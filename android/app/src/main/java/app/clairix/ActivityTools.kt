@@ -152,7 +152,7 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
         )
     }
 
-    ToolPageList(title = "PATTERN OF LIFE", onBack = onBack) {
+    ToolPageList(title = "Pattern of life", onBack = onBack) {
         if (analysing) item(key = "§progress") { LoadingBlock("Analysing $fixes fixes — stops, departures and routes…") }
         error?.let { e -> item(key = "§error") { Notice(Tone.Danger, e, title = "Error") } }
 
@@ -210,7 +210,7 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
                     }
                 }
 
-                item(key = "§places-hdr") { SectionHeader("PLACES") }
+                item(key = "§places-hdr") { SectionHeader("Places") }
                 items(r.clusters, key = { "place|${it.id}" }) { c ->
                     ClairixCard(spacing = 4.dp) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -237,7 +237,7 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
                 }
 
                 if (r.suggestions.isNotEmpty()) {
-                    item(key = "§suggest-hdr") { SectionHeader("SUGGESTIONS") }
+                    item(key = "§suggest-hdr") { SectionHeader("Suggestions") }
                     item(key = "§suggest") {
                         ClairixCard(spacing = 6.dp) {
                             for (s in r.suggestions) {
@@ -249,7 +249,7 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§data-hdr") { SectionHeader("DATA") }
+        item(key = "§data-hdr") { SectionHeader("Data") }
         item(key = "§data") {
             ClairixCard {
                 KeyValueRow("Fixes recorded", "$fixes of ${LocationHistory.CAP}")
@@ -339,8 +339,8 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
     val startMin = sleepStart.toIntOrNull()
     val endMin = sleepEnd.toIntOrNull()
 
-    ToolPageList(title = "UNLOCK LEDGER", onBack = onBack) {
-        item(key = "§sources-hdr") { SectionHeader("SOURCES") }
+    ToolPageList(title = "Unlock ledger", onBack = onBack) {
+        item(key = "§sources-hdr") { SectionHeader("Sources") }
         item(key = "§sources") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -353,7 +353,7 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    StatusPill(if (adminActive) "ACTIVE" else "OFF", if (adminActive) Tone.Safe else Tone.Caution)
+                    StatusPill(if (adminActive) "Active" else "Off", if (adminActive) Tone.Safe else Tone.Caution)
                 }
                 if (!adminActive) {
                     SecondaryButton("Enable device admin", onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
@@ -369,7 +369,7 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    StatusPill(if (usageAccess) "GRANTED" else "OFF", if (usageAccess) Tone.Safe else Tone.Caution)
+                    StatusPill(if (usageAccess) "Granted" else "Off", if (usageAccess) Tone.Safe else Tone.Caution)
                 }
                 if (!usageAccess) {
                     SecondaryButton("Grant usage access", onClick = { openExternal(context, UnlockLedger.usageAccessIntent()) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
@@ -390,11 +390,11 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
                         )
                     }
                     when (t) {
-                        null -> StatusPill("CHECKING", Tone.Neutral)
-                        BiometricTripwireResult.OK -> StatusPill("INTACT", Tone.Safe)
-                        BiometricTripwireResult.FIRST_INIT -> StatusPill("ARMED", Tone.Info)
-                        is BiometricTripwireResult.TRIGGERED -> StatusPill("TRIGGERED", Tone.Danger)
-                        is BiometricTripwireResult.UNAVAILABLE -> StatusPill("UNAVAILABLE", Tone.Caution)
+                        null -> StatusPill("Checking", Tone.Neutral)
+                        BiometricTripwireResult.OK -> StatusPill("Intact", Tone.Safe)
+                        BiometricTripwireResult.FIRST_INIT -> StatusPill("Armed", Tone.Info)
+                        is BiometricTripwireResult.TRIGGERED -> StatusPill("Triggered", Tone.Danger)
+                        is BiometricTripwireResult.UNAVAILABLE -> StatusPill("Unavailable", Tone.Caution)
                     }
                 }
                 when (t) {
@@ -409,7 +409,7 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§sleep-hdr") { SectionHeader("SLEEP WINDOW") }
+        item(key = "§sleep-hdr") { SectionHeader("Sleep window") }
         item(key = "§sleep") {
             ClairixCard {
                 Text(
@@ -458,7 +458,7 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§events-hdr") { SectionHeader("LAST 7 DAYS") }
+        item(key = "§events-hdr") { SectionHeader("Last 7 days") }
         val list = events
         when {
             list == null -> item(key = "§events-progress") { LoadingBlock("Reading the ledger…") }

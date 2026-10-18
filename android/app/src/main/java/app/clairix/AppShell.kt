@@ -5,6 +5,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -322,6 +326,43 @@ internal fun ShellBottomBar(
             )
         }
     )
+}
+
+/**
+ * The frame every top-level screen sits in: the top bar, an optional [header]
+ * (sub-tabs, action rows), the [content], the floating [sos] button at the bottom
+ * end, and the bottom navigation when the build has more than one tab.
+ */
+@Composable
+internal fun ShellScaffold(
+    title: String,
+    onBack: (() -> Unit)?,
+    onSettings: () -> Unit,
+    menu: List<ShellMenuItem>,
+    tabs: List<HomeTab>,
+    selected: HomeTab,
+    alert: (HomeTab) -> Boolean,
+    onSelectTab: (HomeTab) -> Unit,
+    header: @Composable ColumnScope.() -> Unit = {},
+    sos: (@Composable () -> Unit)? = null,
+    content: @Composable BoxScope.() -> Unit
+) {
+    Column(Modifier.fillMaxSize().background(ClairixTheme.colors.base)) {
+        ShellTopBar(title = title, onBack = onBack, onSettings = onSettings, menu = menu)
+        header()
+        Box(
+            Modifier
+                .weight(1f)
+                // Without a tab bar the content reaches the bottom edge itself.
+                .then(if (tabs.size == 1) Modifier.navigationBarsPadding() else Modifier)
+        ) {
+            content()
+            if (sos != null) {
+                Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)) { sos() }
+            }
+        }
+        if (tabs.size > 1) ShellBottomBar(tabs = tabs, selected = selected, alert = alert, onSelect = onSelectTab)
+    }
 }
 
 /** Sub-pages under the top bar, for a destination with more than one screen. */

@@ -108,7 +108,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
         usageAccess = StalkwareScanner.hasUsageAccess(context)
     }
 
-    ToolPageList(title = "STALKERWARE", onBack = onBack) {
+    ToolPageList(title = "Stalkerware", onBack = onBack) {
         if (!usageAccess) {
             item(key = "§usage") {
                 ClairixCard {
@@ -161,15 +161,15 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 }
             }
             if (r.high.isNotEmpty()) {
-                item(key = "§high-hdr") { SectionHeader("HIGH") }
+                item(key = "§high-hdr") { SectionHeader("High") }
                 items(r.high, key = { "high|${it.packageName}" }) { SuspiciousAppCard(it, context) }
             }
             if (r.medium.isNotEmpty()) {
-                item(key = "§medium-hdr") { SectionHeader("MEDIUM") }
+                item(key = "§medium-hdr") { SectionHeader("Medium") }
                 items(r.medium, key = { "medium|${it.packageName}" }) { SuspiciousAppCard(it, context) }
             }
             if (r.suspiciousImes.isNotEmpty()) {
-                item(key = "§ime-hdr") { SectionHeader("KEYBOARDS") }
+                item(key = "§ime-hdr") { SectionHeader("Keyboards") }
                 item(key = "§ime-note") {
                     Notice(
                         Tone.Caution,
@@ -190,7 +190,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 }
             }
             if (r.activeDeviceAdmins.isNotEmpty()) {
-                item(key = "§admin-hdr") { SectionHeader("DEVICE ADMINS") }
+                item(key = "§admin-hdr") { SectionHeader("Device admins") }
                 item(key = "§admin-note") {
                     Notice(
                         Tone.Caution,
@@ -234,7 +234,7 @@ private fun GrantCard(
                 Text(packageName, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
             if (flagged != null) StatusPill("${flagged.severity.name} · ${flagged.score}", flagged.severity.tone())
-            else if (known) StatusPill("KNOWN APP", Tone.Safe)
+            else if (known) StatusPill("Known app", Tone.Safe)
         }
         SecondaryButton(actionLabel, onClick = { openExternal(context, action) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
     }
@@ -327,8 +327,8 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
         )
     }
 
-    ToolPageList(title = "CERTIFICATES & TLS", onBack = onBack) {
-        item(key = "§tls-hdr") { SectionHeader("TLS CANARY") }
+    ToolPageList(title = "Certificates & TLS", onBack = onBack) {
+        item(key = "§tls-hdr") { SectionHeader("TLS canary") }
         item(key = "§tls") {
             val r = tls
             ClairixCard {
@@ -345,12 +345,12 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     }
                     when {
                         r == null -> Unit
-                        r.intercepted -> StatusPill("INTERCEPTED", Tone.Danger)
-                        r.untrustedUnpinned -> StatusPill("NOT TRUSTED", Tone.Danger)
-                        r.proxyOnly -> StatusPill("PROXY", Tone.Caution)
-                        r.error != null && r.observedSpki == null -> StatusPill("NO RESULT", Tone.Caution)
-                        r.pinnedNow -> StatusPill("PINNED", Tone.Info)
-                        else -> StatusPill("CLEAR", Tone.Safe)
+                        r.intercepted -> StatusPill("Intercepted", Tone.Danger)
+                        r.untrustedUnpinned -> StatusPill("Not trusted", Tone.Danger)
+                        r.proxyOnly -> StatusPill("Proxy", Tone.Caution)
+                        r.error != null && r.observedSpki == null -> StatusPill("No result", Tone.Caution)
+                        r.pinnedNow -> StatusPill("Pinned", Tone.Info)
+                        else -> StatusPill("Clear", Tone.Safe)
                     }
                 }
                 val lastRun = last
@@ -404,7 +404,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§ca-hdr") { SectionHeader("TRUST STORE AUDIT") }
+        item(key = "§ca-hdr") { SectionHeader("Trust store audit") }
         val list = cas
         when {
             list == null -> item(key = "§ca-progress") { LoadingBlock("Reading the trust store…") }

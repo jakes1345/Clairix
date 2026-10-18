@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window, system bars and splash screen sit on Ink, the same ground as
+         the launcher icon (values/colors.xml, written by brand/tools/build_logo.py). -->
+    <color name="clairix_ink">@color/ic_launcher_background</color>
+</resources>

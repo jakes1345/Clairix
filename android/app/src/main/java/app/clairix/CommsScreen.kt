@@ -121,20 +121,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.ui.graphics.toArgb
+import app.clairix.ui.theme.ClairixBrand
+import app.clairix.ui.components.*
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
-import app.clairix.ui.components.ClairixShapes
-import app.clairix.ui.components.GhostButton
-import app.clairix.ui.components.PrimaryButton
-import app.clairix.ui.components.SecondaryButton
-import app.clairix.ui.components.Tone
-import app.clairix.ui.components.ClairixCard
-import app.clairix.ui.components.Hairline
-import app.clairix.ui.components.SectionHeader
-import app.clairix.ui.components.StatusPill
-import app.clairix.ui.components.ToggleRow
-import app.clairix.ui.components.clairixTextFieldColors
 
 // ── Colour tokens local to this file ──────────────────────────────────────────
 
@@ -280,6 +274,10 @@ fun CommsScreen(
     }
 }
 
+/** Message bubbles: chamfered on the corner nearest the sender. */
+private val MineBubble = CutCornerShape(topStart = 12.dp, bottomEnd = 4.dp, topEnd = 0.dp, bottomStart = 0.dp)
+private val TheirBubble = CutCornerShape(topEnd = 12.dp, bottomStart = 4.dp)
+
 // ── Shared pieces ────────────────────────────────────────────────────────────
 
 /**
@@ -402,11 +400,18 @@ private fun rememberCodeScanner(onCode: (PairingCode?) -> Unit): () -> Unit {
     }
 }
 
+/**
+ * QR modules in the brand's fixed Ink and Bone, not the theme's: a code has to
+ * scan the same whichever theme is set, and scanners want dark on light.
+ */
+private val QR_DARK = ClairixBrand.Ink.toArgb()
+private val QR_LIGHT = ClairixBrand.Bone.toArgb()
+
 private fun qrBitmap(text: String, sizePx: Int): Bitmap {
     val hints = mapOf(EncodeHintType.MARGIN to 1, EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.CHARACTER_SET to "UTF-8")
     val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
     val pixels = IntArray(sizePx * sizePx)
-    for (y in 0 until sizePx) for (x in 0 until sizePx) pixels[y * sizePx + x] = if (matrix[x, y]) 0xFF0E1116.toInt() else 0xFFE6EAF1.toInt()
+    for (y in 0 until sizePx) for (x in 0 until sizePx) pixels[y * sizePx + x] = if (matrix[x, y]) QR_DARK else QR_LIGHT
     return Bitmap.createBitmap(pixels, sizePx, sizePx, Bitmap.Config.ARGB_8888)
 }
 
@@ -444,16 +449,21 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
     val takeInvite: (PairingCode?) -> Unit = { code ->
         when {
             code == null -> inviteError = "That is not a Clairix invite."
-            code.invite == null -> inviteError = "That is someone's contact code, not an invite. Ask them for an invite: COMMS → INVITE on their phone."
+            code.invite == null -> inviteError = "That's someone's contact code, not an invite. Ask them to tap Invite in Comms on their phone."
             else -> { inviteError = null; onInvite(code) }
         }
     }
     val scanInvite = rememberCodeScanner { takeInvite(it) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Spacer(Modifier.height(20.dp))
-        Text("COMMS", style = MaterialTheme.typography.headlineSmall, color = ClairixTheme.colors.text)
-        Text("End-to-end encrypted messaging between Clairix apps, through a relay you run", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+        Spacer(Modifier.height(8.dp))
+        StatusHero(
+            eyebrow = "Messages and calls",
+            headline = if (invite != null) "Invite ready" else "Not set up",
+            body = "End-to-end encrypted messages and calls between Clairix apps, through a relay you or a friend run.",
+            tone = if (invite != null) Tone.Accent else Tone.Neutral,
+            trailing = { LogoMark(size = 48.dp, contentDescription = null) }
+        )
 
         if (invite != null) {
             ClairixCard {
@@ -489,24 +499,21 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 )
                 GhostButton("Use a relay URL and secret instead", onClick = { onInvite(null) }, tone = Tone.Neutral)
             }
-            ClairixCard {
-                Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
-                Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-            }
+            Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
             Spacer(Modifier.height(16.dp))
             return@Column
         }
 
         ClairixCard {
-            Text("Have an invite?", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text("Have an invite?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
-                "Someone already on Clairix can invite you: COMMS → INVITE on their phone. Scan the QR code it shows, " +
-                    "or copy the invite they sent you and paste it here. No relay URL or secret needed.",
+                "Someone already on Clairix can invite you: they tap Invite in Comms on their phone. Scan the QR code " +
+                    "it shows, or copy the invite they sent and paste it here. No relay URL or secret needed.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SecondaryButton(
+                PrimaryButton(
                     "Scan invite",
                     onClick = { inviteError = null; scanInvite() },
                     modifier = Modifier.weight(1f)
@@ -521,12 +528,12 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
         }
 
         ClairixCard {
-            Text("Or run your own relay", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text("Or run your own relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
                 "Deploy comms-worker from the Clairix repository to Cloudflare, then enter its URL and the enrollment " +
                     "secret you set. This phone generates its keys here, never shares the private half, and the relay " +
                     "hands it a random nine-digit Clairix number. Clairix then keeps a quiet background connection to the " +
-                    "relay so messages arrive and calls ring while it is closed; SETTINGS → Online switches that off.",
+                    "relay so messages arrive and calls ring while it's closed; Online in Comms settings switches that off.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -566,13 +573,10 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             )
         }
 
-        ClairixCard {
-            Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
-            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-        }
+        Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
 
         ClairixCard {
-            Text("What is protected", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text("What's protected", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
                 "Every message is encrypted on this phone for one contact with the Olm double ratchet (vodozemac) and " +
                     "sealed again so the relay cannot see who sent it. The relay stores only opaque envelopes, your public " +
@@ -609,84 +613,96 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
     LaunchedEffect(state.registered) { if (state.registered) CommsRepository.refreshBalance() }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(20.dp))
-        Header("Conversations") {
-            GhostButton("Invite", onClick = onInvite)
-            GhostButton("Group", onClick = { createGroup = true })
-            GhostButton("My code", onClick = onMyCode, tone = Tone.Neutral)
-            GhostButton("+ Add", onClick = { addContact = true }, tone = Tone.Safe)
-        }
-        Spacer(Modifier.height(4.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(state.number?.let { formatClairixNumber(it) } ?: "—", style = MaterialTheme.typography.monoLarge, color = ClairixTheme.colors.accent)
-                Text("Clairix number · not a phone number · Clairix apps on your relay only", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
-            }
-            GhostButton("Settings", onClick = onSettings, tone = Tone.Neutral)
-        }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
+        // ── Status first: this phone's number and whether anything reaches it ──
         // The socket is held open whenever this screen is up, so "Live" is the
         // normal state; what differs is whether anything reaches the phone once
         // Clairix is closed.
-        val statusLine = buildString {
-            append(if (state.connected) "Live" else "Connecting…")
-            append(
-                when {
-                    state.online -> " · background on"
-                    state.pushRegistered -> " · push wake-ups"
-                    else -> " · nothing arrives while closed"
+        val reachTone = when {
+            !state.connected -> Tone.Caution
+            state.online || state.pushRegistered -> Tone.Safe
+            else -> Tone.Caution
+        }
+        ClairixCard(spacing = 8.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Your Clairix number", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
+                    Text(
+                        state.number?.let { formatClairixNumber(it) } ?: "—",
+                        style = MaterialTheme.typography.monoLarge,
+                        color = ClairixTheme.colors.accent
+                    )
                 }
+                StatusPill(if (state.connected) "Live" else "Connecting", if (state.connected) Tone.Safe else Tone.Caution)
+            }
+            Text(
+                buildString {
+                    append(
+                        when {
+                            state.online -> "Online in the background"
+                            state.pushRegistered -> "Push wake-ups on"
+                            else -> "Nothing arrives while Clairix is closed"
+                        }
+                    )
+                    if (!state.listed) append(" · unlisted")
+                    if (state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
+                    if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = reachTone.color()
             )
-            if (!state.listed) append(" · unlisted")
-            if (state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
-            if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
+            Text(
+                "Not a phone number. It reaches Clairix apps on your relay only.",
+                style = MaterialTheme.typography.bodySmall,
+                color = ClairixTheme.colors.textSubtle
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                GhostButton("My code", onClick = onMyCode, tone = Tone.Accent)
+                GhostButton(if (state.busy) "Syncing" else "Sync", onClick = { scope.launch { CommsRepository.sync() } }, tone = Tone.Neutral, enabled = !state.busy)
+                Spacer(Modifier.weight(1f))
+                GhostButton("Settings", onClick = onSettings, tone = Tone.Neutral)
+            }
         }
-        val statusColour = when {
-            !state.connected -> ClairixTheme.colors.caution
-            state.online || state.pushRegistered -> ClairixTheme.colors.safe
-            else -> ClairixTheme.colors.caution
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(statusLine, style = MaterialTheme.typography.monoSmall, color = statusColour, modifier = Modifier.weight(1f))
-            GhostButton(if (state.busy) "Syncing" else "Sync", onClick = { scope.launch { CommsRepository.sync() } }, tone = Tone.Neutral, enabled = !state.busy)
+        Spacer(Modifier.height(8.dp))
+        // ── Actions ──
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryButton("Add contact", onClick = { addContact = true }, modifier = Modifier.weight(1f))
+            SecondaryButton("Invite", onClick = onInvite, tone = Tone.Accent, modifier = Modifier.weight(1f))
+            SecondaryButton("Group", onClick = { createGroup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
         }
         state.error?.let {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.weight(1f))
-                GhostButton("Dismiss", onClick = { CommsRepository.clearError() }, tone = Tone.Neutral)
-            }
+            Spacer(Modifier.height(8.dp))
+            Notice(
+                Tone.Danger, it,
+                action = { GhostButton("Dismiss", onClick = { CommsRepository.clearError() }, tone = Tone.Neutral) }
+            )
         }
         val batteryFree by rememberBatteryUnrestricted()
         if (state.online && !batteryFree) {
             val context = LocalContext.current
             Spacer(Modifier.height(6.dp))
-            Row(
-                Modifier.fillMaxWidth().background(ClairixTheme.colors.caution.copy(alpha = 0.12f), ClairixShapes.Card).padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Battery saving can cut Clairix off in the background, and then calls do not ring. Allow Clairix to run unrestricted.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClairixTheme.colors.textMuted,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                GhostButton("Allow", onClick = { openBatterySettings(context) })
-            }
+            Notice(
+                Tone.Caution,
+                "Battery saving can cut Clairix off in the background, and then calls don't ring. Let Clairix run unrestricted.",
+                action = { GhostButton("Allow", onClick = { openBatterySettings(context) }) }
+            )
         }
         Spacer(Modifier.height(8.dp))
 
         if (threads.isEmpty() && groupThreads.isEmpty()) {
             NoContactsCard()
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 96.dp),
+                modifier = Modifier.weight(1f)
+            ) {
                 // Groups first: a group's stripe is always the accent colour, so
                 // the section label keeps them apart from a contact with unread messages.
                 if (groupThreads.isNotEmpty()) {
-                    item(key = "§groups") { SectionHeader("GROUPS") }
+                    item(key = "§groups") { SectionHeader("Groups", supporting = "${groupThreads.size}") }
                     items(groupThreads, key = { "g:${it.group.id}" }) { gt -> GroupRow(gt, onClick = { onOpenGroup(gt.group.id) }) }
-                    item(key = "§groups-end") { Hairline() }
-                    item(key = "§contacts") { SectionHeader("CONTACTS") }
+                    item(key = "§contacts") { SectionHeader("Contacts", supporting = "${threads.size}") }
                 }
                 if (threads.isEmpty()) {
                     item(key = "§no-contacts") { NoContactsCard() }
@@ -700,14 +716,12 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
 
 @Composable
 private fun NoContactsCard() {
-    ClairixCard {
-        Text("No contacts yet", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
-        Text(
-            "Tap + ADD and scan a contact's Clairix code, or enter their listed Clairix number. Show yours under MY CODE.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle
-        )
-    }
+    EmptyState(
+        title = "No contacts yet",
+        body = "Tap Add contact and scan their Clairix code, or enter their listed number. Show yours under My code.",
+        icon = ClairixIcons.Forum,
+        modifier = Modifier.padding(top = 8.dp)
+    )
 }
 
 /** Names a new group; the phone that makes it is its first member and admin. */
@@ -731,8 +745,9 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
     }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = ClairixTheme.colors.surface,
-        title = { Text("Create a group", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Create a group", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -764,103 +779,125 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
 @Composable
 private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
     val m = t.lastMessage
-    val stripe = when {
-        t.contact.keyChanged -> ClairixTheme.colors.danger
-        t.unread > 0 -> ClairixTheme.colors.accent
-        m?.failed == true -> ClairixTheme.colors.danger
-        t.contact.verified -> ClairixTheme.colors.safe
-        else -> ClairixTheme.colors.border
+    val c = ClairixTheme.colors
+    val tone = when {
+        t.contact.keyChanged -> Tone.Danger
+        m?.failed == true -> Tone.Danger
+        t.unread > 0 -> Tone.Accent
+        else -> null
     }
-    Row(Modifier.fillMaxWidth().clip(ClairixShapes.Card).background(ClairixTheme.colors.surface).clickable(onClick = onClick).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    contactLabel(t.contact),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ClairixTheme.colors.text,
-                    fontWeight = if (t.unread > 0) FontWeight.Bold else FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (t.unread > 0) {
+    ClairixCard(tone = tone, onClick = onClick, onClickLabel = "Open conversation", spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Avatar(contactLabel(t.contact), highlighted = t.unread > 0)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        t.unread.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF12161D),
-                        modifier = Modifier.background(ClairixTheme.colors.accent, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
+                        contactLabel(t.contact),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = c.text,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.width(8.dp))
+                    if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
                 }
-                if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        formatClairixNumber(t.contact.number),
+                        style = MaterialTheme.typography.monoSmall,
+                        color = c.textSubtle
+                    )
+                    when {
+                        t.contact.keyChanged -> StatusPill("Keys changed", Tone.Danger)
+                        t.contact.verified -> StatusPill("Verified", Tone.Safe)
+                        else -> StatusPill("Unverified", Tone.Neutral)
+                    }
+                }
             }
+            if (t.unread > 0) UnreadCount(t.unread)
+        }
+        if (m != null) {
             Text(
-                formatClairixNumber(t.contact.number) + when {
-                    t.contact.keyChanged -> " · Keys changed"
-                    t.contact.verified -> " · verified"
-                    else -> " · unverified"
-                },
-                style = MaterialTheme.typography.monoSmall,
-                color = if (t.contact.keyChanged) ClairixTheme.colors.danger else ClairixTheme.colors.textSubtle
+                (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (t.unread > 0) c.text else c.textSubtle,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
-            if (m != null) {
-                Text(
-                    (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (t.unread > 0) ClairixTheme.colors.textMuted else ClairixTheme.colors.textSubtle,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (m.failed) Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger)
-            }
+            if (m.failed) Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = c.danger)
         }
     }
 }
 
-/** A group in the conversation list. The stripe is always the accent colour: groups carry no per-contact trust state. */
+/** A group in the conversation list. Groups carry no per-contact trust state, so no verification pill. */
 @Composable
 private fun GroupRow(gt: GroupThread, onClick: () -> Unit) {
     val m = gt.lastMessage
     val unread = gt.unread > 0
-    Row(Modifier.fillMaxWidth().clip(ClairixShapes.Card).background(ClairixTheme.colors.surface).clickable(onClick = onClick).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(ClairixTheme.colors.accent))
-        Box(Modifier.padding(start = 12.dp, top = 12.dp).size(28.dp), contentAlignment = Alignment.Center) {
-            GroupGlyph(if (unread) ClairixTheme.colors.accent else ClairixTheme.colors.textMuted, Modifier.size(24.dp))
-        }
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    gt.group.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (unread) ClairixTheme.colors.accent else ClairixTheme.colors.text,
-                    fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (unread) {
+    val c = ClairixTheme.colors
+    ClairixCard(tone = if (unread) Tone.Accent else null, onClick = onClick, onClickLabel = "Open group", spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                Modifier.size(44.dp).background(if (unread) c.accentContainer else c.surfaceOverlay, ClairixShapes.Octagon),
+                contentAlignment = Alignment.Center
+            ) {
+                GroupGlyph(if (unread) c.accent else c.textMuted, Modifier.size(24.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        gt.unread.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF12161D),
-                        modifier = Modifier.background(ClairixTheme.colors.accent, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
+                        gt.group.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = c.text,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.width(8.dp))
+                    if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
                 }
-                if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                Text("${gt.memberCount} member${if (gt.memberCount == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
             }
-            Text("${gt.memberCount} member${if (gt.memberCount == 1) "" else "s"}", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-            if (m != null) {
-                Text(
-                    (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (unread) ClairixTheme.colors.textMuted else ClairixTheme.colors.textSubtle,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            if (unread) UnreadCount(gt.unread)
         }
+        if (m != null) {
+            Text(
+                (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (unread) c.text else c.textSubtle,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** A contact's initials in an octagon, the mark's shape. */
+@Composable
+private fun Avatar(name: String, highlighted: Boolean) {
+    val c = ClairixTheme.colors
+    val initials = name.split(' ', '-', '_').filter { it.isNotBlank() }.take(2)
+        .joinToString("") { it.first().uppercase(Locale.getDefault()) }.ifBlank { "#" }
+    Box(
+        Modifier.size(44.dp).background(if (highlighted) c.accentContainer else c.surfaceOverlay, ClairixShapes.Octagon),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(initials, style = MaterialTheme.typography.titleSmall, color = if (highlighted) c.accent else c.textMuted)
+    }
+}
+
+/** How many messages are unread, on the accent. */
+@Composable
+private fun UnreadCount(count: Int) {
+    val c = ClairixTheme.colors
+    Box(
+        Modifier
+            .heightIn(min = 24.dp)
+            .background(c.accent, ClairixShapes.Tag)
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .semantics { contentDescription = "$count unread" },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(count.toString(), style = MaterialTheme.typography.labelLarge, color = c.onAccent)
     }
 }
 
@@ -898,8 +935,9 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = ClairixTheme.colors.surface,
-        title = { Text("Add a contact", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Add a contact", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -1078,13 +1116,13 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
         Header(c?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
-            val (label, colour) = when {
-                c == null -> "" to ClairixTheme.colors.textSubtle
-                c.keyChanged -> "KEYS CHANGED" to ClairixTheme.colors.danger
-                c.verified -> "VERIFIED" to ClairixTheme.colors.safe
-                else -> "UNVERIFIED" to ClairixTheme.colors.caution
+            val (label, tone) = when {
+                c == null -> "" to Tone.Neutral
+                c.keyChanged -> "Keys changed" to Tone.Danger
+                c.verified -> "Verified" to Tone.Safe
+                else -> "Verify" to Tone.Caution
             }
-            if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = Tone.Neutral)
+            if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = tone)
             GhostButton("Pay", onClick = { paying = true }, enabled = c != null && !c.keyChanged)
             GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c != null && !c.keyChanged)
         }
@@ -1095,10 +1133,11 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         )
         if (c?.keyChanged == true) {
             Spacer(Modifier.height(6.dp))
-            Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.danger.copy(alpha = 0.12f), ClairixShapes.Card).padding(10.dp)) {
-                Text("This contact's keys changed", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger)
-                Text("They may have reinstalled Clairix, or someone may be in between. Scan their code or compare safety numbers before continuing.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
-            }
+            Notice(
+                Tone.Danger,
+                "They may have reinstalled Clairix, or someone may be in between. Scan their code or compare safety numbers before you carry on.",
+                title = "This contact's keys changed"
+            )
         }
         Spacer(Modifier.height(8.dp))
 
@@ -1142,7 +1181,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 val thumb = remember(pending) { pending?.thumbB64?.takeIf { it.isNotBlank() }?.let { CommsMedia.decodeB64(it, 160)?.asImageBitmap() } }
-                Box(Modifier.size(56.dp).clip(RoundedCornerShape(6.dp)).background(ClairixTheme.colors.surfaceRaised), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(56.dp).clip(ClairixShapes.Tag).background(ClairixTheme.colors.surfaceRaised), contentAlignment = Alignment.Center) {
                     if (thumb != null) Image(thumb, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     else if (preparing) CircularProgressIndicator(color = ClairixTheme.colors.accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                     else PictureGlyph(ClairixTheme.colors.textSubtle, Modifier.size(26.dp))
@@ -1200,7 +1239,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         }
         when {
             !state.connected -> Text("Connecting to the relay… messages you send are queued until it is back.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
-            !state.online && !state.pushRegistered -> Text("Live while Clairix is open. Nothing arrives, and calls cannot ring, once it is closed: turn on Online or push in SETTINGS.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
+            !state.online && !state.pushRegistered -> Text("Live while Clairix is open. Once it's closed nothing arrives and calls can't ring: turn on Online or push in Comms settings.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
         }
     }
 }
@@ -1233,7 +1272,7 @@ private fun MessageBubble(
                 (if (mine) "↗ " else "↙ ") + m.body + " · " + timeFmt.format(Date(m.ts)),
                 style = MaterialTheme.typography.monoSmall,
                 color = colour,
-                modifier = Modifier.background(ClairixTheme.colors.surface, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 4.dp)
+                modifier = Modifier.background(ClairixTheme.colors.surface, ClairixShapes.Tag).padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
         return
@@ -1244,17 +1283,16 @@ private fun MessageBubble(
             Row(
                 Modifier
                     .widthIn(max = 300.dp)
-                    .background(if (mine) ClairixTheme.colors.surfaceRaised else ClairixTheme.colors.surface, RoundedCornerShape(10.dp))
+                    .background(if (mine) ClairixTheme.colors.accentContainer else ClairixTheme.colors.surfaceRaised, if (mine) MineBubble else TheirBubble)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Button(
+                PrimaryButton(
+                    if (playing) "Stop" else "Play",
                     onClick = onPlay,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (playing) ClairixTheme.colors.danger else ClairixTheme.colors.safe, contentColor = Color(0xFF12161D)),
-                    shape = RoundedCornerShape(20.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                    modifier = Modifier.height(36.dp)
-                ) { Text(if (playing) "■ Stop" else "▶ Play", style = MaterialTheme.typography.labelLarge) }
+                    tone = if (playing) Tone.Danger else Tone.Safe
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Voicemail · ${durationLabel(duration)}", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
                     Text(timeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
@@ -1267,7 +1305,7 @@ private fun MessageBubble(
         Column(
             Modifier
                 .widthIn(max = 300.dp)
-                .background(if (mine) ClairixTheme.colors.surfaceRaised else ClairixTheme.colors.surface, RoundedCornerShape(10.dp))
+                .background(if (mine) ClairixTheme.colors.accentContainer else ClairixTheme.colors.surfaceRaised, if (mine) MineBubble else TheirBubble)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
@@ -1339,14 +1377,14 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
         Column(
             Modifier
                 .widthIn(max = 264.dp)
-                .background(if (mine) ClairixTheme.colors.surfaceRaised else ClairixTheme.colors.surface, RoundedCornerShape(10.dp))
+                .background(if (mine) ClairixTheme.colors.accentContainer else ClairixTheme.colors.surfaceRaised, if (mine) MineBubble else TheirBubble)
                 .padding(6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Box(
                 Modifier
                     .width(width).height(height)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(ClairixShapes.Tag)
                     .background(ClairixTheme.colors.base)
                     .clickable(enabled = complete && media != null, onClick = onOpen),
                 contentAlignment = Alignment.Center
@@ -1360,19 +1398,19 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                     PictureGlyph(ClairixTheme.colors.textSubtle, Modifier.size(40.dp))
                 }
                 if (media?.isVideo == true) {
-                    Box(Modifier.size(52.dp).background(Color(0xAA0E1116), RoundedCornerShape(26.dp)), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(52.dp).background(ClairixTheme.colors.base.copy(alpha = 0.67f), ClairixShapes.Octagon), contentAlignment = Alignment.Center) {
                         Text("▶", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text)
                     }
                     Text(
                         durationLabel(media.durationMs),
                         style = MaterialTheme.typography.monoSmall,
                         color = ClairixTheme.colors.text,
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0xAA0E1116), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp)
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(ClairixTheme.colors.base.copy(alpha = 0.67f), ClairixShapes.Tag).padding(horizontal = 5.dp, vertical = 1.dp)
                     )
                 }
                 if (receiving || progress != null) {
                     Column(
-                        Modifier.fillMaxSize().background(Color(0x880E1116)),
+                        Modifier.fillMaxSize().background(ClairixTheme.colors.base.copy(alpha = 0.53f)),
                         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
                     ) {
                         CircularProgressIndicator(color = ClairixTheme.colors.accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
@@ -1413,8 +1451,9 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
 private fun AttachMenu(onDismiss: () -> Unit, onGallery: () -> Unit, onPhoto: () -> Unit, onVideo: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = ClairixTheme.colors.surface,
-        title = { Text("Send a photo or video", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Send a photo or video", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -1442,7 +1481,7 @@ private fun AttachMenu(onDismiss: () -> Unit, onGallery: () -> Unit, onPhoto: ()
 private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
     val media = remember(m.body) { MediaBody.decode(m.body) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Box(Modifier.fillMaxSize().background(Color(0xF20A0D12))) {
+        Box(Modifier.fillMaxSize().background(ClairixTheme.colors.base.copy(alpha = 0.95f))) {
             if (media == null) {
                 Text("This attachment cannot be shown", color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
             } else if (media.isVideo) {
@@ -1511,7 +1550,7 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
                     media.caption,
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.text,
-                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().background(Color(0xB00E1116)).padding(16.dp)
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().background(ClairixTheme.colors.base.copy(alpha = 0.69f)).padding(16.dp)
                 )
             }
         }
@@ -1561,8 +1600,9 @@ private fun PayDialog(contact: Contact, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = { if (!sending) onDismiss() },
-        containerColor = ClairixTheme.colors.surface,
-        title = { Text("Pay ${contactLabel(contact)}", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Pay ${contactLabel(contact)}", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -1621,12 +1661,12 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
     val now = rememberTick(1_000L)
     val accept = rememberMicrophoneGate { CallManager.accept() }
     val (title, colour) = when (call.phase) {
-        CallPhase.INCOMING -> "INCOMING CALL" to ClairixTheme.colors.safe
-        CallPhase.DIALING -> if (call.ringing) "RINGING" to ClairixTheme.colors.safe else "CALLING" to ClairixTheme.colors.textSubtle
-        CallPhase.CONNECTING -> "CONNECTING" to ClairixTheme.colors.textSubtle
-        CallPhase.CONNECTED -> "ENCRYPTED CALL" to ClairixTheme.colors.safe
-        CallPhase.RECONNECTING -> "RECONNECTING" to ClairixTheme.colors.caution
-        CallPhase.ENDED -> "CALL ENDED" to ClairixTheme.colors.textSubtle
+        CallPhase.INCOMING -> "Incoming call" to ClairixTheme.colors.safe
+        CallPhase.DIALING -> if (call.ringing) "Ringing" to ClairixTheme.colors.safe else "Calling" to ClairixTheme.colors.textSubtle
+        CallPhase.CONNECTING -> "Connecting" to ClairixTheme.colors.textSubtle
+        CallPhase.CONNECTED -> "Encrypted call" to ClairixTheme.colors.safe
+        CallPhase.RECONNECTING -> "Reconnecting" to ClairixTheme.colors.caution
+        CallPhase.ENDED -> "Call ended" to ClairixTheme.colors.textSubtle
     }
     Column(
         modifier.fillMaxSize().padding(horizontal = 24.dp),
@@ -1663,16 +1703,16 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(48.dp))
         when (call.phase) {
             CallPhase.INCOMING -> Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                CallButton("DECLINE", ClairixTheme.colors.danger) { CallManager.reject() }
-                CallButton("ACCEPT", ClairixTheme.colors.safe) { accept() }
+                CallButton("Decline", Tone.Danger) { CallManager.reject() }
+                CallButton("Accept", Tone.Safe) { accept() }
             }
             CallPhase.ENDED -> Unit
             else -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    ToggleChip(if (call.muted) "UNMUTE" else "MUTE", call.muted) { CallManager.toggleMute() }
-                    ToggleChip("SPEAKER", call.speaker) { CallManager.toggleSpeaker() }
+                    ToggleChip(if (call.muted) "Unmute" else "Mute", call.muted) { CallManager.toggleMute() }
+                    ToggleChip("Speaker", call.speaker) { CallManager.toggleSpeaker() }
                 }
-                CallButton("HANG UP", ClairixTheme.colors.danger) { CallManager.hangUp() }
+                CallButton("Hang up", Tone.Danger) { CallManager.hangUp() }
             }
         }
         Spacer(Modifier.height(40.dp))
@@ -1689,13 +1729,8 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CallButton(label: String, colour: Color, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = colour, contentColor = Color(0xFF12161D)),
-        shape = RoundedCornerShape(28.dp),
-        modifier = Modifier.height(56.dp).widthIn(min = 140.dp)
-    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
+private fun CallButton(label: String, tone: Tone, onClick: () -> Unit) {
+    PrimaryButton(label, onClick = onClick, tone = tone, modifier = Modifier.height(56.dp).widthIn(min = 136.dp))
 }
 
 @Composable
@@ -1738,8 +1773,9 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            containerColor = ClairixTheme.colors.surface,
-            title = { Text("Remove ${contactLabel(c)}?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            containerColor = ClairixTheme.colors.surfaceRaised,
+            shape = ClairixShapes.Sheet,
+            title = { Text("Remove ${contactLabel(c)}?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
             text = { Text("Their keys, the encrypted session and every message with them are deleted from this phone.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) },
             confirmButton = {
                 GhostButton(
@@ -1759,9 +1795,9 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
 
         ClairixCard {
             val (label, colour) = when {
-                c.keyChanged -> "KEYS CHANGED — verify again" to ClairixTheme.colors.danger
-                c.verified -> "VERIFIED" to ClairixTheme.colors.safe
-                else -> "UNVERIFIED" to ClairixTheme.colors.caution
+                c.keyChanged -> "Keys changed. Verify again" to ClairixTheme.colors.danger
+                c.verified -> "Verified" to ClairixTheme.colors.safe
+                else -> "Unverified" to ClairixTheme.colors.caution
             }
             Text(label, style = MaterialTheme.typography.labelSmall, color = colour)
             Text(
@@ -1793,7 +1829,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
 
         ClairixCard {
             Text("Or scan their code", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-            Text("Their MY CODE screen carries their keys. A matching scan verifies them in one step.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            Text("Their My code screen carries their keys. A matching scan verifies them in one step.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             SecondaryButton("Scan their code", onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
@@ -1817,7 +1853,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
 /**
  * Makes a one-time invite and shows it three ways: a QR code for someone
  * standing next to you (they scan it in Clairix setup), a link to send them
- * (it opens a page with the download and an OPEN IN CLAIRIX button), and the
+ * (it opens a page with the download and an Open in Clairix button), and the
  * share sheet.
  */
 @Composable
@@ -1854,7 +1890,7 @@ private fun InviteScreen(onBack: () -> Unit) {
                 color = ClairixTheme.colors.textSubtle
             )
             if (invite == null) {
-                PrimaryButton(if (busy) "MAKING INVITE…" else "MAKE AN INVITE", enabled = !busy, onClick = create)
+                PrimaryButton(if (busy) "Making invite…" else "Make an invite", enabled = !busy, loading = busy, onClick = create, modifier = Modifier.fillMaxWidth())
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
@@ -1862,17 +1898,17 @@ private fun InviteScreen(onBack: () -> Unit) {
             val link = invite.first.inviteLink()
             ClairixCard {
                 Text("Next to you: let them scan this", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-                Text("In Clairix on their phone: COMMS → SCAN INVITE.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                Text("In Clairix on their phone: Comms, then Scan invite.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 if (bitmap != null) {
                     Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                        Image(bitmap.asImageBitmap(), contentDescription = "Clairix invite code", modifier = Modifier.size(260.dp).clip(RoundedCornerShape(6.dp)))
+                        Image(bitmap.asImageBitmap(), contentDescription = "Clairix invite code", modifier = Modifier.size(260.dp).clip(ClairixShapes.Tag))
                     }
                 }
             }
             ClairixCard {
                 Text("Far away: send them the link", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "The link opens a page with the Clairix download and an OPEN IN CLAIRIX button. Anyone who gets the link can use it, " +
+                    "The link opens a page with the Clairix download and an Open in Clairix button. Anyone who gets the link can use it, " +
                         "so send it only to the person you mean. Works once, until $until.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
@@ -1895,10 +1931,7 @@ private fun InviteScreen(onBack: () -> Unit) {
                 }
             }
         }
-        ClairixCard {
-            Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
-            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-        }
+        Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -1911,8 +1944,9 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
     val mine = CommsRepository.state.collectAsStateWithLifecycle().value.number == code.number
     AlertDialog(
         onDismissRequest = onDone,
-        containerColor = ClairixTheme.colors.surface,
-        title = { Text(if (mine) "Your own invite" else "Add ${code.name.ifBlank { formatClairixNumber(code.number) }}?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text(if (mine) "Your own invite" else "Add ${code.name.ifBlank { formatClairixNumber(code.number) }}?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -1958,7 +1992,7 @@ private fun MyCodeScreen(onBack: () -> Unit) {
             Text("Clairix number · ${if (state.listed) "listed" else "unlisted"}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             if (bitmap != null) {
                 Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                    Image(bitmap.asImageBitmap(), contentDescription = "Your Clairix pairing code", modifier = Modifier.size(260.dp).clip(RoundedCornerShape(6.dp)))
+                    Image(bitmap.asImageBitmap(), contentDescription = "Your Clairix pairing code", modifier = Modifier.size(260.dp).clip(ClairixShapes.Tag))
                 }
             }
             Text(
@@ -1971,10 +2005,7 @@ private fun MyCodeScreen(onBack: () -> Unit) {
                 code?.let { c -> GhostButton("Copy code text", onClick = { clipboard.setText(AnnotatedString(c.encode())) }, tone = Tone.Neutral) }
             }
         }
-        ClairixCard {
-            Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
-            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-        }
+        Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
         if (myKey != null) {
             ClairixCard {
                 Text("Identity key", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
@@ -2037,8 +2068,9 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
     if (confirmUnpair) {
         AlertDialog(
             onDismissRequest = { confirmUnpair = false },
-            containerColor = ClairixTheme.colors.surface,
-            title = { Text("Give up this Clairix number?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            containerColor = ClairixTheme.colors.surfaceRaised,
+            shape = ClairixShapes.Sheet,
+            title = { Text("Give up this Clairix number?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
             text = {
                 Text(
                     "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
@@ -2076,7 +2108,7 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                     Text("Push wake-ups", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text(
                         if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing."
-                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap SET UP. No Google services are used.",
+                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap Set up. No Google services are used.",
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -2472,8 +2504,9 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
     if (leaveConfirm) {
         AlertDialog(
             onDismissRequest = { leaveConfirm = false },
-            containerColor = ClairixTheme.colors.surface,
-            title = { Text("Leave group?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            containerColor = ClairixTheme.colors.surfaceRaised,
+            shape = ClairixShapes.Sheet,
+            title = { Text("Leave group?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
             text = {
                 Text(
                     "You will leave \"${group?.name ?: "this group"}\" and will no longer receive its messages.",
@@ -2512,7 +2545,7 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.padding(bottom = 8.dp))
         }
 
-        SectionHeader("MEMBERS")
+        SectionHeader("Members")
         Spacer(Modifier.height(6.dp))
         ClairixCard {
             if (members.isEmpty()) {
@@ -2556,7 +2589,7 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
-        SectionHeader("ACTIONS")
+        SectionHeader("Actions")
         Spacer(Modifier.height(6.dp))
         ClairixCard {
             Row(
@@ -2585,8 +2618,9 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = ClairixTheme.colors.surface,
-        title = { Text("Add member", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Add member", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (available.isEmpty()) {
@@ -2683,7 +2717,7 @@ private fun DiagnosticsCard() {
         }
         Text(
             "What happened with the relay, calls and envelopes on this phone. No message text is kept. " +
-                "If a call or message goes missing, COPY this and send it along.",
+                "If a call or message goes missing, copy this and send it along.",
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle
         )

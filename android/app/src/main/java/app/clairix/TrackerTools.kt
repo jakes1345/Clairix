@@ -108,7 +108,7 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
         return
     }
 
-    ToolPageList(title = "FIND A TRACKER", onBack = onBack) {
+    ToolPageList(title = "Find a tracker", onBack = onBack) {
         if (!status.scanning) {
             item(key = "§not-scanning") {
                 Notice(Tone.Caution, "The locator listens to the scanner's packets. Start scanning in Scan > Trackers first.", title = "Scanner off")
@@ -153,7 +153,7 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
                         Text(d.address, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                     }
                     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (d.following) StatusPill("FOLLOWING", Tone.Danger)
+                        if (d.following) StatusPill("Following", Tone.Danger)
                         else StatusPill(
                             d.threat.name,
                             when (d.threat) {
@@ -206,7 +206,7 @@ private fun TrackerLocator(detection: Detection, onBack: () -> Unit) {
         }
     }
 
-    ToolPageList(title = detection.tracker?.label?.uppercase(Locale.US) ?: "LOCATE", onBack = onBack) {
+    ToolPageList(title = detection.tracker?.label?.uppercase(Locale.US) ?: "Locate", onBack = onBack) {
         item(key = "§who") {
             ClairixCard(spacing = 4.dp) {
                 Text(detection.tracker?.label ?: detection.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
@@ -328,7 +328,7 @@ internal fun SelfTestPage(onBack: (() -> Unit)? = null) {
     val advertising = transitions.any { it.second is BleCanaryState.Advertising }
     val failed = transitions.lastOrNull()?.second is BleCanaryState.Error
 
-    ToolPageList(title = "SELF-TEST BEACON", onBack = onBack) {
+    ToolPageList(title = "Self-test beacon", onBack = onBack) {
         item(key = "§intro") {
             Text(
                 "The phone advertises as an AirTag that has been separated from its owner for sixty " +
@@ -364,10 +364,10 @@ internal fun SelfTestPage(onBack: (() -> Unit)? = null) {
                         }
                     }
                     when {
-                        running -> StatusPill("LIVE", Tone.Info)
-                        detected -> StatusPill("DETECTED", Tone.Safe)
-                        failed -> StatusPill("ERROR", Tone.Danger)
-                        advertising -> StatusPill("NOT HEARD", Tone.Caution)
+                        running -> StatusPill("Live", Tone.Info)
+                        detected -> StatusPill("Detected", Tone.Safe)
+                        failed -> StatusPill("Error", Tone.Danger)
+                        advertising -> StatusPill("Not heard", Tone.Caution)
                         else -> Unit
                     }
                 }
@@ -384,7 +384,7 @@ internal fun SelfTestPage(onBack: (() -> Unit)? = null) {
         }
 
         if (transitions.isNotEmpty()) {
-            item(key = "§log-hdr") { SectionHeader("WHAT HAPPENED") }
+            item(key = "§log-hdr") { SectionHeader("What happened") }
             itemsIndexed(transitions, key = { i, _ -> "t|$i" }) { _, (ts, state) ->
                 Row(
                     Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(horizontal = 14.dp, vertical = 10.dp),
@@ -408,7 +408,7 @@ internal fun SelfTestPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§meaning-hdr") { SectionHeader("WHAT THE RESULTS MEAN") }
+        item(key = "§meaning-hdr") { SectionHeader("What the results mean") }
         item(key = "§meaning") {
             ClairixCard(spacing = 6.dp) {
                 Text(

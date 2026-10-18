@@ -2,7 +2,14 @@ package app.clairix.ui.components
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -66,17 +73,41 @@ fun LogoMark(modifier: Modifier = Modifier, size: Dp = 32.dp, contentDescription
 }
 
 /**
- * The stencil slit: one horizontal cut through whatever this modifies, in
- * [ground] (the colour behind it), like light through a visor. Use it sparingly,
- * on large display type and hero panels only, never on body text.
+ * Display text with the stencil slit, the brand's one horizontal cut, through
+ * every line at the middle of the capitals, as the wordmark has it. Use it
+ * sparingly: big display headlines only, never body text. The slit is drawn in
+ * [ground], the colour behind the text. Accessibility services read the text
+ * exactly as written.
  */
-fun Modifier.stencilSlit(ground: Color, fraction: Float = 0.52f, thickness: Dp = 2.dp): Modifier =
-    drawWithContent {
-        drawContent()
-        val h = thickness.toPx()
-        drawRect(
-            color = ground,
-            topLeft = Offset(0f, size.height * fraction - h / 2f),
-            size = Size(size.width, h)
-        )
-    }
+@Composable
+fun StencilText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    ground: Color,
+    modifier: Modifier = Modifier,
+    thickness: Dp = 2.dp
+) {
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        text,
+        style = style,
+        color = color,
+        onTextLayout = { layout = it },
+        modifier = modifier.drawWithContent {
+            drawContent()
+            val l = layout ?: return@drawWithContent
+            val h = thickness.toPx()
+            // Archivo's capitals are about 0.72 em tall, so their middle sits 0.36 em over the baseline.
+            val capMiddle = style.fontSize.toPx() * 0.36f
+            for (line in 0 until l.lineCount) {
+                val y = l.getLineBaseline(line) - capMiddle
+                drawRect(
+                    color = ground,
+                    topLeft = Offset(l.getLineLeft(line), y - h / 2f),
+                    size = Size(l.getLineRight(line) - l.getLineLeft(line), h)
+                )
+            }
+        }
+    )
+}

@@ -1053,7 +1053,7 @@ private const val SOS_HOLD_MS = 1500L
  * confirm dialog appears, and [onConfirmed] runs only after the user taps Send.
  */
 @Composable
-private fun SosButton(onConfirmed: () -> Unit) {
+internal fun SosButton(onConfirmed: () -> Unit) {
     var sosProgress by remember { mutableFloatStateOf(0f) }
     var sosPressing by remember { mutableStateOf(false) }
     var showSosConfirm by remember { mutableStateOf(false) }
@@ -1287,120 +1287,114 @@ private fun MainApp(
         HomeTab.DRIVE, HomeTab.ACTIVITY -> false
     }
 
-    Column(Modifier.fillMaxSize()) {
-        ShellTopBar(title = title, onBack = popUp, onSettings = { showSettings = true }, menu = menu)
-
-        when {
-            tab == HomeTab.SCAN && trackerAction == null && category == ScanCategory.TRACKERS -> {
-                ShellSubTabs(ScanCategory.TRACKERS.subTabs, trackerSub) { trackerSub = it }
-                TrackerActionsRow { action -> trackerActionName = action.name }
+    ShellScaffold(
+        title = title,
+        onBack = popUp,
+        onSettings = { showSettings = true },
+        menu = menu,
+        tabs = tabs,
+        selected = tab,
+        alert = { alertFor(it) },
+        onSelectTab = { openTab(it) },
+        header = {
+            when {
+                tab == HomeTab.SCAN && trackerAction == null && category == ScanCategory.TRACKERS -> {
+                    ShellSubTabs(ScanCategory.TRACKERS.subTabs, trackerSub) { trackerSub = it }
+                    TrackerActionsRow { action -> trackerActionName = action.name }
+                }
+                tab == HomeTab.SCAN && trackerAction == null && category == ScanCategory.PHONE ->
+                    ShellSubTabs(ScanCategory.PHONE.subTabs, phoneSub) { phoneSub = it }
+                tab == HomeTab.ACTIVITY ->
+                    ShellSubTabs(ACTIVITY_SUB_TABS, activitySub) { activitySub = it }
             }
-            tab == HomeTab.SCAN && trackerAction == null && category == ScanCategory.PHONE ->
-                ShellSubTabs(ScanCategory.PHONE.subTabs, phoneSub) { phoneSub = it }
-            tab == HomeTab.ACTIVITY ->
-                ShellSubTabs(ACTIVITY_SUB_TABS, activitySub) { activitySub = it }
-        }
-
-        Box(
-            Modifier
-                .weight(1f)
-                // Without a tab bar the content reaches the bottom edge itself.
-                .then(if (tabs.size == 1) Modifier.navigationBarsPadding() else Modifier)
-        ) {
-            when (tab) {
-                HomeTab.SCAN -> when {
-                    trackerAction == TrackerAction.LOCATE -> FindTrackerPage()
-                    trackerAction == TrackerAction.SELF_TEST -> SelfTestPage()
-                    category == null -> ScanHub(
-                        scanning = status.scanning,
-                        statuses = statuses,
-                        onOpen = { openCategory(it) }
-                    )
-                    category == ScanCategory.TRACKERS -> if (trackerSub == 0) {
-                        ScanScreen(
-                            onStart, onStop, hasPermissions,
-                            onShowExplainer = { d -> explainerTarget = ExplainerTarget.BleDevice(d) }
-                        )
-                    } else {
-                        MapScreen()
-                    }
-                    category == ScanCategory.CAMERAS -> CameraSweepScreen()
-                    category == ScanCategory.CELL -> CellScreen(
-                        onShowExplainer = { f -> explainerTarget = ExplainerTarget.CellIndicator(f) },
-                        onShown = onRefreshCell
-                    )
-                    category == ScanCategory.WIFI -> WifiScreen(onShown = onRefreshWifi)
-                    category == ScanCategory.NFC -> NfcScreen(
-                        onAddToVault = onAddToVault,
-                        onRemoveVault = onRemoveVault,
-                        onEmulate = onEmulate,
-                        onUnlockVault = onUnlockVault,
-                        onLockVault = onLockVault,
-                        onEraseVault = onEraseVault
-                    )
-                    category == ScanCategory.PHONE -> when (phoneSub) {
-                        0 -> DeviceScreen(onShown = onRefreshDeviceHealth)
-                        1 -> StalkerwarePage()
-                        else -> CertificatesPage()
-                    }
-                }
-                HomeTab.COMMS -> when (commsAction) {
-                    CommsAction.FAKE_CALL -> FakeCallPage()
-                    CommsAction.DURESS -> DuressPage()
-                    null -> CommsScreen(
-                        openPeer = threadRequest,
-                        onPeerConsumed = { Registry.takeThreadRequest() },
-                        openInvite = inviteRequest,
-                        onInviteConsumed = { Registry.takeInviteRequest() },
-                        openGroup = groupRequest,
-                        onGroupConsumed = { Registry.takeGroupRequest() },
-                        onAppSettings = { showSettings = true }
-                    )
-                }
-                HomeTab.DRIVE -> DriveScreen()
-                HomeTab.ACTIVITY -> when (activitySub) {
-                    0 -> TimelineScreen()
-                    1 -> PatternOfLifePage()
-                    else -> UnlockLedgerPage()
-                }
-            }
-
-            // SOS panic button, floating over the active screen. Hidden while the
-            // phone is locked; no animation needed for a critical safety button.
-            if (!locked) {
-                Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)) {
-                    SosButton(onConfirmed = {
-                        scope.launch(Dispatchers.IO) {
-                            suspend fun toast(text: String) = withContext(Dispatchers.Main) {
-                                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
-                            }
-                            // The alert goes out at once with whatever position is known.
-                            // Waiting for a fix first held it up by several seconds; now a
-                            // fix found afterwards follows as a second alert.
-                            val s = Registry.status.value
-                            val hadFix = s.lat != null && s.lon != null
-                            Registry.setPanicActive(true)
-                            toast(if (hadFix) "SOS sent with your location" else "SOS sent — finding your location…")
-                            if (hadFix) return@launch
-                            val loc = sosLocation(context)
-                            if (loc == null) { toast("No GPS fix to attach to the SOS"); return@launch }
-                            // The first broadcast lowers the flag when it is done; a second
-                            // raise before that would be lost, so wait for it.
-                            Registry.panicActive.first { !it }
-                            Registry.setPanicActive(true)
-                            toast("Your location followed the SOS")
+        },
+        // SOS panic button, floating over the active screen. Hidden while the
+        // phone is locked; no animation needed for a critical safety button.
+        sos = if (locked) null else {
+            {
+                SosButton(onConfirmed = {
+                    scope.launch(Dispatchers.IO) {
+                        suspend fun toast(text: String) = withContext(Dispatchers.Main) {
+                            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
                         }
-                    })
+                        // The alert goes out at once with whatever position is known.
+                        // Waiting for a fix first held it up by several seconds; now a
+                        // fix found afterwards follows as a second alert.
+                        val s = Registry.status.value
+                        val hadFix = s.lat != null && s.lon != null
+                        Registry.setPanicActive(true)
+                        toast(if (hadFix) "SOS sent with your location" else "SOS sent. Finding your location…")
+                        if (hadFix) return@launch
+                        val loc = sosLocation(context)
+                        if (loc == null) { toast("No GPS fix to attach to the SOS"); return@launch }
+                        // The first broadcast lowers the flag when it is done; a second
+                        // raise before that would be lost, so wait for it.
+                        Registry.panicActive.first { !it }
+                        Registry.setPanicActive(true)
+                        toast("Your location followed the SOS")
+                    }
+                })
+            }
+        }
+    ) {
+        when (tab) {
+            HomeTab.SCAN -> when {
+                trackerAction == TrackerAction.LOCATE -> FindTrackerPage()
+                trackerAction == TrackerAction.SELF_TEST -> SelfTestPage()
+                category == null -> ScanHub(
+                    scanning = status.scanning,
+                    statuses = statuses,
+                    onOpen = { openCategory(it) }
+                )
+                category == ScanCategory.TRACKERS -> if (trackerSub == 0) {
+                    ScanScreen(
+                        onStart, onStop, hasPermissions,
+                        onShowExplainer = { d -> explainerTarget = ExplainerTarget.BleDevice(d) }
+                    )
+                } else {
+                    MapScreen()
                 }
+                category == ScanCategory.CAMERAS -> CameraSweepScreen()
+                category == ScanCategory.CELL -> CellScreen(
+                    onShowExplainer = { f -> explainerTarget = ExplainerTarget.CellIndicator(f) },
+                    onShown = onRefreshCell
+                )
+                category == ScanCategory.WIFI -> WifiScreen(onShown = onRefreshWifi)
+                category == ScanCategory.NFC -> NfcScreen(
+                    onAddToVault = onAddToVault,
+                    onRemoveVault = onRemoveVault,
+                    onEmulate = onEmulate,
+                    onUnlockVault = onUnlockVault,
+                    onLockVault = onLockVault,
+                    onEraseVault = onEraseVault
+                )
+                category == ScanCategory.PHONE -> when (phoneSub) {
+                    0 -> DeviceScreen(onShown = onRefreshDeviceHealth)
+                    1 -> StalkerwarePage()
+                    else -> CertificatesPage()
+                }
+            }
+            HomeTab.COMMS -> when (commsAction) {
+                CommsAction.FAKE_CALL -> FakeCallPage()
+                CommsAction.DURESS -> DuressPage()
+                null -> CommsScreen(
+                    openPeer = threadRequest,
+                    onPeerConsumed = { Registry.takeThreadRequest() },
+                    openInvite = inviteRequest,
+                    onInviteConsumed = { Registry.takeInviteRequest() },
+                    openGroup = groupRequest,
+                    onGroupConsumed = { Registry.takeGroupRequest() },
+                    onAppSettings = { showSettings = true }
+                )
+            }
+            HomeTab.DRIVE -> DriveScreen()
+            HomeTab.ACTIVITY -> when (activitySub) {
+                0 -> TimelineScreen()
+                1 -> PatternOfLifePage()
+                else -> UnlockLedgerPage()
             }
         }
 
-        if (tabs.size > 1) ShellBottomBar(
-            tabs = tabs,
-            selected = tab,
-            alert = { alertFor(it) },
-            onSelect = { openTab(it) }
-        )
     }
 
     // Threat explainer bottom sheet
@@ -1444,7 +1438,7 @@ private fun sosLocation(context: Context): LatLon? {
 // ── Scan (BLE) screen ────────────────────────────────────────────────────
 
 @Composable
-private fun ScanScreen(
+internal fun ScanScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     hasPermissions: () -> Boolean,
@@ -3131,7 +3125,7 @@ private fun NfcTagRow(
 // ── Device health screen ────────────────────────────────────────────────
 
 @Composable
-private fun DeviceScreen(onShown: () -> Unit) {
+internal fun DeviceScreen(onShown: () -> Unit) {
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     // Live microphone and camera monitoring only runs inside the scanner service;

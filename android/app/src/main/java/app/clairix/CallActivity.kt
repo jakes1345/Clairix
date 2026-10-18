@@ -84,6 +84,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
@@ -145,8 +147,9 @@ class CallActivity : ComponentActivity() {
         handle(intent)
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(background = ClairixTheme.colors.base, surface = ClairixTheme.colors.surface)) {
-                Surface(color = ClairixTheme.colors.base, modifier = Modifier.fillMaxSize()) {
+            val theme by AppSettings.theme.collectAsStateWithLifecycle()
+            ClairixTheme(theme = theme) {
+                Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                     val call by CallManager.call.collectAsStateWithLifecycle()
                     val c = call
                     // The call the voicemail is for, kept once the call itself is gone
@@ -270,7 +273,7 @@ internal fun VoicemailScreen(contact: Contact, call: ActiveCall?, modifier: Modi
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("CALL ENDED", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
+        Text("Call ended", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
         Spacer(Modifier.height(12.dp))
         Text(contact.name.ifBlank { formatClairixNumber(contact.number) }, style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
         Spacer(Modifier.height(4.dp))
@@ -375,11 +378,11 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
             is VoicemailStep.Recorded -> {
                 Text("Voicemail recorded · ${durationLabel(s.durationMs)}", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    VoicemailButton("DISCARD", ClairixTheme.colors.danger) {
+                    VoicemailButton("Discard", Tone.Danger) {
                         step = VoicemailStep.Idle
                         error = null
                     }
-                    VoicemailButton("SEND VOICEMAIL", ClairixTheme.colors.safe) {
+                    VoicemailButton("Send voicemail", Tone.Safe) {
                         step = VoicemailStep.Sending(s.audioB64, s.durationMs)
                         scope.launch {
                             CommsRepository.sendVoicemail(contact, s.audioB64, s.durationMs)
@@ -438,7 +441,7 @@ private fun RecordButton(recording: Boolean, onClick: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             if (recording) {
-                Box(Modifier.size(30.dp).background(Color(0xFF12161D), RoundedCornerShape(6.dp)))
+                Box(Modifier.size(30.dp).background(ClairixTheme.colors.onDanger, ClairixShapes.Tag))
             } else {
                 MicrophoneGlyph(ClairixTheme.colors.text, Modifier.size(40.dp))
             }
@@ -465,13 +468,7 @@ private fun MicrophoneGlyph(colour: Color, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun VoicemailButton(label: String, colour: Color, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = colour, contentColor = Color(0xFF12161D)),
-        shape = RoundedCornerShape(28.dp),
-        modifier = Modifier.height(56.dp).widthIn(min = 130.dp)
-    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
+private fun VoicemailButton(label: String, tone: Tone, onClick: () -> Unit) {
+    PrimaryButton(label, onClick = onClick, tone = tone, modifier = Modifier.height(56.dp).widthIn(min = 136.dp))
 }
 
-// Colour tokens, the same as the COMMS tab's.

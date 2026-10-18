@@ -114,7 +114,7 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         pendingAt = FakeCall.pendingAt(context)
     }
 
-    ToolPageList(title = "FAKE CALL", onBack = onBack) {
+    ToolPageList(title = "Fake call", onBack = onBack) {
         item(key = "§intro") {
             Text(
                 "A way out of a conversation or a situation that is going wrong. The phone rings with " +
@@ -139,14 +139,14 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                                 color = ClairixTheme.colors.textSubtle
                             )
                         }
-                        StatusPill("SCHEDULED", Tone.Accent)
+                        StatusPill("Scheduled", Tone.Accent)
                     }
                     SecondaryButton("Cancel", onClick = { FakeCall.cancel(context); pendingAt = null }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
-        item(key = "§caller-hdr") { SectionHeader("CALLER") }
+        item(key = "§caller-hdr") { SectionHeader("Caller") }
         item(key = "§caller") {
             ClairixCard {
                 ClairixTextField(value = name, onValueChange = { name = it.take(40) }, label = "Name shown", placeholder = "Mum", modifier = Modifier.fillMaxWidth())
@@ -160,7 +160,7 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§connect-hdr") { SectionHeader("ON ANSWER") }
+        item(key = "§connect-hdr") { SectionHeader("On answer") }
         item(key = "§connect") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -207,7 +207,7 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§when-hdr") { SectionHeader("RING IN") }
+        item(key = "§when-hdr") { SectionHeader("Ring in") }
         item(key = "§when") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -281,7 +281,7 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
         )
     }
 
-    ToolPageList(title = "DURESS PHRASE", onBack = onBack) {
+    ToolPageList(title = "Duress phrase", onBack = onBack) {
         item(key = "§status") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -299,7 +299,7 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    StatusPill(if (configured) "CONFIGURED" else "NOT SET", if (configured) Tone.Safe else Tone.Neutral)
+                    StatusPill(if (configured) "Configured" else "Not set", if (configured) Tone.Safe else Tone.Neutral)
                 }
                 if (tooShortStored) {
                     Text(
@@ -312,7 +312,7 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§set-hdr") { SectionHeader(if (configured) "REPLACE PHRASE" else "SET PHRASE") }
+        item(key = "§set-hdr") { SectionHeader(if (configured) "Replace phrase" else "Set phrase") }
         item(key = "§set") {
             ClairixCard {
                 ClairixTextField(

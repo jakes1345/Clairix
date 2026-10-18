@@ -406,12 +406,13 @@ fun StatusHero(
                 }
                 // Short verdicts get the full display size; longer ones step down
                 // so they wrap to two lines at most on a phone.
-                Text(
+                StencilText(
                     headline.uppercase(Locale.getDefault()),
                     style = if (headline.length <= 10) MaterialTheme.typography.displayMedium
                     else MaterialTheme.typography.headlineLarge,
                     color = fg,
-                    modifier = Modifier.stencilSlit(c.surface, thickness = 3.dp)
+                    ground = c.surface,
+                    thickness = if (headline.length <= 10) 3.dp else 2.dp
                 )
             }
             if (trailing != null) trailing()

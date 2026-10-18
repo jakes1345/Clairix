@@ -78,15 +78,16 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.toggleable
+import app.clairix.ui.components.*
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.MaterialTheme
 import app.clairix.ui.theme.monoSmall
-import app.clairix.ui.components.ClairixShapes
-
-// ── Colour tokens local to this file ──────────────────────────────────────────
 
 private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
-private enum class SweepTab(val label: String) { OPTICAL("OPTICAL"), NETWORK("NETWORK"), WIRELESS("WIRELESS"), GUIDED("GUIDED") }
+private enum class SweepTab(val label: String) { OPTICAL("Optical"), NETWORK("Network"), WIRELESS("Wireless"), GUIDED("Guided") }
 
 /**
  * The hidden-camera sweep: four tabs for the four ways a phone can look —
@@ -103,53 +104,50 @@ fun CameraSweepScreen(onBack: (() -> Unit)? = null) {
     val strong = findings.count { it.confidence >= 0.7f }
 
     Column(Modifier.fillMaxSize().background(ClairixTheme.colors.base)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 8.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (onBack != null) {
-                Text(
-                    "‹",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = ClairixTheme.colors.textMuted,
-                    modifier = Modifier.clickable(onClick = onBack).padding(horizontal = 8.dp)
-                )
-            } else {
-                Spacer(Modifier.width(8.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text("HIDDEN CAMERAS", style = MaterialTheme.typography.headlineSmall, color = ClairixTheme.colors.text)
-                Text("Lens glint, infrared, the Wi-Fi, the air and your hands", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-            }
-            if (findings.isNotEmpty()) {
-                Badge(
-                    text = "${findings.size}" + if (strong > 0) " · $strong strong" else "",
-                    color = if (strong > 0) ClairixTheme.colors.danger else ClairixTheme.colors.caution
-                )
-            }
-        }
+        // Shown on its own screen it brings its own bar; under the shell it has one already.
+        if (onBack != null) ClairixTopBar(title = "Hidden cameras", onBack = onBack)
 
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            SweepTab.entries.forEachIndexed { i, t ->
-                val selected = t == tab
-                val count = findings.count { it.method in methodsFor(t) }
-                Column(
-                    Modifier.weight(1f).clickable { tabIndex = i }.padding(vertical = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+        // ── Status first: what the sweep has found so far ──────────────────
+        val tone = when {
+            strong > 0 -> Tone.Danger
+            findings.isNotEmpty() -> Tone.Caution
+            else -> Tone.Neutral
+        }
+        ClairixCard(
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            tone = if (tone == Tone.Neutral) null else tone,
+            emphasis = strong > 0,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                IconWell(ClairixIcons.Videocam, if (tone == Tone.Neutral) Tone.Accent else tone, size = 40.dp)
+                Column(Modifier.weight(1f)) {
                     Text(
-                        t.label + if (count > 0) " ($count)" else "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (selected) ClairixTheme.colors.text else ClairixTheme.colors.textSubtle,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        when {
+                            strong > 0 -> if (strong == 1) "1 strong finding" else "$strong strong findings"
+                            findings.isNotEmpty() -> "${findings.size} to check"
+                            else -> "Nothing found yet"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ClairixTheme.colors.text
                     )
-                    Spacer(Modifier.height(6.dp))
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(if (selected) ClairixTheme.colors.accent else ClairixTheme.colors.border))
+                    Text(
+                        "Lens glint, infrared, the Wi-Fi, the air and your hands",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
+                    )
                 }
             }
         }
+
+        SegmentedTabs(
+            labels = SweepTab.entries.map { t ->
+                val count = findings.count { it.method in methodsFor(t) }
+                t.label + if (count > 0) " · $count" else ""
+            },
+            selected = tabIndex.coerceIn(0, SweepTab.entries.size - 1),
+            onSelect = { tabIndex = it }
+        )
 
         when (tab) {
             SweepTab.OPTICAL -> OpticalTab(findings)
@@ -187,18 +185,19 @@ private fun OpticalTab(findings: List<CameraFinding>) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Spacer(Modifier.height(4.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OpticalMode.entries.forEachIndexed { i, m ->
-                Chip(
-                    text = m.label.uppercase(Locale.US), selected = m == mode,
-                    modifier = Modifier.weight(1f), onClick = { modeIndex = i }
-                )
-            }
-            Chip(text = if (live) "PAUSE" else "RESUME", selected = false, onClick = { live = !live })
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            ChoiceChips(
+                choices = OpticalMode.entries,
+                selected = mode,
+                label = { it.label },
+                onSelect = { modeIndex = OpticalMode.entries.indexOf(it) },
+                modifier = Modifier.weight(1f)
+            )
+            GhostButton(if (live) "Pause" else "Resume", onClick = { live = !live }, tone = Tone.Neutral)
         }
 
         if (!granted) {
-            PanelBox {
+            ClairixCard(spacing = 4.dp) {
                 Text("Camera permission", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
                     "The optical sweep looks through the phone's camera for lenses looking back. Frames are analysed in memory and never saved or sent.",
@@ -206,11 +205,11 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                     color = ClairixTheme.colors.textMuted
                 )
                 Spacer(Modifier.height(8.dp))
-                ActionButton("ALLOW CAMERA") { ask.launch(Manifest.permission.CAMERA) }
+                PrimaryButton("Allow camera", onClick = { ask.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth())
             }
         } else {
             Box(
-                Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(ClairixShapes.Card).background(Color.Black)
+                Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(ClairixShapes.Card).background(ClairixTheme.colors.base)
             ) {
                 if (live) {
                     CameraViewfinder(mode)
@@ -222,7 +221,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                 }
                 // Status strip
                 Row(
-                    Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0xAA0E1116)).padding(horizontal = 10.dp, vertical = 6.dp),
+                    Modifier.align(Alignment.BottomStart).fillMaxWidth().background(ClairixTheme.colors.base.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     val status = when {
@@ -230,7 +229,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                         !state.running -> "Opening camera…"
                         state.tooBright -> "Too bright for IR — darken the room"
                         state.washedOut -> "Washed out — back away from the surface"
-                        state.tracks.any { it.candidate } -> "STEADY REFLECTION — look for a pinhole"
+                        state.tracks.any { it.candidate } -> "Steady reflection. Look for a pinhole"
                         state.tracks.isNotEmpty() -> "${state.tracks.size} bright spot(s), none steady yet"
                         else -> if (mode == OpticalMode.GLINT) "Pan slowly, torch on" else "Point at suspect objects"
                     }
@@ -250,7 +249,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
             }
         }
 
-        PanelBox {
+        ClairixCard(spacing = 4.dp) {
             if (mode == OpticalMode.GLINT) {
                 Text("How glint works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
@@ -376,8 +375,8 @@ private fun NetworkTab(findings: List<CameraFinding>) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Spacer(Modifier.height(4.dp))
-        PanelBox {
-            SectionLabel("THIS NETWORK")
+        ClairixCard(spacing = 4.dp) {
+            Text("This network", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
             val conn = wifi.connection
             Text(
                 conn?.ssid ?: progress.ssid ?: "Not connected to Wi-Fi",
@@ -389,14 +388,14 @@ private fun NetworkTab(findings: List<CameraFinding>) {
             Spacer(Modifier.height(8.dp))
             if (progress.running) {
                 val frac = if (progress.hostsTotal > 0) progress.hostsDone.toFloat() / progress.hostsTotal else 0f
-                LinearProgressIndicator(progress = { frac }, color = ClairixTheme.colors.accent, trackColor = ClairixTheme.colors.border, modifier = Modifier.fillMaxWidth())
+                ClairixProgressBar(frac)
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(progress.phase, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                     Text("${progress.hostsDone}/${progress.hostsTotal} · ${progress.liveHosts} live", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                 }
                 Spacer(Modifier.height(8.dp))
-                ActionButton("CANCEL", tone = ClairixTheme.colors.textMuted) { HiddenCameraScanner.cancelNetworkScan() }
+                SecondaryButton("Cancel", onClick = { HiddenCameraScanner.cancelNetworkScan() }, modifier = Modifier.fillMaxWidth())
             } else {
                 progress.error?.let { SweepWarning(it) }
                 if (progress.lastScanTs > 0 && progress.error == null) {
@@ -407,11 +406,11 @@ private fun NetworkTab(findings: List<CameraFinding>) {
                     )
                 }
                 Spacer(Modifier.height(6.dp))
-                ActionButton("SWEEP THE WI-FI FOR CAMERAS") { HiddenCameraScanner.startNetworkScan(ctx) }
+                PrimaryButton("Sweep the Wi-Fi for cameras", onClick = { HiddenCameraScanner.startNetworkScan(ctx) }, modifier = Modifier.fillMaxWidth())
             }
         }
 
-        PanelBox {
+        ClairixCard(spacing = 4.dp) {
             Text("What it looks for", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "Every address on the Wi-Fi's /24 is tried on the camera ports — RTSP (554, 8554), the Dahua and XMeye recorder ports (37777, 34567), the web ports — and whatever answers is asked for its banner. At the same time an ONVIF discovery probe goes out, which every ONVIF camera must answer, and mDNS is browsed for RTSP, Axis, PSIA, ONVIF and HomeKit camera services. A host with just a web page and no camera fingerprint is left out: that is every printer and router. Join the venue's Wi-Fi first — a guest network that isolates clients will hide everything, which is itself worth knowing.",
@@ -439,8 +438,8 @@ private fun WirelessTab(findings: List<CameraFinding>) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Spacer(Modifier.height(4.dp))
-        PanelBox {
-            SectionLabel("WI-FI SETUP HOTSPOTS")
+        ClairixCard(spacing = 4.dp) {
+            Text("Wi-Fi setup hotspots", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "A camera nobody has finished installing broadcasts its own hotspot — usually open, named for its maker with a few hex digits. The venue's own networks never look like that.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -456,13 +455,17 @@ private fun WirelessTab(findings: List<CameraFinding>) {
                 )
                 Spacer(Modifier.height(6.dp))
             }
-            ActionButton(if (state.wifiScanning) "SCANNING…" else "SCAN FOR SETUP HOTSPOTS", enabled = !state.wifiScanning) {
-                HiddenCameraScanner.startWifiSetupScan(ctx)
-            }
+            PrimaryButton(
+                if (state.wifiScanning) "Scanning…" else "Scan for setup hotspots",
+                onClick = { HiddenCameraScanner.startWifiSetupScan(ctx) },
+                enabled = !state.wifiScanning,
+                loading = state.wifiScanning,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
-        PanelBox {
-            SectionLabel("BLUETOOTH SETUP BEACONS")
+        ClairixCard(spacing = 4.dp) {
+            Text("Bluetooth setup beacons", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "Before it has Wi-Fi credentials a camera advertises over Bluetooth so an app can hand them over. Twenty seconds of listening catches everything in the room that is still waiting.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -478,13 +481,13 @@ private fun WirelessTab(findings: List<CameraFinding>) {
                     color = ClairixTheme.colors.accent
                 )
                 Spacer(Modifier.height(6.dp))
-                ActionButton("STOP", tone = ClairixTheme.colors.textMuted) { HiddenCameraScanner.stopBleListening() }
+                SecondaryButton("Stop", onClick = { HiddenCameraScanner.stopBleListening() }, modifier = Modifier.fillMaxWidth())
             } else {
                 if (state.bleDevicesSeen > 0) {
                     Text("Last window heard ${state.bleDevicesSeen} devices", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                     Spacer(Modifier.height(6.dp))
                 }
-                ActionButton("LISTEN FOR 20 SECONDS") { HiddenCameraScanner.startBleListening(ctx, 20_000L) }
+                SecondaryButton("Listen for 20 seconds", onClick = { HiddenCameraScanner.startBleListening(ctx, 20_000L) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
             }
         }
 
@@ -513,13 +516,13 @@ private fun GuidedTab(findings: List<CameraFinding>) {
         Spacer(Modifier.height(4.dp))
 
         // Magnetometer gauge
-        PanelBox {
+        ClairixCard(spacing = 4.dp) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                SectionLabel("MAGNETIC GAUGE", Modifier.weight(1f))
-                Chip(
-                    text = if (mag.active) "STOP" else "START",
-                    selected = mag.active,
-                    onClick = { if (mag.active) HiddenCameraScanner.stopMagnetic() else HiddenCameraScanner.startMagnetic(ctx) }
+                Text("Magnetic gauge", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
+                ClairixButton(
+                    if (mag.active) "Stop" else "Start",
+                    onClick = { if (mag.active) HiddenCameraScanner.stopMagnetic() else HiddenCameraScanner.startMagnetic(ctx) },
+                    kind = if (mag.active) ButtonKind.Secondary else ButtonKind.Primary
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -529,7 +532,7 @@ private fun GuidedTab(findings: List<CameraFinding>) {
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        if (mag.warmingUp) "Settling…" else if (mag.triggered) "ANOMALY — look here" else "Quiet",
+                        if (mag.warmingUp) "Settling…" else if (mag.triggered) "Anomaly. Look here" else "Quiet",
                         style = MaterialTheme.typography.titleSmall,
                         color = if (mag.triggered) ClairixTheme.colors.danger else if (mag.warmingUp) ClairixTheme.colors.textSubtle else ClairixTheme.colors.safe
                     )
@@ -552,28 +555,27 @@ private fun GuidedTab(findings: List<CameraFinding>) {
         }
 
         // Checklist
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionLabel("ROOM SWEEP · ${done.count { id -> steps.any { it.id == id } }}/${steps.size}", Modifier.weight(1f))
-            if (done.isNotEmpty()) {
-                Text(
-                    "RESET",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ClairixTheme.colors.textSubtle,
-                    modifier = Modifier.clickable { HiddenCameraScanner.resetSweep() }.padding(4.dp)
-                )
-            }
-        }
+        SectionHeader(
+            "Room sweep · ${done.count { id -> steps.any { it.id == id } }} of ${steps.size}",
+            action = if (done.isNotEmpty()) {
+                { GhostButton("Reset", onClick = { HiddenCameraScanner.resetSweep() }, tone = Tone.Neutral) }
+            } else null
+        )
         steps.forEachIndexed { i, step ->
             val checked = step.id in done
             Row(
-                Modifier.fillMaxWidth().background(if (checked) ClairixTheme.colors.surface else ClairixTheme.colors.surfaceRaised, ClairixShapes.Card)
-                    .clickable { HiddenCameraScanner.toggleSweepStep(step.id) }
+                Modifier.fillMaxWidth()
+                    .clip(ClairixShapes.Card)
+                    .background(if (checked) ClairixTheme.colors.base else ClairixTheme.colors.surface, ClairixShapes.Card)
+                    .border(1.dp, ClairixTheme.colors.border, ClairixShapes.Card)
+                    .toggleable(value = checked, role = Role.Checkbox, onValueChange = { HiddenCameraScanner.toggleSweepStep(step.id) })
                     .padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.Top
             ) {
                 Checkbox(
-                    checked = checked, onCheckedChange = { HiddenCameraScanner.toggleSweepStep(step.id) },
-                    colors = CheckboxDefaults.colors(checkedColor = ClairixTheme.colors.safe, uncheckedColor = ClairixTheme.colors.textSubtle, checkmarkColor = ClairixTheme.colors.base)
+                    checked = checked, onCheckedChange = null,
+                    modifier = Modifier.padding(12.dp),
+                    colors = CheckboxDefaults.colors(checkedColor = ClairixTheme.colors.safe, uncheckedColor = ClairixTheme.colors.textSubtle, checkmarkColor = ClairixTheme.colors.onSafe)
                 )
                 Column(Modifier.weight(1f).padding(top = 12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -585,7 +587,7 @@ private fun GuidedTab(findings: List<CameraFinding>) {
                             color = if (checked) ClairixTheme.colors.textMuted else ClairixTheme.colors.text,
                             modifier = Modifier.weight(1f)
                         )
-                        Badge(step.tool, ClairixTheme.colors.info)
+                        StatusPill(step.tool, Tone.Info)
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(step.detail, style = MaterialTheme.typography.bodyMedium, color = if (checked) ClairixTheme.colors.textSubtle else ClairixTheme.colors.textMuted)
@@ -594,11 +596,7 @@ private fun GuidedTab(findings: List<CameraFinding>) {
         }
 
         // The honest limit
-        Column(Modifier.fillMaxWidth().border(1.dp, ClairixTheme.colors.caution.copy(alpha = 0.6f), ClairixShapes.Card).padding(14.dp)) {
-            Text("WHAT THE PHONE CANNOT SEE", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.caution)
-            Spacer(Modifier.height(6.dp))
-            Text(HiddenCameraScanner.ANALOG_RF_NOTE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
-        }
+        Notice(Tone.Caution, HiddenCameraScanner.ANALOG_RF_NOTE, title = "What the phone can't see")
 
         FindingsSection(mine, methodsFor(SweepTab.GUIDED), "No magnetic anomalies recorded")
         Spacer(Modifier.height(24.dp))
@@ -631,21 +629,15 @@ private fun MagneticBar(field: Float, baseline: Float, threshold: Float, trigger
 
 @Composable
 private fun FindingsSection(rows: List<CameraFinding>, methods: Set<CameraFindMethod>, emptyText: String) {
-    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        val strong = rows.count { it.confidence >= 0.7f }
-        SectionLabel(
-            "FINDINGS (${rows.size})" + if (strong > 0) " · $strong strong" else "",
-            Modifier.weight(1f), color = if (strong > 0) ClairixTheme.colors.danger else ClairixTheme.colors.textMuted
-        )
-        if (rows.isNotEmpty()) {
-            Text(
-                "CLEAR",
-                style = MaterialTheme.typography.labelSmall,
-                color = ClairixTheme.colors.textSubtle,
-                modifier = Modifier.clickable { methods.forEach { HiddenCameraScanner.clear(it) } }.padding(4.dp)
-            )
-        }
-    }
+    val strong = rows.count { it.confidence >= 0.7f }
+    SectionHeader(
+        "Findings",
+        tone = if (strong > 0) Tone.Danger else Tone.Accent,
+        supporting = if (rows.isEmpty()) null else "${rows.size}" + if (strong > 0) " · $strong strong" else "",
+        action = if (rows.isNotEmpty()) {
+            { GhostButton("Clear", onClick = { methods.forEach { HiddenCameraScanner.clear(it) } }, tone = Tone.Neutral) }
+        } else null
+    )
     if (rows.isEmpty()) {
         Text(emptyText, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
     } else {
@@ -656,30 +648,20 @@ private fun FindingsSection(rows: List<CameraFinding>, methods: Set<CameraFindMe
 @Composable
 private fun FindingRow(f: CameraFinding) {
     val tone = when {
-        f.confidence >= 0.8f -> ClairixTheme.colors.danger
-        f.confidence >= 0.5f -> ClairixTheme.colors.caution
-        else -> ClairixTheme.colors.textMuted
+        f.confidence >= 0.8f -> Tone.Danger
+        f.confidence >= 0.5f -> Tone.Caution
+        else -> Tone.Neutral
     }
-    Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).background(tone, RoundedCornerShape(4.dp)))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                HiddenCameraScanner.methodLabel(f.method).uppercase(Locale.US),
-                style = MaterialTheme.typography.labelSmall,
-                color = tone,
-                modifier = Modifier.weight(1f)
-            )
-            Text("${(f.confidence * 100).roundToInt()} %", style = MaterialTheme.typography.monoSmall, color = tone)
-            Spacer(Modifier.width(8.dp))
+    ClairixCard(tone = tone, spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatusPill(HiddenCameraScanner.methodLabel(f.method), tone)
+            Spacer(Modifier.weight(1f))
+            Text("${(f.confidence * 100).roundToInt()} %", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
             Text(timeFmt.format(Date(f.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
         }
-        Spacer(Modifier.height(6.dp))
         Text(f.location, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-        Spacer(Modifier.height(4.dp))
         Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
         if (f.lat != null && f.lon != null) {
-            Spacer(Modifier.height(4.dp))
             Text(
                 String.format(Locale.US, "%.5f, %.5f", f.lat, f.lon),
                 style = MaterialTheme.typography.monoSmall,
@@ -689,64 +671,10 @@ private fun FindingRow(f: CameraFinding) {
     }
 }
 
-@Composable
-private fun PanelBox(content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp)) { content() }
-}
-
-@Composable
-private fun SectionLabel(text: String, modifier: Modifier = Modifier, color: Color = ClairixTheme.colors.textMuted) {
-    Text(text, style = MaterialTheme.typography.labelSmall, color = color, modifier = modifier)
-}
-
-/** An error from one of the sweep methods: the warning icon, then the message. */
+/** A message from one of the sweep methods, such as an error or a missing permission. */
 @Composable
 private fun SweepWarning(text: String) {
-    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Icon(
-            Icons.Filled.Warning, contentDescription = "Warning", tint = ClairixTheme.colors.caution,
-            modifier = Modifier.padding(top = 1.dp).size(15.dp)
-        )
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution)
-    }
-}
-
-@Composable
-private fun Badge(text: String, color: Color) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-        modifier = Modifier.border(1.dp, color.copy(alpha = 0.7f), ClairixShapes.Card).padding(horizontal = 6.dp, vertical = 2.dp)
-    )
-}
-
-@Composable
-private fun Chip(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier
-            .background(if (selected) ClairixTheme.colors.accent.copy(alpha = 0.18f) else ClairixTheme.colors.surfaceRaised, ClairixShapes.Card)
-            .border(1.dp, if (selected) ClairixTheme.colors.accent else ClairixTheme.colors.border, ClairixShapes.Card)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = if (selected) ClairixTheme.colors.accent else ClairixTheme.colors.textMuted, maxLines = 1)
-    }
-}
-
-@Composable
-private fun ActionButton(text: String, enabled: Boolean = true, tone: Color = ClairixTheme.colors.accent, onClick: () -> Unit) {
-    val col = if (enabled) tone else ClairixTheme.colors.textSubtle
-    Box(
-        Modifier.fillMaxWidth()
-            .border(1.dp, col, ClairixShapes.Card)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = col)
-    }
+    Notice(Tone.Caution, text)
 }
 
 /** Wall-clock time that ticks every [periodMs] so "n s ago" labels and countdowns move. */

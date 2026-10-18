@@ -52,7 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import app.clairix.ui.theme.DecoyCallPalette
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -246,12 +246,15 @@ class FakeCallReceiver : BroadcastReceiver() {
     }
 }
 
-private val FcGround = Color(0xFF0B0F14)
-private val FcInk = Color(0xFFF2F4F7)
-private val FcDim = Color(0xFF9AA4B2)
-private val FcAnswer = Color(0xFF2EBD59)
-private val FcDecline = Color(0xFFE5484D)
-private val FcAvatar = Color(0xFF3A4A5E)
+// The decoy deliberately does not wear the Clairix look: it copies a stock call
+// screen, in Material's default type and the fixed DecoyCallPalette, so that a
+// glance over the shoulder sees an ordinary incoming call whatever theme is set.
+private val FcGround = DecoyCallPalette.Ground
+private val FcInk = DecoyCallPalette.Ink
+private val FcDim = DecoyCallPalette.Dim
+private val FcAnswer = DecoyCallPalette.Answer
+private val FcDecline = DecoyCallPalette.Decline
+private val FcAvatar = DecoyCallPalette.Avatar
 
 /**
  * The incoming-call screen of a [FakeCall]. Shows over the lock screen and turns

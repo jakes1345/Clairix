@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Platform theme: Compose draws everything, so there is no need to pull
-         in AppCompat or the Material Components library just for a theme. -->
+    <!--
+        Platform theme. Compose draws everything, so this only sets what the
+        system shows before the first frame and around it: the Android 12+
+        splash screen (the launcher mark on Ink, the brand book's app-icon rule)
+        and the window and system bar colours, all Ink so there is no flash of
+        another colour on launch. Every theme the user can pick in the app is
+        dark, so Ink under the bars matches all four.
+    -->
     <style name="Theme.Clairix" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:statusBarColor">#0E1116</item>
-        <item name="android:navigationBarColor">#0E1116</item>
+        <item name="android:windowBackground">@color/clairix_ink</item>
+        <item name="android:statusBarColor">@color/clairix_ink</item>
+        <item name="android:navigationBarColor">@color/clairix_ink</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+
+        <!-- Android 12 SplashScreen API: the mark, centred on Ink. -->
+        <item name="android:windowSplashScreenBackground">@color/clairix_ink</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_mark</item>
+        <item name="android:windowSplashScreenAnimationDuration">300</item>
     </style>
 </resources>

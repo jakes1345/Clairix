@@ -1,34 +1,62 @@
 package app.clairix
 
 import android.content.Context
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
-import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.Hairline
+import app.clairix.ui.components.IconWell
+import app.clairix.ui.components.ListGroup
+import app.clairix.ui.components.LogoMark
 import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.components.Tone
+import app.clairix.ui.components.StencilText
+import app.clairix.ui.theme.ClairixMotion
+import app.clairix.ui.theme.ClairixTheme
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 private const val ONBOARDING_PREFS = "prefs"
 private const val ONBOARDING_DONE_KEY = "onboarding_done"
 // The full app walks through the scanner; the comms-only build has three pages
-// about encrypted messaging and ends on GET STARTED instead of START SCANNING.
+// about encrypted messaging and ends on Get started instead of Start scanning.
 private val TOTAL_PAGES = if (BuildConfig.FULL_ACCESS) 4 else 3
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -41,15 +69,20 @@ fun markOnboardingDone(context: Context) =
     context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)
         .edit().putBoolean(ONBOARDING_DONE_KEY, true).apply()
 
-// ── Colour tokens local to this file ──────────────────────────────────────────
-
 // ── OnboardingScreen ───────────────────────────────────────────────────────────
 
+/**
+ * First run: a few pages on what Clairix does and what it needs, then the start
+ * button. The pages scroll on their own if a small phone or large text does not
+ * fit them; the page bars and the main button stay pinned at the bottom.
+ */
 @Composable
 fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val pagerState = rememberPagerState(pageCount = { TOTAL_PAGES })
     val scope = rememberCoroutineScope()
+    val c = ClairixTheme.colors
+    val last = pagerState.currentPage == TOTAL_PAGES - 1
 
     fun finish() {
         markOnboardingDone(context)
@@ -57,475 +90,245 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
         onComplete()
     }
 
-    Box(Modifier.fillMaxSize().background(ClairixTheme.colors.base)) {
-        // Pages
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize()
-        ) { page ->
+    Column(Modifier.fillMaxSize().background(c.base)) {
+        // ── Top: the mark, and Skip until the last page ──────────────────────
+        Row(
+            Modifier.fillMaxWidth().statusBarsPadding().padding(start = 24.dp, end = 8.dp, top = 8.dp).height(56.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            LogoMark(size = 28.dp)
+            Spacer(Modifier.weight(1f))
+            if (!last) {
+                GhostButton(
+                    "Skip",
+                    onClick = { scope.launch { pagerState.scrollToPage(TOTAL_PAGES - 1) } },
+                    tone = Tone.Neutral
+                )
+            }
+        }
+
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
             if (BuildConfig.FULL_ACCESS) {
                 when (page) {
-                    0 -> OPage1()
-                    1 -> OPage2()
-                    2 -> OPage3()
-                    else -> OPage4(onStart = { finish() })
+                    0 -> IntroPage(
+                        eyebrow = "Counter-surveillance",
+                        title = "Nothing hides.",
+                        lead = "Clairix finds hidden cameras, trackers following you, fake cell towers, rogue " +
+                            "Wi-Fi and spyware, and keeps your calls and messages private.",
+                        note = "Detection data stays on this phone. The map downloads tiles from OpenStreetMap, " +
+                            "which sees your IP address and the area you're viewing."
+                    )
+                    1 -> ListPage(
+                        eyebrow = "Permissions",
+                        title = "What it needs",
+                        lead = "Three permissions, asked for when you start scanning.",
+                        items = listOf(
+                            Triple(ClairixIcons.BluetoothSearching, "Nearby devices", "Listens for Bluetooth trackers such as AirTags, Tile and SmartTags."),
+                            Triple(Icons.Filled.LocationOn, "Precise location", "Proves a tracker is moving with you, not just nearby, by checking it shows up in different places."),
+                            Triple(Icons.Filled.Notifications, "Notifications", "Tells you the moment something is confirmed on you, even with the app closed.")
+                        )
+                    )
+                    2 -> ListPage(
+                        eyebrow = "How it works",
+                        title = "Watch the watchers",
+                        lead = "Clairix learns what's normal around you, then flags what isn't.",
+                        items = listOf(
+                            Triple(ClairixIcons.TrackChanges, "Trackers", "Matches known tracker signals and checks whether one keeps turning up as you move."),
+                            Triple(ClairixIcons.CellTower, "Fake cell towers", "Learns your usual towers, then watches for forced downgrades, unknown cells and signals that are too strong."),
+                            Triple(ClairixIcons.Wifi, "Wi-Fi and NFC", "Flags bait hotspots that copy real networks, and NFC tags hidden where they shouldn't be.")
+                        )
+                    )
+                    else -> ReadyPage(
+                        title = "Ready when you are",
+                        lead = "Start scanning and keep the app running while you move.",
+                        note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together."
+                    )
                 }
             } else {
                 when (page) {
-                    0 -> OCommsPage1()
-                    1 -> OCommsPage2()
-                    else -> OCommsPage3(onStart = { finish() })
-                }
-            }
-        }
-
-        // Skip button — top right, hidden on last page
-        if (pagerState.currentPage < TOTAL_PAGES - 1) {
-            GhostButton(
-                "Skip",
-                onClick = { scope.launch { pagerState.scrollToPage(TOTAL_PAGES - 1) } },
-                tone = Tone.Neutral
-            )
-        }
-
-        // Page indicator dots + NEXT button — pinned at bottom
-        Column(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Dot indicators
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                repeat(TOTAL_PAGES) { i ->
-                    val active = pagerState.currentPage == i
-                    Box(
-                        Modifier
-                            .size(if (active) 10.dp else 7.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (active) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle.copy(alpha = 0.5f)
-                            )
+                    0 -> IntroPage(
+                        eyebrow = "Clairix Comms",
+                        title = "Yours only.",
+                        lead = "Messages and calls for your circle, encrypted on this phone. Only the person you send " +
+                            "to can read them. No phone number, no Google account, no carrier.",
+                        note = "Your keys, contacts and message history stay on this phone."
+                    )
+                    1 -> ListPage(
+                        eyebrow = "Permissions",
+                        title = "What it needs",
+                        lead = "Each one is asked for the first time it's needed.",
+                        items = listOf(
+                            Triple(Icons.Filled.Notifications, "Notifications", "So a new message shows and a call rings while the app is closed."),
+                            Triple(Icons.Filled.Call, "Microphone", "For calls. Asked once you have a number, so the first call isn't also the first question."),
+                            Triple(ClairixIcons.Videocam, "Camera", "To scan a contact's pairing code. Nothing is recorded."),
+                            Triple(Icons.Filled.LocationOn, "Location", "Attached to an SOS so your group knows where you are. Read only when you press SOS.")
+                        )
+                    )
+                    else -> ReadyPage(
+                        title = "You need an invite",
+                        lead = "The person who gave you this app sends an invite link or shows a QR code. Opening it " +
+                            "gives you a Clairix number and adds them as your first contact.",
+                        note = "A Clairix number isn't a phone number. It only reaches other Clairix apps on the same " +
+                            "relay. Keep Comms online so calls ring while the app is closed."
                     )
                 }
             }
+        }
 
-            // NEXT button — hidden on the last page (which has its own Start button)
-            if (pagerState.currentPage < TOTAL_PAGES - 1) {
+        // ── Bottom: page bars and the main button ────────────────────────────
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            PageBars(current = pagerState.currentPage, count = TOTAL_PAGES)
+            if (last) {
+                PrimaryButton(
+                    if (BuildConfig.FULL_ACCESS) "Start scanning" else "Get started",
+                    onClick = { finish() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
                 PrimaryButton(
                     "Next",
-                    onClick = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
-                        },
-                    modifier = Modifier.width(200.dp)
+                    onClick = { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } },
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
     }
 }
 
-// ── Page 1: App purpose ────────────────────────────────────────────────────────
-
+/** Which page this is: chamfered bars, the current one long and in the accent. */
 @Composable
-private fun OPage1() {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        // Shield graphic
-        Box(
-            Modifier
-                .size(120.dp)
-                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("A", style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.accent)
-        }
-        Spacer(Modifier.height(36.dp))
-        Text(
-            "Clairix",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Counter-surveillance for professionals",
-            style = MaterialTheme.typography.titleMedium,
-            color = ClairixTheme.colors.accent,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Clairix continuously scans for hidden surveillance devices — " +
-            "Bluetooth trackers, IMSI catchers (fake cell towers), rogue WiFi access " +
-            "points, and NFC tags — so you can detect and document covert monitoring " +
-            "in real time.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textMuted,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(20.dp))
-        Text(
-            "Detection data stays on this device. The Map tab downloads map tiles from " +
-            "OpenStreetMap, which sees your IP address and the area you're viewing.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(120.dp))
-    }
-}
-
-// ── Page 2: Permissions ────────────────────────────────────────────────────────
-
-@Composable
-private fun OPage2() {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 28.dp)
-            .padding(top = 72.dp, bottom = 140.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "Permissions",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Three permissions are needed for full functionality:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(24.dp))
-
-        OPermissionItem(
-            label = "Nearby Devices (Bluetooth)",
-            desc = "Scans for BLE advertising packets from trackers " +
-                   "(AirTags, Tile, Samsung SmartTag) in the vicinity."
-        )
-        Spacer(Modifier.height(10.dp))
-        OPermissionItem(
-            label = "Precise Location",
-            desc = "Required to map where detected devices appear alongside you. " +
-                   "Confirming that a tracker is following — not just nearby — " +
-                   "requires GPS to prove shared movement across distance."
-        )
-        Spacer(Modifier.height(10.dp))
-        OPermissionItem(
-            label = "Notifications",
-            desc = "Sends an alert the moment a device is confirmed as following, " +
-                   "even when the app is in the background."
-        )
-
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "You will be prompted for permissions when you start scanning.",
-            style = MaterialTheme.typography.bodySmall,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-private fun OPermissionItem(label: String, desc: String) {
+private fun PageBars(current: Int, count: Int) {
+    val c = ClairixTheme.colors
     Row(
-        Modifier
-            .fillMaxWidth()
-            .background(ClairixTheme.colors.surface, RoundedCornerShape(8.dp))
-            .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top
+        Modifier.semantics(mergeDescendants = true) { contentDescription = "Page ${current + 1} of $count" },
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Box(
-            Modifier
-                .padding(top = 3.dp)
-                .size(8.dp)
-                .background(ClairixTheme.colors.accent, CircleShape)
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-            Text(desc, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+        repeat(count) { i ->
+            val width by animateDpAsState(
+                if (i == current) 32.dp else 12.dp,
+                animationSpec = tween(ClairixMotion.base, easing = ClairixMotion.standard),
+                label = "page-bar"
+            )
+            Box(
+                Modifier
+                    .width(width)
+                    .height(6.dp)
+                    .background(if (i == current) c.accent else c.borderStrong, ClairixShapes.Tag)
+            )
         }
     }
 }
 
-// ── Page 3: How it works ───────────────────────────────────────────────────────
-
+/** A page's eyebrow and its display title. The title is the brand's loud bit. */
 @Composable
-private fun OPage3() {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 28.dp)
-            .padding(top = 72.dp, bottom = 140.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+private fun PageTitle(eyebrow: String, title: String) {
+    val c = ClairixTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.width(16.dp).height(3.dp).background(c.accent))
+            Text(eyebrow.uppercase(Locale.getDefault()), style = MaterialTheme.typography.labelSmall, color = c.textMuted)
+        }
         Text(
-            "How It Works",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(24.dp))
-
-        OHowItWorksItem(
-            color = ClairixTheme.colors.accent,
-            title = "BLE Tracker Detection",
-            text = "Bluetooth trackers broadcast advertising packets continuously. Clairix " +
-                   "matches known signatures (AirTag, Tile, SmartTag) and monitors whether a device " +
-                   "reappears across multiple locations — confirming it is following rather than " +
-                   "just passing by."
-        )
-        Spacer(Modifier.height(10.dp))
-        OHowItWorksItem(
-            color = ClairixTheme.colors.info,
-            title = "IMSI Catcher Detection",
-            text = "Clairix builds a local baseline of your usual cell towers, then watches " +
-                   "for anomalies — forced technology downgrades, unknown cells at familiar " +
-                   "locations, abnormally strong signals — that indicate a portable surveillance " +
-                   "device impersonating a legitimate tower."
-        )
-        Spacer(Modifier.height(10.dp))
-        OHowItWorksItem(
-            color = ClairixTheme.colors.textSubtle,
-            title = "WiFi & NFC",
-            text = "Rogue access points mimic carrier networks to intercept traffic. NFC tags " +
-                   "hidden in objects can track location. Clairix flags suspicious SSIDs " +
-                   "and known covert-tracking NFC chip types in real time."
+            title.uppercase(Locale.getDefault()),
+            style = MaterialTheme.typography.displayMedium,
+            color = c.text,
+            modifier = Modifier.semantics { heading() }
         )
     }
 }
 
 @Composable
-private fun OHowItWorksItem(color: Color, title: String, text: String) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(ClairixTheme.colors.surface, RoundedCornerShape(8.dp))
-            .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Box(
-            Modifier
-                .width(3.dp)
-                .height(60.dp)
-                .background(color, RoundedCornerShape(2.dp))
-        )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = color)
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
-        }
-    }
-}
-
-// ── Comms-only build: page 1, what this is ────────────────────────────────────
-
-@Composable
-private fun OCommsPage1() {
+private fun IntroPage(eyebrow: String, title: String, lead: String, note: String) {
+    val c = ClairixTheme.colors
     Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
+        Spacer(Modifier.height(16.dp))
         Box(
             Modifier
-                .size(120.dp)
-                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
+                .size(136.dp)
+                .background(c.surface, ClairixShapes.Octagon),
             contentAlignment = Alignment.Center
         ) {
-            Text("A", style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.accent)
+            LogoMark(size = 88.dp, contentDescription = "Clairix")
         }
-        Spacer(Modifier.height(36.dp))
-        Text(
-            "Clairix Comms",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.width(16.dp).height(3.dp).background(c.accent))
+                Text(eyebrow.uppercase(Locale.getDefault()), style = MaterialTheme.typography.labelSmall, color = c.textMuted)
+            }
+            // The tagline carries the stencil slit, as it does on the brand book's cover.
+            StencilText(
+                title.uppercase(Locale.getDefault()),
+                style = MaterialTheme.typography.displayLarge,
+                color = c.text,
+                ground = c.base,
+                thickness = 4.dp,
+                modifier = Modifier.semantics { heading() }
+            )
+        }
+        Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
+        Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
         Spacer(Modifier.height(8.dp))
-        Text(
-            "Private messages and calls for your circle",
-            style = MaterialTheme.typography.titleMedium,
-            color = ClairixTheme.colors.accent,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Everything you send is encrypted on this phone and only the person you send it to " +
-            "can read it. The relay that carries it sees neither what a message says nor who " +
-            "sent it. Calls are encrypted the same way. No phone number, no Google account and " +
-            "no carrier are involved.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textMuted,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(20.dp))
-        Text(
-            "Your keys, contacts and message history stay on this device.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(120.dp))
     }
 }
 
-// ── Comms-only build: page 2, permissions ─────────────────────────────────────
-
 @Composable
-private fun OCommsPage2() {
+private fun ListPage(eyebrow: String, title: String, lead: String, items: List<Triple<ImageVector, String, String>>) {
+    val c = ClairixTheme.colors
     Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 28.dp)
-            .padding(top = 72.dp, bottom = 140.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            "Permissions",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Each one is asked for when it is first needed:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(24.dp))
-
-        OPermissionItem(
-            label = "Notifications",
-            desc = "So a new message shows and an incoming call rings while the app is closed."
-        )
-        Spacer(Modifier.height(10.dp))
-        OPermissionItem(
-            label = "Microphone",
-            desc = "For calls. Asked once you have a number, so the first call is not also the first question."
-        )
-        Spacer(Modifier.height(10.dp))
-        OPermissionItem(
-            label = "Camera",
-            desc = "To scan a contact's pairing code. Asked when you tap SCAN; nothing is recorded."
-        )
-        Spacer(Modifier.height(10.dp))
-        OPermissionItem(
-            label = "Location",
-            desc = "Attached to an SOS so your group knows where you are. Read at the moment you press SOS and at no other time."
-        )
+        Spacer(Modifier.height(16.dp))
+        PageTitle(eyebrow, title)
+        Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
+        ListGroup {
+            items.forEachIndexed { i, (icon, label, desc) ->
+                if (i > 0) Hairline()
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp).semantics(mergeDescendants = true) {},
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    IconWell(icon, Tone.Accent)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(label, style = MaterialTheme.typography.titleMedium, color = c.text)
+                        Text(desc, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
-// ── Comms-only build: page 3, ready ───────────────────────────────────────────
-
 @Composable
-private fun OCommsPage3(onStart: () -> Unit) {
+private fun ReadyPage(title: String, lead: String, note: String) {
+    val c = ClairixTheme.colors
     Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
+        Spacer(Modifier.height(16.dp))
         Box(
-            Modifier
-                .size(120.dp)
-                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
+            Modifier.size(96.dp).background(c.accentContainer, ClairixShapes.Octagon),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Check, contentDescription = null, tint = ClairixTheme.colors.safe, modifier = Modifier.size(64.dp))
+            androidx.compose.material3.Icon(
+                Icons.Filled.Lock,
+                contentDescription = null,
+                tint = c.accent,
+                modifier = Modifier.size(44.dp)
+            )
         }
-        Spacer(Modifier.height(36.dp))
-        Text(
-            "You need an invite",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "The person who gave you this app sends you an invite link or shows you a QR code. " +
-            "Opening it registers you with their relay and gives you a Clairix number; it also adds " +
-            "them as your first contact.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textMuted,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(
-            "A Clairix number is not a phone number. It reaches other Clairix apps on the same relay " +
-            "and nothing else. Keep COMMS set to Online so calls ring while the app is closed.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(44.dp))
-        PrimaryButton("Get started", onClick = onStart, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(140.dp))
-    }
-}
-
-// ── Page 4: Ready ──────────────────────────────────────────────────────────────
-
-@Composable
-private fun OPage4(onStart: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Box(
-            Modifier
-                .size(120.dp)
-                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Filled.Check, contentDescription = null, tint = ClairixTheme.colors.safe, modifier = Modifier.size(64.dp))
-        }
-        Spacer(Modifier.height(36.dp))
-        Text(
-            "Ready to Scan",
-            style = MaterialTheme.typography.headlineLarge,
-            color = ClairixTheme.colors.text,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "Clairix is ready. Start scanning now to begin monitoring for surveillance devices.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textMuted,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(
-            "For best results: keep the app running while travelling. Confirming a tracker " +
-            "is following typically requires 10 minutes and 300 metres of shared movement.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ClairixTheme.colors.textSubtle,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(44.dp))
-        PrimaryButton("Start scanning", onClick = onStart, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(140.dp))
+        PageTitle("Last step", title)
+        Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
+        Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
+        Spacer(Modifier.height(8.dp))
     }
 }
