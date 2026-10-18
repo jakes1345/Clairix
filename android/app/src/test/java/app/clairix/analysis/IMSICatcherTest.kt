@@ -82,6 +82,28 @@ class IMSICatcherTest {
     }
 
     @Test
+    fun aFirstFixWithoutSpeedIsNotStationary() {
+        // Same tracking-area change as above, but the first fix of the session has no
+        // speed and nothing to compare with: motion is unknown, so the rule stays quiet.
+        val c = catcher()
+        c.recordAndAnalyze(cell("A", tac = "100"), null)
+        now += 15_000L
+        val first = c.recordAndAnalyze(cell("B", tac = "200"), fixAt(0.0, speed = null))
+        assertFalse(first.map { it.id }.toString(), first.any { it.id == "tac_change_stationary" })
+    }
+
+    @Test
+    fun aStalePreviousFixDoesNotMakeTheCurrentOneStationary() {
+        val c = catcher()
+        c.recordAndAnalyze(cell("A", tac = "100"), fixAt(0.0, speed = null))
+        // Ten minutes later, a few metres away: the average speed is near zero, but a
+        // fix that old says nothing about whether the phone is moving now.
+        now += 10 * 60_000L
+        val later = c.recordAndAnalyze(cell("B", tac = "200"), fixAt(5.0, speed = null))
+        assertFalse(later.map { it.id }.toString(), later.any { it.id == "tac_change_stationary" })
+    }
+
+    @Test
     fun aRepeatedFixIsComparedWithTheOneBeforeIt() {
         // A poll that sees the same fix twice has no time delta of its own; the
         // movement is the one between that fix and the distinct fix before it.

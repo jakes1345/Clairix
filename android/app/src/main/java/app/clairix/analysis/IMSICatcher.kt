@@ -17,6 +17,15 @@ import org.json.JSONObject
  * Eight heuristics, each with a score weight. The scores accumulate until
  * they cross a Threat threshold. A single indicator is noise; three at once
  * is a problem.
+ *
+ * Several heuristics describe what travelling normally looks like and only mean
+ * something while the phone stands still: RAT downgrade and oscillation, area
+ * change, cell flapping, signal spike, and the two ephemeral-cell rules. They run
+ * only when the phone is known to be stationary — a fresh fix reporting a low
+ * speed, or two fresh fixes close enough in time whose implied speed is low.
+ * Without a usable fix (none, a stale one, a first fix with no speed, or a
+ * previous fix too old to compare) motion is unknown, unknown is treated as
+ * moving, and those rules stay quiet.
  */
 class IMSICatcher(
     private val store: Store,
@@ -128,9 +137,9 @@ class IMSICatcher(
         // When this reading repeats the newest fix, compare against the one before.
         val newest = prevFix
         val previousFix = if (newest != null && fix.time <= newest.time) olderFix else newest
-        // A previous fix from long ago averages a drive and a stop together; it says
-        // no more about now than having no previous fix at all.
-        if (previousFix == null || fix.time - previousFix.time > FIX_STALE_MS) return true
+        // No previous fix, or one from long ago that averages a drive and a stop
+        // together: the speed is unknown, and unknown is not stationary.
+        if (previousFix == null || fix.time - previousFix.time > FIX_STALE_MS) return false
         val dtSeconds = (fix.time - previousFix.time) / 1000.0
         if (dtSeconds <= 0) return false
         return haversine(previousFix, fix) / dtSeconds < MOVING_SPEED_MS
