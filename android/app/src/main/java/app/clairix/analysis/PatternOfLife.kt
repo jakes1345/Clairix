@@ -88,7 +88,8 @@ object LocationHistory {
         }
     }
 
-    fun flush() { store?.flush() }
+    /** Serialised under [lock], the lock [record] mutates the JSON under; see [Store]. */
+    fun flush() { synchronized(lock) { store?.flush() } }
 }
 
 // ── Report types ──────────────────────────────────────────────────────────────

@@ -913,7 +913,8 @@ class ScanService : LifecycleService() {
         // The last reading stays on the Cell tab, but nothing is judging it any more;
         // the tab says so instead of showing a frozen "RISK: NONE" as if it were live.
         Registry.updateCell { it.copy(analysing = false, findings = emptyList(), score = 0, level = Threat.NONE) }
-        cellStore.flush()
+        // Each owner flushes under the lock it mutates its JSON under; see Store.
+        imsiCatcher.flush()
         TimelineLog.flush()
         LocationHistory.flush()
         phoneHealthMonitor.stop()

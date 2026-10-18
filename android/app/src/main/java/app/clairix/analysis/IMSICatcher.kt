@@ -409,6 +409,15 @@ class IMSICatcher(private val store: Store) {
         return score to level
     }
 
+    /**
+     * Writes the baseline now. Synchronized on this object, the lock every mutation
+     * of the store's JSON happens under, so the snapshot cannot race one; see [Store].
+     */
+    @Synchronized
+    fun flush() {
+        store.flush()
+    }
+
     /** Wipes the learned baseline and the in-memory history behind it. */
     @Synchronized
     fun resetBaseline() {
