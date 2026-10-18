@@ -75,10 +75,17 @@ class Tracker(
          * cadence fingerprinter can only prove a rotation after a few packets, by which
          * time the new address has a few sightings under a key of its own.
          *
-         * [certain] is the fingerprinter's own confidence in the stitch. Only then may
-         * the merge move this entry's start earlier: an uncertain stitch that pulled
-         * firstSeen back to the other key's could hand a device a ten-minute presence
-         * it never had, and with it a "following" verdict.
+         * [certain] is the fingerprinter's own confidence in the stitch.
+         *
+         * A certain merge joins the two histories: the earliest firstSeen, every
+         * sighting and every place. An uncertain one may be two different devices,
+         * so the evidence of presence — firstSeen, sightings, places, and the
+         * persistent/following verdicts drawn from them — restarts from the newer of
+         * the two, and the device has to earn "following" again on its own. Here
+         * `this` is usually the older entry (the stitch target) and [other] the new
+         * address; keeping this entry's early firstSeen, as the first version of
+         * this did, still handed the new address the old one's ten minutes. The
+         * identity bookkeeping (rotations, addresses, names, DULT) is kept either way.
          */
         fun absorb(other: Entry, certain: Boolean) {
             if (address.isEmpty()) address = other.address
@@ -94,20 +101,30 @@ class Tracker(
                 approxMetres = other.approxMetres
                 lastHeardAt = other.lastHeardAt ?: lastHeardAt
             }
-            firstSeen = when {
-                firstSeen == 0L -> other.firstSeen
-                certain -> min(firstSeen, other.firstSeen)
-                else -> firstSeen
-            }
-            lastSeen = max(lastSeen, other.lastSeen)
-            sightings += other.sightings
             // The merge itself is one more address the device has used.
             rotations = rotations + other.rotations + 1
             addresses = addresses + other.addresses
-            following = following || other.following
-            persistent = persistent || other.persistent
-            score = max(score, other.score)
-            other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+            if (certain) {
+                firstSeen = if (firstSeen == 0L) other.firstSeen else min(firstSeen, other.firstSeen)
+                sightings += other.sightings
+                following = following || other.following
+                persistent = persistent || other.persistent
+                score = max(score, other.score)
+                other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+            } else {
+                // Restart the presence clock at the later of the two starts.
+                val newer = if (other.firstSeen != 0L && (firstSeen == 0L || other.firstSeen >= firstSeen)) other else this
+                if (newer === other) {
+                    firstSeen = other.firstSeen
+                    sightings = other.sightings
+                    following = other.following
+                    persistent = other.persistent
+                    score = other.score
+                    area.clear()
+                    other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+                }
+            }
+            lastSeen = max(lastSeen, other.lastSeen)
             name = BleNames.displayName(advertisedName, tracker, manufacturer, address)
         }
     }

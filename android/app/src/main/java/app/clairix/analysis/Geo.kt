@@ -99,6 +99,12 @@ class ObservationArea(private val maxPlaces: Int = 60) {
 
     fun movedWithUs(thresholdM: Double = FOLLOW_DISPLACEMENT_M): Boolean = span() >= thresholdM
 
+    /** Forgets every place. */
+    fun clear() {
+        places.clear()
+        spanCache = 0.0
+    }
+
     fun points(): List<LatLon> = places.map { LatLon(it.lat, it.lon) }
 }
 
