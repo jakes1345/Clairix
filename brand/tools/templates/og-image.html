@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clairix OG image template (1200x630)</title>
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<style>
+  @font-face { font-family: "Inter"; src: url("../../fonts/inter/web/InterVariable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+  html, body { margin: 0; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden; position: relative;
+    background: var(--clx-ink);
+    font-family: var(--clx-font-sans); color: var(--clx-white);
+    font-optical-sizing: auto; -webkit-font-smoothing: antialiased;
+  }
+  .glow {
+    position: absolute; left: 667px; top: -102px; width: 640px; height: 640px; border-radius: 50%;
+    background: radial-gradient(closest-side, oklch(0.71 0.14 252 / 0.22), oklch(0.71 0.14 252 / 0.06) 55%, transparent);
+  }
+  .mark { position: absolute; left: 700px; top: 125px; width: 380px; height: 380px; }
+  .word { position: absolute; left: 88px; top: 84px; height: 40px; }
+  h1 {
+    position: absolute; left: 88px; top: 196px; margin: 0;
+    font-size: 76px; line-height: 80px; font-weight: 600; letter-spacing: -0.03em;
+  }
+  h1 span { color: var(--clx-neutral-400); }
+  p {
+    position: absolute; left: 88px; top: 380px; margin: 0; width: 520px;
+    font-size: 24px; line-height: 34px; color: var(--clx-neutral-300); letter-spacing: -0.01em;
+  }
+  .url { position: absolute; left: 88px; bottom: 76px; font-size: 20px; font-weight: 500; color: var(--clx-neutral-400); letter-spacing: 0; }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <img class="mark" src="../../logo/symbol-reversed.svg" alt="">
+  <img class="word" src="../../logo/wordmark-light.svg" alt="Clairix">
+  <h1>See clearly.<br><span>Stay private.</span></h1>
+  <p>Find hidden cameras, trackers and spyware. Keep your calls and messages to yourself.</p>
+  <div class="url">clairix.app</div>
+</body>
+</html>

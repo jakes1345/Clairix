@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clairix Play Store feature graphic template (1024x500)</title>
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<style>
+  @font-face { font-family: "Inter"; src: url("../../fonts/inter/web/InterVariable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+  html, body { margin: 0; }
+  body {
+    width: 1024px; height: 500px; overflow: hidden; position: relative;
+    background: var(--clx-ink);
+    font-family: var(--clx-font-sans); color: var(--clx-white);
+    font-optical-sizing: auto; -webkit-font-smoothing: antialiased;
+  }
+  .glow {
+    position: absolute; left: 547px; top: -107px; width: 560px; height: 560px; border-radius: 50%;
+    background: radial-gradient(closest-side, oklch(0.71 0.14 252 / 0.24), oklch(0.71 0.14 252 / 0.06) 55%, transparent);
+  }
+  .mark { position: absolute; left: 600px; top: 100px; width: 300px; height: 300px; }
+  .word { position: absolute; left: 80px; top: 150px; height: 46px; }
+  h1 {
+    position: absolute; left: 80px; top: 236px; margin: 0;
+    font-size: 52px; line-height: 58px; font-weight: 600; letter-spacing: -0.028em;
+  }
+  h1 span { color: var(--clx-neutral-400); }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <img class="mark" src="../../logo/symbol-reversed.svg" alt="">
+  <img class="word" src="../../logo/wordmark-light.svg" alt="Clairix">
+  <h1>See clearly.<br><span>Stay private.</span></h1>
+</body>
+</html>
