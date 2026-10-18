@@ -29,6 +29,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -189,7 +190,13 @@ class MainActivity : AppCompatActivity() {
     // Constructing the vault touches nothing; the Keystore is only reached inside
     // its methods, which never throw — so no keystore state can take down launch.
     private val cardVault by lazy { CardVault(applicationContext) }
-    private val hceComponent by lazy { ComponentName(this, CardEmulationService::class.java) }
+    /**
+     * The card-emulation service, or null in an edition built without the card
+     * vault (the Play edition), where there is no service to route readers to.
+     */
+    private val hceComponent: ComponentName? by lazy {
+        if (BuildConfig.CARD_VAULT) CardEmulationBridge.component(this) else null
+    }
 
     /**
      * The static device-health scan (accessibility services, device admins, debug
@@ -247,9 +254,12 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch(Dispatchers.IO) { runCatching { BiometricTripwire.check(applicationContext) } }
 
             // The comms-only build declares no NFC permission or HCE service, so its
-            // adapter stays null and every NFC path below is a no-op.
+            // adapter stays null and every NFC path below is a no-op. The Play
+            // edition reads tags but has no card emulation, so it never asks for it.
             nfcAdapter = runCatching { NfcAdapter.getDefaultAdapter(this) }.getOrNull()
-            cardEmulation = nfcAdapter?.let { runCatching { CardEmulation.getInstance(it) }.getOrNull() }
+            if (hceComponent != null) {
+                cardEmulation = nfcAdapter?.let { runCatching { CardEmulation.getInstance(it) }.getOrNull() }
+            }
 
             // Emulation state lives only in this process, so if nothing is armed now,
             // any AIDs still registered belong to a previous process — they survive
@@ -578,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         if (Registry.emulating.value != null) {
             if (readerModeOn) runCatching { adapter.disableReaderMode(this) }
             readerModeOn = false
-            runCatching { cardEmulation?.setPreferredService(this, hceComponent) }
+            hceComponent?.let { component -> runCatching { cardEmulation?.setPreferredService(this, component) } }
         } else {
             runCatching { cardEmulation?.unsetPreferredService(this) }
             if (!readerModeOn) {
@@ -630,6 +640,7 @@ class MainActivity : AppCompatActivity() {
     // ── Card emulation ───────────────────────────────────────────────────────
 
     private fun armEmulation(card: VaultCard) {
+        if (!BuildConfig.CARD_VAULT) return
         // Emulating replays the card's stored credential, so it needs the vault open
         // — the card has to come from an unlocked vault, not a stale UI row.
         val state = Registry.vault.value
@@ -637,7 +648,9 @@ class MainActivity : AppCompatActivity() {
             unlockVault()
             return
         }
-        val emulation = cardEmulation ?: run {
+        val emulation = cardEmulation
+        val component = hceComponent
+        if (emulation == null || component == null) {
             toast("This phone does not support NFC card emulation")
             return
         }
@@ -651,12 +664,12 @@ class MainActivity : AppCompatActivity() {
             } else null
         }.distinct().ifEmpty { listOf("F000000000") }
 
-        val loaded = runCatching { CardEmulationService.loadPairs(card.apduPairs) }.isSuccess
+        val loaded = CardEmulationBridge.load(card.apduPairs)
         val registered = loaded && runCatching {
-            emulation.registerAidsForService(hceComponent, CardEmulation.CATEGORY_OTHER, aids)
+            emulation.registerAidsForService(component, CardEmulation.CATEGORY_OTHER, aids)
         }.getOrDefault(false)
         if (!registered) {
-            CardEmulationService.activePairs = emptyList()
+            CardEmulationBridge.clear()
             clearHceAids()
             // The pairs and AIDs are gone, so whatever was armed before — switching
             // from card A to card B that then failed — is gone with them. Say so,
@@ -671,7 +684,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopEmulation() {
-        CardEmulationService.activePairs = emptyList()
+        CardEmulationBridge.clear()
         clearHceAids()
         Registry.setEmulating(null)
         applyNfcMode()
@@ -679,7 +692,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Removes the dynamically registered AIDs, which otherwise persist across reboots. */
     private fun clearHceAids() {
-        runCatching { cardEmulation?.removeAidsForService(hceComponent, CardEmulation.CATEGORY_OTHER) }
+        val component = hceComponent ?: return
+        runCatching { cardEmulation?.removeAidsForService(component, CardEmulation.CATEGORY_OTHER) }
     }
 
     // ── Vault ────────────────────────────────────────────────────────────────
@@ -699,6 +713,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Authenticates, then decrypts and publishes the vault. */
     private fun unlockVault(attempt: Int = 0) {
+        if (!BuildConfig.CARD_VAULT) return
         Registry.publishVault(VaultState.Unlocking)
         authenticate(VaultAuthPurpose.Unlock(attempt))
     }
@@ -723,6 +738,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addToVault(tag: NfcTag, label: String, replace: Boolean) {
+        if (!BuildConfig.CARD_VAULT) return
         val card = VaultCard(
             id        = UUID.randomUUID().toString(),
             uid       = tag.uid,
@@ -736,6 +752,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun removeFromVault(id: String) {
+        if (!BuildConfig.CARD_VAULT) return
         writeVault(VaultOp.Remove(id))
     }
 
@@ -801,6 +818,7 @@ class MainActivity : AppCompatActivity() {
      * phone cannot be used to wipe it.
      */
     private fun eraseVault() {
+        if (!BuildConfig.CARD_VAULT) return
         if (BiometricManager.from(this).canAuthenticate(VAULT_AUTHENTICATORS) ==
             BiometricManager.BIOMETRIC_SUCCESS
         ) {
@@ -2780,6 +2798,12 @@ private val CardProfile.hceLimited: Boolean
 
 private const val HCE_LIMITED_CAVEAT = "Static replay only — readers that challenge the card will reject it"
 
+/**
+ * The NFC tab: the tags read this session and, in the full edition, the card
+ * vault and card emulation. The Play edition is built with CARD_VAULT off, so
+ * the tab there is the tag reader and skimmer check alone: no vault section, no
+ * save or emulate controls, and no emulation hints on the tag rows.
+ */
 @Composable
 internal fun NfcScreen(
     onAddToVault: (NfcTag, String, Boolean) -> Unit,
@@ -2798,11 +2822,12 @@ internal fun NfcScreen(
     val vault = (vaultState as? VaultState.Unlocked)?.cards.orEmpty()
     val vaultOpen = vaultState is VaultState.Unlocked
     var confirmErase by remember { mutableStateOf(false) }
-    val c = ClairixTheme.colors
+
+    val vaultEnabled = BuildConfig.CARD_VAULT
 
     // The vault refused to overwrite a stored card with this UID; ask.
     val pendingReplace = replace
-    if (pendingReplace != null) {
+    if (vaultEnabled && pendingReplace != null) {
         ClairixDialog(
             title = "Replace the stored card?",
             text = "\"${pendingReplace.existing.label}\" is already in the vault with UID " +
@@ -2816,7 +2841,7 @@ internal fun NfcScreen(
         )
     }
 
-    if (confirmErase) {
+    if (vaultEnabled && confirmErase) {
         ClairixDialog(
             title = "Erase the vault?",
             text = "The stored cards can't be read, and erasing deletes them and the vault key for good. " +
@@ -2856,7 +2881,7 @@ internal fun NfcScreen(
 
         // Active emulation banner
         val armedCard = armed
-        if (armedCard != null) {
+        if (vaultEnabled && armedCard != null) {
             item(key = "emul_banner") {
                 Notice(
                     Tone.Info,
@@ -2889,6 +2914,7 @@ internal fun NfcScreen(
             items(tags, key = { "t_${it.uid}" }) { tag ->
                 NfcTagRow(
                     t = tag,
+                    vaultEnabled = vaultEnabled,
                     inVault = vault.any { it.uid == tag.uid },
                     vaultOpen = vaultOpen,
                     onAddToVault = { label -> onAddToVault(tag, label, false) },
@@ -2897,63 +2923,85 @@ internal fun NfcScreen(
             }
         }
 
-        // ── The vault ──
-        item(key = "vault_hdr") {
-            SectionHeader(
-                "Card vault",
-                supporting = if (vaultState is VaultState.Unlocked) null else "Hardware-encrypted",
-                action = if (vaultState is VaultState.Unlocked) {
-                    { GhostButton("Lock", onClick = onLockVault, tone = Tone.Neutral) }
-                } else null
-            )
-        }
-        when (val state = vaultState) {
-            VaultState.Locked, VaultState.Unlocking -> item(key = "vault_locked") {
-                ClairixCard {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Icon(Icons.Filled.Lock, contentDescription = null, tint = c.accent)
-                        Text("Vault locked", style = MaterialTheme.typography.titleMedium, color = c.text)
-                    }
-                    Text(
-                        "Stored cards are encrypted with a hardware key that only works after you confirm it's you " +
-                            "with your fingerprint, face or screen-lock PIN. AES-256-GCM in the Android Keystore.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = c.textSubtle
-                    )
-                    PrimaryButton(
-                        if (state == VaultState.Unlocking) "Waiting for you to confirm…" else "Unlock vault",
-                        onClick = onUnlockVault,
-                        enabled = state == VaultState.Locked,
-                        loading = state == VaultState.Unlocking,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+        // ── The vault (full edition only) ──
+        if (vaultEnabled) vaultSection(
+            vaultState = vaultState,
+            emulId = emulId,
+            onEmulate = onEmulate,
+            onRemoveVault = onRemoveVault,
+            onUnlockVault = onUnlockVault,
+            onLockVault = onLockVault,
+            onConfirmErase = { confirmErase = true }
+        )
+    }
+}
+
+/** The card vault's rows on the NFC tab: its state, and the stored cards once it is open. */
+private fun LazyListScope.vaultSection(
+    vaultState: VaultState,
+    emulId: String?,
+    onEmulate: (VaultCard?) -> Unit,
+    onRemoveVault: (String) -> Unit,
+    onUnlockVault: () -> Unit,
+    onLockVault: () -> Unit,
+    onConfirmErase: () -> Unit
+) {
+    item(key = "vault_hdr") {
+        SectionHeader(
+            "Card vault",
+            supporting = if (vaultState is VaultState.Unlocked) null else "Hardware-encrypted",
+            action = if (vaultState is VaultState.Unlocked) {
+                { GhostButton("Lock", onClick = onLockVault, tone = Tone.Neutral) }
+            } else null
+        )
+    }
+    when (val state = vaultState) {
+        VaultState.Locked, VaultState.Unlocking -> item(key = "vault_locked") {
+            val c = ClairixTheme.colors
+            ClairixCard {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, tint = c.accent)
+                    Text("Vault locked", style = MaterialTheme.typography.titleMedium, color = c.text)
                 }
-            }
-            is VaultState.Failed -> item(key = "vault_failed") {
-                Notice(
-                    Tone.Danger,
-                    state.message,
-                    title = "Vault unavailable",
-                    action = {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (state.retryable) GhostButton("Try again", onClick = onUnlockVault)
-                            if (state.erasable) GhostButton("Erase vault", onClick = { confirmErase = true }, tone = Tone.Danger)
-                        }
-                    }
+                Text(
+                    "Stored cards are encrypted with a hardware key that only works after you confirm it's you " +
+                        "with your fingerprint, face or screen-lock PIN. AES-256-GCM in the Android Keystore.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = c.textSubtle
+                )
+                PrimaryButton(
+                    if (state == VaultState.Unlocking) "Waiting for you to confirm…" else "Unlock vault",
+                    onClick = onUnlockVault,
+                    enabled = state == VaultState.Locked,
+                    loading = state == VaultState.Unlocking,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
-            is VaultState.Unlocked -> if (state.cards.isEmpty()) {
-                item(key = "vault_empty") {
-                    EmptyState(
-                        title = "No cards stored",
-                        body = "Scan a card and tap Save to vault to keep it here.",
-                        icon = Icons.Filled.Lock
-                    )
+        }
+        is VaultState.Failed -> item(key = "vault_failed") {
+            Notice(
+                Tone.Danger,
+                state.message,
+                title = "Vault unavailable",
+                action = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (state.retryable) GhostButton("Try again", onClick = onUnlockVault)
+                        if (state.erasable) GhostButton("Erase vault", onClick = onConfirmErase, tone = Tone.Danger)
+                    }
                 }
-            } else {
-                items(state.cards, key = { "v_${it.id}" }) { card ->
-                    VaultCardRow(card = card, emulId = emulId, onEmulate = onEmulate, onRemove = { onRemoveVault(card.id) })
-                }
+            )
+        }
+        is VaultState.Unlocked -> if (state.cards.isEmpty()) {
+            item(key = "vault_empty") {
+                EmptyState(
+                    title = "No cards stored",
+                    body = "Scan a card and tap Save to vault to keep it here.",
+                    icon = Icons.Filled.Lock
+                )
+            }
+        } else {
+            items(state.cards, key = { "v_${it.id}" }) { card ->
+                VaultCardRow(card = card, emulId = emulId, onEmulate = onEmulate, onRemove = { onRemoveVault(card.id) })
             }
         }
     }
@@ -3009,6 +3057,7 @@ private fun VaultCardRow(
 @Composable
 private fun NfcTagRow(
     t: NfcTag,
+    vaultEnabled: Boolean,
     inVault: Boolean,
     vaultOpen: Boolean,
     onAddToVault: (String) -> Unit,
@@ -3067,15 +3116,18 @@ private fun NfcTagRow(
             Text("Data: ${t.payload.take(80)}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
         }
 
-        // HCE capability hint
-        if (t.profile.hceLimited && !isPayment) {
-            Text("Replay only: $HCE_LIMITED_CAVEAT. Save it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
-        } else if (t.profile.hceCapable && !isPayment) {
-            Text("Your phone can stand in for this card. Save it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+        // HCE capability hint, only where there is a vault to emulate from: the
+        // Play edition reads and checks tags but does not store or emulate them.
+        if (vaultEnabled && !isPayment) {
+            if (t.profile.hceLimited) {
+                Text("Replay only: $HCE_LIMITED_CAVEAT. Save it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
+            } else if (t.profile.hceCapable) {
+                Text("Your phone can stand in for this card. Save it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+            }
         }
 
         // Add-to-vault inline input
-        if (addingLabel) {
+        if (vaultEnabled && addingLabel) {
             ClairixTextField(
                 value = labelText,
                 onValueChange = { labelText = it },
@@ -3104,12 +3156,15 @@ private fun NfcTagRow(
             // is open, so a locked vault offers the unlock, not the save: with
             // the key's auth window still warm, a save from here used to go
             // through without a prompt and replace the stored card unseen.
-            if (!vaultOpen && !isPayment) {
-                GhostButton("Unlock to save", onClick = onUnlockVault)
-            } else if (!inVault && !isPayment && !addingLabel) {
-                GhostButton("Save to vault", onClick = { addingLabel = true; labelText = t.profile.label })
-            } else if (inVault) {
-                StatusPill("In vault", Tone.Safe)
+            // Without a vault (the Play edition) the row offers only Copy UID.
+            if (vaultEnabled) {
+                if (!vaultOpen && !isPayment) {
+                    GhostButton("Unlock to save", onClick = onUnlockVault)
+                } else if (!inVault && !isPayment && !addingLabel) {
+                    GhostButton("Save to vault", onClick = { addingLabel = true; labelText = t.profile.label })
+                } else if (inVault) {
+                    StatusPill("In vault", Tone.Safe)
+                }
             }
             Spacer(Modifier.weight(1f))
             GhostButton(

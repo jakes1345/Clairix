@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The full flavour's additions to src/main/AndroidManifest.xml, which declares
-    only what COMMS needs. Everything here belongs to the scanner, the tools and
-    the card vault, so the comms-only APK never asks for any of it.
+    The suite flavour's additions to src/main/AndroidManifest.xml, which declares
+    only what COMMS needs. Everything here belongs to the scanner and the tools,
+    so the comms-only APK never asks for any of it. The card-emulation service is
+    not here: only the full edition declares it (src/fullSuite/AndroidManifest.xml),
+    so the Play build carries no HostApduService at all.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -182,24 +184,6 @@
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
-
-        <!--
-            Host Card Emulation service — replays recorded ISO 14443-4 APDU conversations so
-            the phone can act as a stored access card. Only activates when the user explicitly
-            enables emulation for a vault card; no data is sent until a reader initiates contact.
-        -->
-        <service
-            android:name=".CardEmulationService"
-            android:exported="true"
-            android:permission="android.permission.BIND_NFC_SERVICE">
-            <intent-filter>
-                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-            </intent-filter>
-            <meta-data
-                android:name="android.nfc.cardemulation.host_apdu_service"
-                android:resource="@xml/hce_service"/>
-        </service>
 
         <!--
             Fake incoming call: a pretend ring the owner schedules as a reason to

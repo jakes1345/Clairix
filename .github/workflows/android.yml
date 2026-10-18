@@ -69,7 +69,9 @@ jobs:
           echo "NDK: $ANDROID_NDK_HOME"
           gradle assembleDebug --no-daemon --stacktrace
 
-      # Both flavours: full (app-full-debug.apk) and comms-only (app-comms-debug.apk).
+      # Every debug variant: the full edition's whole app (app-full-suite-debug.apk)
+      # and comms-only build (app-full-comms-debug.apk), and the Play edition
+      # (app-play-suite-debug.apk).
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:

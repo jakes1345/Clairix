@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Full edition only: the card-emulation service's description (res/xml/hce_service.xml). -->
+<resources>
+    <string name="hce_service">Card Vault Emulation</string>
+</resources>

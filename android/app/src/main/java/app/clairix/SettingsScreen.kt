@@ -681,7 +681,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     Text(
                         if (BuildConfig.FULL_ACCESS)
                             "Detection data stays on this phone. Location history, device identifiers, cell tower " +
-                                "baselines, the timeline and the card vault are stored locally and never uploaded. " +
+                                "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
+                                " are stored locally and never uploaded. " +
                                 "The map downloads tiles from OpenStreetMap, which sees your IP address and the area " +
                                 "you're viewing. Evidence leaves the phone only when you export it."
                         else

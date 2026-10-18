@@ -31,8 +31,8 @@ import java.util.Locale
 
 /**
  * Screenshots of the main screens in every colour theme, rendered on the JVM by
- * layoutlib. `gradle recordPaparazziFullDebug` writes them to src/test/snapshots;
- * `verifyPaparazziFullDebug` fails when a screen no longer matches.
+ * layoutlib. `gradle recordPaparazziFullSuiteDebug` writes them to src/test/snapshots;
+ * `verifyPaparazziFullSuiteDebug` fails when a screen no longer matches.
  *
  * The screens are the app's own composables in the app's own shell. What they
  * show is put in place through the same Registry calls the scanner uses.
