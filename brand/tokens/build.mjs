@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-// Regenerates the Clairix token outputs from tokens.json.
+// Regenerates every Clairix token output from tokens.json.
 //
-//   node brand/tokens/build.mjs          check hex values, write outputs
+//   node brand/tokens/build.mjs          check hex values and contrast, write outputs
 //   node brand/tokens/build.mjs --sync   first rewrite every hex from its OKLCH value
 //
-// Outputs (next to this file):
-//   tokens.css        CSS custom properties, light + dark
-//   ClairixTheme.kt   Jetpack Compose theme (package app.clairix.ui.theme)
-//   contrast.json     WCAG 2.x ratios for every pair in color.contrastPairs
+// Outputs:
+//   brand/tokens/tokens.css      CSS custom properties, one block per [data-theme]
+//   brand/tokens/contrast.json   WCAG 2.x ratio for every checked pair in every theme
+//   android/app/src/main/java/app/clairix/ui/theme/ClairixTheme.kt
+//   android/app/src/main/res/font/*.ttf   (copied from brand/fonts)
 //
-// No dependencies beyond Node 18+.
+// The build fails if any text pair in any theme is below 4.5:1, or if a hex
+// value no longer matches its OKLCH source. No dependencies beyond Node 18+.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,33 +19,32 @@ import { fileURLToPath } from 'node:url';
 import { oklchToHex, parseOklch, contrast } from '../tools/color.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BRAND = path.resolve(HERE, '..');
+const ROOT = path.resolve(BRAND, '..');
 const SRC = path.join(HERE, 'tokens.json');
+const KT = path.join(ROOT, 'android/app/src/main/java/app/clairix/ui/theme/ClairixTheme.kt');
+const RES_FONT = path.join(ROOT, 'android/app/src/main/res/font');
 const sync = process.argv.includes('--sync');
 
 const tokens = JSON.parse(fs.readFileSync(SRC, 'utf8'));
 const isMeta = (k) => k.startsWith('$');
+const T = tokens.color.themes;
+const THEMES = Object.keys(T);
 
 // ---------------------------------------------------------------- colours
-// Flatten primitives to { 'blue.500': {oklch, hex}, white: {...} }.
-const prim = {};
-(function walk(node, prefix) {
-  for (const [k, v] of Object.entries(node)) {
-    if (isMeta(k)) continue;
-    const key = prefix ? `${prefix}.${k}` : k;
-    if (v && typeof v === 'object' && 'oklch' in v) prim[key] = v;
-    else if (v && typeof v === 'object') walk(v, key);
-  }
-})(tokens.color.primitive, '');
-
+// A role is either {oklch, hex} or the name of another role in the same theme.
 let mismatches = 0;
-for (const [key, v] of Object.entries(prim)) {
-  const { L, C, h } = parseOklch(v.oklch);
-  const hex = oklchToHex(L, C, h);
-  if (hex !== v.hex) {
-    if (sync) v.hex = hex;
-    else {
-      mismatches++;
-      console.error(`hex mismatch ${key}: ${v.hex} in file, ${hex} from ${v.oklch}`);
+for (const [name, theme] of Object.entries(T)) {
+  for (const [role, v] of Object.entries(theme)) {
+    if (!v || typeof v !== 'object' || !('oklch' in v)) continue;
+    const { L, C, h } = parseOklch(v.oklch);
+    const hex = oklchToHex(L, C, h);
+    if (v.hex !== hex) {
+      if (sync) v.hex = hex;
+      else {
+        mismatches++;
+        console.error(`hex mismatch ${name}.${role}: ${v.hex} in file, ${hex} from ${v.oklch}`);
+      }
     }
   }
 }
@@ -53,149 +54,130 @@ if (mismatches) {
 }
 if (sync) fs.writeFileSync(SRC, JSON.stringify(tokens, null, 2) + '\n');
 
-const modes = ['light', 'dark'];
-const sem = (mode) =>
-  Object.fromEntries(
-    Object.entries(tokens.color.semantic[mode])
-      .filter(([k]) => !isMeta(k))
-      .map(([k, ref]) => {
-        if (!prim[ref]) throw new Error(`semantic ${mode}.${k} references unknown primitive ${ref}`);
-        return [k, { ref, ...prim[ref] }];
-      }),
-  );
-const semantic = { light: sem('light'), dark: sem('dark') };
+const ROLES = Object.keys(T[tokens.color.defaultTheme]).filter((k) => !['label', 'description'].includes(k));
+function resolve(theme, role, seen = []) {
+  const v = T[theme][role];
+  if (v === undefined) throw new Error(`theme ${theme} has no role ${role}`);
+  if (typeof v === 'string') {
+    if (seen.includes(v)) throw new Error(`reference loop in ${theme}: ${[...seen, v].join(' -> ')}`);
+    return { ...resolve(theme, v, [...seen, role]), ref: v };
+  }
+  return v;
+}
+for (const t of THEMES) for (const r of ROLES) resolve(t, r); // every theme must define every role
 
 // ---------------------------------------------------------------- contrast
-const report = { generated: 'node brand/tokens/build.mjs', standard: 'WCAG 2.x relative luminance', modes: {} };
+const report = { generated: 'node brand/tokens/build.mjs', standard: 'WCAG 2.x, AA body text 4.5:1', themes: {} };
 let failures = 0;
-for (const mode of modes) {
-  report.modes[mode] = tokens.color.contrastPairs.pairs.map(([fg, bg, min]) => {
-    const a = semantic[mode][fg], b = semantic[mode][bg];
-    const ratio = Math.round(contrast(a.hex, b.hex) * 100) / 100;
-    const pass = ratio >= min;
-    if (!pass) {
+for (const t of THEMES) {
+  report.themes[t] = tokens.color.contrastPairs.pairs.map(([fg, bg]) => {
+    const a = resolve(t, fg).hex, b = resolve(t, bg).hex;
+    const ratio = Math.round(contrast(a, b) * 100) / 100;
+    if (ratio < 4.5) {
       failures++;
-      console.error(`contrast FAIL ${mode}: ${fg} ${a.hex} on ${bg} ${b.hex} = ${ratio} (< ${min})`);
+      console.error(`contrast FAIL ${t}: ${fg} ${a} on ${bg} ${b} = ${ratio}`);
     }
-    return { fg, bg, fgHex: a.hex, bgHex: b.hex, ratio, min, aa: ratio >= 4.5, aaLarge: ratio >= 3, pass };
+    return { fg, bg, fgHex: a, bgHex: b, ratio, aa: ratio >= 4.5, aaa: ratio >= 7 };
   });
 }
 fs.writeFileSync(path.join(HERE, 'contrast.json'), JSON.stringify(report, null, 2) + '\n');
+if (failures) {
+  console.error(`\n${failures} contrast failure(s). Nothing else written.`);
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------- CSS
 const kebab = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
-const cssVar = (key) => `--clx-${key.replace('.', '-')}`;
-const bezier = (b) => `cubic-bezier(${b.join(', ')})`;
-
-let css = `/* Clairix design tokens. Generated from tokens.json by build.mjs. Do not edit by hand. */\n\n`;
-css += `:root {\n  /* Primitives (hex fallback; OKLCH below where supported) */\n`;
-for (const [k, v] of Object.entries(prim)) css += `  ${cssVar(k)}: ${v.hex};\n`;
-css += `\n  /* Type */\n`;
-for (const [k, f] of Object.entries(tokens.font.family)) css += `  --clx-font-${k}: ${f.stack};\n`;
-for (const [k, w] of Object.entries(tokens.font.weight)) css += `  --clx-weight-${k}: ${w};\n`;
-for (const [k, t] of Object.entries(tokens.font.scale)) {
+const F = tokens.font;
+let css = `/* Clairix design tokens. Generated from tokens.json by build.mjs. Do not edit by hand.
+   Dark-only. Themes: ${THEMES.join(', ')} (default ${tokens.color.defaultTheme}). Set data-theme on <html>. */\n\n`;
+css += `:root {\n  color-scheme: dark;\n\n  /* Type */\n`;
+for (const [k, f] of Object.entries(F.family)) css += `  --clx-font-${k}: ${f.stack};\n  --clx-stretch-${k}: ${f.stretch};\n`;
+for (const [k, t] of Object.entries(F.scale)) {
   if (isMeta(k)) continue;
   const n = kebab(k);
-  css += `  --clx-text-${n}-size: ${t.size / 16}rem;\n`;
-  css += `  --clx-text-${n}-line: ${t.lineHeight / 16}rem;\n`;
-  css += `  --clx-text-${n}-weight: ${t.weight};\n`;
+  css += `  --clx-text-${n}: ${t.weight} ${t.size / 16}rem/${t.lineHeight / 16}rem var(--clx-font-${t.family});\n`;
+  css += `  --clx-text-${n}-stretch: var(--clx-stretch-${t.family});\n`;
   css += `  --clx-text-${n}-tracking: ${t.tracking}em;\n`;
+  if (t.case === 'upper') css += `  --clx-text-${n}-case: uppercase;\n`;
 }
 css += `\n  /* Space, radius */\n`;
 for (const [k, v] of Object.entries(tokens.space)) if (!isMeta(k)) css += `  --clx-space-${k}: ${v / 16}rem;\n`;
-for (const [k, v] of Object.entries(tokens.radius)) if (!isMeta(k)) css += `  --clx-radius-${k}: ${v === 9999 ? '9999px' : v / 16 + 'rem'};\n`;
+for (const [k, v] of Object.entries(tokens.radius)) if (!isMeta(k)) css += `  --clx-radius-${k}: ${v === 9999 ? '9999px' : v + 'px'};\n`;
 css += `\n  /* Elevation */\n`;
 for (const [k, v] of Object.entries(tokens.elevation)) if (!isMeta(k)) css += `  --clx-shadow-${k}: ${v.shadow};\n`;
 css += `\n  /* Motion */\n`;
 for (const [k, v] of Object.entries(tokens.motion.duration)) css += `  --clx-duration-${k}: ${v}ms;\n`;
-for (const [k, v] of Object.entries(tokens.motion.easing)) css += `  --clx-ease-${k}: ${bezier(v)};\n`;
-css += `}\n\n@supports (color: oklch(0 0 0)) {\n  :root {\n`;
-for (const [k, v] of Object.entries(prim)) css += `    ${cssVar(k)}: ${v.oklch};\n`;
-css += `  }\n}\n\n`;
+for (const [k, v] of Object.entries(tokens.motion.easing)) css += `  --clx-ease-${k}: cubic-bezier(${v.join(', ')});\n`;
+css += `}\n`;
 
-const semBlock = (mode, indent) =>
-  Object.entries(semantic[mode])
-    .map(([k, v]) => `${indent}--clx-${kebab(k)}: var(${cssVar(v.ref)});`)
-    .join('\n');
-css += `/* Semantic roles: light is the default */\n:root,\n[data-theme="light"] {\n  color-scheme: light;\n${semBlock('light', '  ')}\n}\n\n`;
-css += `@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {\n    color-scheme: dark;\n${semBlock('dark', '    ')}\n  }\n}\n\n`;
-css += `[data-theme="dark"] {\n  color-scheme: dark;\n${semBlock('dark', '  ')}\n}\n\n`;
-css += `@media (prefers-reduced-motion: reduce) {\n  :root {\n${Object.keys(tokens.motion.duration).map((k) => `    --clx-duration-${k}: 0ms;`).join('\n')}\n  }\n}\n`;
+const themeBlock = (t, fmt) =>
+  ROLES.map((r) => {
+    const v = T[t][r];
+    if (typeof v === 'string') return `  --clx-${kebab(r)}: var(--clx-${kebab(v)});`;
+    return `  --clx-${kebab(r)}: ${fmt === 'oklch' ? v.oklch : v.hex};`;
+  }).join('\n');
+for (const t of THEMES) {
+  const sel = t === tokens.color.defaultTheme ? `:root,\n[data-theme="${t}"]` : `[data-theme="${t}"]`;
+  css += `\n/* ${T[t].label}: ${T[t].description} */\n${sel} {\n${themeBlock(t, 'hex')}\n}\n`;
+  css += `@supports (color: oklch(0 0 0)) {\n  ${sel.replace('\n', '\n  ')} {\n${themeBlock(t, 'oklch').replace(/^/gm, '  ')}\n  }\n}\n`;
+}
+css += `\n@media (prefers-reduced-motion: reduce) {\n  :root {\n${Object.keys(tokens.motion.duration).map((k) => `    --clx-duration-${k}: 0ms;`).join('\n')}\n  }\n}\n`;
 fs.writeFileSync(path.join(HERE, 'tokens.css'), css);
+
+// ---------------------------------------------------------------- fonts for Android
+const FONTS = {
+  archivo_regular: 'archivo/static/Archivo-Regular.ttf',
+  archivo_medium: 'archivo/static/Archivo-Medium.ttf',
+  archivo_semibold: 'archivo/static/Archivo-SemiBold.ttf',
+  archivo_bold: 'archivo/static/Archivo-Bold.ttf',
+  archivo_expanded_bold: 'archivo/static/ArchivoExpanded-Bold.ttf',
+  archivo_expanded_extrabold: 'archivo/static/ArchivoExpanded-ExtraBold.ttf',
+  archivo_expanded_black: 'archivo/static/ArchivoExpanded-Black.ttf',
+  jetbrains_mono_regular: 'jetbrains-mono/static/JetBrainsMono-Regular.ttf',
+  jetbrains_mono_medium: 'jetbrains-mono/static/JetBrainsMono-Medium.ttf',
+};
+fs.mkdirSync(RES_FONT, { recursive: true });
+for (const [res, src] of Object.entries(FONTS)) fs.copyFileSync(path.join(BRAND, 'fonts', src), path.join(RES_FONT, `${res}.ttf`));
 
 // ---------------------------------------------------------------- Kotlin
 const argb = (hex) => `Color(0xFF${hex.slice(1)})`;
-const kName = (key) =>
-  key
-    .split('.')
-    .map((p, i) => (i === 0 ? p[0].toUpperCase() + p.slice(1) : p))
-    .join('');
-
-// Material 3 ColorScheme slots -> semantic roles (or primitives prefixed with '#').
-const m3 = {
-  light: {
-    primary: 'primary', onPrimary: 'onPrimary', primaryContainer: 'primaryContainer', onPrimaryContainer: 'onPrimaryContainer',
-    inversePrimary: '#blue.300',
-    secondary: '#neutral.700', onSecondary: '#white', secondaryContainer: '#neutral.100', onSecondaryContainer: '#neutral.800',
-    tertiary: 'info', onTertiary: 'onInfo', tertiaryContainer: 'infoContainer', onTertiaryContainer: 'onInfoContainer',
-    background: 'background', onBackground: 'text',
-    surface: 'surface', onSurface: 'text', surfaceVariant: 'surfaceMuted', onSurfaceVariant: 'textSecondary',
-    surfaceTint: 'primary', inverseSurface: '#neutral.900', inverseOnSurface: '#neutral.50',
-    error: 'danger', onError: 'onDanger', errorContainer: 'dangerContainer', onErrorContainer: 'onDangerContainer',
-    outline: 'borderStrong', outlineVariant: 'border', scrim: 'scrim',
-    surfaceBright: '#white', surfaceDim: '#neutral.200',
-    surfaceContainerLowest: '#white', surfaceContainerLow: '#neutral.50', surfaceContainer: '#neutral.100',
-    surfaceContainerHigh: '#neutral.200', surfaceContainerHighest: '#neutral.300',
-  },
-  dark: {
-    primary: 'primary', onPrimary: 'onPrimary', primaryContainer: 'primaryContainer', onPrimaryContainer: 'onPrimaryContainer',
-    inversePrimary: '#blue.600',
-    secondary: '#neutral.300', onSecondary: '#neutral.900', secondaryContainer: '#neutral.800', onSecondaryContainer: '#neutral.100',
-    tertiary: 'info', onTertiary: 'onInfo', tertiaryContainer: 'infoContainer', onTertiaryContainer: 'onInfoContainer',
-    background: 'background', onBackground: 'text',
-    surface: 'surface', onSurface: 'text', surfaceVariant: 'surfaceMuted', onSurfaceVariant: 'textSecondary',
-    surfaceTint: 'primary', inverseSurface: '#neutral.100', inverseOnSurface: '#neutral.900',
-    error: 'danger', onError: 'onDanger', errorContainer: 'dangerContainer', onErrorContainer: 'onDangerContainer',
-    outline: 'borderStrong', outlineVariant: 'border', scrim: 'scrim',
-    surfaceBright: '#neutral.800', surfaceDim: '#ink',
-    surfaceContainerLowest: '#ink', surfaceContainerLow: '#neutral.950', surfaceContainer: '#neutral.900',
-    surfaceContainerHigh: '#neutral.800', surfaceContainerHighest: '#neutral.700',
-  },
+const Up = (s) => s[0].toUpperCase() + s.slice(1);
+const M3 = {
+  primary: 'accent', onPrimary: 'onAccent', primaryContainer: 'accentContainer', onPrimaryContainer: 'onAccentContainer',
+  inversePrimary: 'accent',
+  secondary: 'textMuted', onSecondary: 'base', secondaryContainer: 'surfaceOverlay', onSecondaryContainer: 'text',
+  tertiary: 'info', onTertiary: 'onInfo', tertiaryContainer: 'infoContainer', onTertiaryContainer: 'onInfoContainer',
+  background: 'base', onBackground: 'text', surface: 'base', onSurface: 'text',
+  surfaceVariant: 'surfaceRaised', onSurfaceVariant: 'textMuted', surfaceTint: 'accent',
+  inverseSurface: 'text', inverseOnSurface: 'base',
+  error: 'danger', onError: 'onDanger', errorContainer: 'dangerContainer', onErrorContainer: 'onDangerContainer',
+  outline: 'borderStrong', outlineVariant: 'border',
+  surfaceBright: 'surfaceOverlay', surfaceDim: 'base',
+  surfaceContainerLowest: 'base', surfaceContainerLow: 'surface', surfaceContainer: 'surface',
+  surfaceContainerHigh: 'surfaceRaised', surfaceContainerHighest: 'surfaceOverlay',
 };
-const resolve = (mode, v) => (v.startsWith('#') ? { ref: v.slice(1), ...prim[v.slice(1)] } : semantic[mode][v]);
-
-const ease = (b) => `CubicBezierEasing(${b.map((x) => `${x}f`).join(', ')})`;
-const famOf = (t) => (t.family === 'display' ? 'InterDisplay' : t.family === 'mono' ? 'JetBrainsMono' : 'Inter');
-const weightName = { 400: 'Normal', 500: 'Medium', 600: 'SemiBold', 700: 'Bold' };
-const styleOf = (t) =>
-  `TextStyle(\n    fontFamily = ${famOf(t)},\n    fontWeight = FontWeight.${weightName[t.weight]},\n    fontSize = ${t.size}.sp,\n    lineHeight = ${t.lineHeight}.sp,\n    letterSpacing = ${t.tracking === 0 ? '0' : `(${t.tracking})`}.em,\n)`;
+const weightName = { 400: 'Normal', 500: 'Medium', 600: 'SemiBold', 700: 'Bold', 800: 'ExtraBold', 900: 'Black' };
+const famName = { display: 'ArchivoExpanded', ui: 'Archivo', mono: 'JetBrainsMono' };
 
 let kt = `// Clairix theme for Jetpack Compose.
 // Generated from brand/tokens/tokens.json by brand/tokens/build.mjs. Do not edit by hand.
 //
-// To use: copy this file into app/src/main/java/app/clairix/ui/theme/, and copy
-// these fonts from brand/fonts into app/src/main/res/font/ (lowercase names):
-//   inter/static/Inter-Regular.ttf          -> inter_regular.ttf
-//   inter/static/Inter-Medium.ttf           -> inter_medium.ttf
-//   inter/static/Inter-SemiBold.ttf         -> inter_semibold.ttf
-//   inter/static/Inter-Bold.ttf             -> inter_bold.ttf
-//   inter/static/InterDisplay-Medium.ttf    -> inter_display_medium.ttf
-//   inter/static/InterDisplay-SemiBold.ttf  -> inter_display_semibold.ttf
-//   jetbrains-mono/static/JetBrainsMono-Regular.ttf -> jetbrains_mono_regular.ttf
-//   jetbrains-mono/static/JetBrainsMono-Medium.ttf  -> jetbrains_mono_medium.ttf
-// Then wrap the app content in ClairixTheme { ... }.
+// Dark-only, four colour themes (${THEMES.map((t) => T[t].label).join(', ')}); ${T[tokens.color.defaultTheme].label} is the default.
+// The logo and app icon never change with the theme: only these colours do.
+// Fonts live in res/font (Archivo, Archivo Expanded, JetBrains Mono; SIL OFL).
+// Usage: ClairixTheme(theme = ClairixThemeName.ACID) { ... }
 
 package app.clairix.ui.theme
 
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -210,40 +192,49 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import app.clairix.R
 
-/** Raw palette. Prefer MaterialTheme.colorScheme or ClairixTheme.colors in UI code. */
-object ClairixPalette {
-`;
-for (const [k, v] of Object.entries(prim)) kt += `    /** ${v.oklch} */\n    val ${kName(k)} = ${argb(v.hex)}\n`;
-kt += `}\n\n`;
-
-for (const mode of modes) {
-  const fn = mode === 'light' ? 'lightColorScheme' : 'darkColorScheme';
-  kt += `val Clairix${mode === 'light' ? 'Light' : 'Dark'}ColorScheme: ColorScheme = ${fn}(\n`;
-  for (const [slot, v] of Object.entries(m3[mode])) {
-    const r = resolve(mode, v);
-    kt += `    ${slot} = ClairixPalette.${kName(r.ref)},\n`;
-  }
-  kt += `)\n\n`;
+/** The selectable colour themes. ACID is the brand default. */
+enum class ClairixThemeName(val label: String) {
+${THEMES.map((t) => `    ${t.toUpperCase()}("${T[t].label}"),`).join('\n')}
 }
 
-// Status colours Material does not have.
-const extra = ['glint', 'safe', 'onSafe', 'safeContainer', 'onSafeContainer', 'caution', 'onCaution', 'cautionContainer', 'onCautionContainer', 'info', 'onInfo', 'infoContainer', 'onInfoContainer', 'textTertiary', 'border'];
-kt += `/** Clairix roles that Material 3 has no slot for: the Glint accent and the status colours. */\n@Immutable\ndata class ClairixColors(\n${extra.map((k) => `    val ${k}: Color,`).join('\n')}\n)\n\n`;
-for (const mode of modes) {
-  kt += `val Clairix${mode === 'light' ? 'Light' : 'Dark'}Colors = ClairixColors(\n${extra.map((k) => `    ${k} = ClairixPalette.${kName(semantic[mode][k].ref)},`).join('\n')}\n)\n\n`;
-}
-
-kt += `val Inter = FontFamily(
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-    Font(R.font.inter_bold, FontWeight.Bold),
+/** Every colour role of a Clairix theme, including those Material 3 has no slot for. */
+@Immutable
+data class ClairixColors(
+${ROLES.map((r) => `    val ${r}: Color,`).join('\n')}
 )
 
-/** Inter's display optical size, for text 20 sp and larger. */
-val InterDisplay = FontFamily(
-    Font(R.font.inter_display_medium, FontWeight.Medium),
-    Font(R.font.inter_display_semibold, FontWeight.SemiBold),
+`;
+for (const t of THEMES) {
+  kt += `/** ${T[t].label}: ${T[t].description} */\nval ${Up(t)}Colors = ClairixColors(\n`;
+  kt += ROLES.map((r) => {
+    const v = resolve(t, r);
+    return `    ${r} = ${argb(v.hex)},${v.ref ? ` // = ${v.ref}` : v.oklch ? ` // ${v.oklch}` : ''}`;
+  }).join('\n');
+  kt += `\n)\n\n`;
+}
+kt += `fun ClairixThemeName.colors(): ClairixColors = when (this) {
+${THEMES.map((t) => `    ClairixThemeName.${t.toUpperCase()} -> ${Up(t)}Colors`).join('\n')}
+}
+
+/** Maps a Clairix theme onto a Material 3 dark ColorScheme. */
+fun ClairixColors.toColorScheme(): ColorScheme = darkColorScheme(
+${Object.entries(M3).map(([slot, role]) => `    ${slot} = ${role},`).join('\n')}
+    scrim = Color.Black,
+)
+
+/** Archivo at normal width: body, labels, buttons. */
+val Archivo = FontFamily(
+    Font(R.font.archivo_regular, FontWeight.Normal),
+    Font(R.font.archivo_medium, FontWeight.Medium),
+    Font(R.font.archivo_semibold, FontWeight.SemiBold),
+    Font(R.font.archivo_bold, FontWeight.Bold),
+)
+
+/** Archivo Expanded: headlines and display. Set these styles in capitals. */
+val ArchivoExpanded = FontFamily(
+    Font(R.font.archivo_expanded_bold, FontWeight.Bold),
+    Font(R.font.archivo_expanded_extrabold, FontWeight.ExtraBold),
+    Font(R.font.archivo_expanded_black, FontWeight.Black),
 )
 
 /** Machine values only: MAC addresses, cell IDs, fingerprints. */
@@ -252,57 +243,67 @@ val JetBrainsMono = FontFamily(
     Font(R.font.jetbrains_mono_medium, FontWeight.Medium),
 )
 
-/** The full Clairix type scale, including steps Material has no slot for. */
+/**
+ * The full Clairix type scale. Styles marked UPPERCASE are always set in
+ * capitals: pass text.uppercase(), since TextStyle has no text-transform.
+ */
 object ClairixType {
 `;
-for (const [k, t] of Object.entries(tokens.font.scale)) {
+for (const [k, t] of Object.entries(F.scale)) {
   if (isMeta(k) || t.web) continue;
-  kt += `    val ${k} = ${styleOf(t).replace(/\n/g, '\n    ')}\n`;
+  kt += `    ${t.case === 'upper' ? '/** UPPERCASE */\n    ' : ''}val ${k} = TextStyle(
+        fontFamily = ${famName[t.family]},
+        fontWeight = FontWeight.${weightName[t.weight]},
+        fontSize = ${t.size}.sp,
+        lineHeight = ${t.lineHeight}.sp,
+        letterSpacing = ${t.tracking === 0 ? '0' : `(${t.tracking})`}.em,
+    )
+`;
 }
-kt += `}\n\nval ClairixTypography = Typography(\n`;
-for (const [slot, ref] of Object.entries(tokens.font.material3)) {
-  if (isMeta(slot)) continue;
-  kt += `    ${slot} = ClairixType.${ref},\n`;
-}
-kt += `)\n\n`;
+kt += `}
 
-const R = tokens.radius;
-kt += `val ClairixShapes = Shapes(
-    extraSmall = RoundedCornerShape(${R.xs}.dp),
-    small = RoundedCornerShape(${R.sm}.dp),
-    medium = RoundedCornerShape(${R.md}.dp),
-    large = RoundedCornerShape(${R.lg}.dp),
-    extraLarge = RoundedCornerShape(${R.xl}.dp),
+val ClairixTypography = Typography(
+${Object.entries(F.material3).filter(([k]) => !isMeta(k)).map(([slot, ref]) => `    ${slot} = ClairixType.${ref},`).join('\n')}
 )
+
+val ClairixShapes = Shapes(
+    extraSmall = RoundedCornerShape(${tokens.radius.xs}.dp),
+    small = RoundedCornerShape(${tokens.radius.sm}.dp),
+    medium = RoundedCornerShape(${tokens.radius.md}.dp),
+    large = RoundedCornerShape(${tokens.radius.lg}.dp),
+    extraLarge = RoundedCornerShape(${tokens.radius.xl}.dp),
+)
+
+/** The brand's cut corner, from the octagon in the logo. For badges, tags and hero cards. */
+val ClairixChamfer = CutCornerShape(${tokens.radius.chamfer}.dp)
 
 /** 4 dp spacing grid. */
 object ClairixSpace {
 ${Object.entries(tokens.space).filter(([k]) => !isMeta(k)).map(([k, v]) => `    val s${k} = ${v}.dp`).join('\n')}
 }
 
-/** Elevation levels in dp. Depth is carried mostly by surface colour. */
+/** Elevation in dp. On black, depth is mostly the surface step. */
 object ClairixElevation {
 ${Object.entries(tokens.elevation).filter(([k]) => !isMeta(k)).map(([k, v]) => `    val level${k} = ${v.dp}.dp`).join('\n')}
 }
 
-/** Calm motion: short, decelerating, never bouncy. Durations in milliseconds. */
+/** Fast and decisive, never bouncy. Durations in milliseconds. */
 object ClairixMotion {
 ${Object.entries(tokens.motion.duration).map(([k, v]) => `    const val ${k} = ${v}`).join('\n')}
-${Object.entries(tokens.motion.easing).map(([k, v]) => `    val ${k} = ${ease(v)}`).join('\n')}
+${Object.entries(tokens.motion.easing).map(([k, v]) => `    val ${k} = CubicBezierEasing(${v.map((x) => `${x}f`).join(', ')})`).join('\n')}
 }
 
-val LocalClairixColors = staticCompositionLocalOf { ClairixLightColors }
+val LocalClairixColors = staticCompositionLocalOf { ${Up(tokens.color.defaultTheme)}Colors }
 
 @Composable
 fun ClairixTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    theme: ClairixThemeName = ClairixThemeName.${tokens.color.defaultTheme.toUpperCase()},
     content: @Composable () -> Unit,
 ) {
-    CompositionLocalProvider(
-        LocalClairixColors provides if (darkTheme) ClairixDarkColors else ClairixLightColors,
-    ) {
+    val colors = theme.colors()
+    CompositionLocalProvider(LocalClairixColors provides colors) {
         MaterialTheme(
-            colorScheme = if (darkTheme) ClairixDarkColorScheme else ClairixLightColorScheme,
+            colorScheme = colors.toColorScheme(),
             typography = ClairixTypography,
             shapes = ClairixShapes,
             content = content,
@@ -310,13 +311,14 @@ fun ClairixTheme(
     }
 }
 
-/** Access Clairix-only roles: ClairixTheme.colors.safe, ClairixTheme.colors.glint ... */
+/** Clairix-only roles: ClairixTheme.colors.safe, .caution, .textSubtle ... */
 object ClairixTheme {
     val colors: ClairixColors
         @Composable get() = LocalClairixColors.current
 }
 `;
-fs.writeFileSync(path.join(HERE, 'ClairixTheme.kt'), kt);
+fs.mkdirSync(path.dirname(KT), { recursive: true });
+fs.writeFileSync(KT, kt);
 
-console.log(`tokens: ${Object.keys(prim).length} primitives, contrast pairs checked ${tokens.color.contrastPairs.pairs.length * 2}, failures ${failures}`);
-if (failures) process.exit(1);
+const n = Object.values(report.themes).reduce((a, r) => a + r.length, 0);
+console.log(`tokens: ${THEMES.length} themes x ${ROLES.length} roles, ${n} contrast pairs checked, all >= 4.5`);
