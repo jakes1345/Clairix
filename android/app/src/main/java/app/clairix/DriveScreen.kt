@@ -30,16 +30,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.components.Tone
+import app.clairix.ui.components.ButtonKind
+import app.clairix.ui.components.ClairixButton
+import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.ClairixShapes
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.clairix.nav.NavScreen
@@ -214,27 +215,17 @@ internal fun DriveContent(
                 )
             }
 
-            FilledTonalButton(
+            // Clear of the SOS button in the bottom end corner.
+            ClairixButton(
+                if (driveModeActive) "Turn off drive mode" else "Turn on drive mode",
                 onClick = onToggleDriveMode,
+                kind = if (driveModeActive) ButtonKind.Secondary else ButtonKind.Primary,
+                tone = if (driveModeActive) Tone.Danger else Tone.Accent,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 12.dp)
-                    .heightIn(min = 64.dp),
-                shape = ClairixShapes.Card,
-                colors = if (driveModeActive) {
-                    ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                } else {
-                    ButtonDefaults.filledTonalButtonColors()
-                }
-            ) {
-                Text(
-                    style = MaterialTheme.typography.labelLarge,
-                    text = if (driveModeActive) "Deactivate" else "Activate Drive Mode"
-                )
-            }
+                    .padding(start = 12.dp, end = 88.dp, top = 12.dp, bottom = 12.dp)
+                    .heightIn(min = 56.dp)
+            )
         }
     }
 
@@ -411,7 +402,7 @@ private fun ScannerCard(
     onSetChannelActive: (Long, Boolean) -> Unit,
     onOpenRecording: (String) -> Unit
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ClairixCard(contentPadding = PaddingValues(0.dp), spacing = 0.dp) {
         CardHeader(title = "Scanner", expanded = expanded, onToggle = onToggle) {
             if (isRecording) {
                 val pulse = rememberInfiniteTransition(label = "recPulse").animateFloat(
@@ -656,7 +647,7 @@ private fun AdsbCard(
     aircraft: List<Aircraft>
 ) {
     val anyEmergency = aircraft.any { it.isEmergency }
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ClairixCard(contentPadding = PaddingValues(0.dp), spacing = 0.dp) {
         CardHeader(title = "Aircraft", expanded = expanded, onToggle = onToggle) {
             Box(
                 modifier = Modifier
@@ -800,7 +791,7 @@ private fun ObdCard(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ClairixCard(contentPadding = PaddingValues(0.dp), spacing = 0.dp) {
         CardHeader(title = "OBD-II", expanded = expanded, onToggle = onToggle) {
             Text(
                 style = MaterialTheme.typography.bodyMedium,

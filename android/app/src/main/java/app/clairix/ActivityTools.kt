@@ -1,19 +1,10 @@
 package app.clairix
 
-import android.bluetooth.BluetoothManager
-import android.content.Context
-import android.content.Intent
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -25,51 +16,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.clairix.analysis.CaAuditScanner
 import app.clairix.analysis.LocationHistory
 import app.clairix.analysis.PatternOfLife
 import app.clairix.analysis.PatternReport
-import app.clairix.analysis.StalkwareScanner
-import app.clairix.analysis.SuspiciousCa
-import app.clairix.analysis.TlsCanary
-import app.clairix.analysis.TlsCanaryResult
 import app.clairix.analysis.clock
-import app.clairix.comms.CommsRepository
-import app.clairix.comms.Contact
-import app.clairix.comms.formatClairixNumber
-import app.clairix.detect.BleCanary
-import app.clairix.detect.BleCanaryState
-import app.clairix.detect.DultInterrogator
-import app.clairix.detect.DultResult
-import app.clairix.detect.LocatorState
-import app.clairix.detect.RssiLocator
-import app.clairix.detect.RssiLocatorView
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.BiometricTripwireResult
-import app.clairix.security.DuressPhrase
-import app.clairix.security.FakeCall
 import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import app.clairix.ui.theme.ClairixTheme
 import app.clairix.ui.theme.monoSmall
@@ -256,7 +219,7 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
                 KeyValueRow("Fixes recorded", "$fixes of ${LocationHistory.CAP}")
                 Text(
                     "The GPS log the analysis reads. It stays on this phone and is also removed by " +
-                    "CLEAR ALL DATA in Settings.",
+                    "Clear all data in Settings.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
