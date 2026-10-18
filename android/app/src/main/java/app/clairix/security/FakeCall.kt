@@ -327,7 +327,7 @@ class FakeCallActivity : ComponentActivity() {
     private fun startRinging() {
         if (wake == null) {
             wake = getSystemService(PowerManager::class.java)
-                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aegis:fake-call")
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:fake-call")
                 ?.apply { setReferenceCounted(false); acquire(FakeCall.RING_MS + 5_000L) }
         }
         val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager

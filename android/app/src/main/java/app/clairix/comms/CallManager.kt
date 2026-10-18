@@ -636,9 +636,9 @@ object CallManager {
         val f = ensureFactory()
         val peer = f.createPeerConnection(config, observer(callId)) ?: throw IllegalStateException("WebRTC refused to create a connection")
         val source = f.createAudioSource(MediaConstraints())
-        val track = f.createAudioTrack("aegis-audio-$callId", source)
+        val track = f.createAudioTrack("clairix-audio-$callId", source)
         track.setEnabled(_call.value?.takeIf { it.id == callId }?.muted != true)
-        peer.addTrack(track, listOf("aegis-stream"))
+        peer.addTrack(track, listOf("clairix-stream"))
         return Media(callId, peer, source, track)
     }
 
@@ -867,7 +867,7 @@ object CallManager {
         // sleep in the middle of ringing.
         if (ringWake == null) {
             ringWake = appContext.getSystemService(PowerManager::class.java)
-                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aegis:ringing")
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:ringing")
                 ?.apply { setReferenceCounted(false); acquire(RING_TIMEOUT_MS + 5_000L) }
         }
         if (ringer == null) ringer = Ringer(appContext).also { it.start() }
@@ -986,7 +986,7 @@ private class CallAudio(context: Context) {
     private fun holdProximity(atEar: Boolean) {
         if (atEar && power?.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK) == true) {
             if (proximity == null) {
-                proximity = power.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "aegis:call-proximity").apply {
+                proximity = power.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "clairix:call-proximity").apply {
                     setReferenceCounted(false)
                     acquire(4 * 3_600_000L)
                 }

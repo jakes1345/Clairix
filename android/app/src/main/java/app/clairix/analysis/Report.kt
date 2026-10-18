@@ -47,10 +47,10 @@ object Report {
         // mail client reads the attachment when it actually sends, which offline can
         // be well after the share, and deleting the file underneath it lost the report.
         val now = System.currentTimeMillis()
-        context.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("aegis_") && f.name.endsWith(".txt") }
+        context.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("clairix_") && f.name.endsWith(".txt") }
             ?.filter { now - it.lastModified() > EXPORT_RETENTION_MS }
             ?.forEach { it.delete() }
-        val file = File(context.cacheDir, "aegis_${now}.txt")
+        val file = File(context.cacheDir, "clairix_${now}.txt")
         file.writeText(text)
         val uri: Uri = FileProvider.getUriForFile(
             context, "${context.packageName}.fileprovider", file
@@ -74,7 +74,7 @@ object Report {
         wifi: List<WifiAnomaly> = emptyList()
     ): String = buildString {
         val now = Date()
-        appendLine("=== AEGIS EVIDENCE REPORT ===")
+        appendLine("=== CLAIRIX EVIDENCE REPORT ===")
         appendLine("Clairix Report — generated ${sdf.format(now)}")
         appendLine()
 
@@ -168,7 +168,7 @@ object Report {
         val now = System.currentTimeMillis()
         val root = JSONObject()
         root.put("v", ThreatPayload.VERSION)
-        root.put("app", "aegis")
+        root.put("app", "clairix")
         root.put("ts", now)
         root.put("ts_utc", sdfIso.format(Date(now)))
 

@@ -220,7 +220,7 @@ enum class EventKind {
     PANIC,
     /** A fingerprint or face was enrolled on the phone since Clairix last checked. */
     BIOMETRIC_ENROLLED,
-    /** The screen was being recorded or cast while an Clairix screen was showing. */
+    /** The screen was being recorded or cast while a Clairix screen was showing. */
     SCREEN_RECORDING,
     /** The phone was unlocked inside the owner's sleep window. */
     UNLOCK_ANOMALY,

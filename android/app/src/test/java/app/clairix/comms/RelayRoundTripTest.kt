@@ -13,10 +13,10 @@ import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
-import uniffi.aegis_comms_crypto.CryptoException
-import uniffi.aegis_comms_crypto.Identity
-import uniffi.aegis_comms_crypto.PeerKeys
-import uniffi.aegis_comms_crypto.fingerprint
+import uniffi.clairix_comms_crypto.CryptoException
+import uniffi.clairix_comms_crypto.Identity
+import uniffi.clairix_comms_crypto.PeerKeys
+import uniffi.clairix_comms_crypto.fingerprint
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -28,13 +28,13 @@ import java.util.concurrent.TimeUnit
  *
  * Each phone registers a fresh unlisted identity, keeps the live WebSocket
  * open the way LiveLink does, and acks what it receives. Both mailboxes are
- * wiped at the end. Runs only when AEGIS_RELAY_URL and AEGIS_ENROLL_SECRET
+ * wiped at the end. Runs only when CLAIRIX_RELAY_URL and CLAIRIX_ENROLL_SECRET
  * are set in the environment; skipped otherwise (in CI, for example).
  */
 class RelayRoundTripTest {
 
-    private val relayUrl: String? = System.getenv("AEGIS_RELAY_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-    private val secret: String? = System.getenv("AEGIS_ENROLL_SECRET")?.trim()?.takeIf { it.isNotEmpty() }
+    private val relayUrl: String? = System.getenv("CLAIRIX_RELAY_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+    private val secret: String? = System.getenv("CLAIRIX_ENROLL_SECRET")?.trim()?.takeIf { it.isNotEmpty() }
 
     private lateinit var alice: Phone
     private lateinit var bob: Phone
@@ -153,7 +153,7 @@ class RelayRoundTripTest {
 
     @Before
     fun setUp() {
-        assumeTrue("set AEGIS_RELAY_URL and AEGIS_ENROLL_SECRET to run the relay round-trip tests", relayUrl != null && secret != null)
+        assumeTrue("set CLAIRIX_RELAY_URL and CLAIRIX_ENROLL_SECRET to run the relay round-trip tests", relayUrl != null && secret != null)
         alice = Phone(relayUrl!!, secret!!, "Alice")
         bob = Phone(relayUrl, secret, "Bob")
         alice.connect()
@@ -314,7 +314,7 @@ class RelayRoundTripTest {
         val bundle = alice.relay.bundle(bob.number!!, fingerprint(bob.keys.ed25519))
         val after = bob.relay.me().oneTimeKeys
         val again = bob.identity.publicBundle().let {
-            uniffi.aegis_comms_crypto.PublicBundle(it.ed25519, it.curve25519, it.sealing, it.signature, null, listOf(bundle.sessionKey))
+            uniffi.clairix_comms_crypto.PublicBundle(it.ed25519, it.curve25519, it.sealing, it.signature, null, listOf(bundle.sessionKey))
         }
         assertEquals(after, bob.relay.putKeys(again))
     }
@@ -363,7 +363,7 @@ class RelayRoundTripTest {
     @Test
     fun theRelaySendsHeartbeatsToAConnectedPhone() {
         // Takes up to two and a half minutes, so it runs only when asked for.
-        assumeTrue("set AEGIS_SLOW_TESTS to wait for a relay heartbeat", System.getenv("AEGIS_SLOW_TESTS") != null)
+        assumeTrue("set CLAIRIX_SLOW_TESTS to wait for a relay heartbeat", System.getenv("CLAIRIX_SLOW_TESTS") != null)
         assertTrue("no heartbeat within 150 s", alice.awaitControl("hb", 150))
     }
 

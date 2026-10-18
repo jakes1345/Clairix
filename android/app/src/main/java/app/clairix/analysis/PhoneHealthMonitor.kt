@@ -111,7 +111,7 @@ class PhoneHealthMonitor(private val context: Context) {
         // lost the microphone to a higher-priority recorder. It hears nothing, so it
         // is not "an app recording audio".
         //
-        // The list also includes this app's own recordings — an Clairix call, a voicemail
+        // The list also includes this app's own recordings — a Clairix call, a voicemail
         // being recorded — which lit the MICROPHONE ACTIVE banner for the user's own
         // call. They are told apart by audio session id: `getClientUid()` is not in
         // the public SDK, and the platform hands a third-party app an anonymised copy

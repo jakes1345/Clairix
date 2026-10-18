@@ -11,9 +11,9 @@ import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
-import uniffi.aegis_comms_crypto.Identity
-import uniffi.aegis_comms_crypto.PublicBundle
-import uniffi.aegis_comms_crypto.SignedKey
+import uniffi.clairix_comms_crypto.Identity
+import uniffi.clairix_comms_crypto.PublicBundle
+import uniffi.clairix_comms_crypto.SignedKey
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom

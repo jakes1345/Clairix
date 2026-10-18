@@ -460,14 +460,14 @@ private fun OCommsPage3(onStart: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         Text(
             "The person who gave you this app sends you an invite link or shows you a QR code. " +
-            "Opening it registers you with their relay and gives you an Clairix number; it also adds " +
+            "Opening it registers you with their relay and gives you a Clairix number; it also adds " +
             "them as your first contact.",
             color = OInkDimClr, fontSize = 14.sp, textAlign = TextAlign.Center,
             lineHeight = 21.sp
         )
         Spacer(Modifier.height(14.dp))
         Text(
-            "An Clairix number is not a phone number. It reaches other Clairix apps on the same relay " +
+            "A Clairix number is not a phone number. It reaches other Clairix apps on the same relay " +
             "and nothing else. Keep COMMS set to Online so calls ring while the app is closed.",
             color = OMutedClr, fontSize = 12.sp, textAlign = TextAlign.Center,
             lineHeight = 18.sp

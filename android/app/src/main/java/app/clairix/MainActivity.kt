@@ -455,11 +455,11 @@ class MainActivity : AppCompatActivity() {
      * not exported.
      */
     private fun handleOpenThreadIntent(intent: Intent?) {
-        // An invite link (the relay's invite page opens aegis://invite?c=…). It
+        // An invite link (the relay's invite page opens clairix://invite?c=…). It
         // only fills in the COMMS setup or offers to add the inviter; nothing is
         // registered or added until the owner confirms on screen.
         val data = intent?.data
-        if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "aegis" && data.host == "invite") {
+        if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "clairix" && data.host == "invite") {
             data.getQueryParameter("c")?.let { Registry.requestInvite(it) }
             intent.data = null
             Registry.requestTab(CommsNotifications.COMMS_TAB_INDEX)
@@ -1665,7 +1665,7 @@ private fun ScanScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("AEGIS", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text("CLAIRIX", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = {
                         val i = Report.share(context, status, detections, timeline, cell, nfc)

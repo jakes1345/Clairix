@@ -2,8 +2,8 @@ package app.clairix.comms
 
 import android.content.Context
 import android.util.Base64
-import uniffi.aegis_comms_crypto.Identity
-import uniffi.aegis_comms_crypto.randomKey
+import uniffi.clairix_comms_crypto.Identity
+import uniffi.clairix_comms_crypto.randomKey
 import java.io.File
 
 /**

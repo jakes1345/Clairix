@@ -35,10 +35,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.unifiedpush.android.connector.UnifiedPush
-import uniffi.aegis_comms_crypto.CryptoException
-import uniffi.aegis_comms_crypto.PeerKeys
-import uniffi.aegis_comms_crypto.fingerprint
-import uniffi.aegis_comms_crypto.verify
+import uniffi.clairix_comms_crypto.CryptoException
+import uniffi.clairix_comms_crypto.PeerKeys
+import uniffi.clairix_comms_crypto.fingerprint
+import uniffi.clairix_comms_crypto.verify
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -526,7 +526,7 @@ object CommsRepository {
      */
     suspend fun addContactByNumber(rawNumber: String, name: String): Result<Contact> = withContext(Dispatchers.IO) {
         lock.withLock {
-            val number = parseClairixNumber(rawNumber) ?: return@withLock Result.failure(RelayException("An Clairix number is nine digits"))
+            val number = parseClairixNumber(rawNumber) ?: return@withLock Result.failure(RelayException("A Clairix number is nine digits"))
             if (number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
             store.contact(number)?.let { return@withLock Result.success(it) }
             setBusy(true)
@@ -1606,7 +1606,7 @@ object CommsRepository {
         }
         val json = CommsWire.parse(p.payload)
         if (json == null) {
-            CommsLog.add("Envelope ${shortId(p.id)} decrypted but is not an Clairix payload; dropped")
+            CommsLog.add("Envelope ${shortId(p.id)} decrypted but is not a Clairix payload; dropped")
             store.deletePending(p.id)
             return true
         }

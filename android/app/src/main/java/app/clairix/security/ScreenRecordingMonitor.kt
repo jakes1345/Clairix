@@ -20,7 +20,7 @@ import java.util.concurrent.Executor
 import java.util.function.Consumer
 
 /**
- * Notices when an Clairix screen is being recorded or cast.
+ * Notices when a Clairix screen is being recorded or cast.
  *
  * Two sources, neither of which names the recorder to a third-party app:
  *

@@ -62,7 +62,7 @@ sealed interface BiometricTripwireResult {
  */
 object BiometricTripwire {
 
-    internal const val KEY_ALIAS = "aegis_bio_tripwire_v1"
+    internal const val KEY_ALIAS = "clairix_bio_tripwire_v1"
     internal const val PREFS_NAME = "bio_tripwire"
 
     /** When the current key was generated, 0 when none has been. */
