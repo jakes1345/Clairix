@@ -46,6 +46,11 @@ import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.math.sin
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.monoLarge
+import app.clairix.ui.theme.mono
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.SecondaryButton
 
 private const val RPM_MAX = 8000f
 private const val RPM_REDLINE_FRACTION = 0.75f
@@ -224,9 +229,8 @@ private fun DriveContent(
                 }
             ) {
                 Text(
-                    text = if (driveModeActive) "Deactivate" else "Activate Drive Mode",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.labelLarge,
+                    text = if (driveModeActive) "Deactivate" else "Activate Drive Mode"
                 )
             }
         }
@@ -255,23 +259,22 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState) {
         Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
+                    style = MaterialTheme.typography.headlineLarge,
                     text = obd.speedKph?.toString() ?: "--",
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
+                    style = MaterialTheme.typography.bodyMedium,
                     text = "km/h",
-                    fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
             }
             val mph = obd.speedKph?.let { (it * KPH_TO_MPH).roundToInt() }
             Text(
+                style = MaterialTheme.typography.bodyMedium,
                 text = if (mph != null) "$mph mph" else "-- mph",
-                fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -290,8 +293,8 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState) {
             )
             Spacer(Modifier.width(6.dp))
             Text(
+                style = MaterialTheme.typography.bodyMedium,
                 text = if (obd.connected) obd.deviceName ?: "OBD" else "No OBD",
-                fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onBackground
@@ -340,8 +343,8 @@ private fun SdrIndicator(state: SdrState) {
         StatusDot(color = dotColor, modifier = Modifier.alpha(dotAlpha))
         Spacer(Modifier.width(6.dp))
         Text(
+            style = MaterialTheme.typography.bodyMedium,
             text = label,
-            fontSize = 13.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
@@ -375,17 +378,16 @@ private fun CardHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
+            style = MaterialTheme.typography.titleLarge,
             text = title,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.width(10.dp))
         trailing()
         Spacer(Modifier.weight(1f))
         Text(
+            style = MaterialTheme.typography.bodyMedium,
             text = if (expanded) "▲" else "▼",
-            fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
@@ -423,9 +425,8 @@ private fun ScannerCard(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
+                    style = MaterialTheme.typography.titleSmall,
                     text = "REC",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.error
                 )
             }
@@ -450,19 +451,19 @@ private fun ScannerCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
+                        style = MaterialTheme.typography.bodyMedium,
                         text = "${channels.size} channels",
-                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.weight(1f))
                     FilledTonalIconButton(onClick = onAddClick) {
-                        Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Text("+", style = MaterialTheme.typography.labelLarge)
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
+                        style = MaterialTheme.typography.bodyMedium,
                         text = "Squelch",
-                        fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Slider(
@@ -473,17 +474,15 @@ private fun ScannerCard(
                             .padding(horizontal = 12.dp)
                     )
                     Text(
+                        style = MaterialTheme.typography.mono,
                         text = "${(squelchLevel * 100).roundToInt()}%",
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 if (lastRecordingPath != null) {
                     Text(
+                        style = MaterialTheme.typography.monoSmall,
                         text = lastRecordingPath,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.primary,
@@ -499,23 +498,21 @@ private fun ScannerCard(
 private fun ActiveChannelDisplay(channel: ScannerChannel?) {
     if (channel == null) {
         Text(
+            style = MaterialTheme.typography.bodyLarge,
             text = "No active channel",
-            fontSize = 16.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         return
     }
     Column {
         Text(
+            style = MaterialTheme.typography.monoLarge,
             text = formatMhz(channel.freqHz),
-            fontSize = 32.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(
+            style = MaterialTheme.typography.bodyMedium,
             text = channel.name,
-            fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
@@ -578,8 +575,8 @@ private fun ChannelList(
 ) {
     if (channels.isEmpty()) {
         Text(
+            style = MaterialTheme.typography.bodyMedium,
             text = "No channels saved",
-            fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         return
@@ -611,9 +608,8 @@ private fun ChannelList(
                         contentAlignment = Alignment.CenterEnd
                     ) {
                         Text(
+                            style = MaterialTheme.typography.titleSmall,
                             text = "Delete",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
                     }
@@ -627,17 +623,16 @@ private fun ChannelList(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
+                        style = MaterialTheme.typography.bodyLarge,
                         text = channel.name,
                         modifier = Modifier.weight(1f),
-                        fontSize = 15.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
+                        style = MaterialTheme.typography.mono,
                         text = formatMhz(channel.freqHz),
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.width(8.dp))
@@ -671,9 +666,8 @@ private fun AdsbCard(
                     .padding(horizontal = 10.dp, vertical = 2.dp)
             ) {
                 Text(
+                    style = MaterialTheme.typography.titleSmall,
                     text = aircraft.size.toString(),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
                     color = if (anyEmergency) MaterialTheme.colorScheme.onError
                     else MaterialTheme.colorScheme.onSecondaryContainer
                 )
@@ -694,13 +688,13 @@ private fun AdsbCard(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
+                            style = MaterialTheme.typography.bodyLarge,
                             text = "No aircraft detected",
-                            fontSize = 15.sp,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
+                            style = MaterialTheme.typography.bodyMedium,
                             text = "SDR must be on 1090 MHz",
-                            fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -744,10 +738,8 @@ private fun AircraftRow(plane: Aircraft) {
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
+                style = MaterialTheme.typography.mono,
                 text = plane.callsign?.takeIf { it.isNotBlank() } ?: plane.icao,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
                 color = textColor
             )
             if (emergency) {
@@ -759,40 +751,35 @@ private fun AircraftRow(plane: Aircraft) {
                             .padding(horizontal = 6.dp, vertical = 1.dp)
                     ) {
                         Text(
+                            style = MaterialTheme.typography.labelSmall,
                             text = "EMERG",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onError
                         )
                     }
                     Spacer(Modifier.width(6.dp))
                     Text(
+                        style = MaterialTheme.typography.monoSmall,
                         text = plane.squawk ?: "----",
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
                         color = textColor
                     )
                 }
             }
         }
         Text(
+            style = MaterialTheme.typography.monoSmall,
             text = plane.altitudeFt?.let { "$it ft" } ?: "-- ft",
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
             color = dimColor,
             modifier = Modifier.padding(horizontal = 6.dp)
         )
         Text(
+            style = MaterialTheme.typography.monoSmall,
             text = plane.speedKts?.let { "$it kts" } ?: "-- kts",
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
             color = dimColor,
             modifier = Modifier.padding(horizontal = 6.dp)
         )
         Text(
+            style = MaterialTheme.typography.headlineMedium,
             text = "↑",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
             color = textColor,
             modifier = Modifier
                 .padding(start = 6.dp)
@@ -814,8 +801,8 @@ private fun ObdCard(
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         CardHeader(title = "OBD-II", expanded = expanded, onToggle = onToggle) {
             Text(
+                style = MaterialTheme.typography.bodyMedium,
                 text = if (obd.connected) obd.deviceName ?: "Connected" else "Not connected",
-                fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -835,15 +822,14 @@ private fun ObdCard(
                 Column {
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Text(
+                            style = MaterialTheme.typography.bodyMedium,
                             text = "Throttle",
-                            fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.weight(1f))
                         Text(
+                            style = MaterialTheme.typography.mono,
                             text = obd.throttlePct?.let { "$it%" } ?: "--",
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -864,7 +850,7 @@ private fun ObdCard(
                         obd.dtcs.forEach { code ->
                             AssistChip(
                                 onClick = {},
-                                label = { Text(code, fontFamily = FontFamily.Monospace) },
+                                label = { Text(code, style = MaterialTheme.typography.monoSmall) },
                                 colors = AssistChipDefaults.assistChipColors(
                                     containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                                     labelColor = MaterialTheme.colorScheme.onTertiaryContainer
@@ -875,9 +861,9 @@ private fun ObdCard(
                 }
 
                 if (obd.connected) {
-                    TextButton(onClick = onDisconnect) { Text("Disconnect") }
+                    GhostButton("Disconnect", onClick = onDisconnect)
                 } else {
-                    OutlinedButton(onClick = onConnect) { Text("Connect OBD") }
+                    SecondaryButton("Connect OBD", onClick = onConnect)
                 }
             }
         }
@@ -905,10 +891,8 @@ private fun RpmGauge(rpm: Int?) {
             trackColor = MaterialTheme.colorScheme.surfaceVariant
         )
         Text(
+            style = MaterialTheme.typography.mono,
             text = rpm?.let { "$it RPM" } ?: "--",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurface
         )
     }
@@ -926,16 +910,14 @@ private fun CoolantRow(tempC: Int?) {
         StatusDot(color = color, size = 12)
         Spacer(Modifier.width(10.dp))
         Text(
+            style = MaterialTheme.typography.bodyMedium,
             text = "Coolant",
-            fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.weight(1f))
         Text(
+            style = MaterialTheme.typography.monoLarge,
             text = tempC?.let { "$it °C" } ?: "--",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
             color = color
         )
     }
@@ -975,17 +957,18 @@ private fun AddChannelDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                enabled = valid,
+            GhostButton(
+                "OK",
                 onClick = {
-                    if (valid && freqMhz != null) {
-                        onConfirm(name.trim(), (freqMhz * 1_000_000.0).roundToLong())
-                    }
-                }
-            ) { Text("OK") }
+                        if (valid && freqMhz != null) {
+                            onConfirm(name.trim(), (freqMhz * 1_000_000.0).roundToLong())
+                        }
+                    },
+                enabled = valid
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            GhostButton("Cancel", onClick = onDismiss)
         }
     )
 }

@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -127,24 +128,21 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
+import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import app.clairix.ui.theme.ClairixMotion
+import app.clairix.ui.components.*
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.monoLarge
+import app.clairix.ui.theme.mono
 
-// ── Colour tokens ───────────────────────────────────────────────────────
-
-private val Ground     = Color(0xFF0E1116)
-private val Panel      = Color(0xFF161B23)
-private val PanelLight = Color(0xFF1D2430)
-private val MapGround  = Color(0xFF0A0E13)
-private val Ink        = Color(0xFFE6EAF1)
-private val InkDim     = Color(0xFFA8B2C1)
-private val Muted      = Color(0xFF6F7A8B)
-private val Rule       = Color(0xFF262E3A)
-private val Accent     = Color(0xFFFF7A3D)
-private val Critical   = Color(0xFFF2545B)
-private val Caution    = Color(0xFFE8B33D)
-private val Clear      = Color(0xFF3DB88A)
-private val Blue       = Color(0xFF4A8FD4)
-
-private val CardShape = RoundedCornerShape(4.dp)
+// ── Permissions ─────────────────────────────────────────────────────────
 
 /**
  * Everything the app asks for up front.
@@ -289,8 +287,11 @@ class MainActivity : AppCompatActivity() {
         handleOpenThreadIntent(intent)
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(background = Ground, surface = Panel)) {
-                Surface(color = Ground, modifier = Modifier.fillMaxSize()) {
+            // The colour theme the user picked in Settings > Appearance; switching it
+            // there recolours everything at once, without a restart.
+            val theme by AppSettings.theme.collectAsStateWithLifecycle()
+            ClairixTheme(theme = theme) {
+                Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                     val locked by AppLock.locked.collectAsStateWithLifecycle()
 
                     // The lock screen is drawn OVER the app, not INSTEAD of it. Taking
@@ -1012,41 +1013,11 @@ private fun dayLabel(ts: Long, now: Long): String {
     val thisYear = cal.get(Calendar.YEAR)
     cal.add(Calendar.DAY_OF_YEAR, -1)
     val yesterdayStart = cal.timeInMillis
-    if (ts >= todayStart) return "TODAY"
-    if (ts >= yesterdayStart) return "YESTERDAY"
+    if (ts >= todayStart) return "Today"
+    if (ts >= yesterdayStart) return "Yesterday"
     cal.timeInMillis = ts
     val fmt = if (cal.get(Calendar.YEAR) == thisYear) dayFmt else dayYearFmt
-    return fmt.format(Date(ts)).uppercase(Locale.US)
-}
-
-// ── Threat colouring ─────────────────────────────────────────────────────
-
-private fun threatColor(t: Threat): Color = when (t) {
-    Threat.CRITICAL -> Critical
-    Threat.HIGH -> Accent
-    Threat.MEDIUM -> Caution
-    Threat.LOW -> Muted
-    Threat.NONE -> Clear
-}
-
-private fun severityColor(s: Severity): Color = when (s) {
-    Severity.CRITICAL -> Critical
-    Severity.HIGH -> Accent
-    Severity.MEDIUM -> Caution
-    Severity.LOW -> Muted
-}
-
-/** Green at 0, yellow at 0.5, red at 1. */
-private fun meterColor(t: Float): Color {
-    val f = t.coerceIn(0f, 1f)
-    return if (f <= 0.5f) lerp(Clear, Caution, f * 2f) else lerp(Caution, Critical, (f - 0.5f) * 2f)
-}
-
-private fun trailColor(t: Threat, following: Boolean): Color = when {
-    following || t == Threat.CRITICAL -> Critical
-    t == Threat.HIGH -> Accent
-    t == Threat.MEDIUM -> Caution
-    else -> Blue
+    return fmt.format(Date(ts))
 }
 
 // ── Shared building blocks ────────────────────────────────────────────────
@@ -1064,80 +1035,6 @@ private fun rememberNow(periodMs: Long = 1000L): Long {
     return now
 }
 
-/** Opacity that breathes 0.3 → 0.8 → 0.3, one second per leg. */
-@Composable
-private fun rememberPulse(): State<Float> {
-    var high by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000L)
-            high = !high
-        }
-    }
-    return animateFloatAsState(
-        targetValue = if (high) 0.8f else 0.3f,
-        animationSpec = tween(durationMillis = 1000, easing = LinearEasing),
-        label = "pulse"
-    )
-}
-
-@Composable
-private fun ThreatBadge(label: String, color: Color) {
-    Text(
-        label, color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-        modifier = Modifier
-            .border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(3.dp))
-            .background(color.copy(alpha = 0.10f), RoundedCornerShape(3.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    )
-}
-
-@Composable
-private fun SectionLabel(text: String, color: Color = Muted) {
-    Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-}
-
-@Composable
-private fun Hairline() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Rule))
-}
-
-@Composable
-private fun KvRow(label: String, value: String, valueColor: Color = InkDim) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Text(label, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(end = 12.dp))
-        Text(
-            value, color = valueColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.End, modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun NoticeBanner(color: Color, tag: String, text: String) {
-    Row(
-        Modifier.fillMaxWidth()
-            .background(color.copy(alpha = 0.12f), CardShape)
-            .border(1.dp, color.copy(alpha = 0.5f), CardShape)
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(tag, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Text(text, color = color, fontSize = 12.sp, modifier = Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun PanelBox(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier.fillMaxWidth().background(Panel, CardShape).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        content = content
-    )
-}
-
 // ── Threat explainer target ─────────────────────────────────────────────────
 
 private sealed class ExplainerTarget {
@@ -1151,9 +1048,9 @@ private sealed class ExplainerTarget {
 private const val SOS_HOLD_MS = 1500L
 
 /**
- * A round hold-to-arm SOS button with a progress ring, followed by a confirm
- * dialog. [onConfirmed] runs only after the user has both held the button for
- * [SOS_HOLD_MS] and tapped SEND in the dialog.
+ * The SOS button: an octagon, like a stop sign and like the mark, in the danger
+ * colour. Holding it fills it from the bottom; once [SOS_HOLD_MS] has passed a
+ * confirm dialog appears, and [onConfirmed] runs only after the user taps Send.
  */
 @Composable
 private fun SosButton(onConfirmed: () -> Unit) {
@@ -1179,12 +1076,18 @@ private fun SosButton(onConfirmed: () -> Unit) {
         }
     }
 
+    val c = ClairixTheme.colors
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(Critical.copy(alpha = if (sosPressing) 1f else 0.85f))
+            .size(60.dp)
+            .clip(ClairixShapes.Octagon)
+            .background(c.danger)
+            .border(2.dp, c.base.copy(alpha = 0.6f), ClairixShapes.Octagon)
+            .semantics {
+                contentDescription = "SOS. Hold to send an emergency alert to your groups"
+                role = Role.Button
+            }
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -1195,70 +1098,43 @@ private fun SosButton(onConfirmed: () -> Unit) {
                 )
             }
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            if (sosProgress > 0f) {
-                val stroke = 3.dp.toPx()
-                drawArc(
-                    color = Color.White.copy(alpha = 0.6f),
-                    startAngle = -90f,
-                    sweepAngle = 360f * sosProgress.coerceIn(0f, 1f),
-                    useCenter = false,
-                    topLeft = Offset(stroke / 2f, stroke / 2f),
-                    size = Size(size.width - stroke, size.height - stroke),
-                    style = Stroke(width = stroke)
-                )
-            }
-        }
-        Text(
-            "SOS", color = Color.White, fontSize = 11.sp,
-            fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp
+        // The hold fills the octagon from the bottom, in the dark ink of its label.
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(sosProgress.coerceIn(0f, 1f))
+                .background(c.onDanger.copy(alpha = 0.28f))
         )
+        Text("SOS", style = MaterialTheme.typography.headlineSmall, color = c.onDanger)
     }
 
     if (showSosConfirm) {
-        AlertDialog(
-            onDismissRequest = { showSosConfirm = false; sosProgress = 0f },
-            containerColor = Panel,
-            title = { Text("Send emergency alert?", fontWeight = FontWeight.Bold, color = Ink) },
-            text = {
-                Text(
-                    "This will send your location to all your group members immediately.",
-                    color = InkDim, fontSize = 13.sp
-                )
+        ClairixDialog(
+            title = "Send an SOS?",
+            text = "Your groups get an alert with your location right away.",
+            confirmLabel = "Send SOS",
+            confirmTone = Tone.Danger,
+            onConfirm = {
+                showSosConfirm = false
+                sosProgress = 0f
+                onConfirmed()
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    showSosConfirm = false
-                    sosProgress = 0f
-                    onConfirmed()
-                }) {
-                    Text("SEND SOS", color = Critical, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSosConfirm = false; sosProgress = 0f }) {
-                    Text("CANCEL", color = Muted)
-                }
-            }
+            onDismiss = { showSosConfirm = false; sosProgress = 0f }
         )
     }
 }
 
-/** A warning: the Material warning icon in [color], then [text]. */
+/** A short warning line: the warning icon and [text], both in [tone]. */
 @Composable
-private fun WarningLine(
-    text: String,
-    color: Color,
-    fontSize: Int,
-    modifier: Modifier = Modifier,
-    fontWeight: FontWeight = FontWeight.Normal
-) {
-    Row(modifier, verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+private fun WarningLine(text: String, tone: Tone, modifier: Modifier = Modifier) {
+    val fg = tone.color()
+    Row(modifier, verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(
-            Icons.Filled.Warning, contentDescription = "Warning", tint = color,
-            modifier = Modifier.padding(top = 1.dp).size((fontSize + 3).dp)
+            Icons.Filled.Warning, contentDescription = null, tint = fg,
+            modifier = Modifier.padding(top = 2.dp).size(16.dp)
         )
-        Text(text, color = color, fontSize = fontSize.sp, lineHeight = (fontSize + 4).sp, fontWeight = fontWeight)
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = fg)
     }
 }
 
@@ -1533,7 +1409,8 @@ private fun MainApp(
         ModalBottomSheet(
             onDismissRequest = { explainerTarget = null },
             sheetState = sheetState,
-            containerColor = Panel
+            containerColor = ClairixTheme.colors.surfaceRaised,
+            shape = ClairixShapes.Sheet
         ) {
             ThreatExplainerSheet(target = target, onDismiss = { explainerTarget = null })
         }
@@ -1592,68 +1469,44 @@ private fun ScanScreen(
     val live = remember(detections, trusted) { detections.filter { it.address !in trusted } }
     val ordered = remember(detections, trusted) { detections.sortedBy { it.address in trusted } }
 
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        item(key = "§header") {
-            // The title and the Settings gear are in the shell's top bar; the
-            // evidence report is this screen's own action.
-            Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = {
-                    val i = Report.share(context, status, detections, timeline, cell, nfc)
-                    context.startActivity(Intent.createChooser(i, "Share evidence report"))
-                }) {
-                    Icon(Icons.Filled.Share, contentDescription = null, tint = InkDim, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Export report", color = InkDim, fontSize = 13.sp)
-                }
-            }
-        }
-
-        if (status.scanning) {
-            item(key = "§meter") { ThreatMeter(live, cell) }
-        }
-
-        item(key = "§status") { ScanStatusPanel(status, detections, trusted) }
-
-        item(key = "§toggle") {
-            Button(
-                onClick = {
+    ScreenList {
+        // ── Status first: what the scan says, and the switch that runs it ──
+        item(key = "§status") {
+            TrackerStatusHero(
+                status = status,
+                live = live,
+                onToggle = {
                     if (status.scanning) onStop()
                     else if (hasPermissions()) onStart()
                     else launcher.launch(REQUIRED)
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (status.scanning) Rule else Accent,
-                    contentColor = if (status.scanning) Ink else Color(0xFF12161D)
-                ),
-                shape = CardShape, modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (status.scanning) "STOP SCANNING" else "START SCANNING",
-                    fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-            }
+                }
+            )
         }
 
+        if (status.scanning) {
+            item(key = "§figures") { ScanFigures(status, detections, live, cell) }
+        }
+
+        item(key = "§details") { ScanDetailsCard(status, detections, trusted) }
+
+        // ── Findings ──
         if (detections.isEmpty()) {
-            item(key = "§empty") { EmptyState(status.scanning) }
+            item(key = "§empty") {
+                EmptyState(
+                    title = if (status.scanning) "Nothing flagged yet" else "Not scanning",
+                    body = if (status.scanning)
+                        "Proving something follows you takes 10 minutes of presence and a 300 m move. Leave it running."
+                    else "Start scanning to check for Bluetooth trackers travelling with you.",
+                    icon = ClairixIcons.BluetoothSearching,
+                    tone = if (status.scanning) Tone.Safe else Tone.Neutral
+                )
+            }
         } else {
             item(key = "§list-label") {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SectionLabel("FLAGGED DEVICES")
-                    Text(
-                        "${live.size} live · ${detections.size - live.size} trusted · tap a card for detail",
-                        color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
-                    )
-                }
+                SectionHeader(
+                    "Flagged devices",
+                    supporting = "${live.size} live · ${detections.size - live.size} trusted"
+                )
             }
             items(ordered, key = { it.key }) { d ->
                 DetectionRow(
@@ -1666,127 +1519,169 @@ private fun ScanScreen(
             }
         }
 
-        item(key = "§footer") { Spacer(Modifier.height(24.dp)) }
+        // ── Actions ──
+        item(key = "§export") {
+            SecondaryButton(
+                "Export evidence report",
+                onClick = {
+                    val i = Report.share(context, status, detections, timeline, cell, nfc)
+                    context.startActivity(Intent.createChooser(i, "Share evidence report"))
+                },
+                icon = Icons.Filled.Share,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            )
+        }
     }
 }
 
+/** The verdict the Trackers screen leads with, and the start/stop switch under it. */
 @Composable
-private fun ThreatMeter(live: List<Detection>, cell: CellStatus) {
+private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggle: () -> Unit) {
+    val following = live.filter { it.following }
+    val persistent = live.count { it.persistent }
+    val (headline, body, tone) = when {
+        !status.scanning -> Triple(
+            "Scanner off",
+            "Start scanning to check for Bluetooth trackers travelling with you.",
+            Tone.Neutral
+        )
+        following.size == 1 -> Triple(
+            "Tracker on you",
+            "${following[0].name} was heard ${following[0].displacementM.roundToInt()} m apart while you moved. " +
+                "Open it below to see where to look.",
+            Tone.Danger
+        )
+        following.size > 1 -> Triple(
+            "${following.size} trackers on you",
+            "They were heard in different places while you moved. Open each one below to see where to look.",
+            Tone.Danger
+        )
+        persistent > 0 -> Triple(
+            "Keep watching",
+            "${plural(persistent, "device")} keep showing up. Following is only confirmed once you move about " +
+                "${AppSettings.followThresholdM.toInt()} m with GPS on.",
+            Tone.Caution
+        )
+        else -> Triple(
+            "Nothing following",
+            "Watching ${plural(status.nearbyCount, "device")} nearby. Nothing has moved with you.",
+            Tone.Safe
+        )
+    }
+    StatusHero(
+        eyebrow = if (status.scanning) "Trackers · scanning" else "Trackers",
+        headline = headline,
+        body = body,
+        tone = tone,
+        modifier = Modifier.padding(top = 8.dp),
+        footer = {
+            if (status.scanning) {
+                SecondaryButton("Stop scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
+            } else {
+                PrimaryButton("Start scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    )
+}
+
+/** Threat level, devices in range and devices flagged, side by side. */
+@Composable
+private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: List<Detection>, cell: CellStatus) {
     val bleScore = live.maxOfOrNull { it.score } ?: 0
     val cellScore = if (cell.available) cell.score else 0
     val score = maxOf(bleScore, cellScore).coerceIn(0, 100)
     val fraction by animateFloatAsState(
         targetValue = score / 100f,
-        animationSpec = tween(durationMillis = 600),
+        animationSpec = tween(durationMillis = ClairixMotion.reveal),
         label = "threat"
     )
-    val color = meterColor(fraction)
-
-    val following = live.count { it.following }
-    val known = live.count { it.identified }
-    val cellHot = cell.available && cell.level.ordinal >= Threat.HIGH.ordinal
-
-    val (summary, summaryColor) = when {
-        cellHot && (following > 0 || known > 0) ->
-            "IMSI anomaly + BLE tracker: possible coordinated surveillance" to Critical
-        following == 1 -> "CRITICAL: device following you" to Critical
-        following > 1 -> "CRITICAL: $following devices following you" to Critical
-        cellHot -> "IMSI anomaly: possible fake cell tower in range" to Critical
-        known > 0 -> "${plural(known, "known tracker")} in range" to Accent
-        live.isNotEmpty() -> "${plural(live.size, "unidentified device")} under observation" to Caution
-        else -> "No threats" to Clear
+    val scoreTone = when {
+        score >= 70 -> Tone.Danger
+        score >= 30 -> Tone.Caution
+        else -> Tone.Safe
     }
-
-    Column(
-        Modifier.fillMaxWidth().background(Panel, CardShape).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            SectionLabel("THREAT LEVEL")
-            Text(
-                "$score", color = color, fontSize = 16.sp,
-                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatTile("$score", "Threat level of 100", Modifier.weight(1f), tone = scoreTone)
+            StatTile("${status.nearbyCount}", "In range", Modifier.weight(1f))
+            StatTile(
+                "${detections.size}", "Flagged", Modifier.weight(1f),
+                tone = if (live.any { it.following }) Tone.Danger else Tone.Neutral
             )
         }
-        Box(Modifier.fillMaxWidth().height(8.dp).background(Rule, RoundedCornerShape(4.dp))) {
-            Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(color, RoundedCornerShape(4.dp)))
+        ClairixCard(spacing = 8.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Threat level",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClairixTheme.colors.text,
+                    modifier = Modifier.weight(1f)
+                )
+                Text("$score / 100", style = MaterialTheme.typography.mono, color = meterColor(fraction))
+            }
+            ClairixProgressBar(fraction, tone = scoreTone)
+            Text(
+                "Bluetooth peak $bleScore · cellular $cellScore. The higher of the two sets the level.",
+                style = MaterialTheme.typography.bodySmall,
+                color = ClairixTheme.colors.textSubtle
+            )
         }
-        Text(summary, color = summaryColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Text(
-            "BLE peak $bleScore · cellular $cellScore · scale 0–100",
-            color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
-        )
     }
 }
 
+/** What the scan is working with: position, filtered noise, trusted devices, errors. */
 @Composable
-private fun ScanStatusPanel(status: ScanStatus, detections: List<Detection>, trusted: Set<String>) {
-    val live = detections.filter { it.address !in trusted }
-    val following = live.count { it.following }
-    val (verdict, verdictColor) = when {
-        following > 0 -> "$following CONFIRMED FOLLOWING" to Critical
-        live.any { it.persistent } -> "Persistent devices, unconfirmed" to Caution
-        else -> "Nothing confirmed" to Clear
-    }
-    Column(
-        Modifier.fillMaxWidth().background(Panel, CardShape).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Text(verdict, color = verdictColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, trusted: Set<String>) {
+    ClairixCard(spacing = 4.dp) {
         val scanText = when {
             !status.scanning -> "Idle"
-            status.nearbyCount > detections.size ->
-                "Scanning · ${detections.size} flagged · ${status.nearbyCount} total in range"
-            else -> "Scanning · ${detections.size} device(s) flagged"
+            status.nearbyCount > detections.size -> "${detections.size} flagged of ${status.nearbyCount} in range"
+            else -> "${plural(detections.size, "device")} flagged"
         }
-        Text(scanText, color = InkDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        KeyValueRow("Scan", scanText)
         val filtered = status.nearbyCount - detections.size
         if (status.scanning && filtered > 0) {
-            Text("+$filtered transient signals filtered", color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            KeyValueRow("Filtered out", "$filtered passing signals")
         }
-        Text(if (status.hasFix)
-            "Fix %.4f, %.4f · ${if (status.moving) "moving" else "stationary"} · %.1f km".format(
-                Locale.US, status.lat ?: 0.0, status.lon ?: 0.0, status.travelledM / 1000.0)
-            else "No fix — following cannot be confirmed without GPS",
-            color = if (status.hasFix) Muted else Caution, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        if (status.hasFix) {
+            KeyValueRow("Position", "%.4f, %.4f".format(Locale.US, status.lat ?: 0.0, status.lon ?: 0.0))
+            KeyValueRow(
+                "Movement",
+                "${if (status.moving) "Moving" else "Still"} · %.1f km".format(Locale.US, status.travelledM / 1000.0)
+            )
+        } else {
+            WarningLine("No GPS fix. Following can't be confirmed without one.", Tone.Caution)
+        }
         if (trusted.isNotEmpty()) {
-            Text("${plural(trusted.size, "device")} marked safe and excluded from the threat level",
-                color = Muted, fontSize = 11.sp)
+            KeyValueRow("Marked safe", "${plural(trusted.size, "device")}, left out of the threat level", mono = false)
         }
-        status.error?.let { Text(it, color = Critical, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
-    }
-}
-
-@Composable
-private fun EmptyState(scanning: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(if (scanning) "Nothing flagged yet." else "Not scanning.", color = InkDim, fontSize = 14.sp)
-        if (scanning) Text("Proving something follows you takes 10 min presence and a 300 m drive. Leave it running.",
-            color = Muted, fontSize = 13.sp)
+        status.error?.let { WarningLine(it, Tone.Danger) }
     }
 }
 
 @Composable
 private fun RssiBar(rssi: Int) {
     val strength = if (rssi == 0) 0f else ((rssi + 100) / 60f).coerceIn(0f, 1f)
-    val color = when {
-        rssi == 0 -> Muted
-        rssi >= -60 -> Critical
-        rssi >= -75 -> Accent
-        rssi >= -90 -> Caution
-        else -> Muted
+    val tone = when {
+        rssi == 0 -> Tone.Neutral
+        rssi >= -75 -> Tone.Danger
+        rssi >= -90 -> Tone.Caution
+        else -> Tone.Neutral
     }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.width(48.dp).height(5.dp).background(Rule, RoundedCornerShape(2.dp))) {
-            Box(Modifier.fillMaxWidth(strength).fillMaxHeight().background(color, RoundedCornerShape(2.dp)))
+    val c = ClairixTheme.colors
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.semantics(mergeDescendants = true) {}
+    ) {
+        Box(Modifier.width(48.dp).height(6.dp).background(c.border)) {
+            Box(Modifier.fillMaxWidth(strength).fillMaxHeight().background(if (tone == Tone.Neutral) c.textSubtle else tone.color()))
         }
         Text(
             "${fmtDbm(rssi)} · ${BleNames.signalLabel(rssi)}",
-            color = color, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1
+            style = MaterialTheme.typography.monoSmall,
+            color = c.textMuted,
+            maxLines = 1
         )
     }
 }
@@ -1799,207 +1694,202 @@ private fun DetectionRow(
     onShowExplainer: (() -> Unit)? = null
 ) {
     var expanded by remember(d.key) { mutableStateOf(false) }
-    val stripe = if (trusted) Rule else threatColor(d.threat)
     val chevron by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
-        animationSpec = tween(durationMillis = 200),
+        animationSpec = tween(durationMillis = ClairixMotion.base),
         label = "chevron"
     )
+    val c = ClairixTheme.colors
+    val tone = if (trusted) null else d.threat.tone()
 
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(CardShape)
-            .background(Panel)
-            .clickable { expanded = !expanded }
-            .height(IntrinsicSize.Min)
+    ClairixCard(
+        tone = tone,
+        emphasis = d.following && !trusted,
+        onClick = { expanded = !expanded },
+        onClickLabel = if (expanded) "Hide details" else "Show details"
     ) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    d.name, color = if (trusted) InkDim else Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                if (trusted) ThreatBadge("TRUSTED", Muted) else ThreatBadge(d.threat.name, threatColor(d.threat))
-                Text("›", color = Muted, fontSize = 18.sp, modifier = Modifier.rotate(chevron))
-            }
-
-            val t = d.tracker
-            if (t != null) {
-                // A signature match is the strongest identification there is; the
-                // manufacturer/service line would only repeat "Apple".
-                Text("${t.label} · ${t.brand}", color = if (trusted) Muted else Accent, fontSize = 12.sp)
-            } else {
-                Text(
-                    d.summary, color = Muted, fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${d.sightings}× · last ${fmtClock(d.lastSeen)} · ${fmtAgo(now, d.lastSeen)}",
-                    color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                RssiBar(d.rssi)
-            }
-
-            if (d.following && !trusted) {
-                WarningLine(
-                    "Confirmed following — ${d.displacementM.roundToInt()} m apart",
-                    color = Critical, fontSize = 12, fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            if (expanded) DetectionDetail(d, trusted, onShowExplainer)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                d.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (trusted) c.textMuted else c.text,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (trusted) StatusPill("Trusted", Tone.Neutral)
+            else StatusPill(if (d.following) "Following" else levelLabel(d.threat.name), d.threat.tone())
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = c.textSubtle,
+                modifier = Modifier.rotate(chevron)
+            )
         }
+
+        val t = d.tracker
+        if (t != null) {
+            // A signature match is the strongest identification there is; the
+            // manufacturer/service line would only repeat "Apple".
+            Text("${t.label} · ${t.brand}", style = MaterialTheme.typography.bodyMedium, color = if (trusted) c.textSubtle else c.text)
+        } else {
+            Text(d.summary, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${d.sightings}× · ${fmtAgo(now, d.lastSeen)}",
+                style = MaterialTheme.typography.monoSmall,
+                color = c.textSubtle,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            RssiBar(d.rssi)
+        }
+
+        if (d.following && !trusted) {
+            WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
+        }
+
+        if (expanded) DetectionDetail(d, trusted, onShowExplainer)
     }
 }
 
 @Composable
 private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (() -> Unit)? = null) {
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val c = ClairixTheme.colors
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Hairline()
 
-        // ── Tracker type ──
-        SectionLabel("TRACKER TYPE")
+        // ── Follow assessment first: it is the answer to "is this on me?" ──
+        SectionHeader("Is it following you?")
+        val (line, lineTone) = when (d.confidence) {
+            FollowConfidence.NONE -> "Not enough data yet" to Tone.Neutral
+            FollowConfidence.NO_POSITION -> "No GPS, so movement can't be confirmed" to Tone.Caution
+            FollowConfidence.NOT_MOVED_ENOUGH -> "Nearby, not following" to Tone.Caution
+            FollowConfidence.CONFIRMED -> "Following you" to Tone.Danger
+        }
+        Text(line, style = MaterialTheme.typography.titleSmall, color = if (trusted) c.textSubtle else lineTone.color())
+        val explanation = when (d.confidence) {
+            FollowConfidence.NONE ->
+                if (d.identified) "Known tracker type, but heard too briefly to show a pattern."
+                else "Watching for a pattern of it staying with you."
+            FollowConfidence.NO_POSITION ->
+                "It keeps showing up. A GPS fix is needed to prove it moves with you."
+            FollowConfidence.NOT_MOVED_ENOUGH ->
+                "It keeps showing up, but only ${d.displacementM.roundToInt()} m of shared travel so far. " +
+                    "Confirming it needs about 300 m."
+            FollowConfidence.CONFIRMED ->
+                "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
+                    "Check wheel wells, bumper covers, the OBD-II port, under seats and bag linings."
+        }
+        Text(explanation, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+
+        // ── What it is ──
+        SectionHeader("Tracker type")
         val t = d.tracker
         if (t != null) {
             Column(
-                Modifier.fillMaxWidth().background(PanelLight, CardShape).padding(10.dp),
+                Modifier.fillMaxWidth().background(c.surfaceRaised, ClairixShapes.Card).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(t.label, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f))
-                    ThreatBadge(t.threat.name, threatColor(t.threat))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(t.label, style = MaterialTheme.typography.titleSmall, color = c.text, modifier = Modifier.weight(1f))
+                    StatusPill(levelLabel(t.threat.name), t.threat.tone())
                 }
-                Text("Brand: ${t.brand} · Threat rating: ${t.threat.name}", color = InkDim, fontSize = 12.sp)
-                Text(t.notes, color = InkDim, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Made by ${t.brand}", style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+                Text(t.notes, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
             }
         } else {
             Text(
-                "No known tracker signature matched. Flagged on behaviour alone — persistence, movement and signal pattern.",
-                color = Muted, fontSize = 12.sp, lineHeight = 17.sp
+                "No known tracker signature matched. Flagged on behaviour alone: how long it stays, how it moves and its signal.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = c.textSubtle
             )
         }
 
-        // ── Identification ──
         // What the radio itself says, resolved through the Bluetooth SIG assigned numbers.
-        SectionLabel("IDENTIFICATION")
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            KvRow("Advertised name", d.advertisedName ?: "none broadcast", if (d.advertisedName != null) Ink else Muted)
-            KvRow("Manufacturer", d.manufacturer ?: "not advertised", if (d.manufacturer != null) InkDim else Muted)
-            KvRow("Radio", d.radio)
-            KvRow(
+        SectionHeader("Identification")
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            KeyValueRow("Advertised name", d.advertisedName ?: "None broadcast", valueColor = if (d.advertisedName != null) c.text else c.textSubtle)
+            KeyValueRow("Manufacturer", d.manufacturer ?: "Not advertised", valueColor = if (d.manufacturer != null) c.textMuted else c.textSubtle)
+            KeyValueRow("Radio", d.radio)
+            KeyValueRow(
                 "Services",
-                if (d.services.isEmpty()) "none advertised" else d.services.joinToString(" / "),
-                if (d.services.isEmpty()) Muted else InkDim
+                if (d.services.isEmpty()) "None advertised" else d.services.joinToString(" / "),
+                valueColor = if (d.services.isEmpty()) c.textSubtle else c.textMuted
             )
-            KvRow("Address", BleNames.formatMac(d.address) + (d.addressKind?.let { " · $it" } ?: ""))
+            KeyValueRow("Address", BleNames.formatMac(d.address) + (d.addressKind?.let { " · $it" } ?: ""))
         }
 
-        // ── Observation ──
-        SectionLabel("OBSERVATION")
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            KvRow("First seen", fmtTime(d.firstSeen))
-            KvRow("Last seen", fmtTime(d.lastSeen))
-            KvRow("Present for", fmtDuration(d.lastSeen - d.firstSeen))
-            KvRow(
+        SectionHeader("Observation")
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            KeyValueRow("First seen", fmtTime(d.firstSeen))
+            KeyValueRow("Last seen", fmtTime(d.lastSeen))
+            KeyValueRow("Present for", fmtDuration(d.lastSeen - d.firstSeen))
+            KeyValueRow(
                 "Sightings",
-                if (d.places > 0) "${d.sightings} across ${plural(d.places, "distinct location")}"
-                else "${d.sightings} (no location data)"
+                if (d.places > 0) "${d.sightings} across ${plural(d.places, "place")}"
+                else "${d.sightings}, no location data"
             )
-            KvRow("Est. distance", d.approxMetres?.let { fmtMetres(it) } ?: "unknown")
-            KvRow("Signal strength", "${fmtDbm(d.rssi)} · ${BleNames.signalLabel(d.rssi)}")
-            KvRow("Displacement", "Observed ${d.displacementM.roundToInt()} metres apart")
-            KvRow(
-                "MAC rotation",
-                if (d.rotations > 0) "MAC rotated ${d.rotations}× · ${plural(d.addresses, "address").replace("addresss", "addresses")} seen"
+            KeyValueRow("Distance", d.approxMetres?.let { fmtMetres(it) } ?: "Unknown")
+            KeyValueRow("Signal", "${fmtDbm(d.rssi)} · ${BleNames.signalLabel(d.rssi)}")
+            KeyValueRow("Spread", "${d.displacementM.roundToInt()} m apart")
+            KeyValueRow(
+                "Address changes",
+                if (d.rotations > 0) "${d.rotations}× · ${d.addresses} ${if (d.addresses == 1) "address" else "addresses"} seen"
                 else "Stable address",
-                if (d.rotations > 0) Caution else InkDim
+                valueColor = if (d.rotations > 0) c.caution else c.textMuted
             )
-            KvRow("Threat score", "${d.score}/100", if (trusted) Muted else threatColor(d.threat))
+            KeyValueRow("Threat score", "${d.score} / 100", valueColor = if (trusted) c.textSubtle else d.threat.tone().color())
         }
-
-        // ── Follow assessment ──
-        SectionLabel("FOLLOW ASSESSMENT")
-        val (line, lineColor) = when (d.confidence) {
-            FollowConfidence.NONE -> "Not enough data to assess" to Muted
-            FollowConfidence.NO_POSITION -> "No GPS — cannot confirm movement" to Caution
-            FollowConfidence.NOT_MOVED_ENOUGH -> "Present but not following" to Caution
-            FollowConfidence.CONFIRMED -> "Confirmed following" to Critical
-        }
-        Text(line, color = if (trusted) Muted else lineColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        val explanation = when (d.confidence) {
-            FollowConfidence.NONE ->
-                if (d.identified) "Known tracker type, but present too briefly to establish a pattern."
-                else "Watching for a persistence pattern."
-            FollowConfidence.NO_POSITION ->
-                "Device is persistent. A GPS fix is required to prove it moves with you."
-            FollowConfidence.NOT_MOVED_ENOUGH ->
-                "Persistent, but only ${d.displacementM.roundToInt()} m of shared travel so far. Confirmation needs about 300 m."
-            FollowConfidence.CONFIRMED ->
-                "Seen ${d.displacementM.roundToInt()} m apart while moving with you. On you or your vehicle. " +
-                    "Check: wheel wells, bumper covers, OBD-II port, under seats, bag linings."
-        }
-        Text(explanation, color = InkDim, fontSize = 12.sp, lineHeight = 17.sp)
 
         // ── Actions ──
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (trusted) {
-                TextButton(
-                    onClick = { Registry.untrust(d.address) },
-                    shape = RoundedCornerShape(3.dp),
-                    border = BorderStroke(1.dp, Rule)
-                ) { Text("TRUSTED", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
-                Text("Tap to revoke and put it back in the threat picture.", color = Muted, fontSize = 10.sp,
-                    modifier = Modifier.weight(1f))
-            } else {
-                TextButton(
-                    onClick = { Registry.trust(d.address) },
-                    shape = RoundedCornerShape(3.dp),
-                    border = BorderStroke(1.dp, Clear.copy(alpha = 0.6f))
-                ) { Text("MARK SAFE", color = Clear, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
-                Text("Marks this device as yours and removes it from the threat level.", color = Muted, fontSize = 10.sp,
-                    modifier = Modifier.weight(1f))
-            }
-        }
-
-        // "What is this?" explainer button for high/critical threats
-        if (onShowExplainer != null && !trusted) {
-            TextButton(
-                onClick = onShowExplainer,
-                shape = RoundedCornerShape(3.dp),
-                border = BorderStroke(1.dp, Accent.copy(alpha = 0.5f)),
+        if (trusted) {
+            SecondaryButton(
+                "Put it back in the threat level",
+                onClick = { Registry.untrust(d.address) },
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    "WHAT IS THIS? HOW DO I RESPOND?",
-                    color = Accent, fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold, letterSpacing = 1.sp
-                )
+            )
+        } else {
+            if (onShowExplainer != null) {
+                PrimaryButton("What is this, and what do I do?", onClick = onShowExplainer, modifier = Modifier.fillMaxWidth())
             }
+            SecondaryButton(
+                "Mark as mine",
+                onClick = { Registry.trust(d.address) },
+                tone = Tone.Safe,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "Marking it as yours removes it from the threat level. You can undo this here or in Settings.",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.textSubtle
+            )
         }
     }
 }
 
 // ── Map screen ─────────────────────────────────────────────────────────
 
-private data class MarkerKey(val argbFill: Int, val sizeDp: Int, val outline: Boolean)
+private data class MarkerKey(val argbFill: Int, val sizeDp: Int, val outlineArgb: Int?)
+
+/**
+ * The theme's colours as the ARGB ints osmdroid draws with, read once per
+ * composition so the map follows the selected theme like everything else.
+ */
+private data class MarkerPalette(
+    val danger: Int,
+    val caution: Int,
+    val subtle: Int,
+    val info: Int,
+    val ring: Int
+)
 
 /**
  * Marker icons by (colour, size, outline). The overlays are rebuilt whenever a fix
@@ -2011,12 +1901,12 @@ private data class MarkerKey(val argbFill: Int, val sizeDp: Int, val outline: Bo
  */
 private val markerCache = HashMap<MarkerKey, BitmapDrawable>()
 
-private fun markerBitmap(argbFill: Int, sizeDp: Int, outline: Boolean = false): BitmapDrawable =
-    markerCache.getOrPut(MarkerKey(argbFill, sizeDp, outline)) {
-        drawMarkerBitmap(argbFill, sizeDp, outline)
+private fun markerBitmap(argbFill: Int, sizeDp: Int, outlineArgb: Int? = null): BitmapDrawable =
+    markerCache.getOrPut(MarkerKey(argbFill, sizeDp, outlineArgb)) {
+        drawMarkerBitmap(argbFill, sizeDp, outlineArgb)
     }
 
-private fun drawMarkerBitmap(argbFill: Int, sizeDp: Int, outline: Boolean): BitmapDrawable {
+private fun drawMarkerBitmap(argbFill: Int, sizeDp: Int, outlineArgb: Int?): BitmapDrawable {
     val px = (sizeDp * Resources.getSystem().displayMetrics.density + 0.5f).toInt()
     val bm = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bm)
@@ -2025,8 +1915,8 @@ private fun drawMarkerBitmap(argbFill: Int, sizeDp: Int, outline: Boolean): Bitm
         style = AndroidPaint.Style.FILL
     }
     canvas.drawCircle(px / 2f, px / 2f, px / 2f - 1f, paint)
-    if (outline) {
-        paint.color = android.graphics.Color.WHITE
+    if (outlineArgb != null) {
+        paint.color = outlineArgb
         paint.style = AndroidPaint.Style.STROKE
         paint.strokeWidth = px * 0.18f
         canvas.drawCircle(px / 2f, px / 2f, px / 2f - 2f, paint)
@@ -2034,22 +1924,20 @@ private fun drawMarkerBitmap(argbFill: Int, sizeDp: Int, outline: Boolean): Bitm
     return BitmapDrawable(Resources.getSystem(), bm)
 }
 
-private fun threatArgb(threat: Threat, following: Boolean): Int = when {
-    following -> 0xFFF2545B.toInt()
-    threat.ordinal >= Threat.HIGH.ordinal -> 0xFFFF7A3D.toInt()
-    threat.ordinal >= Threat.MEDIUM.ordinal -> 0xFFE8B33D.toInt()
-    else -> 0xFF4A8FD4.toInt()
+private fun threatArgb(p: MarkerPalette, threat: Threat, following: Boolean): Int = when {
+    following || threat.ordinal >= Threat.HIGH.ordinal -> p.danger
+    threat.ordinal >= Threat.MEDIUM.ordinal -> p.caution
+    else -> p.info
 }
 
 /**
- * Colour of a device's trail polyline, by threat level alone. LOW is a muted
- * grey-blue so it reads as background next to the blue GPS track.
+ * Colour of a device's trail polyline, by threat level alone. LOW is the quiet
+ * text colour so it reads as background next to the info-coloured GPS track.
  */
-private fun trailArgb(threat: Threat): Int = when (threat) {
-    Threat.CRITICAL -> 0xFFF2545B.toInt()
-    Threat.HIGH -> 0xFFFF7A3D.toInt()
-    Threat.MEDIUM -> 0xFFE8B33D.toInt()
-    else -> 0xFF6F7A8B.toInt()
+private fun trailArgb(p: MarkerPalette, threat: Threat): Int = when (threat) {
+    Threat.CRITICAL, Threat.HIGH -> p.danger
+    Threat.MEDIUM -> p.caution
+    else -> p.subtle
 }
 
 /** Keep a downloaded tile this long past whatever the tile server's headers allow. */
@@ -2091,6 +1979,14 @@ private fun MapScreen() {
 
     val cellHot = cell.available && cell.level.ordinal >= Threat.HIGH.ordinal
     val followingTrails = mapData.devices.count { it.following }
+    val theme = ClairixTheme.colors
+    val palette = MarkerPalette(
+        danger = theme.danger.toArgb(),
+        caution = theme.caution.toArgb(),
+        subtle = theme.textSubtle.toArgb(),
+        info = theme.info.toArgb(),
+        ring = theme.text.toArgb()
+    )
 
     val mapView = remember {
         configureOsm(context)
@@ -2110,7 +2006,7 @@ private fun MapScreen() {
     // Only center the map on the very first GPS fix; after that the user controls it.
     var hasCentered by remember { mutableStateOf(false) }
 
-    LaunchedEffect(status.lat, status.lon, mapData, sharedThreats) {
+    LaunchedEffect(status.lat, status.lon, mapData, sharedThreats, palette) {
         // Rebuild all overlays except the tile layer. This runs before the fix check
         // on purpose: ACTION_CLEAR resets the registry, which drops the fix to null,
         // and returning first left the cleared devices' markers and trails on screen.
@@ -2123,16 +2019,15 @@ private fun MapScreen() {
         for (threat in sharedThreats) {
             if (threat.expiresAt < now) continue
             val markerArgb = when (threat.severity) {
-                "CRITICAL" -> 0xFFF2545B.toInt()
-                "HIGH" -> 0xFFFF7A3D.toInt()
-                "MEDIUM" -> 0xFFE8B33D.toInt()
-                else -> 0xFF6F7A8B.toInt()
+                "CRITICAL", "HIGH" -> palette.danger
+                "MEDIUM" -> palette.caution
+                else -> palette.subtle
             }
             val marker = Marker(mapView).apply {
                 position = GeoPoint(threat.lat, threat.lon)
                 title = "${threat.fromName}: ${threat.title}"
                 snippet = "${threat.kind} · ${fmtAgo(now, threat.ts)}"
-                icon = markerBitmap(markerArgb, 10, outline = true)
+                icon = markerBitmap(markerArgb, 10, outlineArgb = palette.ring)
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             }
             mapView.overlays.add(marker)
@@ -2156,7 +2051,7 @@ private fun MapScreen() {
         // GPS track
         if (mapData.track.size > 1) {
             val line = Polyline(mapView).apply {
-                outlinePaint.color = 0xFF4A8FD4.toInt()
+                outlinePaint.color = palette.info
                 outlinePaint.strokeWidth = 8f
                 outlinePaint.alpha = 180
                 setPoints(mapData.track.map { GeoPoint(it.lat, it.lon) })
@@ -2170,7 +2065,7 @@ private fun MapScreen() {
         for (trail in mapData.devices) {
             if (trail.points.size < 2) continue
             val line = Polyline(mapView).apply {
-                outlinePaint.color = trailArgb(trail.threat)
+                outlinePaint.color = trailArgb(palette, trail.threat)
                 outlinePaint.strokeWidth = trailWidthPx
                 outlinePaint.alpha = 200
                 setPoints(trail.points.map { GeoPoint(it.lat, it.lon) })
@@ -2185,7 +2080,7 @@ private fun MapScreen() {
             // points is a set of distinct places in insertion order, so its last entry
             // is the last *new* place, not the last fix. A→B→A would leave the marker at B.
             val pt = trail.lastHeardAt ?: trail.points.lastOrNull() ?: continue
-            val argb = threatArgb(trail.threat, trail.following)
+            val argb = threatArgb(palette, trail.threat, trail.following)
             val sizeDp = if (trail.following) 22 else 16
             val marker = Marker(mapView).apply {
                 position = GeoPoint(pt.lat, pt.lon)
@@ -2199,23 +2094,23 @@ private fun MapScreen() {
 
         // Cell anomaly markers (larger with outline)
         for (cm in mapData.cells) {
-            val argb = threatArgb(cm.level, false)
+            val argb = threatArgb(palette, cm.level, false)
             val marker = Marker(mapView).apply {
                 position = GeoPoint(cm.point.lat, cm.point.lon)
                 title = cm.label
                 snippet = "%.6f, %.6f".format(cm.point.lat, cm.point.lon)
-                icon = markerBitmap(argb, 20, outline = true)
+                icon = markerBitmap(argb, 20, outlineArgb = palette.ring)
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             }
             mapView.overlays.add(marker)
         }
 
-        // Current position (blue dot with white ring)
+        // Current position: an info-coloured dot with a ring in the text colour
         val posMarker = Marker(mapView).apply {
             position = GeoPoint(lat, lon)
             title = "Your position"
             snippet = "%.6f, %.6f".format(lat, lon)
-            icon = markerBitmap(0xFF4A8FD4.toInt(), 20, outline = true)
+            icon = markerBitmap(palette.info, 20, outlineArgb = palette.ring)
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
         }
         mapView.overlays.add(posMarker)
@@ -2258,46 +2153,57 @@ private fun MapScreen() {
     Box(Modifier.fillMaxSize()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
-        // Top-left status chip
-        val chipColor = if (followingTrails > 0) Critical else Muted
-        Text(
-            buildString {
-                append(if (status.hasFix) "GPS fix" else "No fix")
-                if (status.lat != null) append("  %.5f, %.5f".format(status.lat, status.lon))
-                if (mapData.devices.isNotEmpty()) append("  ·  ${plural(mapData.devices.size, "device")}")
-                if (followingTrails > 0) append("  ·  $followingTrails FOLLOWING")
-            },
-            color = chipColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(8.dp)
-                .background(Panel.copy(alpha = 0.92f), CardShape)
-                .padding(horizontal = 8.dp, vertical = 5.dp)
-        )
-
-        if (cellHot) {
-            Text(
-                "Cell anomaly — ${cell.level.name}",
-                color = Caution, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .background(Panel.copy(alpha = 0.92f), CardShape)
-                    .padding(horizontal = 8.dp, vertical = 5.dp)
+        // Overlays: where the fix is, how many devices are drawn, and any alert.
+        Column(
+            Modifier.align(Alignment.TopStart).fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MapChip(
+                text = buildString {
+                    append(if (status.hasFix) "GPS fix" else "No fix")
+                    if (status.lat != null) append(" · %.5f, %.5f".format(Locale.US, status.lat, status.lon))
+                    if (mapData.devices.isNotEmpty()) append(" · ${plural(mapData.devices.size, "device")}")
+                },
+                tone = if (status.hasFix) Tone.Neutral else Tone.Caution
             )
+            if (cellHot) MapChip("Sketchy cell tower nearby · ${levelLabel(cell.level.name)}", Tone.Caution)
         }
 
         if (followingTrails > 0) {
-            Text(
-                "● ${plural(followingTrails, "device")} FOLLOWING YOU",
-                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier
+            Row(
+                Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 14.dp)
-                    .background(Critical.copy(alpha = 0.92f), CardShape)
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            )
+                    .padding(start = 12.dp, end = 88.dp, bottom = 16.dp)
+                    .background(ClairixTheme.colors.danger, ClairixShapes.Control)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Filled.Warning, contentDescription = null, tint = ClairixTheme.colors.onDanger, modifier = Modifier.size(18.dp))
+                Text(
+                    if (followingTrails == 1) "1 tracker on you" else "$followingTrails trackers on you",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClairixTheme.colors.onDanger
+                )
+            }
         }
+    }
+}
+
+/** A small label floating over the map, on the raised surface so it reads over any tile. */
+@Composable
+private fun MapChip(text: String, tone: Tone) {
+    val c = ClairixTheme.colors
+    Row(
+        Modifier
+            .background(c.surfaceRaised.copy(alpha = 0.94f), ClairixShapes.Tag)
+            .border(1.dp, c.border, ClairixShapes.Tag)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(Modifier.size(6.dp).background(if (tone == Tone.Neutral) c.textSubtle else tone.color(), ClairixShapes.Tag))
+        Text(text, style = MaterialTheme.typography.monoSmall, color = c.text)
     }
 }
 
@@ -2308,40 +2214,34 @@ private fun TimelineScreen() {
     val events by Registry.timeline.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(60_000L)
-    // Log is newest-first, so groups come out TODAY, YESTERDAY, then older days.
+    // Log is newest-first, so groups come out Today, Yesterday, then older days.
     val groups = remember(events, now / 60_000L) { events.groupBy { dayLabel(it.ts, now) } }
+    val flagged = remember(events) { events.count { it.severity.ordinal >= Severity.HIGH.ordinal || it.kind == EventKind.PANIC } }
+    val today = groups[dayLabel(now, now)]?.size ?: 0
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(20.dp))
-        Text("EVENT LOG", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Text(
-            if (events.isEmpty()) "Nothing recorded" else "${plural(events.size, "recorded event")} · tap an event for location context",
-            color = Muted, fontSize = 12.sp
-        )
-        Spacer(Modifier.height(12.dp))
-        if (events.isEmpty()) {
-            Text("No events recorded yet. Start scanning to begin monitoring.", color = Muted, fontSize = 13.sp)
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                groups.forEach { (label, list) ->
-                    item(key = "§day-$label") { DayHeader(label, list.size) }
-                    items(list, key = { it.id }) { TimelineRow(it, status) }
-                }
-                item(key = "§footer") { Spacer(Modifier.height(24.dp)) }
+    ScreenList {
+        // ── Status first: how much is on record and how much of it matters ──
+        item(key = "§figures") {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatTile("$today", "Today", Modifier.weight(1f))
+                StatTile("$flagged", "Flagged", Modifier.weight(1f), tone = if (flagged > 0) Tone.Danger else Tone.Neutral)
+                StatTile("${events.size}", "On record", Modifier.weight(1f))
             }
         }
-    }
-}
-
-@Composable
-private fun DayHeader(label: String, count: Int) {
-    Row(
-        Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        SectionLabel(label, Accent)
-        Text(plural(count, "event"), color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        if (events.isEmpty()) {
+            item(key = "§empty") {
+                EmptyState(
+                    title = "Nothing recorded yet",
+                    body = "Every finding lands here with the time and place it happened. Start scanning to begin.",
+                    icon = ClairixIcons.Timeline
+                )
+            }
+        } else {
+            groups.forEach { (label, list) ->
+                item(key = "§day-$label") { SectionHeader(label, supporting = plural(list.size, "event")) }
+                items(list, key = { it.id }) { TimelineRow(it, status) }
+            }
+        }
     }
 }
 
@@ -2350,99 +2250,88 @@ private fun DayHeader(label: String, count: Int) {
  * so a row from a group member is not mistaken for a local detection. Null for
  * the ordinary kinds, whose title already says what happened.
  */
-private fun eventKindTag(kind: EventKind): Pair<String, Color>? = when (kind) {
-    EventKind.SHARED_THREAT -> "COMMUNITY REPORT" to Accent
-    EventKind.PANIC -> "SOS ALERT" to Critical
+private fun eventKindTag(kind: EventKind): Pair<String, Tone>? = when (kind) {
+    EventKind.SHARED_THREAT -> "Community report" to Tone.Info
+    EventKind.PANIC -> "SOS alert" to Tone.Danger
     else -> null
 }
 
 /**
- * Stripe and dot colour of a log row. Severity decides for local detections; a
- * community report is always the group's accent and an SOS is always critical,
- * whatever severity the sender attached.
+ * The tone of a log row. Severity decides for local detections; a community
+ * report is always info and an SOS is always danger, whatever severity the
+ * sender attached.
  */
-private fun eventColor(e: TimelineEvent): Color = when (e.kind) {
-    EventKind.SHARED_THREAT -> Accent
-    EventKind.PANIC -> Critical
-    else -> severityColor(e.severity)
+private fun eventTone(e: TimelineEvent): Tone = when (e.kind) {
+    EventKind.SHARED_THREAT -> Tone.Info
+    EventKind.PANIC -> Tone.Danger
+    else -> e.severity.tone()
 }
 
 @Composable
 private fun TimelineRow(e: TimelineEvent, status: ScanStatus) {
     var open by remember(e.id) { mutableStateOf(false) }
-    val col = eventColor(e)
+    val tone = eventTone(e)
     val tag = eventKindTag(e.kind)
-    val titleColor = if (e.severity == Severity.LOW && tag == null) InkDim else col
     val lat = e.lat
     val lon = e.lon
-    val hasLoc = lat != null && lon != null
+    val c = ClairixTheme.colors
 
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(CardShape)
-            .background(Panel)
-            .clickable { open = !open }
-            .height(IntrinsicSize.Min)
+    ClairixCard(
+        tone = tone,
+        onClick = { open = !open },
+        onClickLabel = if (open) "Hide details" else "Show details",
+        spacing = 4.dp
     ) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(col))
-        Column(
-            Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top
         ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(Modifier.size(10.dp).background(col, CircleShape))
-                Text(
-                    e.title, color = titleColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                    maxLines = if (open) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis
-                )
-                Text(fmtClock(e.ts), color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            }
-            if (tag != null) {
-                Text(
-                    tag.first, color = tag.second, fontSize = 9.sp, fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp,
-                    modifier = Modifier
-                        .background(tag.second.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
-                        .padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            }
-            if (e.detail.isNotBlank()) {
-                Text(
-                    e.detail, color = Muted, fontSize = 12.sp,
-                    maxLines = if (open) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis
-                )
-            }
-            if (hasLoc) {
-                Text("%.5f, %.5f".format(Locale.US, lat, lon), color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            }
-            if (open) {
-                Hairline()
-                Text(
-                    "${fmtTime(e.ts)} · ${e.kind.name.replace('_', ' ').lowercase(Locale.US)} · ${e.severity.name.lowercase(Locale.US)}",
-                    color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace
-                )
-                if (lat != null && lon != null) {
-                    EventLocationSnapshot(lat, lon, status)
-                } else {
-                    Text("No location recorded for this event", color = Muted, fontSize = 11.sp)
-                }
+            Text(
+                e.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (tone == Tone.Neutral) c.textMuted else c.text,
+                modifier = Modifier.weight(1f),
+                maxLines = if (open) Int.MAX_VALUE else 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(fmtClock(e.ts), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+        }
+        if (tag != null) StatusPill(tag.first, tag.second)
+        if (e.detail.isNotBlank()) {
+            Text(
+                e.detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = c.textSubtle,
+                maxLines = if (open) Int.MAX_VALUE else 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (lat != null && lon != null) {
+            Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+        }
+        if (open) {
+            Hairline(Modifier.padding(vertical = 4.dp))
+            KeyValueRow("Time", fmtTime(e.ts))
+            KeyValueRow("Kind", e.kind.name.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }, mono = false)
+            KeyValueRow("Severity", levelLabel(e.severity.name), valueColor = if (tone == Tone.Neutral) null else tone.color(), mono = false)
+            if (lat != null && lon != null) {
+                EventLocationSnapshot(lat, lon, status)
+            } else {
+                Text("No location recorded for this event", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
             }
         }
     }
 }
 
-/** A 100 dp square showing where the event happened relative to where the phone is now. */
+/** A square showing where the event happened relative to where the phone is now. */
 @Composable
 private fun EventLocationSnapshot(lat: Double, lon: Double, status: ScanStatus) {
+    val c = ClairixTheme.colors
     val curLat = status.lat
     val curLon = status.lon
     if (!status.hasFix || curLat == null || curLon == null) {
-        Text("No location context", color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Text("No current fix to compare with", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
         return
     }
     val mPerDegLat = 111320.0
@@ -2452,33 +2341,38 @@ private fun EventLocationSnapshot(lat: Double, lon: Double, status: ScanStatus) 
     val dist = hypot(eastM, southM)
     val bearing = (Math.toDegrees(atan2(eastM, -southM)) + 360.0) % 360.0
 
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(
+        Modifier.padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
         Canvas(
-            Modifier.size(100.dp)
-                .background(MapGround, CardShape)
-                .border(1.dp, Rule, CardShape)
+            Modifier.size(104.dp)
+                .background(c.base, ClairixShapes.Card)
+                .border(1.dp, c.border, ClairixShapes.Card)
+                .semantics { contentDescription = "Event position relative to you" }
         ) {
-            val c = Offset(size.width / 2f, size.height / 2f)
+            val centre = Offset(size.width / 2f, size.height / 2f)
             val maxR = size.minDimension / 2f - 10f
-            drawCircle(Rule, radius = maxR, center = c, style = Stroke(1f))
-            drawCircle(Rule, radius = maxR / 2f, center = c, style = Stroke(1f))
+            drawCircle(c.border, radius = maxR, center = centre, style = Stroke(1f))
+            drawCircle(c.border, radius = maxR / 2f, center = centre, style = Stroke(1f))
             val target = if (dist > 0.0) {
                 val pxPerM = maxR / dist.toFloat()
-                Offset(c.x + (eastM * pxPerM).toFloat(), c.y + (southM * pxPerM).toFloat())
-            } else c
-            drawLine(Muted, c, target, strokeWidth = 1f)
-            drawCircle(Color.White, radius = 5f, center = c)
-            drawCircle(Blue, radius = 3.5f, center = c)
-            drawCircle(Critical, radius = 5f, center = target)
+                Offset(centre.x + (eastM * pxPerM).toFloat(), centre.y + (southM * pxPerM).toFloat())
+            } else centre
+            drawLine(c.textSubtle, centre, target, strokeWidth = 1f)
+            drawCircle(c.text, radius = 5f, center = centre)
+            drawCircle(c.info, radius = 3.5f, center = centre)
+            drawCircle(c.danger, radius = 5f, center = target)
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                if (dist < 1.0) "Here" else "${fmtMetres(dist).removePrefix("~")} away",
-                color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace
+                if (dist < 1.0) "Right here" else "${fmtMetres(dist).removePrefix("~")} away",
+                style = MaterialTheme.typography.titleSmall,
+                color = c.text
             )
-            if (dist >= 1.0) Text("${compass(bearing)} of your position", color = InkDim, fontSize = 11.sp)
-            Text("Centre is where you are now", color = Muted, fontSize = 10.sp)
-            Text("Outer ring = ${fmtMetres(dist).removePrefix("~")}", color = Muted, fontSize = 10.sp)
+            if (dist >= 1.0) Text("${compass(bearing)} of you", style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+            Text("Centre is where you are now", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
         }
     }
 }
@@ -2500,208 +2394,23 @@ private fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onSh
         }
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item(key = "§header") {
-            Column(Modifier.padding(top = 20.dp)) {
-                Text("CELLULAR", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text("Serving tower, radio and baseline-based IMSI catcher detection", color = Muted, fontSize = 12.sp)
-            }
+    val radio = cell.radio
+    val c = cell.cell
+    val palette = ClairixTheme.colors
+
+    ScreenList {
+        // ── The verdict first, because it is what the screen is for ──────────
+        item(key = "§verdict") { CellVerdict(cell) }
+
+        if (cell.available && cell.analysing && cell.level.ordinal >= Threat.MEDIUM.ordinal && cell.findings.isNotEmpty()) {
+            item(key = "§alarm") { CatcherAlarm(cell) }
         }
 
-        val radio = cell.radio
-        val c = cell.cell
-
-        // ── The verdict first, because it is what the tab is for ──────────────
+        // ── Findings: every indicator that fired, each one explained on tap ──
         if (cell.available && cell.analysing) {
-            item(key = "§risk") { CatcherRiskBadge(cell) }
-            if (cell.level.ordinal >= Threat.MEDIUM.ordinal && cell.findings.isNotEmpty()) {
-                item(key = "§alarm") { CatcherAlarm(cell) }
-            }
-        } else if (cell.available) {
-            item(key = "§not-analysing") {
-                NoticeBanner(
-                    Caution, "NOT ANALYSED",
-                    "Live tower data below, but IMSI-catcher detection only runs while scanning is on. Start scanning from the SCAN tab."
-                )
-            }
-        }
-
-        if (!cell.available) {
-            item(key = "§unavailable") {
-                Column(
-                    Modifier.fillMaxWidth().background(Panel, CardShape).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(cell.reason ?: "Reading the modem…", color = InkDim, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    if (radio != null && (radio.operatorName != null || radio.simOperatorName != null)) {
-                        Text(
-                            "Registered on ${radio.operatorName ?: "—"} · SIM ${radio.simOperatorName ?: "—"} · ${radio.simState ?: ""}",
-                            color = Muted, fontSize = 12.sp
-                        )
-                    }
-                }
-            }
-        }
-
-        if (c != null) {
-            // ── Operator & radio ──────────────────────────────────────────────
-            item(key = "§operator") {
-                PanelBox {
-                    SectionLabel("OPERATOR")
-                    val decoded = Plmn.describe(c.mcc, c.mnc)
-                    val operator = radio?.operatorName ?: c.plmnCarrier ?: "Unknown operator"
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(operator, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        if (radio?.roaming == true) ThreatBadge("ROAMING", Caution)
-                    }
-                    CellInfoRow("Network type", radio?.dataNetworkType ?: c.rat.label)
-                    CellInfoRow("Radio", c.rat.label)
-                    CellInfoRow("PLMN (MCC-MNC)", "${c.mcc ?: "?"}-${c.mnc ?: "?"}" + (decoded?.let { "  $it" } ?: ""))
-                    if (radio != null && (radio.simOperatorName != null || radio.simPlmn != null)) {
-                        val simLine = listOfNotNull(radio.simOperatorName, radio.simPlmn).joinToString(" · ")
-                        CellInfoRow("SIM carrier", simLine)
-                    }
-                    if (radio != null) {
-                        CellInfoRow("Mobile data", if (radio.dataConnected) "Connected" else "Not connected")
-                        if (radio.simState != null && radio.simState != "Ready") CellInfoRow("SIM state", radio.simState)
-                    }
-                    // Roaming on a network whose PLMN decodes to a different carrier than
-                    // the SIM's is the ordinary case; a home PLMN that the modem names
-                    // differently from the table is worth a glance.
-                    val simName = radio?.simOperatorName
-                    val decodedCarrier = c.plmnCarrier
-                    if (radio?.roaming == false && simName != null && decodedCarrier != null &&
-                        !decodedCarrier.contains(simName, ignoreCase = true) && !simName.contains(decodedCarrier.substringBefore(' '), ignoreCase = true)
-                    ) {
-                        Text(
-                            "Not roaming, but the serving PLMN decodes to $decodedCarrier while the SIM is $simName. " +
-                                "Usually a partner or merged network; a catcher impersonating your carrier can also look like this.",
-                            color = Caution, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            // ── Signal ─────────────────────────────────────────────────────────
-            item(key = "§signal") {
-                PanelBox {
-                    SectionLabel("SIGNAL")
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SignalBars(c.bars ?: barsFromDbm(c.signalDbm, c.rat), color = signalColor(c.bars ?: barsFromDbm(c.signalDbm, c.rat)))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                c.signalDbm?.let { fmtDbm(it) } ?: "— dBm",
-                                color = Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace
-                            )
-                            Text(signalWord(c.bars ?: barsFromDbm(c.signalDbm, c.rat), c.rat), color = Muted, fontSize = 11.sp)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            if (c.rsrq != null) Text("RSRQ ${c.rsrq} dB", color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                            if (c.sinr != null) Text("SINR ${c.sinr} dB", color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                            c.timingAdvance?.let { ta ->
-                                val metres = if (c.rat == Rat.GSM) ta * 550 else ta * 78
-                                Text(
-                                    "TA $ta ≈ ${if (metres >= 1000) "%.1f km".format(Locale.US, metres / 1000.0) else "$metres m"}",
-                                    color = if (ta == 0 && c.rat == Rat.LTE) Accent else InkDim,
-                                    fontSize = 11.sp, fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── Serving cell identity ─────────────────────────────────────────
-            item(key = "§serving") {
-                PanelBox {
-                    SectionLabel("SERVING CELL")
-                    CellInfoRow("Cell ID", c.cellId)
-                    if (c.rat == Rat.LTE) {
-                        c.cellId.toLongOrNull()?.let { ci ->
-                            CellInfoRow("eNodeB / sector", "${ci shr 8} / ${ci and 0xFF}")
-                        }
-                    }
-                    if (c.rat == Rat.NR5G) {
-                        c.cellId.toLongOrNull()?.let { nci ->
-                            // gNB id length varies (22–32 bits); the common 24-bit split is shown.
-                            CellInfoRow("gNodeB / cell (24-bit split)", "${nci shr 12} / ${nci and 0xFFF}")
-                        }
-                    }
-                    CellInfoRow(if (c.rat.rank >= Rat.LTE.rank) "Tracking area (TAC)" else "Location area (LAC)", c.tac ?: "Not reported")
-                    c.pci?.let {
-                        CellInfoRow(
-                            when (c.rat) { Rat.GSM -> "BSIC"; Rat.UMTS -> "Scrambling code"; else -> "Physical cell ID" },
-                            it.toString()
-                        )
-                    }
-                    CellInfoRow("Band", c.band ?: "Not reported")
-                    c.arfcn?.let {
-                        CellInfoRow(
-                            when (c.rat) { Rat.LTE -> "EARFCN"; Rat.NR5G -> "NR-ARFCN"; Rat.UMTS -> "UARFCN"; else -> "ARFCN" },
-                            it.toString()
-                        )
-                    }
-                    c.bandwidthKhz?.let { CellInfoRow("Bandwidth", "${it / 1000} MHz") }
-                    CellInfoRow("Neighbours heard", "${c.neighbors ?: "not reported"}")
-                    CellInfoRow("Read", "${fmtClock(c.ts)} · ${fmtAgo(now, c.ts)}")
-                }
-            }
-
-            // ── Neighbours ────────────────────────────────────────────────────
-            if (cell.neighbors.isNotEmpty()) {
-                item(key = "§neighbours") {
-                    PanelBox {
-                        SectionLabel("NEIGHBOURING CELLS (${cell.neighbors.size})")
-                        Text(
-                            "What else the modem can hear. A real tower always has company; a lone transmitter does not.",
-                            color = Muted, fontSize = 11.sp, lineHeight = 15.sp
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        cell.neighbors.take(12).forEach { n ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SignalBars(n.bars ?: barsFromDbm(n.signalDbm, n.rat), color = Muted, height = 12.dp)
-                                Text(n.rat.label, color = InkDim, fontSize = 11.sp, modifier = Modifier.width(56.dp))
-                                Text(n.id, color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-                                Text(n.signalDbm?.let { fmtDbm(it) } ?: "—", color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                            }
-                        }
-                        if (cell.neighbors.size > 12) Text("+${cell.neighbors.size - 12} more", color = Muted, fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-
-        if (cell.available && cell.analysing) {
-            item(key = "§baseline") {
-                Column(Modifier.fillMaxWidth().background(Panel, CardShape).padding(12.dp)) {
-                    Text("Baseline maturity", color = InkDim, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = { cell.maturity },
-                        modifier = Modifier.fillMaxWidth(),
-                        color = if (cell.mature) Clear else Caution,
-                        trackColor = Rule
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        if (cell.mature) "${plural(cell.knownCells, "cell")} · ${plural(cell.visits, "visit")} · Mature"
-                        else "${cell.visits}/10 visits — keep scanning in your usual locations; a visit is a " +
-                            "return to an area after time spent somewhere else",
-                        color = Muted, fontSize = 12.sp
-                    )
-                }
-            }
-
             if (cell.findings.isNotEmpty()) {
                 item(key = "§indicators") {
-                    Text(
-                        "ACTIVE INDICATORS (${cell.findings.size})", color = Critical, fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+                    SectionHeader("Indicators", supporting = "${cell.findings.size} active", tone = Tone.Danger)
                 }
                 items(cell.findings, key = { it.id }) { f ->
                     FindingRow(
@@ -2712,25 +2421,230 @@ private fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onSh
                 }
             } else {
                 item(key = "§no-indicators") {
-                    Text(
-                        "No active indicators against the current baseline. " +
-                            "Twelve heuristics are checked every 15 s: forced 2G/3G downgrade, tower in the wrong area, " +
-                            "area change while still, signal above the area's record, unknown cell in a familiar area, " +
-                            "towers that appear and vanish, rapid switching, no neighbours, transmitter within 78 m, " +
-                            "signal spikes and technology oscillation.",
-                        color = Muted, fontSize = 11.sp, lineHeight = 15.sp
+                    Notice(
+                        Tone.Safe,
+                        "Twelve checks run every 15 s against your baseline: forced 2G/3G downgrades, a tower in the " +
+                            "wrong area, area changes while you stand still, signal above the area's record, unknown " +
+                            "cells in familiar places, towers that appear and vanish, rapid switching, no neighbours, " +
+                            "a transmitter within 78 m, signal spikes and technology flip-flopping.",
+                        title = "No indicators right now"
                     )
                 }
             }
-
             if (cell.score > 0) {
                 item(key = "§meaning") { WhatThisMeans(cell.score) }
             }
+            item(key = "§baseline") {
+                ClairixCard(spacing = 8.dp) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Baseline", style = MaterialTheme.typography.titleSmall, color = palette.text, modifier = Modifier.weight(1f))
+                        StatusPill(if (cell.mature) "Ready" else "Learning", if (cell.mature) Tone.Safe else Tone.Caution)
+                    }
+                    ClairixProgressBar(cell.maturity, tone = if (cell.mature) Tone.Safe else Tone.Caution)
+                    Text(
+                        if (cell.mature) "${plural(cell.knownCells, "cell")} · ${plural(cell.visits, "visit")}. Clairix knows your usual towers."
+                        else "${cell.visits} of 10 visits. Keep scanning where you usually are; a visit is a return to an " +
+                            "area after time spent somewhere else.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textSubtle
+                    )
+                }
+            }
+        } else if (cell.available) {
+            item(key = "§not-analysing") {
+                Notice(
+                    Tone.Caution,
+                    "Live tower data is below, but fake-tower detection only runs while scanning is on. " +
+                        "Start scanning from Trackers.",
+                    title = "Not checked yet"
+                )
+            }
         }
 
-        item(key = "§footer") { Spacer(Modifier.height(24.dp)) }
+        if (!cell.available) {
+            item(key = "§unavailable") {
+                EmptyState(
+                    title = cell.reason ?: "Reading the modem…",
+                    body = if (radio != null && (radio.operatorName != null || radio.simOperatorName != null))
+                        "Registered on ${radio.operatorName ?: "unknown"} · SIM ${radio.simOperatorName ?: "unknown"}" +
+                            (radio.simState?.let { " · $it" } ?: "")
+                    else "Tower details appear here once the modem reports a serving cell.",
+                    icon = ClairixIcons.CellTower
+                )
+            }
+        }
+
+        if (c != null) {
+            item(key = "§details-hdr") { SectionHeader("Serving tower") }
+            // ── Operator & radio ──────────────────────────────────────────────
+            item(key = "§operator") {
+                ClairixCard(spacing = 4.dp) {
+                    val decoded = Plmn.describe(c.mcc, c.mnc)
+                    val operator = radio?.operatorName ?: c.plmnCarrier ?: "Unknown operator"
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(operator, style = MaterialTheme.typography.titleLarge, color = palette.text, modifier = Modifier.weight(1f))
+                        if (radio?.roaming == true) StatusPill("Roaming", Tone.Caution)
+                    }
+                    KeyValueRow("Network type", radio?.dataNetworkType ?: c.rat.label)
+                    KeyValueRow("Radio", c.rat.label)
+                    KeyValueRow("PLMN (MCC-MNC)", "${c.mcc ?: "?"}-${c.mnc ?: "?"}" + (decoded?.let { "  $it" } ?: ""))
+                    if (radio != null && (radio.simOperatorName != null || radio.simPlmn != null)) {
+                        val simLine = listOfNotNull(radio.simOperatorName, radio.simPlmn).joinToString(" · ")
+                        KeyValueRow("SIM carrier", simLine)
+                    }
+                    if (radio != null) {
+                        KeyValueRow("Mobile data", if (radio.dataConnected) "Connected" else "Not connected")
+                        if (radio.simState != null && radio.simState != "Ready") KeyValueRow("SIM state", radio.simState)
+                    }
+                    // Roaming on a network whose PLMN decodes to a different carrier than
+                    // the SIM's is the ordinary case; a home PLMN that the modem names
+                    // differently from the table is worth a glance.
+                    val simName = radio?.simOperatorName
+                    val decodedCarrier = c.plmnCarrier
+                    if (radio?.roaming == false && simName != null && decodedCarrier != null &&
+                        !decodedCarrier.contains(simName, ignoreCase = true) && !simName.contains(decodedCarrier.substringBefore(' '), ignoreCase = true)
+                    ) {
+                        WarningLine(
+                            "Not roaming, but the tower's network decodes to $decodedCarrier while the SIM is $simName. " +
+                                "Usually a partner or merged network; a fake tower posing as your carrier can look like this too.",
+                            Tone.Caution,
+                            Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            // ── Signal ─────────────────────────────────────────────────────────
+            item(key = "§signal") {
+                val bars = c.bars ?: barsFromDbm(c.signalDbm, c.rat)
+                ClairixCard {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        SignalBars(bars, tone = signalTone(bars))
+                        Column(Modifier.weight(1f)) {
+                            Text(c.signalDbm?.let { fmtDbm(it) } ?: "— dBm", style = MaterialTheme.typography.monoLarge, color = palette.text)
+                            Text(signalWord(bars, c.rat), style = MaterialTheme.typography.bodyMedium, color = palette.textSubtle)
+                        }
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            if (c.rsrq != null) Text("RSRQ ${c.rsrq} dB", style = MaterialTheme.typography.monoSmall, color = palette.textMuted)
+                            if (c.sinr != null) Text("SINR ${c.sinr} dB", style = MaterialTheme.typography.monoSmall, color = palette.textMuted)
+                            c.timingAdvance?.let { ta ->
+                                val metres = if (c.rat == Rat.GSM) ta * 550 else ta * 78
+                                Text(
+                                    "TA $ta ≈ ${if (metres >= 1000) "%.1f km".format(Locale.US, metres / 1000.0) else "$metres m"}",
+                                    style = MaterialTheme.typography.monoSmall,
+                                    color = if (ta == 0 && c.rat == Rat.LTE) palette.caution else palette.textMuted
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Serving cell identity ─────────────────────────────────────────
+            item(key = "§serving") {
+                ClairixCard(spacing = 4.dp) {
+                    KeyValueRow("Cell ID", c.cellId)
+                    if (c.rat == Rat.LTE) {
+                        c.cellId.toLongOrNull()?.let { ci ->
+                            KeyValueRow("eNodeB / sector", "${ci shr 8} / ${ci and 0xFF}")
+                        }
+                    }
+                    if (c.rat == Rat.NR5G) {
+                        c.cellId.toLongOrNull()?.let { nci ->
+                            // gNB id length varies (22–32 bits); the common 24-bit split is shown.
+                            KeyValueRow("gNodeB / cell (24-bit split)", "${nci shr 12} / ${nci and 0xFFF}")
+                        }
+                    }
+                    KeyValueRow(if (c.rat.rank >= Rat.LTE.rank) "Tracking area (TAC)" else "Location area (LAC)", c.tac ?: "Not reported")
+                    c.pci?.let {
+                        KeyValueRow(
+                            when (c.rat) { Rat.GSM -> "BSIC"; Rat.UMTS -> "Scrambling code"; else -> "Physical cell ID" },
+                            it.toString()
+                        )
+                    }
+                    KeyValueRow("Band", c.band ?: "Not reported")
+                    c.arfcn?.let {
+                        KeyValueRow(
+                            when (c.rat) { Rat.LTE -> "EARFCN"; Rat.NR5G -> "NR-ARFCN"; Rat.UMTS -> "UARFCN"; else -> "ARFCN" },
+                            it.toString()
+                        )
+                    }
+                    c.bandwidthKhz?.let { KeyValueRow("Bandwidth", "${it / 1000} MHz") }
+                    KeyValueRow("Neighbours heard", "${c.neighbors ?: "Not reported"}")
+                    KeyValueRow("Read", "${fmtClock(c.ts)} · ${fmtAgo(now, c.ts)}")
+                }
+            }
+
+            // ── Neighbours ────────────────────────────────────────────────────
+            if (cell.neighbors.isNotEmpty()) {
+                item(key = "§neighbours-hdr") { SectionHeader("Neighbouring cells", supporting = "${cell.neighbors.size} heard") }
+                item(key = "§neighbours") {
+                    ClairixCard(spacing = 8.dp) {
+                        Text(
+                            "What else the modem can hear. A real tower always has company; a lone transmitter does not.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = palette.textSubtle
+                        )
+                        cell.neighbors.take(12).forEach { n ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                SignalBars(n.bars ?: barsFromDbm(n.signalDbm, n.rat), tone = Tone.Neutral, height = 14.dp)
+                                Text(n.rat.label, style = MaterialTheme.typography.bodyMedium, color = palette.textMuted, modifier = Modifier.width(56.dp))
+                                Text(n.id, style = MaterialTheme.typography.monoSmall, color = palette.textMuted, modifier = Modifier.weight(1f))
+                                Text(n.signalDbm?.let { fmtDbm(it) } ?: "—", style = MaterialTheme.typography.monoSmall, color = palette.textSubtle)
+                            }
+                        }
+                        if (cell.neighbors.size > 12) {
+                            Text("+${cell.neighbors.size - 12} more", style = MaterialTheme.typography.bodySmall, color = palette.textSubtle)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+/** The headline of the Cell screen: one verdict from the detector, or why there is none. */
+@Composable
+private fun CellVerdict(cell: CellStatus) {
+    val (eyebrow, headline, body, tone) = when {
+        !cell.available -> CellCopy("Cell towers", "No reading", "The modem hasn't reported a tower yet.", Tone.Neutral)
+        !cell.analysing -> CellCopy("Cell towers", "Not checked", "Tower details are live below. Start scanning to check them for fakes.", Tone.Neutral)
+        cell.level == Threat.CRITICAL -> CellCopy(
+            "Cell towers · analysing", "Fake tower likely",
+            "Several signs point to a fake cell tower nearby. Avoid calls and SMS here; use Clairix calls over Wi-Fi.",
+            Tone.Danger
+        )
+        cell.level == Threat.HIGH -> CellCopy(
+            "Cell towers · analysing", "Sketchy tower",
+            "This tower doesn't match your baseline. Avoid sensitive calls and SMS until you've moved on.",
+            Tone.Danger
+        )
+        cell.level == Threat.MEDIUM -> CellCopy(
+            "Cell towers · analysing", "Worth a look",
+            "Some indicators fired. Not conclusive on its own; watch whether more appear.",
+            Tone.Caution
+        )
+        !cell.mature -> CellCopy(
+            "Cell towers · learning", "Learning",
+            "Clairix is still learning your usual towers. Nothing suspicious so far.",
+            Tone.Neutral
+        )
+        else -> CellCopy(
+            "Cell towers · analysing", "Towers clear",
+            "Your towers match the baseline. Nothing points to a fake tower.",
+            Tone.Safe
+        )
+    }
+    StatusHero(
+        eyebrow = eyebrow,
+        headline = headline,
+        body = body + if (cell.available && cell.analysing) " Score ${cell.score} / 100." else "",
+        tone = tone,
+        modifier = Modifier.padding(top = 8.dp)
+    )
+}
+
+private data class CellCopy(val eyebrow: String, val headline: String, val body: String, val tone: Tone)
 
 /** Bars 0..4 from dBm when the platform gives none — the platform's own LTE/NR thresholds. */
 private fun barsFromDbm(dbm: Int?, rat: Rat): Int {
@@ -2756,61 +2670,57 @@ private fun signalWord(bars: Int, rat: Rat): String = when (bars) {
     else -> " (RSSI)"
 }
 
-private fun signalColor(bars: Int): Color = when (bars) {
-    4, 3 -> Clear
-    2 -> Caution
-    1 -> Accent
-    else -> Muted
+private fun signalTone(bars: Int): Tone = when (bars) {
+    4, 3 -> Tone.Safe
+    2 -> Tone.Caution
+    1 -> Tone.Danger
+    else -> Tone.Neutral
 }
 
 @Composable
-private fun SignalBars(bars: Int, color: Color, height: androidx.compose.ui.unit.Dp = 22.dp) {
-    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+private fun SignalBars(bars: Int, tone: Tone, height: androidx.compose.ui.unit.Dp = 24.dp) {
+    val c = ClairixTheme.colors
+    val on = if (tone == Tone.Neutral) c.textMuted else tone.color()
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.semantics { contentDescription = "$bars of 4 bars" }
+    ) {
         for (i in 1..4) {
             Box(
                 Modifier.width(height / 4).height(height * i / 4)
-                    .background(if (i <= bars) color else Rule, RoundedCornerShape(1.dp))
+                    .background(if (i <= bars) on else c.border)
             )
         }
     }
 }
 
 /**
- * The prominent card that says "this looks like an IMSI catcher" and lists exactly
- * what set it off, so the reader knows what was seen rather than a bare "suspicious".
+ * The card that says "this looks like a fake tower" and lists exactly what set
+ * it off, so the reader knows what was seen rather than a bare "suspicious".
  */
 @Composable
 private fun CatcherAlarm(cell: CellStatus) {
-    val col = threatColor(cell.level)
-    val headline = when (cell.level) {
-        Threat.CRITICAL -> "POSSIBLE IMSI CATCHER — STRONG EVIDENCE"
-        Threat.HIGH -> "POSSIBLE IMSI CATCHER"
-        else -> "CELL ANOMALIES PRESENT"
-    }
-    Column(
-        Modifier.fillMaxWidth()
-            .background(col.copy(alpha = 0.15f), CardShape)
-            .border(1.dp, col.copy(alpha = 0.7f), CardShape)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Text(headline, color = col, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+    val tone = cell.level.tone()
+    val c = ClairixTheme.colors
+    ClairixCard(tone = tone, emphasis = true) {
         Text(
-            "Triggered by ${plural(cell.findings.size, "indicator")}, score ${cell.score}/100:",
-            color = Ink, fontSize = 12.sp
+            "What set it off",
+            style = MaterialTheme.typography.titleSmall,
+            color = tone.color()
         )
         cell.findings.sortedByDescending { it.severity.ordinal }.forEach { f ->
-            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("•", color = severityColor(f.severity), fontSize = 12.sp)
-                Text(f.title, color = severityColor(f.severity), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                ThreatBadge(f.severity.name, severityColor(f.severity))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(f.title, style = MaterialTheme.typography.bodyMedium, color = c.text, modifier = Modifier.weight(1f))
+                StatusPill(levelLabel(f.severity.name), f.severity.tone())
             }
         }
-        cell.cell?.let { c ->
+        cell.cell?.let { cc ->
             Text(
-                "On ${c.rat.label} cell ${c.cellId}" + (c.band?.let { " · $it" } ?: "") +
-                    (c.signalDbm?.let { " · ${fmtDbm(it)}" } ?: ""),
-                color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                "On ${cc.rat.label} cell ${cc.cellId}" + (cc.band?.let { " · $it" } ?: "") +
+                    (cc.signalDbm?.let { " · ${fmtDbm(it)}" } ?: ""),
+                style = MaterialTheme.typography.monoSmall,
+                color = c.textMuted
             )
         }
         Text(
@@ -2818,107 +2728,48 @@ private fun CatcherAlarm(cell: CellStatus) {
                 Threat.CRITICAL, Threat.HIGH -> "Avoid calls and SMS here. Use end-to-end encrypted messaging over Wi-Fi with a VPN, or airplane mode. Tap an indicator below for details."
                 else -> "Not conclusive on its own. Watch whether more indicators appear; tap one below for what it means."
             },
-            color = InkDim, fontSize = 12.sp, lineHeight = 17.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = c.text
         )
-    }
-}
-
-@Composable
-private fun CatcherRiskBadge(cell: CellStatus) {
-    val col = threatColor(cell.level)
-    val (title, desc) = when (cell.level) {
-        Threat.CRITICAL -> "RISK: CRITICAL" to "Multiple anomaly indicators — strong evidence of an IMSI catcher"
-        Threat.HIGH -> "RISK: HIGH" to "Significant anomalies detected against your baseline"
-        Threat.MEDIUM -> "RISK: MEDIUM" to "Some indicators present"
-        Threat.LOW -> "RISK: LOW" to "Minor indicators"
-        Threat.NONE -> "RISK: NONE" to "No anomalies against baseline"
-    }
-    Row(
-        Modifier.fillMaxWidth()
-            .background(col.copy(alpha = 0.12f), CardShape)
-            .border(1.dp, col.copy(alpha = 0.5f), CardShape)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            title, color = Ground, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
-            modifier = Modifier.background(col, RoundedCornerShape(3.dp)).padding(horizontal = 8.dp, vertical = 4.dp)
-        )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(desc, color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Score ${cell.score}/100 · analysing live" + (if (cell.mature) "" else " · baseline still learning"),
-                color = col.copy(alpha = 0.8f), fontSize = 11.sp, fontFamily = FontFamily.Monospace
-            )
-        }
     }
 }
 
 @Composable
 private fun WhatThisMeans(score: Int) {
     val text = when {
-        score < 30 -> "Low baseline anomaly. May be normal network fluctuation."
-        score < 50 -> "Moderate anomaly. Elevated risk of cell tower spoofing. Consider moving."
-        score < 80 -> "High anomaly. Possible IMSI catcher nearby. Avoid making sensitive calls."
-        else -> "CRITICAL. Strong evidence of active IMSI catcher. Turn off mobile data. Use WiFi with VPN."
+        score < 30 -> "A small change from your baseline. Usually normal network wobble."
+        score < 50 -> "A moderate change from your baseline. Some risk of a spoofed tower; consider moving."
+        score < 80 -> "A big change from your baseline. A fake tower may be nearby; avoid sensitive calls."
+        else -> "Strong signs of a fake tower. Turn off mobile data and use Wi-Fi with a VPN."
     }
-    val col = meterColor(score / 100f)
-    Column(
-        Modifier.fillMaxWidth()
-            .background(Panel, CardShape)
-            .border(1.dp, col.copy(alpha = 0.5f), CardShape)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        SectionLabel("WHAT THIS MEANS", col)
-        Text(text, color = Ink, fontSize = 13.sp, lineHeight = 18.sp)
+    val tone = when {
+        score < 30 -> Tone.Neutral
+        score < 50 -> Tone.Caution
+        else -> Tone.Danger
     }
-}
-
-@Composable
-private fun CellInfoRow(label: String, value: String, valueColor: Color = InkDim) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Text(label, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(end = 12.dp))
-        Text(
-            value, color = valueColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.End, modifier = Modifier.weight(1f)
-        )
-    }
+    Notice(tone, text, title = "What this means")
 }
 
 @Composable
 private fun FindingRow(f: CatcherFinding, onShowExplainer: (() -> Unit)? = null) {
-    val col = severityColor(f.severity)
-    val clickMod = if (onShowExplainer != null) Modifier.clickable { onShowExplainer() } else Modifier
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(Panel)
-            .then(clickMod)
-            .height(IntrinsicSize.Min)
+    val c = ClairixTheme.colors
+    ClairixCard(
+        tone = f.severity.tone(),
+        onClick = onShowExplainer,
+        onClickLabel = "Explain this indicator",
+        spacing = 4.dp
     ) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(col))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(f.title, color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                ThreatBadge(f.severity.name, col)
-                if (onShowExplainer != null) {
-                    Text("?", color = col.copy(alpha = 0.8f), fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 2.dp))
-                }
-            }
-            Text(f.detail, color = InkDim, fontSize = 12.sp, lineHeight = 17.sp)
-            if (onShowExplainer != null) {
-                Text("Tap for explanation and response guidance", color = col.copy(alpha = 0.6f),
-                    fontSize = 10.sp, letterSpacing = 0.5.sp)
-            }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(f.title, style = MaterialTheme.typography.titleSmall, color = c.text, modifier = Modifier.weight(1f))
+            StatusPill(levelLabel(f.severity.name), f.severity.tone())
+        }
+        Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+        if (onShowExplainer != null) {
+            Text("Tap for what it means and what to do", style = MaterialTheme.typography.labelMedium, color = c.accent)
         }
     }
 }
@@ -2954,199 +2805,94 @@ private fun NfcScreen(
     val vault = (vaultState as? VaultState.Unlocked)?.cards.orEmpty()
     val vaultOpen = vaultState is VaultState.Unlocked
     var confirmErase by remember { mutableStateOf(false) }
+    val c = ClairixTheme.colors
 
     // The vault refused to overwrite a stored card with this UID; ask.
     val pendingReplace = replace
     if (pendingReplace != null) {
-        AlertDialog(
-            onDismissRequest = { Registry.setReplacePrompt(null) },
-            containerColor = Panel,
-            title = { Text("Replace existing card?", color = Ink, fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "\"${pendingReplace.existing.label}\" is already in the vault with UID " +
-                        "${pendingReplace.existing.uid}. Replace it with this scan, saved as " +
-                        "\"${pendingReplace.label}\"? The stored copy is overwritten.",
-                    color = InkDim, fontSize = 13.sp, lineHeight = 18.sp
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { onAddToVault(pendingReplace.tag, pendingReplace.label, true) }) {
-                    Text("REPLACE", color = Caution, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { Registry.setReplacePrompt(null) }) {
-                    Text("KEEP EXISTING", color = Muted, letterSpacing = 1.sp)
-                }
-            }
+        ClairixDialog(
+            title = "Replace the stored card?",
+            text = "\"${pendingReplace.existing.label}\" is already in the vault with UID " +
+                "${pendingReplace.existing.uid}. Replace it with this scan, saved as " +
+                "\"${pendingReplace.label}\"? The stored copy is overwritten.",
+            confirmLabel = "Replace",
+            confirmTone = Tone.Caution,
+            onConfirm = { onAddToVault(pendingReplace.tag, pendingReplace.label, true) },
+            dismissLabel = "Keep existing",
+            onDismiss = { Registry.setReplacePrompt(null) }
         )
     }
 
     if (confirmErase) {
-        AlertDialog(
-            onDismissRequest = { confirmErase = false },
-            containerColor = Panel,
-            title = { Text("Erase the vault?", color = Ink, fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "The stored cards cannot be read, and erasing deletes them and the vault key " +
-                        "permanently. Cards you still have physically can be scanned and saved again.",
-                    color = InkDim, fontSize = 13.sp, lineHeight = 18.sp
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmErase = false; onEraseVault() }) {
-                    Text("ERASE", color = Critical, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmErase = false }) {
-                    Text("CANCEL", color = Muted, letterSpacing = 1.sp)
-                }
-            }
+        ClairixDialog(
+            title = "Erase the vault?",
+            text = "The stored cards can't be read, and erasing deletes them and the vault key for good. " +
+                "Cards you still have can be scanned and saved again.",
+            confirmLabel = "Erase vault",
+            confirmTone = Tone.Danger,
+            onConfirm = { confirmErase = false; onEraseVault() },
+            onDismiss = { confirmErase = false }
         )
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Header
-        item(key = "hdr") {
-            Spacer(Modifier.height(20.dp))
-            Text("NFC & CARD VAULT", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            Text("Identify cards · store credentials securely · emulate access cards",
-                color = Muted, fontSize = 12.sp)
-            Spacer(Modifier.height(12.dp))
+    val suspicious = tags.count { it.suspicious }
+
+    ScreenList {
+        // ── Status first ──
+        item(key = "hero") {
+            StatusHero(
+                eyebrow = "NFC",
+                headline = when {
+                    suspicious > 0 -> if (suspicious == 1) "Suspicious tag" else "$suspicious suspicious tags"
+                    tags.isNotEmpty() -> "Tags clean"
+                    else -> "Tap to check"
+                },
+                body = when {
+                    suspicious > 0 -> "A tag below doesn't behave like an ordinary card or sticker. See what was flagged."
+                    tags.isNotEmpty() -> "${plural(tags.size, "tag")} read this session. None look like a skimmer or tracker tag."
+                    else -> "Hold the back of the phone to desk undersides, bag linings, door frames and car seats."
+                },
+                tone = when {
+                    suspicious > 0 -> Tone.Danger
+                    tags.isNotEmpty() -> Tone.Safe
+                    else -> Tone.Neutral
+                },
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
 
         // Active emulation banner
         val armedCard = armed
         if (armedCard != null) {
             item(key = "emul_banner") {
-                Row(
-                    Modifier.fillMaxWidth().clip(CardShape).background(Blue.copy(alpha = 0.15f))
-                        .border(1.dp, Blue.copy(alpha = 0.4f), CardShape).padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("EMULATING", color = Blue, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                        Text(armedCard.label, color = Ink, fontSize = 14.sp)
-                        Text(
-                            "NFC tag reading is paused while emulating. Unlock the phone and hold " +
-                                "its back against the reader — Clairix can stay open or be in the background.",
-                            color = Muted, fontSize = 12.sp
-                        )
-                    }
-                    TextButton(onClick = { onEmulate(null) }) {
-                        Text("STOP", color = Critical, fontSize = 11.sp, letterSpacing = 1.sp)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-        }
-
-        // Vault section
-        item(key = "vault_hdr") {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("VAULT", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                if (vaultState is VaultState.Unlocked) {
-                    TextButton(
-                        onClick = onLockVault,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) { Text("LOCK", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
-                } else {
-                    Text("AES-256-GCM · Android Keystore (hardware TEE)", color = Muted.copy(alpha = 0.6f), fontSize = 10.sp)
-                }
-            }
-        }
-        when (val state = vaultState) {
-            VaultState.Locked, VaultState.Unlocking -> item(key = "vault_locked") {
-                PanelBox {
-                    Text("Vault locked", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Stored cards are encrypted with a hardware key that only works after you " +
-                            "confirm it's you with your fingerprint, face, or screen-lock PIN.",
-                        color = Muted, fontSize = 12.sp, lineHeight = 17.sp
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Button(
-                        onClick = onUnlockVault,
-                        enabled = state == VaultState.Locked,
-                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color(0xFF12161D)),
-                        shape = CardShape, modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (state == VaultState.Unlocking) "WAITING FOR AUTHENTICATION…" else "UNLOCK",
-                            fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-            is VaultState.Failed -> item(key = "vault_failed") {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    NoticeBanner(Critical, "VAULT", state.message)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.retryable) {
-                            TextButton(onClick = onUnlockVault,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                                Text("TRY AGAIN", color = Accent, fontSize = 11.sp, letterSpacing = 1.sp)
-                            }
-                        }
-                        if (state.erasable) {
-                            TextButton(onClick = { confirmErase = true },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                                Text("ERASE VAULT", color = Critical, fontSize = 11.sp, letterSpacing = 1.sp)
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-            is VaultState.Unlocked -> if (state.cards.isEmpty()) {
-                item(key = "vault_empty") {
-                    Text("No cards stored. Scan a card below and tap + VAULT to save it.",
-                        color = InkDim, fontSize = 13.sp)
-                    Spacer(Modifier.height(4.dp))
-                }
-            } else {
-                items(state.cards, key = { "v_${it.id}" }) { card ->
-                    VaultCardRow(card = card, emulId = emulId, onEmulate = onEmulate, onRemove = { onRemoveVault(card.id) })
-                }
-            }
-        }
-
-        // Divider
-        item(key = "divider") {
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("SCANNED TAGS", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                if (tags.isNotEmpty()) {
-                    TextButton(
-                        onClick = { Registry.clearNfc() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) { Text("CLEAR", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
-                }
-            }
-        }
-
-        if (tags.isEmpty()) {
-            item(key = "scan_empty") {
-                Text("No tags scanned yet.", color = InkDim, fontSize = 13.sp)
-                Spacer(Modifier.height(4.dp))
-                Text("Hold phone's NFC area to surfaces: desk undersides, bag linings, door frames, car seats.",
-                    color = Muted, fontSize = 12.sp)
-            }
-        } else {
-            val suspicious = tags.count { it.suspicious }
-            item(key = "scan_count") {
-                Text(
-                    "${plural(tags.size, "tag")} · $suspicious suspicious",
-                    color = if (suspicious > 0) Critical else Muted,
-                    fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                Notice(
+                    Tone.Info,
+                    "${armedCard.label}. Tag reading is paused while emulating. Unlock the phone and hold its back " +
+                        "to the reader; Clairix can stay open or sit in the background.",
+                    title = "Emulating a card",
+                    action = { GhostButton("Stop emulating", onClick = { onEmulate(null) }, tone = Tone.Danger) }
                 )
             }
+        }
+
+        // ── Findings: what was read ──
+        item(key = "divider") {
+            SectionHeader(
+                "Scanned tags",
+                action = if (tags.isNotEmpty()) {
+                    { GhostButton("Clear", onClick = { Registry.clearNfc() }, tone = Tone.Neutral) }
+                } else null
+            )
+        }
+        if (tags.isEmpty()) {
+            item(key = "scan_empty") {
+                EmptyState(
+                    title = "No tags read yet",
+                    body = "Any NFC tag or card the phone touches shows up here with what it is.",
+                    icon = ClairixIcons.Nfc
+                )
+            }
+        } else {
             items(tags, key = { "t_${it.uid}" }) { tag ->
                 NfcTagRow(
                     t = tag,
@@ -3158,7 +2904,65 @@ private fun NfcScreen(
             }
         }
 
-        item(key = "footer") { Spacer(Modifier.height(32.dp)) }
+        // ── The vault ──
+        item(key = "vault_hdr") {
+            SectionHeader(
+                "Card vault",
+                supporting = if (vaultState is VaultState.Unlocked) null else "Hardware-encrypted",
+                action = if (vaultState is VaultState.Unlocked) {
+                    { GhostButton("Lock", onClick = onLockVault, tone = Tone.Neutral) }
+                } else null
+            )
+        }
+        when (val state = vaultState) {
+            VaultState.Locked, VaultState.Unlocking -> item(key = "vault_locked") {
+                ClairixCard {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(Icons.Filled.Lock, contentDescription = null, tint = c.accent)
+                        Text("Vault locked", style = MaterialTheme.typography.titleMedium, color = c.text)
+                    }
+                    Text(
+                        "Stored cards are encrypted with a hardware key that only works after you confirm it's you " +
+                            "with your fingerprint, face or screen-lock PIN. AES-256-GCM in the Android Keystore.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                    PrimaryButton(
+                        if (state == VaultState.Unlocking) "Waiting for you to confirm…" else "Unlock vault",
+                        onClick = onUnlockVault,
+                        enabled = state == VaultState.Locked,
+                        loading = state == VaultState.Unlocking,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            is VaultState.Failed -> item(key = "vault_failed") {
+                Notice(
+                    Tone.Danger,
+                    state.message,
+                    title = "Vault unavailable",
+                    action = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (state.retryable) GhostButton("Try again", onClick = onUnlockVault)
+                            if (state.erasable) GhostButton("Erase vault", onClick = { confirmErase = true }, tone = Tone.Danger)
+                        }
+                    }
+                )
+            }
+            is VaultState.Unlocked -> if (state.cards.isEmpty()) {
+                item(key = "vault_empty") {
+                    EmptyState(
+                        title = "No cards stored",
+                        body = "Scan a card and tap Save to vault to keep it here.",
+                        icon = Icons.Filled.Lock
+                    )
+                }
+            } else {
+                items(state.cards, key = { "v_${it.id}" }) { card ->
+                    VaultCardRow(card = card, emulId = emulId, onEmulate = onEmulate, onRemove = { onRemoveVault(card.id) })
+                }
+            }
+        }
     }
 }
 
@@ -3170,48 +2974,41 @@ private fun VaultCardRow(
     onRemove: () -> Unit
 ) {
     val isEmulating = card.id == emulId
-    val stripe = if (isEmulating) Blue else Clear
-    Row(Modifier.fillMaxWidth().clip(CardShape).background(Panel).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(card.label, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                when {
-                    isEmulating -> ThreatBadge("ACTIVE", Blue)
-                    card.profile.hceLimited -> ThreatBadge("HCE LIMITED", Caution)
-                    card.profile.hceCapable -> ThreatBadge("HCE OK", Clear)
-                    else -> ThreatBadge("STORED", Muted)
-                }
+    val c = ClairixTheme.colors
+    ClairixCard(tone = if (isEmulating) Tone.Info else Tone.Safe, spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                card.label, style = MaterialTheme.typography.titleMedium, color = c.text,
+                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            when {
+                isEmulating -> StatusPill("Active", Tone.Info)
+                card.profile.hceLimited -> StatusPill("Replay only", Tone.Caution)
+                card.profile.hceCapable -> StatusPill("Can emulate", Tone.Safe)
+                else -> StatusPill("Stored", Tone.Neutral)
             }
-            Text("${card.profile.label} · UID ${card.uid}", color = Accent, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-            if (!card.profile.hceCapable) {
-                Text("This card type uses a proprietary RF protocol — HCE emulation is not possible. UID and type are stored for identification.",
-                    color = Muted, fontSize = 11.sp)
-            } else if (card.profile.hceLimited) {
-                Text(HCE_LIMITED_CAVEAT, color = Caution.copy(alpha = 0.9f), fontSize = 11.sp)
+        }
+        Text("${card.profile.label} · UID ${card.uid}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
+        if (!card.profile.hceCapable) {
+            Text(
+                "This card type uses its own radio protocol, so the phone can't stand in for it. The UID and type are kept for identification.",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.textSubtle
+            )
+        } else if (card.profile.hceLimited) {
+            Text(HCE_LIMITED_CAVEAT, style = MaterialTheme.typography.bodySmall, color = c.caution)
+        }
+        Text("Saved ${fmtTime(card.addedTs)}", style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (card.profile.hceCapable) {
+                SecondaryButton(
+                    if (isEmulating) "Stop" else "Emulate",
+                    onClick = { onEmulate(if (isEmulating) null else card) },
+                    tone = if (isEmulating) Tone.Danger else Tone.Info,
+                    modifier = Modifier.weight(1f)
+                )
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(fmtTime(card.addedTs), color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (card.profile.hceCapable) {
-                        TextButton(
-                            onClick = { onEmulate(if (isEmulating) null else card) },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) {
-                            Text(
-                                if (isEmulating) "STOP" else "EMULATE",
-                                color = if (isEmulating) Critical else Blue,
-                                fontSize = 11.sp, letterSpacing = 1.sp
-                            )
-                        }
-                    }
-                    TextButton(
-                        onClick = onRemove,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) { Text("REMOVE", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
-                }
-            }
+            GhostButton("Remove", onClick = onRemove, tone = Tone.Neutral)
         }
     }
 }
@@ -3229,122 +3026,104 @@ private fun NfcTagRow(
     var addingLabel by remember(t.uid) { mutableStateOf(false) }
     var labelText by remember(t.uid) { mutableStateOf("") }
     LaunchedEffect(copied) { if (copied) { delay(1500L); copied = false } }
+    val c = ClairixTheme.colors
 
     val isPayment = t.profile in setOf(CardProfile.EMV_VISA, CardProfile.EMV_MASTERCARD,
         CardProfile.EMV_AMEX, CardProfile.EMV_OTHER)
-    val stripe = when {
-        t.suspicious -> Critical
-        isPayment    -> Caution
-        else         -> Clear
+    val tone = when {
+        t.suspicious -> Tone.Danger
+        isPayment    -> Tone.Caution
+        else         -> Tone.Safe
     }
 
-    Row(Modifier.fillMaxWidth().clip(CardShape).background(Panel).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(t.uid, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                ThreatBadge(when {
-                    t.suspicious -> "SUSPECT"
-                    isPayment    -> "PAYMENT"
-                    else         -> "CLEAN"
-                }, stripe)
-            }
+    ClairixCard(tone = tone, emphasis = t.suspicious) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                t.uid, style = MaterialTheme.typography.mono, color = c.text,
+                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            StatusPill(
+                when {
+                    t.suspicious -> "Suspect"
+                    isPayment    -> "Payment"
+                    else         -> "Clean"
+                },
+                tone
+            )
+        }
 
-            // Profile + ATQA/SAK
-            val techLine = buildString {
-                append(t.type)
-                if (t.atqa != null && t.sak != null) append(" · ATQA ${t.atqa} SAK ${t.sak}")
-                if (t.paymentNetwork != null) append(" · ${t.paymentNetwork}")
-            }
-            Text(techLine, color = Accent, fontSize = 12.sp)
-            Text(t.note, color = if (t.suspicious) Critical.copy(alpha = 0.9f) else Muted, fontSize = 12.sp)
+        // Profile + ATQA/SAK
+        val techLine = buildString {
+            append(t.type)
+            if (t.atqa != null && t.sak != null) append(" · ATQA ${t.atqa} SAK ${t.sak}")
+            if (t.paymentNetwork != null) append(" · ${t.paymentNetwork}")
+        }
+        Text(techLine, style = MaterialTheme.typography.titleSmall, color = c.text)
+        Text(t.note, style = MaterialTheme.typography.bodyMedium, color = if (t.suspicious) c.danger else c.textSubtle)
 
-            // Skimmer flags
-            t.skimmerFlags.forEach { flag ->
-                NoticeBanner(Critical, "ANOMALY", flag)
-            }
-            if (isPayment) {
-                NoticeBanner(Caution, "PAYMENT", "Public card metadata only — no secret data readable. Not a tracker.")
-            }
-            if (t.payload != null) {
-                Text("Data: ${t.payload.take(80)}", color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            }
+        // Skimmer flags
+        t.skimmerFlags.forEach { flag -> WarningLine(flag, Tone.Danger) }
+        if (isPayment) {
+            Text(
+                "Public card details only. Nothing secret can be read, and it isn't a tracker.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = c.textMuted
+            )
+        }
+        if (t.payload != null) {
+            Text("Data: ${t.payload.take(80)}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
+        }
 
-            // HCE capability hint
-            if (t.profile.hceLimited && !isPayment) {
-                Text("HCE limited — $HCE_LIMITED_CAVEAT. Add to vault to try it.",
-                    color = Caution.copy(alpha = 0.9f), fontSize = 11.sp)
-            } else if (t.profile.hceCapable && !isPayment) {
-                Text("This card type can be emulated via HCE — add to vault to use phone as card.",
-                    color = Clear.copy(alpha = 0.8f), fontSize = 11.sp)
-            }
+        // HCE capability hint
+        if (t.profile.hceLimited && !isPayment) {
+            Text("Replay only: $HCE_LIMITED_CAVEAT. Save it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
+        } else if (t.profile.hceCapable && !isPayment) {
+            Text("Your phone can stand in for this card. Save it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+        }
 
-            // Add-to-vault inline input
-            if (addingLabel) {
-                OutlinedTextField(
-                    value = labelText,
-                    onValueChange = { labelText = it },
-                    label = { Text("Card label", fontSize = 12.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Accent,
-                        unfocusedBorderColor = Rule,
-                        focusedTextColor = Ink,
-                        unfocusedTextColor = Ink
-                    )
+        // Add-to-vault inline input
+        if (addingLabel) {
+            ClairixTextField(
+                value = labelText,
+                onValueChange = { labelText = it },
+                label = "Card label",
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryButton(
+                    "Save",
+                    onClick = {
+                        if (labelText.isNotBlank()) {
+                            onAddToVault(labelText.trim())
+                            addingLabel = false; labelText = ""
+                        }
+                    },
+                    enabled = labelText.isNotBlank(),
+                    modifier = Modifier.weight(1f)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { addingLabel = false; labelText = "" },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                        Text("CANCEL", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
-                    }
-                    TextButton(
-                        onClick = {
-                            if (labelText.isNotBlank()) {
-                                onAddToVault(labelText.trim())
-                                addingLabel = false; labelText = ""
-                            }
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        enabled = labelText.isNotBlank()
-                    ) { Text("SAVE", color = Clear, fontSize = 11.sp, letterSpacing = 1.sp) }
-                }
+                GhostButton("Cancel", onClick = { addingLabel = false; labelText = "" }, tone = Tone.Neutral)
             }
+        }
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(fmtTime(t.ts), color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    // Whether the tag is already stored is only known while the vault
-                    // is open, so a locked vault offers the unlock, not the save: with
-                    // the key's auth window still warm, a save from here used to go
-                    // through without a prompt and replace the stored card unseen.
-                    if (!vaultOpen && !isPayment) {
-                        TextButton(
-                            onClick = onUnlockVault,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) { Text("UNLOCK TO SAVE", color = Accent, fontSize = 11.sp, letterSpacing = 1.sp) }
-                    } else if (!inVault && !isPayment && !addingLabel) {
-                        TextButton(
-                            onClick = { addingLabel = true; labelText = t.profile.label },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) { Text("+ VAULT", color = Clear, fontSize = 11.sp, letterSpacing = 1.sp) }
-                    } else if (inVault) {
-                        Text("IN VAULT", color = Clear.copy(alpha = 0.6f), fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(horizontal = 8.dp))
-                    }
-                    TextButton(
-                        onClick = { clipboard.setText(AnnotatedString(t.uid)); copied = true },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) {
-                        Text(if (copied) "COPIED" else "COPY UID",
-                            color = if (copied) Clear else InkDim, fontSize = 11.sp, letterSpacing = 1.sp)
-                    }
-                }
+        Text(fmtTime(t.ts), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Whether the tag is already stored is only known while the vault
+            // is open, so a locked vault offers the unlock, not the save: with
+            // the key's auth window still warm, a save from here used to go
+            // through without a prompt and replace the stored card unseen.
+            if (!vaultOpen && !isPayment) {
+                GhostButton("Unlock to save", onClick = onUnlockVault)
+            } else if (!inVault && !isPayment && !addingLabel) {
+                GhostButton("Save to vault", onClick = { addingLabel = true; labelText = t.profile.label })
+            } else if (inVault) {
+                StatusPill("In vault", Tone.Safe)
             }
+            Spacer(Modifier.weight(1f))
+            GhostButton(
+                if (copied) "Copied" else "Copy UID",
+                onClick = { clipboard.setText(AnnotatedString(t.uid)); copied = true },
+                tone = if (copied) Tone.Safe else Tone.Neutral
+            )
         }
     }
 }
@@ -3367,270 +3146,203 @@ private fun DeviceScreen(onShown: () -> Unit) {
     }
     val problems = health.problems
     val checked = health.facts.size
+    val issues = health.findings.size + problems.size
+    val c = ClairixTheme.colors
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(20.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("DEVICE HEALTH", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text("Security check of the phone itself — integrity, access, sensors, spyware",
-                    color = Muted, fontSize = 12.sp)
+    ScreenList {
+        // ── Status first ───────────────────────────────────────────────────
+        item(key = "hero") { PhoneVerdict(health, checked, issues) }
+
+        item(key = "figures") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatTile("$checked", "Checks run", Modifier.weight(1f))
+                StatTile(
+                    "$issues", if (issues == 1) "Issue" else "Issues", Modifier.weight(1f),
+                    tone = when {
+                        issues == 0 -> Tone.Safe
+                        health.level.ordinal >= Threat.HIGH.ordinal -> Tone.Danger
+                        else -> Tone.Caution
+                    }
+                )
+                StatTile(
+                    if (liveMonitoring) "On" else "Off", "Mic and camera watch", Modifier.weight(1f),
+                    tone = if (liveMonitoring) Tone.Safe else Tone.Neutral
+                )
             }
-            val levelColor = when (health.level) {
-                Threat.CRITICAL -> Critical
-                Threat.HIGH -> Accent
-                Threat.MEDIUM -> Caution
-                Threat.LOW -> Caution
-                Threat.NONE -> Clear
-            }
-            Text(
-                health.level.name,
-                color = levelColor, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.background(levelColor.copy(alpha = 0.12f), CardShape)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
         }
-        Spacer(Modifier.height(12.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-            // ── Active mic / camera — most urgent, always at top ──────────────
-            // Android tells a third-party app that a recording or a camera is in use,
-            // but not which app — so nothing here names one. The status-bar privacy
-            // indicator and Settings → Privacy dashboard show the app itself.
-            // A live sensor is HIGH, not CRITICAL: it is also what every video call
-            // looks like. The banner says what is known and where to find the rest.
-            if (health.activeRecordings > 0) {
-                item(key = "mic_banner") {
-                    ActiveSensorBanner(
-                        label = "MICROPHONE ACTIVE",
-                        color = Accent,
-                        detail = if (health.activeRecordings == 1) "An app is recording audio."
-                            else "Apps are recording audio (${health.activeRecordings} active recordings).",
-                        lines = listOf(
-                            "Android does not tell Clairix which app. Tap the green privacy dot in the " +
-                                "status bar, or open Settings → Security & privacy → Privacy dashboard."
-                        )
-                    )
-                }
+        // ── Active mic / camera: the most urgent, always at the top ─────────
+        // Android tells a third-party app that a recording or a camera is in use,
+        // but not which app — so nothing here names one. The status-bar privacy
+        // indicator and Settings → Privacy dashboard show the app itself.
+        // A live sensor is caution, not danger: it is also what every video call
+        // looks like. The notice says what is known and where to find the rest.
+        if (health.activeRecordings > 0) {
+            item(key = "mic_banner") {
+                Notice(
+                    Tone.Caution,
+                    (if (health.activeRecordings == 1) "An app is recording audio right now. "
+                    else "Apps are recording audio right now (${health.activeRecordings} recordings). ") + SENSOR_HINT,
+                    title = "Microphone in use"
+                )
             }
-            if (health.cameraInUse) {
-                item(key = "cam_banner") {
-                    ActiveSensorBanner(
-                        label = "CAMERA ACTIVE",
-                        color = Accent,
-                        detail = "Camera in use by another app",
-                        lines = listOf(
-                            "Android does not tell Clairix which app. Tap the green privacy dot in the " +
-                                "status bar, or open Settings → Security & privacy → Privacy dashboard."
-                        )
-                    )
-                }
+        }
+        if (health.cameraInUse) {
+            item(key = "cam_banner") {
+                Notice(Tone.Caution, "Another app is using the camera right now. $SENSOR_HINT", title = "Camera in use")
             }
-
-            if (!health.sensorActive) {
-                item(key = "sensors_ok") {
-                    Row(
-                        Modifier.fillMaxWidth().clip(CardShape).background(Panel)
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // With the scanner off nobody is watching the sensors, so
-                        // nothing can be asserted about them.
-                        Canvas(Modifier.size(8.dp)) { drawCircle(if (liveMonitoring) Clear else Muted) }
-                        Text(
-                            if (liveMonitoring) "No app is currently using the microphone or camera"
-                            else "Live mic/camera monitoring runs while scanning is on",
-                            color = if (liveMonitoring) Clear else Muted, fontSize = 13.sp
-                        )
-                    }
-                }
+        }
+        if (!health.sensorActive && !liveMonitoring) {
+            item(key = "sensors_off") {
+                Text(
+                    "Microphone and camera use is only watched while scanning is on.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = c.textSubtle,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
+        }
 
-            // ── Divider ────────────────────────────────────────────────────────
-            item(key = "div") { Spacer(Modifier.height(4.dp)) }
-
-            // ── Verdict ────────────────────────────────────────────────────────
-            if (health.findingsScannedTs == 0L) {
-                item(key = "checking") {
-                    Column(
-                        Modifier.fillMaxWidth().clip(CardShape).background(Panel).padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text("Checking…", color = InkDim, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Root, bootloader, verified boot, SELinux, encryption, debug interfaces, accessibility " +
-                                "services, device admins and known spyware packages.",
-                            color = Muted, fontSize = 12.sp
-                        )
-                    }
-                }
-            } else if (health.findings.isEmpty() && problems.isEmpty()) {
-                item(key = "all_clear") {
-                    Column(
-                        Modifier.fillMaxWidth().clip(CardShape).background(Panel).padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text("No issues found", color = Clear, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "$checked checks passed: no root, locked bootloader, verified boot, debug interfaces off, " +
-                                "no accessibility services, device admins or known spyware. Checked ${fmtClock(health.findingsScannedTs)}.",
-                            color = Muted, fontSize = 12.sp, lineHeight = 16.sp
-                        )
-                    }
-                }
-            } else {
-                item(key = "summary") {
-                    val worst = health.level
-                    val col = threatColor(worst)
-                    Column(
-                        Modifier.fillMaxWidth().clip(CardShape).background(col.copy(alpha = 0.12f))
-                            .border(1.dp, col.copy(alpha = 0.5f), CardShape).padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            "${plural(health.findings.size + problems.size, "issue")} on $checked checks",
-                            color = col, fontSize = 13.sp, fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            (health.findings.map { it.title } + problems.map { "${it.label}: ${it.value}" })
-                                .take(4).joinToString(" · ") + if (health.findings.size + problems.size > 4) " · …" else "",
-                            color = InkDim, fontSize = 12.sp, lineHeight = 16.sp
-                        )
-                        Text("Checked ${fmtClock(health.findingsScannedTs)}", color = Muted, fontSize = 11.sp)
-                    }
-                }
+        // ── Findings: things installed or granted that need acting on ────────
+        if (health.findings.isNotEmpty()) {
+            item(key = "findings_head") {
+                SectionHeader("Apps with spy-level access", supporting = "${health.findings.size}", tone = Tone.Danger)
             }
+            items(health.findings, key = { it.id }) { f -> HealthFindingRow(f) }
+        }
 
-            // ── Findings: things installed or granted that need acting on ────────
-            if (health.findings.isNotEmpty()) {
-                item(key = "findings_head") {
-                    Text(
-                        "APPS WITH SURVEILLANCE-GRADE ACCESS (${health.findings.size})", color = Critical,
-                        fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+        // ── Checklist ───────────────────────────────────────────────────────
+        if (health.facts.isNotEmpty()) {
+            val groups = health.facts.groupBy { it.category }
+            val order = listOf("Integrity", "Access", "Software", "Network", "Hardware")
+            for (cat in order + (groups.keys - order.toSet())) {
+                val rows = groups[cat] ?: continue
+                item(key = "cat_$cat") {
+                    val flagged = rows.count { it.severity != null && it.severity.ordinal >= Severity.MEDIUM.ordinal }
+                    SectionHeader(cat, supporting = if (flagged > 0) "$flagged to check" else "All passed")
                 }
-                items(health.findings, key = { it.id }) { f -> HealthFindingRow(f) }
-            }
-
-            // ── Checklist ───────────────────────────────────────────────────────
-            if (health.facts.isNotEmpty()) {
-                val groups = health.facts.groupBy { it.category }
-                val order = listOf("Integrity", "Access", "Software", "Network", "Hardware")
-                for (cat in order + (groups.keys - order.toSet())) {
-                    val rows = groups[cat] ?: continue
-                    item(key = "cat_$cat") {
-                        Text(
-                            cat.uppercase(Locale.US), color = Muted, fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
-                    item(key = "facts_$cat") {
-                        Column(
-                            Modifier.fillMaxWidth().clip(CardShape).background(Panel).padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            rows.forEachIndexed { i, f ->
-                                if (i > 0) Hairline()
-                                HealthFactRow(f)
-                            }
+                item(key = "facts_$cat") {
+                    ListGroup {
+                        rows.forEachIndexed { i, f ->
+                            if (i > 0) Hairline()
+                            HealthFactRow(f)
                         }
                     }
                 }
             }
-
-            item(key = "§footer") { Spacer(Modifier.height(24.dp)) }
         }
     }
+}
+
+/** Where Android shows which app holds the microphone or camera. */
+private const val SENSOR_HINT =
+    "Android doesn't tell Clairix which app. Tap the green privacy dot in the status bar, or open " +
+        "Settings → Security & privacy → Privacy dashboard."
+
+@Composable
+private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
+    val sensor = when {
+        health.activeRecordings > 0 && health.cameraInUse -> "Mic and camera on"
+        health.activeRecordings > 0 -> "Mic in use"
+        health.cameraInUse -> "Camera in use"
+        else -> null
+    }
+    val (headline, body, tone) = when {
+        health.findingsScannedTs == 0L -> Triple(
+            "Checking",
+            "Root, bootloader, verified boot, SELinux, encryption, debug access, accessibility services, " +
+                "device admins and known spyware.",
+            Tone.Neutral
+        )
+        issues > 0 -> Triple(
+            if (issues == 1) "1 to fix" else "$issues to fix",
+            (health.findings.map { it.title } + health.problems.map { it.label })
+                .take(3).joinToString(" · ") + if (issues > 3) " · and more" else "",
+            if (health.level.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
+        )
+        sensor != null -> Triple(
+            sensor,
+            "No spyware or risky settings found in $checked checks. Something is using a sensor right now; see below.",
+            Tone.Caution
+        )
+        else -> Triple(
+            "Phone clear",
+            "$checked checks passed. No root, debug access, unknown admins or known spyware. " +
+                "Checked ${fmtClock(health.findingsScannedTs)}.",
+            Tone.Safe
+        )
+    }
+    StatusHero(
+        eyebrow = "Phone check",
+        headline = headline,
+        body = body,
+        tone = tone,
+        modifier = Modifier.padding(top = 8.dp)
+    )
 }
 
 @Composable
 private fun HealthFactRow(f: HealthFact) {
-    val col = when (f.severity) {
-        null -> Clear
-        Severity.LOW -> Muted
-        Severity.MEDIUM -> Caution
-        Severity.HIGH -> Accent
-        Severity.CRITICAL -> Critical
-    }
-    // Purely informational rows (a version number, a battery level) get a neutral dot;
-    // a check that passed gets green; a problem gets its severity's colour.
+    val c = ClairixTheme.colors
+    // Purely informational rows (a version number, a battery level) get a neutral
+    // mark; a check that passed gets safe; a problem gets its severity's tone.
     val informational = f.severity == null && INFORMATIONAL_FACTS.contains(f.id)
-    val dot = if (informational) Rule else col
-    Column(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Canvas(Modifier.size(7.dp)) { drawCircle(dot) }
-            Text(f.label, color = InkDim, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    val tone = when {
+        f.severity != null -> f.severity.tone()
+        informational -> Tone.Neutral
+        else -> Tone.Safe
+    }
+    val mark = when {
+        informational -> c.borderStrong
+        tone == Tone.Neutral -> c.textSubtle
+        else -> tone.color()
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .semantics(mergeDescendants = true) {},
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(8.dp).background(mark, ClairixShapes.Tag))
+            Text(f.label, style = MaterialTheme.typography.bodyMedium, color = c.text, modifier = Modifier.weight(1f))
             Text(
-                f.value, color = if (f.severity == null) (if (informational) InkDim else Ink) else col,
-                fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                fontWeight = if (f.severity != null && f.severity.ordinal >= Severity.MEDIUM.ordinal) FontWeight.Bold else FontWeight.Normal,
-                textAlign = TextAlign.End, modifier = Modifier.weight(1.4f)
+                f.value,
+                style = MaterialTheme.typography.mono,
+                color = if (f.severity == null) c.textMuted else tone.color(),
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f)
             )
         }
         if (f.detail != null) {
-            Text(f.detail, color = if (f.severity == null) Muted else col.copy(alpha = 0.9f), fontSize = 11.sp, lineHeight = 15.sp,
-                modifier = Modifier.padding(start = 15.dp))
+            Text(
+                f.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (f.severity == null) c.textSubtle else tone.color(),
+                modifier = Modifier.padding(start = 20.dp)
+            )
         }
     }
 }
 
-/** Checklist rows that describe rather than judge, so a green dot would overclaim. */
+/** Checklist rows that describe rather than judge, so a safe mark would overclaim. */
 private val INFORMATIONAL_FACTS = setOf(
     "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always"
 )
 
 @Composable
-private fun ActiveSensorBanner(label: String, color: Color, detail: String, lines: List<String>) {
-    Row(
-        Modifier.fillMaxWidth().clip(CardShape).background(color.copy(alpha = 0.15f))
-            .border(1.dp, color.copy(alpha = 0.6f), CardShape).padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Canvas(Modifier.size(8.dp).padding(top = 3.dp)) { drawCircle(color) }
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
-            Text(detail, color = Ink, fontSize = 13.sp)
-            lines.forEach { line ->
-                Text("  • $line", color = InkDim, fontSize = 12.sp)
-            }
-        }
-    }
-}
-
-@Composable
 private fun HealthFindingRow(f: PhoneHealthFinding) {
-    val stripe = when (f.severity) {
-        Severity.CRITICAL -> Critical
-        Severity.HIGH -> Critical
-        Severity.MEDIUM -> Caution
-        Severity.LOW -> Muted
-    }
-    Row(Modifier.fillMaxWidth().clip(CardShape).background(Panel).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    f.title, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                ThreatBadge(f.severity.name, stripe)
-            }
-            Text(f.category, color = Accent, fontSize = 11.sp, letterSpacing = 0.5.sp)
-            Text(f.detail, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+    val c = ClairixTheme.colors
+    val tone = f.severity.tone()
+    ClairixCard(tone = tone, emphasis = f.severity == Severity.CRITICAL, spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(f.title, style = MaterialTheme.typography.titleSmall, color = c.text, modifier = Modifier.weight(1f))
+            StatusPill(levelLabel(f.severity.name), tone)
         }
+        Text(f.category, style = MaterialTheme.typography.labelMedium, color = c.textMuted)
+        Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
     }
 }
 
@@ -3654,7 +3366,7 @@ private fun WifiScreen(onShown: () -> Unit = {}) {
     }
 
     // Android allows four scan requests per two minutes in the foreground; every
-    // 30 s uses that budget exactly while the tab is open.
+    // 30 s uses that budget exactly while the screen is open.
     LaunchedEffect(Unit) {
         while (true) {
             onShown()
@@ -3665,90 +3377,100 @@ private fun WifiScreen(onShown: () -> Unit = {}) {
     val conn = wifi.connection
     val flagged = wifi.nearby.count { it.flags.isNotEmpty() }
     val open = wifi.nearby.count { !it.security.secure }
+    val high = sorted.count { it.threat.ordinal >= Threat.HIGH.ordinal }
+    val c = ClairixTheme.colors
 
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item(key = "§header") {
-            Column(Modifier.padding(top = 20.dp)) {
-                Text("WI-FI", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text("Your connection, everything in range, and the networks that are bait", color = Muted, fontSize = 12.sp)
-            }
+    ScreenList {
+        // ── Status first ──
+        item(key = "§hero") {
+            StatusHero(
+                eyebrow = "Wi-Fi",
+                headline = when {
+                    high > 0 -> if (high == 1) "Bait network" else "$high bait networks"
+                    sorted.isNotEmpty() -> "Worth a look"
+                    conn != null && !conn.security.secure -> "Open network"
+                    wifi.scannedTs > 0 -> "Wi-Fi clean"
+                    else -> "Checking"
+                },
+                body = when {
+                    high > 0 -> "Networks below look built to catch your traffic. Don't join them."
+                    sorted.isNotEmpty() -> "${plural(sorted.size, "network")} nearby look off. Nothing you're joined to is flagged."
+                    conn != null && !conn.security.secure -> "You're on an unencrypted network. Anyone nearby can read what isn't end-to-end encrypted."
+                    wifi.scannedTs > 0 -> "${plural(wifi.nearby.size, "network")} in range, none flagged. Checked ${fmtAgo(now, wifi.scannedTs)}."
+                    else -> "Reading what's in range. Results fill in within a few seconds."
+                },
+                tone = when {
+                    high > 0 || (conn != null && !conn.security.secure) -> Tone.Danger
+                    sorted.isNotEmpty() -> Tone.Caution
+                    wifi.scannedTs > 0 -> Tone.Safe
+                    else -> Tone.Neutral
+                },
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
 
-        // ── Anomalies first: they are the reason to look ───────────────────────
+        // ── Findings: suspicious networks are the reason to look ───────────
         if (sorted.isNotEmpty()) {
             item(key = "§anomaly-head") {
-                val high = sorted.count { it.threat.ordinal >= Threat.HIGH.ordinal }
-                Text(
-                    "SUSPICIOUS NETWORKS (${sorted.size})" + if (high > 0) " · $high high" else "",
-                    color = if (high > 0) Critical else Accent, fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold, letterSpacing = 1.sp
+                SectionHeader(
+                    "Suspicious networks",
+                    supporting = "${sorted.size}" + if (high > 0) " · $high high" else "",
+                    tone = if (high > 0) Tone.Danger else Tone.Caution
                 )
             }
             itemsIndexed(sorted, key = { i, a -> "anomaly|${a.bssid}|${a.reason}|$i" }) { _, a -> WifiRow(a) }
         }
 
         // ── Connected network ─────────────────────────────────────────────────
+        item(key = "§conn-head") { SectionHeader("Your connection") }
         if (!wifi.available) {
             item(key = "§unavailable") {
-                Column(Modifier.fillMaxWidth().background(Panel, CardShape).padding(16.dp)) {
-                    Text(wifi.reason ?: "Reading the Wi-Fi radio…", color = InkDim, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
+                EmptyState(title = wifi.reason ?: "Reading the Wi-Fi radio…", body = "Connection details appear here once Wi-Fi reports in.", icon = ClairixIcons.Wifi)
             }
         } else if (conn == null) {
             item(key = "§disconnected") {
-                Column(Modifier.fillMaxWidth().background(Panel, CardShape).padding(14.dp)) {
-                    Text("Not connected to Wi-Fi", color = InkDim, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Wi-Fi is on; the phone is not joined to a network.", color = Muted, fontSize = 12.sp)
-                }
+                EmptyState(title = "Not connected", body = "Wi-Fi is on, but the phone hasn't joined a network.", icon = ClairixIcons.Wifi)
             }
         } else {
             item(key = "§connected") {
-                val secCol = if (conn.security.secure) Clear else Critical
-                PanelBox {
-                    SectionLabel("CONNECTED")
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SignalBars(conn.level, color = signalColor(conn.level))
+                ClairixCard(spacing = 4.dp, tone = if (conn.security.secure) null else Tone.Danger) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SignalBars(conn.level, tone = signalTone(conn.level))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                conn.ssid ?: "<name withheld — location off?>", color = Ink, fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                conn.ssid ?: "Name hidden (is location off?)",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = c.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Text(conn.bssid ?: "BSSID unavailable", color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            Text(conn.bssid ?: "BSSID unavailable", style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
                         }
-                        ThreatBadge(conn.security.label.uppercase(Locale.US), secCol)
+                        StatusPill(conn.security.label, if (conn.security.secure) Tone.Safe else Tone.Danger)
                     }
                     Spacer(Modifier.height(4.dp))
-                    CellInfoRow("Signal", "${fmtDbm(conn.rssi)} · ${signalWord(conn.level, Rat.UNKNOWN).substringBefore(" (")}")
-                    CellInfoRow("Frequency", buildString {
+                    KeyValueRow("Signal", "${fmtDbm(conn.rssi)} · ${signalWord(conn.level, Rat.UNKNOWN).substringBefore(" (")}")
+                    KeyValueRow("Frequency", buildString {
                         append(conn.band)
                         if (conn.frequencyMhz > 0) append(" · ${conn.frequencyMhz} MHz")
                         conn.channel?.let { append(" · ch $it") }
                     })
-                    conn.standard?.let { CellInfoRow("Standard", it) }
-                    CellInfoRow("Security", conn.security.label, if (conn.security.secure) InkDim else Critical)
+                    conn.standard?.let { KeyValueRow("Standard", it) }
+                    KeyValueRow("Security", conn.security.label, valueColor = if (conn.security.secure) null else c.danger)
                     val speed = listOfNotNull(
                         conn.txMbps?.let { "↑$it" }, conn.rxMbps?.let { "↓$it" }
                     ).joinToString(" ").ifBlank { conn.linkSpeedMbps?.toString() ?: "" }
-                    if (speed.isNotBlank()) CellInfoRow("Link speed", "$speed Mbps")
-                    Hairline()
-                    CellInfoRow("IPv4", conn.ipv4 ?: "none")
-                    conn.ipv6?.let { CellInfoRow("IPv6", it) }
-                    CellInfoRow("Gateway", conn.gateway ?: "unknown")
-                    CellInfoRow(
-                        "DNS",
-                        if (conn.dnsServers.isEmpty()) "none" else conn.dnsServers.joinToString("\n")
-                    )
-                    CellInfoRow(
-                        "Private DNS", conn.privateDns ?: "Off",
-                        if (conn.privateDns != null) Clear else InkDim
-                    )
-                    CellInfoRow("VPN", if (conn.vpnActive) "Active" else "None", if (conn.vpnActive) Clear else InkDim)
-                    if (conn.metered) CellInfoRow("Metered", "Yes")
+                    if (speed.isNotBlank()) KeyValueRow("Link speed", "$speed Mbps")
+                    Hairline(Modifier.padding(vertical = 4.dp))
+                    KeyValueRow("IPv4", conn.ipv4 ?: "None")
+                    conn.ipv6?.let { KeyValueRow("IPv6", it) }
+                    KeyValueRow("Gateway", conn.gateway ?: "Unknown")
+                    KeyValueRow("DNS", if (conn.dnsServers.isEmpty()) "None" else conn.dnsServers.joinToString("\n"))
+                    KeyValueRow("Private DNS", conn.privateDns ?: "Off", valueColor = if (conn.privateDns != null) c.safe else null)
+                    KeyValueRow("VPN", if (conn.vpnActive) "Active" else "None", valueColor = if (conn.vpnActive) c.safe else null)
+                    if (conn.metered) KeyValueRow("Metered", "Yes")
                     conn.flags.forEach { flag ->
-                        WarningLine(flag, color = if (conn.security.secure) Caution else Critical, fontSize = 11, modifier = Modifier.padding(top = 2.dp))
+                        WarningLine(flag, if (conn.security.secure) Tone.Caution else Tone.Danger, Modifier.padding(top = 4.dp))
                     }
                 }
             }
@@ -3757,105 +3479,105 @@ private fun WifiScreen(onShown: () -> Unit = {}) {
         // ── Nearby ────────────────────────────────────────────────────────────
         if (wifi.available) {
             item(key = "§nearby-head") {
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "IN RANGE (${wifi.nearby.size})", color = InkDim, fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        buildString {
-                            if (open > 0) append("$open open · ")
-                            if (flagged > 0) append("$flagged flagged · ")
-                            append(if (wifi.scannedTs > 0) fmtAgo(now, wifi.scannedTs) else "—")
-                        },
-                        color = if (flagged > 0) Caution else Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace
-                    )
-                }
+                SectionHeader(
+                    "In range",
+                    supporting = buildString {
+                        append("${wifi.nearby.size}")
+                        if (open > 0) append(" · $open open")
+                        if (flagged > 0) append(" · $flagged flagged")
+                    }
+                )
             }
             if (wifi.nearby.isEmpty()) {
                 item(key = "§none-nearby") {
                     Text(
-                        "No scan results yet. Android hands out cached results; a fresh scan has been requested and the list fills in within a few seconds.",
-                        color = Muted, fontSize = 12.sp, lineHeight = 16.sp
+                        "No scan results yet. Android hands out cached results first; a fresh scan has been asked for and the list fills in within a few seconds.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
                     )
                 }
+            } else {
+                item(key = "§nearby") {
+                    ListGroup {
+                        wifi.nearby.forEachIndexed { i, n ->
+                            if (i > 0) Hairline()
+                            NearbyWifiRow(n)
+                        }
+                    }
+                }
             }
-            items(wifi.nearby, key = { "ap|${it.bssid}" }) { n -> NearbyWifiRow(n) }
         }
-
-        item(key = "§footer") { Spacer(Modifier.height(24.dp)) }
     }
 }
 
 @Composable
 private fun NearbyWifiRow(n: WifiNetwork) {
-    val stripe = when {
-        n.flags.any { it.contains("evil twin") || it.contains("interception") || it.contains("bait") } -> Critical
-        !n.security.secure -> Accent
-        n.flags.isNotEmpty() -> Caution
-        n.connected -> Clear
-        else -> Rule
+    val c = ClairixTheme.colors
+    val tone = when {
+        n.flags.any { it.contains("evil twin") || it.contains("interception") || it.contains("bait") } -> Tone.Danger
+        !n.security.secure -> Tone.Caution
+        n.flags.isNotEmpty() -> Tone.Caution
+        n.connected -> Tone.Safe
+        else -> Tone.Neutral
     }
-    Row(Modifier.fillMaxWidth().clip(CardShape).background(Panel).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-        Row(
-            Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            SignalBars(n.level, color = signalColor(n.level), height = 16.dp)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        if (n.hidden) "<hidden>" else n.ssid, color = if (n.hidden) Muted else Ink, fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (n.connected) ThreatBadge("CONNECTED", Clear)
-                }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        SignalBars(n.level, tone = signalTone(n.level), height = 16.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "${n.bssid} · ${n.band}" + (n.channel?.let { " ch $it" } ?: "") + (n.standard?.let { " · ${it.substringBefore(" (")}" } ?: ""),
-                    color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    if (n.hidden) "Hidden network" else n.ssid,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (n.hidden) c.textSubtle else c.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
-                n.flags.forEach { flag ->
-                    WarningLine(flag, color = stripe.takeIf { it != Rule } ?: Caution, fontSize = 11)
-                }
+                if (n.connected) StatusPill("Connected", Tone.Safe)
             }
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(fmtDbm(n.rssi), color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                Text(
-                    n.security.label, color = if (n.security.secure) Muted else Critical, fontSize = 10.sp,
-                    fontWeight = if (n.security.secure) FontWeight.Normal else FontWeight.Bold
-                )
-            }
+            Text(
+                "${n.bssid} · ${n.band}" + (n.channel?.let { " ch $it" } ?: "") + (n.standard?.let { " · ${it.substringBefore(" (")}" } ?: ""),
+                style = MaterialTheme.typography.monoSmall,
+                color = c.textSubtle
+            )
+            n.flags.forEach { flag -> WarningLine(flag, if (tone == Tone.Neutral || tone == Tone.Safe) Tone.Caution else tone) }
+        }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(fmtDbm(n.rssi), style = MaterialTheme.typography.monoSmall, color = c.textMuted)
+            Text(
+                n.security.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (n.security.secure) c.textSubtle else c.caution
+            )
         }
     }
 }
 
 @Composable
 private fun WifiRow(a: WifiAnomaly) {
-    val col = threatColor(a.threat)
-    Row(Modifier.fillMaxWidth().clip(CardShape).background(Panel).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(col))
-        Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    a.ssid.ifBlank { "<hidden SSID>" }, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                ThreatBadge(a.threat.name, col)
-            }
-            Text(a.bssid, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            Text(wifiReason(a.reason), color = col, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(fmtDbm(a.rssi), color = InkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                Text(fmtTime(a.ts), color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            }
+    val c = ClairixTheme.colors
+    val tone = a.threat.tone()
+    ClairixCard(tone = tone, spacing = 4.dp) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                a.ssid.ifBlank { "Hidden network" }, style = MaterialTheme.typography.titleMedium, color = c.text,
+                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            StatusPill(levelLabel(a.threat.name), tone)
         }
+        Text(wifiReason(a.reason), style = MaterialTheme.typography.bodyMedium, color = c.text)
+        Text("${a.bssid} · ${fmtDbm(a.rssi)} · ${fmtTime(a.ts)}", style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
     }
 }
 
@@ -3866,18 +3588,14 @@ private data class ExplainerContent(
     val whatIsThis: String,
     val whatToDo: String,
     val howCertain: String,
-    val severity: Color
+    val tone: Tone
 )
 
 private fun bleExplainerContent(d: Detection): ExplainerContent {
-    val col = when (d.threat) {
-        Threat.CRITICAL -> Color(0xFFF2545B)
-        Threat.HIGH -> Color(0xFFFF7A3D)
-        else -> Color(0xFFE8B33D)
-    }
+    val tone = if (d.threat.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
     return when {
         d.following -> ExplainerContent(
-            headline = "Confirmed Following — ${d.name}",
+            headline = "Tracker on you: ${d.name}",
             whatIsThis = "A Bluetooth tracker has been verified as following your movements. " +
                 "It appeared at multiple locations ${d.displacementM.roundToInt()} metres apart while you were " +
                 "moving, which cannot be explained by proximity alone. ${d.tracker?.let { "This matches a known ${it.brand} ${it.label}." } ?: "No commercial tracker signature matched, but the movement pattern is conclusive."}",
@@ -3888,54 +3606,49 @@ private fun bleExplainerContent(d: Detection): ExplainerContent {
             howCertain = "High confidence. Confirmation requires the device to appear at locations " +
                 "${d.displacementM.roundToInt()} m apart during your movement. " +
                 "Threat score: ${d.score}/100 across ${d.sightings} sightings.",
-            severity = col
+            tone = tone
         )
         d.persistent && d.identified -> ExplainerContent(
-            headline = "Known Tracker — ${d.name}",
+            headline = "Known tracker nearby: ${d.name}",
             whatIsThis = "A ${d.tracker?.brand ?: "commercial"} ${d.tracker?.label ?: "tracker"} has been " +
                 "present for an extended period. Known trackers are purpose-built surveillance devices. " +
                 "Extended presence without confirmed movement suggests it may be attached to your vehicle or belongings.",
             whatToDo = "Monitor this device. If it remains present as you travel, it will be promoted to " +
-                "FOLLOWING status automatically. If you believe it does not belong to you, physically search " +
+                "following automatically. If you believe it does not belong to you, physically search " +
                 "your vehicle and belongings. Pay attention to whether the signal strength (RSSI) stays consistent, " +
                 "which would indicate it is on or very near your person.",
             howCertain = "Medium-to-high confidence. Device is identified as a commercial tracker with " +
                 "${d.sightings} sightings over an extended period. Following confirmation requires GPS movement. " +
                 "Threat score: ${d.score}/100.",
-            severity = col
+            tone = tone
         )
         d.persistent -> ExplainerContent(
-            headline = "Persistent Unknown Device — ${d.name}",
+            headline = "Unknown device keeps showing up: ${d.name}",
             whatIsThis = "An unidentified Bluetooth device has been present continuously for an extended period. " +
                 "This could be a benign device (a neighbour's router, a fixed sensor) or a tracker that does not " +
                 "match the known signature database. Its persistence pattern is unusual for a passing device.",
             whatToDo = "Watch for this device across different locations. If it follows you as you travel, " +
-                "it will be flagged as FOLLOWING. If it is stationary and you remain in one place, it is " +
-                "likely environmental. Mark it as TRUSTED below if you know what it is.",
+                "it will be flagged as following. If it is stationary and you remain in one place, it is " +
+                "likely part of the surroundings. Mark it as yours below if you know what it is.",
             howCertain = "Low-to-medium confidence. No known tracker signature matched — flagged on " +
                 "behaviour alone. Threat score: ${d.score}/100 over ${d.sightings} sightings.",
-            severity = col
+            tone = tone
         )
         else -> ExplainerContent(
-            headline = "${d.threat.name} Threat — ${d.name}",
+            headline = "${levelLabel(d.threat.name)} risk: ${d.name}",
             whatIsThis = "This device has characteristics associated with surveillance trackers. " +
                 "${d.tracker?.let { "It matches the signature of a ${it.brand} ${it.label}." } ?: "No exact tracker signature matched, but its signal pattern warrants monitoring."}",
             whatToDo = "Continue monitoring. The scan needs more time and movement to determine whether " +
                 "this device is following you. Keep the scan running as you travel.",
             howCertain = "Building confidence. Score ${d.score}/100 · ${d.sightings} sightings. " +
                 "GPS confirmation of following requires approximately 300 m of shared movement.",
-            severity = col
+            tone = tone
         )
     }
 }
 
 private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
-    val col = when (f.severity) {
-        Severity.CRITICAL -> Color(0xFFF2545B)
-        Severity.HIGH -> Color(0xFFFF7A3D)
-        Severity.MEDIUM -> Color(0xFFE8B33D)
-        Severity.LOW -> Color(0xFF6F7A8B)
-    }
+    val tone = f.severity.tone()
     // Findings that can fire for more than one cell carry it after a colon, so the
     // explainer keys off the heuristic name in front of it.
     val (what, todo, certain) = when (f.id.substringBefore(':')) {
@@ -4059,7 +3772,7 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
         whatIsThis = what,
         whatToDo = todo,
         howCertain = certain,
-        severity = col
+        tone = tone
     )
 }
 
@@ -4069,95 +3782,50 @@ private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit)
         is ExplainerTarget.BleDevice -> bleExplainerContent(target.detection)
         is ExplainerTarget.CellIndicator -> cellExplainerContent(target.finding)
     }
+    val c = ClairixTheme.colors
 
     Column(
         Modifier
             .fillMaxWidth()
             // These explainers run to several paragraphs. Without a scroll the tail of
-            // the text and the CLOSE button fall off the bottom of the sheet on a
+            // the text and the Close button fall off the bottom of the sheet on a
             // normal-height phone, leaving no way to read or dismiss them.
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
+            .padding(horizontal = 24.dp)
             .padding(top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Drag handle (visual only)
-        Box(
-            Modifier
-                .width(40.dp)
-                .height(4.dp)
-                .background(Muted.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
-                .align(Alignment.CenterHorizontally)
-        )
-
-        // Headline
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Text(
-                content.headline,
-                color = content.severity,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatusPill(
+                when (content.tone) {
+                    Tone.Danger -> "Act now"
+                    Tone.Caution -> "Keep watching"
+                    else -> "For your information"
+                },
+                content.tone
             )
         }
-
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Rule))
-
-        // What is this?
-        ExplainerSection(
-            heading = "WHAT IS THIS?",
-            body = content.whatIsThis,
-            headingColor = Accent
+        Text(
+            content.headline,
+            style = MaterialTheme.typography.headlineSmall,
+            color = c.text,
+            modifier = Modifier.semantics { heading() }
         )
 
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Rule))
+        // Most useful first: what to do, then what it is, then how sure.
+        ExplainerSection("What to do", content.whatToDo, Tone.Accent)
+        ExplainerSection("What this is", content.whatIsThis, Tone.Neutral)
+        ExplainerSection("How sure we are", content.howCertain, Tone.Neutral)
 
-        // What should I do?
-        ExplainerSection(
-            heading = "WHAT SHOULD I DO?",
-            body = content.whatToDo,
-            headingColor = Accent
-        )
-
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Rule))
-
-        // How certain is this?
-        ExplainerSection(
-            heading = "HOW CERTAIN IS THIS?",
-            body = content.howCertain,
-            headingColor = Muted
-        )
-
-        // Dismiss button
-        TextButton(
-            onClick = onDismiss,
-            shape = RoundedCornerShape(4.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("CLOSE", color = Muted, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-        }
+        PrimaryButton("Got it", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun ExplainerSection(heading: String, body: String, headingColor: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            heading,
-            color = headingColor,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp
-        )
-        Text(
-            body,
-            color = InkDim,
-            fontSize = 13.sp,
-            lineHeight = 19.sp
-        )
+private fun ExplainerSection(heading: String, body: String, tone: Tone) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SectionHeader(heading, tone = tone)
+        Text(body, style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.textMuted)
     }
 }
+

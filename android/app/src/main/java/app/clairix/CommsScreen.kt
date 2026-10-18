@@ -38,6 +38,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -117,22 +120,23 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.monoLarge
+import app.clairix.ui.theme.mono
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.Tone
+import app.clairix.ui.components.ClairixCard
+import app.clairix.ui.components.Hairline
+import app.clairix.ui.components.SectionHeader
+import app.clairix.ui.components.StatusPill
+import app.clairix.ui.components.ToggleRow
+import app.clairix.ui.components.clairixTextFieldColors
 
 // ── Colour tokens local to this file ──────────────────────────────────────────
-
-private val CGround   = Color(0xFF0E1116)
-private val CPanel    = Color(0xFF161B23)
-private val CPanelHi  = Color(0xFF1D2430)
-private val CInk      = Color(0xFFE6EAF1)
-private val CInkDim   = Color(0xFFA8B2C1)
-private val CMuted    = Color(0xFF6F7A8B)
-private val CRule     = Color(0xFF262E3A)
-private val CAccent   = Color(0xFFFF7A3D)
-private val CCritical = Color(0xFFF2545B)
-private val CCaution  = Color(0xFFE8B33D)
-private val CClear    = Color(0xFF3DB88A)
-private val CBlue     = Color(0xFF4A8FD4)
-private val CShape    = RoundedCornerShape(4.dp)
 
 private val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
 private val dateTimeFmt = SimpleDateFormat("MMM d HH:mm", Locale.US)
@@ -278,80 +282,32 @@ fun CommsScreen(
 
 // ── Shared pieces ────────────────────────────────────────────────────────────
 
-@Composable
-private fun fieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = CInk, unfocusedTextColor = CInk,
-    focusedBorderColor = CAccent, unfocusedBorderColor = CRule,
-    focusedLabelColor = CAccent, unfocusedLabelColor = CMuted,
-    cursorColor = CAccent, focusedContainerColor = CPanel, unfocusedContainerColor = CPanel
-)
-
+/**
+ * The heading of a Comms page, under the shell's top bar: a back arrow when the
+ * page is nested, the page title, then the page's actions.
+ */
 @Composable
 private fun Header(title: String, onBack: (() -> Unit)? = null, trailing: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         if (onBack != null) {
-            TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) {
-                Text("‹ BACK", color = CAccent, fontSize = 13.sp, letterSpacing = 1.sp)
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = ClairixTheme.colors.text)
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(4.dp))
         }
-        Text(title, color = CInk, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            color = ClairixTheme.colors.text,
+            modifier = Modifier.weight(1f).semantics { heading() },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
         trailing()
     }
-}
-
-@Composable
-private fun Card(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().background(CPanel, CShape).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
-}
-
-@Composable
-private fun SmallButton(label: String, colour: Color = CInkDim, enabled: Boolean = true, onClick: () -> Unit) {
-    TextButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-        Text(label, color = if (enabled) colour else CMuted, fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun PrimaryButton(label: String, enabled: Boolean = true, colour: Color = CAccent, onClick: () -> Unit) {
-    Button(
-        onClick = onClick, enabled = enabled,
-        colors = ButtonDefaults.buttonColors(containerColor = colour, contentColor = Color(0xFF12161D), disabledContainerColor = CPanelHi, disabledContentColor = CMuted),
-        shape = CShape, modifier = Modifier.fillMaxWidth()
-    ) { Text(label, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp) }
-}
-
-@Composable
-private fun ToggleRow(label: String, detail: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(detail, color = CMuted, fontSize = 11.sp, lineHeight = 15.sp)
-        }
-        Switch(
-            checked = checked, onCheckedChange = onChange, enabled = enabled,
-            colors = SwitchDefaults.colors(checkedThumbColor = CGround, checkedTrackColor = CAccent, uncheckedThumbColor = CInkDim, uncheckedTrackColor = CPanelHi, uncheckedBorderColor = CRule)
-        )
-    }
-}
-
-@Composable
-private fun SectionLabel(text: String, colour: Color = CMuted) {
-    Text(text, color = colour, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-}
-
-@Composable
-private fun Hairline() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(CRule))
-}
-
-/** A short upper-case tag, such as a member's role. */
-@Composable
-private fun Badge(label: String, colour: Color) {
-    Text(
-        label, color = colour, fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-        modifier = Modifier.background(colour.copy(alpha = 0.12f), RoundedCornerShape(3.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
-    )
 }
 
 private fun hasMicrophone(context: Context) =
@@ -496,117 +452,134 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Text("COMMS", color = CInk, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Text("End-to-end encrypted messaging between Clairix apps, through a relay you run", color = CMuted, fontSize = 12.sp)
+        Text("COMMS", style = MaterialTheme.typography.headlineSmall, color = ClairixTheme.colors.text)
+        Text("End-to-end encrypted messaging between Clairix apps, through a relay you run", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
 
         if (invite != null) {
-            Card {
-                Text("Join with an invite", color = CInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text("Invited by", color = CMuted, fontSize = 11.sp)
-                Text(invite.name.ifBlank { formatClairixNumber(invite.number) }, color = CAccent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("${formatClairixNumber(invite.number)} · ${invite.relayUrl.removePrefix("https://")}", color = CInkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            ClairixCard {
+                Text("Join with an invite", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text("Invited by", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                Text(invite.name.ifBlank { formatClairixNumber(invite.number) }, style = MaterialTheme.typography.headlineMedium, color = ClairixTheme.colors.accent)
+                Text("${formatClairixNumber(invite.number)} · ${invite.relayUrl.removePrefix("https://")}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
                 Text(
                     "This phone makes its own keys and gets its own Clairix number on their relay. " +
                         "${invite.name.ifBlank { "They" }} will be in your contacts, verified, with a first message telling them you joined.",
-                    color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
-                    label = { Text("Your name shown to contacts (optional)", fontSize = 12.sp) },
-                    singleLine = true, modifier = Modifier.fillMaxWidth(), colors = fieldColors()
+                    label = { Text("Your name shown to contacts (optional)", style = MaterialTheme.typography.bodyMedium) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
                 ToggleRow(
-                    "Listed number",
-                    if (listed) "Anyone with your number on this relay can add you." else "Unlisted: people can add you only by scanning your code. You can change this later.",
-                    listed
-                ) { listed = it }
-                state.error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
-                PrimaryButton(if (state.busy) "REGISTERING…" else "REGISTER", enabled = !state.busy) {
-                    scope.launch { CommsRepository.register(invite.relayUrl, "", name, listed, invite) }
-                }
-                SmallButton("USE A RELAY URL AND SECRET INSTEAD", CMuted) { onInvite(null) }
+                    title = "Listed number",
+                    checked = listed,
+                    onCheckedChange = { listed = it },
+                    subtitle = if (listed) "Anyone with your number on this relay can add you." else "Unlisted: people can add you only by scanning your code. You can change this later."
+                )
+                state.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+                PrimaryButton(
+                    if (state.busy) "Registering…" else "Register",
+                    onClick = {
+                        scope.launch { CommsRepository.register(invite.relayUrl, "", name, listed, invite) }
+                    },
+                    enabled = !state.busy,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                GhostButton("Use a relay URL and secret instead", onClick = { onInvite(null) }, tone = Tone.Neutral)
             }
-            Card {
-                Text("Not a phone number", color = CCaution, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(NOT_A_PHONE, color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
+            ClairixCard {
+                Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+                Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             }
             Spacer(Modifier.height(16.dp))
             return@Column
         }
 
-        Card {
-            Text("Have an invite?", color = CInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        ClairixCard {
+            Text("Have an invite?", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "Someone already on Clairix can invite you: COMMS → INVITE on their phone. Scan the QR code it shows, " +
                     "or copy the invite they sent you and paste it here. No relay URL or secret needed.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { inviteError = null; scanInvite() }, shape = CShape, border = BorderStroke(1.dp, CClear), modifier = Modifier.weight(1f)) {
-                    Text("SCAN INVITE", color = CClear, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                }
-                OutlinedButton(
+                SecondaryButton(
+                    "Scan invite",
+                    onClick = { inviteError = null; scanInvite() },
+                    modifier = Modifier.weight(1f)
+                )
+                SecondaryButton(
+                    "Paste invite",
                     onClick = { takeInvite(clipboard.getText()?.text?.let { PairingCode.fromText(it) }) },
-                    shape = CShape, border = BorderStroke(1.dp, CAccent), modifier = Modifier.weight(1f)
-                ) {
-                    Text("PASTE INVITE", color = CAccent, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                }
+                    modifier = Modifier.weight(1f)
+                )
             }
-            inviteError?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+            inviteError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
 
-        Card {
-            Text("Or run your own relay", color = CInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        ClairixCard {
+            Text("Or run your own relay", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "Deploy comms-worker from the Clairix repository to Cloudflare, then enter its URL and the enrollment " +
                     "secret you set. This phone generates its keys here, never shares the private half, and the relay " +
                     "hands it a random nine-digit Clairix number. Clairix then keeps a quiet background connection to the " +
                     "relay so messages arrive and calls ring while it is closed; SETTINGS → Online switches that off.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
             OutlinedTextField(
                 value = url, onValueChange = { url = it },
-                label = { Text("Relay URL", fontSize = 12.sp) },
-                placeholder = { Text("https://relay.clairix.app", fontSize = 12.sp, color = CMuted) },
+                label = { Text("Relay URL", style = MaterialTheme.typography.bodyMedium) },
+                placeholder = { Text("https://relay.clairix.app", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors()
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = clairixTextFieldColors()
             )
             OutlinedTextField(
                 value = secret, onValueChange = { secret = it },
-                label = { Text("Enrollment secret", fontSize = 12.sp) },
+                label = { Text("Enrollment secret", style = MaterialTheme.typography.bodyMedium) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = fieldColors()
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = clairixTextFieldColors()
             )
             OutlinedTextField(
                 value = name, onValueChange = { name = it.take(40) },
-                label = { Text("Name shown to contacts (optional)", fontSize = 12.sp) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(), colors = fieldColors()
+                label = { Text("Name shown to contacts (optional)", style = MaterialTheme.typography.bodyMedium) },
+                singleLine = true, modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
             )
             ToggleRow(
-                "Listed number",
-                if (listed) "Anyone with your number on this relay can add you." else "Unlisted: people can add you only by scanning your code. You can change this later.",
-                listed
-            ) { listed = it }
-            state.error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
-            PrimaryButton(if (state.busy) "REGISTERING…" else "REGISTER", enabled = !state.busy && url.isNotBlank() && secret.isNotBlank()) {
-                scope.launch { CommsRepository.register(url, secret, name, listed) }
-            }
+                title = "Listed number",
+                checked = listed,
+                onCheckedChange = { listed = it },
+                subtitle = if (listed) "Anyone with your number on this relay can add you." else "Unlisted: people can add you only by scanning your code. You can change this later."
+            )
+            state.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+            PrimaryButton(
+                if (state.busy) "Registering…" else "Register",
+                onClick = {
+                    scope.launch { CommsRepository.register(url, secret, name, listed) }
+                },
+                enabled = !state.busy && url.isNotBlank() && secret.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
-        Card {
-            Text("Not a phone number", color = CCaution, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(NOT_A_PHONE, color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        ClairixCard {
+            Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
         }
 
-        Card {
-            Text("What is protected", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        ClairixCard {
+            Text("What is protected", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "Every message is encrypted on this phone for one contact with the Olm double ratchet (vodozemac) and " +
                     "sealed again so the relay cannot see who sent it. The relay stores only opaque envelopes, your public " +
                     "keys and a push endpoint. Contacts are pinned by their keys; scanning a code or comparing safety " +
                     "numbers in person proves nobody sits in between. Nothing here uses Google or a phone carrier.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
         Spacer(Modifier.height(16.dp))
@@ -637,19 +610,19 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("COMMS") {
-            SmallButton("INVITE", CAccent, onClick = onInvite)
-            SmallButton("GROUP", CAccent, onClick = { createGroup = true })
-            SmallButton("MY CODE", CInkDim, onClick = onMyCode)
-            SmallButton("+ ADD", CClear, onClick = { addContact = true })
+        Header("Conversations") {
+            GhostButton("Invite", onClick = onInvite)
+            GhostButton("Group", onClick = { createGroup = true })
+            GhostButton("My code", onClick = onMyCode, tone = Tone.Neutral)
+            GhostButton("+ Add", onClick = { addContact = true }, tone = Tone.Safe)
         }
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(state.number?.let { formatClairixNumber(it) } ?: "—", color = CAccent, fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                Text("Clairix number · not a phone number · Clairix apps on your relay only", color = CMuted, fontSize = 10.sp)
+                Text(state.number?.let { formatClairixNumber(it) } ?: "—", style = MaterialTheme.typography.monoLarge, color = ClairixTheme.colors.accent)
+                Text("Clairix number · not a phone number · Clairix apps on your relay only", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
             }
-            SmallButton("SETTINGS", CMuted, onClick = onSettings)
+            GhostButton("Settings", onClick = onSettings, tone = Tone.Neutral)
         }
         Spacer(Modifier.height(6.dp))
         // The socket is held open whenever this screen is up, so "Live" is the
@@ -669,18 +642,18 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
             if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
         }
         val statusColour = when {
-            !state.connected -> CCaution
-            state.online || state.pushRegistered -> CClear
-            else -> CCaution
+            !state.connected -> ClairixTheme.colors.caution
+            state.online || state.pushRegistered -> ClairixTheme.colors.safe
+            else -> ClairixTheme.colors.caution
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(statusLine, color = statusColour, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-            SmallButton(if (state.busy) "SYNCING" else "SYNC", CMuted, enabled = !state.busy) { scope.launch { CommsRepository.sync() } }
+            Text(statusLine, style = MaterialTheme.typography.monoSmall, color = statusColour, modifier = Modifier.weight(1f))
+            GhostButton(if (state.busy) "Syncing" else "Sync", onClick = { scope.launch { CommsRepository.sync() } }, tone = Tone.Neutral, enabled = !state.busy)
         }
         state.error?.let {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(it, color = CCritical, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                SmallButton("DISMISS", CMuted) { CommsRepository.clearError() }
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.weight(1f))
+                GhostButton("Dismiss", onClick = { CommsRepository.clearError() }, tone = Tone.Neutral)
             }
         }
         val batteryFree by rememberBatteryUnrestricted()
@@ -688,15 +661,17 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
             val context = LocalContext.current
             Spacer(Modifier.height(6.dp))
             Row(
-                Modifier.fillMaxWidth().background(CCaution.copy(alpha = 0.12f), CShape).padding(10.dp),
+                Modifier.fillMaxWidth().background(ClairixTheme.colors.caution.copy(alpha = 0.12f), ClairixShapes.Card).padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     "Battery saving can cut Clairix off in the background, and then calls do not ring. Allow Clairix to run unrestricted.",
-                    color = CInkDim, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.weight(1f)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textMuted,
+                    modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.width(8.dp))
-                SmallButton("ALLOW", CAccent) { openBatterySettings(context) }
+                GhostButton("Allow", onClick = { openBatterySettings(context) })
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -708,10 +683,10 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                 // Groups first: a group's stripe is always the accent colour, so
                 // the section label keeps them apart from a contact with unread messages.
                 if (groupThreads.isNotEmpty()) {
-                    item(key = "§groups") { SectionLabel("GROUPS") }
+                    item(key = "§groups") { SectionHeader("GROUPS") }
                     items(groupThreads, key = { "g:${it.group.id}" }) { gt -> GroupRow(gt, onClick = { onOpenGroup(gt.group.id) }) }
                     item(key = "§groups-end") { Hairline() }
-                    item(key = "§contacts") { SectionLabel("CONTACTS") }
+                    item(key = "§contacts") { SectionHeader("CONTACTS") }
                 }
                 if (threads.isEmpty()) {
                     item(key = "§no-contacts") { NoContactsCard() }
@@ -725,11 +700,12 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
 
 @Composable
 private fun NoContactsCard() {
-    Card {
-        Text("No contacts yet", color = CInkDim, fontSize = 14.sp)
+    ClairixCard {
+        Text("No contacts yet", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
         Text(
             "Tap + ADD and scan a contact's Clairix code, or enter their listed Clairix number. Show yours under MY CODE.",
-            color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle
         )
     }
 }
@@ -755,29 +731,33 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
     }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = CPanel,
-        title = { Text("Create a group", color = CInk, fontWeight = FontWeight.Bold) },
+        containerColor = ClairixTheme.colors.surface,
+        title = { Text("Create a group", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "A group is a conversation with several contacts at once, each message encrypted for every member. " +
                         "You start as its admin and add members from your contacts.",
-                    color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 OutlinedTextField(
                     value = groupName, onValueChange = { groupName = it.take(60) },
-                    label = { Text("Group name", fontSize = 12.sp) }, singleLine = true, enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(), colors = fieldColors()
+                    label = { Text("Group name", style = MaterialTheme.typography.bodyMedium) }, singleLine = true, enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
-                error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             }
         },
         confirmButton = {
-            TextButton(onClick = create, enabled = groupName.isNotBlank() && !busy) {
-                Text(if (busy) "CREATING…" else "CREATE", color = if (groupName.isNotBlank() && !busy) CAccent else CMuted, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            }
+            GhostButton(
+                if (busy) "Creating…" else "Create",
+                onClick = create,
+                tone = if (groupName.isNotBlank() && !busy) Tone.Accent else Tone.Neutral,
+                enabled = groupName.isNotBlank() && !busy
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
@@ -785,44 +765,54 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
 private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
     val m = t.lastMessage
     val stripe = when {
-        t.contact.keyChanged -> CCritical
-        t.unread > 0 -> CAccent
-        m?.failed == true -> CCritical
-        t.contact.verified -> CClear
-        else -> CRule
+        t.contact.keyChanged -> ClairixTheme.colors.danger
+        t.unread > 0 -> ClairixTheme.colors.accent
+        m?.failed == true -> ClairixTheme.colors.danger
+        t.contact.verified -> ClairixTheme.colors.safe
+        else -> ClairixTheme.colors.border
     }
-    Row(Modifier.fillMaxWidth().clip(CShape).background(CPanel).clickable(onClick = onClick).height(IntrinsicSize.Min)) {
+    Row(Modifier.fillMaxWidth().clip(ClairixShapes.Card).background(ClairixTheme.colors.surface).clickable(onClick = onClick).height(IntrinsicSize.Min)) {
         Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
         Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    contactLabel(t.contact), color = CInk, fontSize = 14.sp,
+                    contactLabel(t.contact),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.text,
                     fontWeight = if (t.unread > 0) FontWeight.Bold else FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (t.unread > 0) {
                     Text(
-                        t.unread.toString(), color = Color(0xFF12161D), fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.background(CAccent, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
+                        t.unread.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF12161D),
+                        modifier = Modifier.background(ClairixTheme.colors.accent, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
                     )
                     Spacer(Modifier.width(8.dp))
                 }
-                if (m != null) Text(dateTimeFmt.format(Date(m.ts)), color = CMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
             Text(
                 formatClairixNumber(t.contact.number) + when {
-                    t.contact.keyChanged -> " · KEYS CHANGED"
+                    t.contact.keyChanged -> " · Keys changed"
                     t.contact.verified -> " · verified"
                     else -> " · unverified"
                 },
-                color = if (t.contact.keyChanged) CCritical else CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                style = MaterialTheme.typography.monoSmall,
+                color = if (t.contact.keyChanged) ClairixTheme.colors.danger else ClairixTheme.colors.textSubtle
             )
             if (m != null) {
                 Text(
                     (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
-                    color = if (t.unread > 0) CInkDim else CMuted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (t.unread > 0) ClairixTheme.colors.textMuted else ClairixTheme.colors.textSubtle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (m.failed) Text(m.error ?: "Not sent", color = CCritical, fontSize = 11.sp)
+                if (m.failed) Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger)
             }
         }
     }
@@ -833,32 +823,41 @@ private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
 private fun GroupRow(gt: GroupThread, onClick: () -> Unit) {
     val m = gt.lastMessage
     val unread = gt.unread > 0
-    Row(Modifier.fillMaxWidth().clip(CShape).background(CPanel).clickable(onClick = onClick).height(IntrinsicSize.Min)) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(CAccent))
+    Row(Modifier.fillMaxWidth().clip(ClairixShapes.Card).background(ClairixTheme.colors.surface).clickable(onClick = onClick).height(IntrinsicSize.Min)) {
+        Box(Modifier.width(3.dp).fillMaxHeight().background(ClairixTheme.colors.accent))
         Box(Modifier.padding(start = 12.dp, top = 12.dp).size(28.dp), contentAlignment = Alignment.Center) {
-            GroupGlyph(if (unread) CAccent else CInkDim, Modifier.size(24.dp))
+            GroupGlyph(if (unread) ClairixTheme.colors.accent else ClairixTheme.colors.textMuted, Modifier.size(24.dp))
         }
         Column(Modifier.weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    gt.group.name, color = if (unread) CAccent else CInk, fontSize = 14.sp,
+                    gt.group.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (unread) ClairixTheme.colors.accent else ClairixTheme.colors.text,
                     fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (unread) {
                     Text(
-                        gt.unread.toString(), color = Color(0xFF12161D), fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.background(CAccent, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
+                        gt.unread.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF12161D),
+                        modifier = Modifier.background(ClairixTheme.colors.accent, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
                     )
                     Spacer(Modifier.width(8.dp))
                 }
-                if (m != null) Text(dateTimeFmt.format(Date(m.ts)), color = CMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
-            Text("${gt.memberCount} member${if (gt.memberCount == 1) "" else "s"}", color = CMuted, fontSize = 12.sp)
+            Text("${gt.memberCount} member${if (gt.memberCount == 1) "" else "s"}", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             if (m != null) {
                 Text(
                     (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
-                    color = if (unread) CInkDim else CMuted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (unread) ClairixTheme.colors.textMuted else ClairixTheme.colors.textSubtle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -899,48 +898,48 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = CPanel,
-        title = { Text("Add a contact", color = CInk, fontWeight = FontWeight.Bold) },
+        containerColor = ClairixTheme.colors.surface,
+        title = { Text("Add a contact", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "Scanning their Clairix code pins their keys directly and marks them verified. Adding by number " +
                         "asks the relay for their keys instead, so they stay unverified until you compare safety numbers.",
-                    color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
-                    label = { Text("Name (optional)", fontSize = 12.sp) }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(), colors = fieldColors()
+                    label = { Text("Name (optional)", style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
-                OutlinedButton(onClick = { error = null; scan() }, shape = CShape, border = BorderStroke(1.dp, CClear), modifier = Modifier.fillMaxWidth()) {
-                    Text("SCAN THEIR CODE", color = CClear, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                }
-                Text("or, if their number is listed", color = CMuted, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+                SecondaryButton("Scan their code", onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
+                Text("or, if their number is listed", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, modifier = Modifier.align(Alignment.CenterHorizontally))
                 OutlinedTextField(
                     value = number, onValueChange = { number = it.filter { ch -> ch.isDigit() || ch == ' ' }.take(11) },
-                    label = { Text("Clairix number (9 digits)", fontSize = 12.sp) }, singleLine = true,
+                    label = { Text("Clairix number (9 digits)", style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth(), colors = fieldColors()
+                    modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
-                Text(NOT_A_PHONE, color = CMuted, fontSize = 10.sp, lineHeight = 14.sp)
-                error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+                Text(NOT_A_PHONE, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             }
         },
         confirmButton = {
-            TextButton(
-                enabled = !state.busy && parseClairixNumber(number) != null,
+            GhostButton(
+                if (state.busy) "Looking up…" else "Add by number",
                 onClick = {
-                    error = null
-                    scope.launch {
-                        CommsRepository.addContactByNumber(number, name)
-                            .onSuccess { onAdded(it.number) }
-                            .onFailure { error = it.message }
-                    }
-                }
-            ) { Text(if (state.busy) "LOOKING UP…" else "ADD BY NUMBER", color = CAccent, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                        error = null
+                        scope.launch {
+                            CommsRepository.addContactByNumber(number, name)
+                                .onSuccess { onAdded(it.number) }
+                                .onFailure { error = it.message }
+                        }
+                    },
+                enabled = !state.busy && parseClairixNumber(number) != null
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral) }
     )
 }
 
@@ -1080,24 +1079,25 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         Spacer(Modifier.height(20.dp))
         Header(c?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
             val (label, colour) = when {
-                c == null -> "" to CMuted
-                c.keyChanged -> "KEYS CHANGED" to CCritical
-                c.verified -> "VERIFIED" to CClear
-                else -> "UNVERIFIED" to CCaution
+                c == null -> "" to ClairixTheme.colors.textSubtle
+                c.keyChanged -> "KEYS CHANGED" to ClairixTheme.colors.danger
+                c.verified -> "VERIFIED" to ClairixTheme.colors.safe
+                else -> "UNVERIFIED" to ClairixTheme.colors.caution
             }
-            if (label.isNotEmpty()) SmallButton(label, colour, onClick = onVerify)
-            SmallButton("PAY", CAccent, enabled = c != null && !c.keyChanged) { paying = true }
-            SmallButton("CALL", CClear, enabled = c != null && !c.keyChanged, onClick = placeCall)
+            if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = Tone.Neutral)
+            GhostButton("Pay", onClick = { paying = true }, enabled = c != null && !c.keyChanged)
+            GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c != null && !c.keyChanged)
         }
         Text(
             "${formatClairixNumber(peer)} · end-to-end encrypted · Clairix number, not a phone number",
-            color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+            style = MaterialTheme.typography.monoSmall,
+            color = ClairixTheme.colors.textSubtle
         )
         if (c?.keyChanged == true) {
             Spacer(Modifier.height(6.dp))
-            Column(Modifier.fillMaxWidth().background(CCritical.copy(alpha = 0.12f), CShape).padding(10.dp)) {
-                Text("This contact's keys changed", color = CCritical, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Text("They may have reinstalled Clairix, or someone may be in between. Scan their code or compare safety numbers before continuing.", color = CInkDim, fontSize = 11.sp, lineHeight = 15.sp)
+            Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.danger.copy(alpha = 0.12f), ClairixShapes.Card).padding(10.dp)) {
+                Text("This contact's keys changed", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger)
+                Text("They may have reinstalled Clairix, or someone may be in between. Scan their code or compare safety numbers before continuing.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -1107,7 +1107,8 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 item(key = "§empty") {
                     Text(
                         "No messages yet. The first one you send starts an encrypted session with ${c?.let { contactLabel(it) } ?: "this contact"}.",
-                        color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
             }
@@ -1133,19 +1134,19 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             item(key = "§footer") { Spacer(Modifier.height(4.dp)) }
         }
 
-        sendError?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+        sendError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         val pending = attachment
         if (pending != null || preparing) {
             Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp).background(CPanel, CShape).padding(8.dp),
+                Modifier.fillMaxWidth().padding(top = 8.dp).background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 val thumb = remember(pending) { pending?.thumbB64?.takeIf { it.isNotBlank() }?.let { CommsMedia.decodeB64(it, 160)?.asImageBitmap() } }
-                Box(Modifier.size(56.dp).clip(RoundedCornerShape(6.dp)).background(CPanelHi), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(56.dp).clip(RoundedCornerShape(6.dp)).background(ClairixTheme.colors.surfaceRaised), contentAlignment = Alignment.Center) {
                     if (thumb != null) Image(thumb, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                    else if (preparing) CircularProgressIndicator(color = CAccent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-                    else PictureGlyph(CMuted, Modifier.size(26.dp))
-                    if (pending?.isVideo == true) Text("▶", color = CInk, fontSize = 18.sp)
+                    else if (preparing) CircularProgressIndicator(color = ClairixTheme.colors.accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                    else PictureGlyph(ClairixTheme.colors.textSubtle, Modifier.size(26.dp))
+                    if (pending?.isVideo == true) Text("▶", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
@@ -1154,50 +1155,52 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                             pending.isVideo -> "Video · ${durationLabel(pending.durationMs)}"
                             else -> "Photo · ${pending.width}×${pending.height}"
                         },
-                        color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.titleSmall,
+                        color = ClairixTheme.colors.text
                     )
                     Text(
                         if (pending == null) "Reading and compressing the file"
                         else "${sizeLabel(pending.bytes.size.toLong())} · ${(pending.bytes.size + CommsWire.MEDIA_CHUNK_BYTES - 1) / CommsWire.MEDIA_CHUNK_BYTES} encrypted envelope(s) · type a caption below, or none",
-                        color = CMuted, fontSize = 11.sp, lineHeight = 14.sp
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
-                SmallButton("REMOVE", CMuted, enabled = !preparing) { attachment = null }
+                GhostButton("Remove", onClick = { attachment = null }, tone = Tone.Neutral, enabled = !preparing)
             }
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { attachMenu = true },
                 enabled = c != null && !c.keyChanged && attachment == null && !preparing,
-                shape = CShape, border = BorderStroke(1.dp, CRule), contentPadding = PaddingValues(0.dp),
+                shape = ClairixShapes.Card, border = BorderStroke(1.dp, ClairixTheme.colors.border), contentPadding = PaddingValues(0.dp),
                 modifier = Modifier.size(56.dp)
-            ) { PictureGlyph(if (c != null && attachment == null && !preparing) CAccent else CMuted, Modifier.size(24.dp)) }
+            ) { PictureGlyph(if (c != null && attachment == null && !preparing) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle, Modifier.size(24.dp)) }
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it.take(4000) },
-                placeholder = { Text(if (attachment != null) "Caption (optional)" else "Encrypted message", color = CMuted, fontSize = 13.sp) },
-                modifier = Modifier.weight(1f), maxLines = 5, colors = fieldColors()
+                placeholder = { Text(if (attachment != null) "Caption (optional)" else "Encrypted message", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
+                modifier = Modifier.weight(1f), maxLines = 5, colors = clairixTextFieldColors()
             )
-            Button(
+            PrimaryButton(
+                "Send",
                 onClick = {
-                    val text = draft.trim()
-                    val media = attachment
-                    if (text.isEmpty() && media == null) return@Button
-                    sendError = null
-                    draft = ""
-                    attachment = null
-                    scope.launch {
-                        if (media != null) CommsRepository.sendMedia(peer, media, text).onFailure { sendError = it.message ?: "Not sent" }
-                        else CommsRepository.send(peer, text).onFailure { sendError = it.message ?: "Not sent" }
-                    }
-                },
+                        val text = draft.trim()
+                        val media = attachment
+                        if (text.isEmpty() && media == null) return@PrimaryButton
+                        sendError = null
+                        draft = ""
+                        attachment = null
+                        scope.launch {
+                            if (media != null) CommsRepository.sendMedia(peer, media, text).onFailure { sendError = it.message ?: "Not sent" }
+                            else CommsRepository.send(peer, text).onFailure { sendError = it.message ?: "Not sent" }
+                        }
+                    },
                 enabled = (draft.isNotBlank() || attachment != null) && c != null && !preparing,
-                colors = ButtonDefaults.buttonColors(containerColor = CAccent, contentColor = Color(0xFF12161D), disabledContainerColor = CPanelHi, disabledContentColor = CMuted),
-                shape = CShape, modifier = Modifier.height(56.dp)
-            ) { Text("SEND", fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                modifier = Modifier.height(56.dp)
+            )
         }
         when {
-            !state.connected -> Text("Connecting to the relay… messages you send are queued until it is back.", color = CCaution, fontSize = 10.sp, modifier = Modifier.padding(bottom = 8.dp))
-            !state.online && !state.pushRegistered -> Text("Live while Clairix is open. Nothing arrives, and calls cannot ring, once it is closed: turn on Online or push in SETTINGS.", color = CCaution, fontSize = 10.sp, modifier = Modifier.padding(bottom = 8.dp))
+            !state.connected -> Text("Connecting to the relay… messages you send are queued until it is back.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
+            !state.online && !state.pushRegistered -> Text("Live while Clairix is open. Nothing arrives, and calls cannot ring, once it is closed: turn on Online or push in SETTINGS.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
         }
     }
 }
@@ -1221,15 +1224,16 @@ private fun MessageBubble(
         // A call or payment record: one quiet centred line in the conversation.
         val missed = m.status == STATUS_CALL && m.body.startsWith("Missed")
         val colour = when {
-            missed -> CCritical
-            m.status == STATUS_PAYMENT -> CClear
-            else -> CMuted
+            missed -> ClairixTheme.colors.danger
+            m.status == STATUS_PAYMENT -> ClairixTheme.colors.safe
+            else -> ClairixTheme.colors.textSubtle
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Text(
                 (if (mine) "↗ " else "↙ ") + m.body + " · " + timeFmt.format(Date(m.ts)),
-                color = colour, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-                modifier = Modifier.background(CPanel, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 4.dp)
+                style = MaterialTheme.typography.monoSmall,
+                color = colour,
+                modifier = Modifier.background(ClairixTheme.colors.surface, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 4.dp)
             )
         }
         return
@@ -1240,20 +1244,20 @@ private fun MessageBubble(
             Row(
                 Modifier
                     .widthIn(max = 300.dp)
-                    .background(if (mine) CPanelHi else CPanel, RoundedCornerShape(10.dp))
+                    .background(if (mine) ClairixTheme.colors.surfaceRaised else ClairixTheme.colors.surface, RoundedCornerShape(10.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Button(
                     onClick = onPlay,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (playing) CCritical else CClear, contentColor = Color(0xFF12161D)),
+                    colors = ButtonDefaults.buttonColors(containerColor = if (playing) ClairixTheme.colors.danger else ClairixTheme.colors.safe, contentColor = Color(0xFF12161D)),
                     shape = RoundedCornerShape(20.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                     modifier = Modifier.height(36.dp)
-                ) { Text(if (playing) "■ STOP" else "▶ PLAY", fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.sp) }
+                ) { Text(if (playing) "■ Stop" else "▶ Play", style = MaterialTheme.typography.labelLarge) }
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Voicemail · ${durationLabel(duration)}", color = CInk, fontSize = 13.sp)
-                    Text(timeFmt.format(Date(m.ts)), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Text("Voicemail · ${durationLabel(duration)}", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
+                    Text(timeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                 }
             }
         }
@@ -1263,13 +1267,13 @@ private fun MessageBubble(
         Column(
             Modifier
                 .widthIn(max = 300.dp)
-                .background(if (mine) CPanelHi else CPanel, RoundedCornerShape(10.dp))
+                .background(if (mine) ClairixTheme.colors.surfaceRaised else ClairixTheme.colors.surface, RoundedCornerShape(10.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Text(m.body, color = CInk, fontSize = 14.sp, lineHeight = 19.sp)
+            Text(m.body, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(timeFmt.format(Date(m.ts)), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                Text(timeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                 if (mine) {
                     DeliveryMark(m.status)
                 }
@@ -1277,8 +1281,8 @@ private fun MessageBubble(
         }
         if (m.failed) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(m.error ?: "Not sent", color = CCritical, fontSize = 11.sp, modifier = Modifier.widthIn(max = 240.dp))
-                SmallButton("RETRY", CAccent, onClick = onRetry)
+                Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger, modifier = Modifier.widthIn(max = 240.dp))
+                GhostButton("Retry", onClick = onRetry)
             }
         }
     }
@@ -1300,11 +1304,11 @@ private fun sizeLabel(bytes: Long): String = when {
 private fun DeliveryMark(status: String) {
     val size = Modifier.size(12.dp)
     when (status) {
-        "queued" -> Text("…", color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-        "sent" -> Icon(Icons.Filled.Done, contentDescription = "Sent", tint = CMuted, modifier = size)
-        "delivered" -> Icon(ClairixIcons.DoneAll, contentDescription = "Delivered", tint = CMuted, modifier = size)
-        "read" -> Icon(ClairixIcons.DoneAll, contentDescription = "Read", tint = CClear, modifier = size)
-        "failed" -> Icon(Icons.Filled.Warning, contentDescription = "Not sent", tint = CCritical, modifier = size)
+        "queued" -> Text("…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+        "sent" -> Icon(Icons.Filled.Done, contentDescription = "Sent", tint = ClairixTheme.colors.textSubtle, modifier = size)
+        "delivered" -> Icon(ClairixIcons.DoneAll, contentDescription = "Delivered", tint = ClairixTheme.colors.textSubtle, modifier = size)
+        "read" -> Icon(ClairixIcons.DoneAll, contentDescription = "Read", tint = ClairixTheme.colors.safe, modifier = size)
+        "failed" -> Icon(Icons.Filled.Warning, contentDescription = "Not sent", tint = ClairixTheme.colors.danger, modifier = size)
         else -> Unit
     }
 }
@@ -1335,7 +1339,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
         Column(
             Modifier
                 .widthIn(max = 264.dp)
-                .background(if (mine) CPanelHi else CPanel, RoundedCornerShape(10.dp))
+                .background(if (mine) ClairixTheme.colors.surfaceRaised else ClairixTheme.colors.surface, RoundedCornerShape(10.dp))
                 .padding(6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -1343,7 +1347,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                 Modifier
                     .width(width).height(height)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(CGround)
+                    .background(ClairixTheme.colors.base)
                     .clickable(enabled = complete && media != null, onClick = onOpen),
                 contentAlignment = Alignment.Center
             ) {
@@ -1353,14 +1357,16 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                         modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
                     )
                 } else {
-                    PictureGlyph(CMuted, Modifier.size(40.dp))
+                    PictureGlyph(ClairixTheme.colors.textSubtle, Modifier.size(40.dp))
                 }
                 if (media?.isVideo == true) {
                     Box(Modifier.size(52.dp).background(Color(0xAA0E1116), RoundedCornerShape(26.dp)), contentAlignment = Alignment.Center) {
-                        Text("▶", color = CInk, fontSize = 22.sp)
+                        Text("▶", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text)
                     }
                     Text(
-                        durationLabel(media.durationMs), color = CInk, fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                        durationLabel(media.durationMs),
+                        style = MaterialTheme.typography.monoSmall,
+                        color = ClairixTheme.colors.text,
                         modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0xAA0E1116), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp)
                     )
                 }
@@ -1369,22 +1375,24 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                         Modifier.fillMaxSize().background(Color(0x880E1116)),
                         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
                     ) {
-                        CircularProgressIndicator(color = CAccent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                        CircularProgressIndicator(color = ClairixTheme.colors.accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                         Spacer(Modifier.height(6.dp))
                         Text(
                             if (progress != null) "Sending ${progress.first}/${progress.second}" else "Receiving…",
-                            color = CInk, fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                            style = MaterialTheme.typography.monoSmall,
+                            color = ClairixTheme.colors.text
                         )
                     }
                 }
             }
             if (media != null && media.caption.isNotBlank()) {
-                Text(media.caption, color = CInk, fontSize = 14.sp, lineHeight = 19.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                Text(media.caption, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text, modifier = Modifier.padding(horizontal = 4.dp))
             }
             Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     (media?.let { if (it.isVideo) "Video" else "Photo" } ?: "Attachment") + (media?.let { " · ${sizeLabel(it.size)}" } ?: "") + " · " + timeFmt.format(Date(m.ts)),
-                    color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    style = MaterialTheme.typography.monoSmall,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 if (mine) {
                     DeliveryMark(m.status)
@@ -1393,8 +1401,8 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
         }
         if (m.failed) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(m.error ?: "Not sent", color = CCritical, fontSize = 11.sp, modifier = Modifier.widthIn(max = 240.dp))
-                if (mine) SmallButton("RETRY", CAccent, onClick = onRetry)
+                Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger, modifier = Modifier.widthIn(max = 240.dp))
+                if (mine) GhostButton("Retry", onClick = onRetry)
             }
         }
     }
@@ -1405,28 +1413,23 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
 private fun AttachMenu(onDismiss: () -> Unit, onGallery: () -> Unit, onPhoto: () -> Unit, onVideo: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = CPanel,
-        title = { Text("Send a photo or video", color = CInk, fontWeight = FontWeight.Bold) },
+        containerColor = ClairixTheme.colors.surface,
+        title = { Text("Send a photo or video", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "Photos are resized to at most ${CommsMedia.MAX_IMAGE_EDGE} px and sent as JPEG; videos go as they are, up to " +
                         "${CommsMedia.MAX_BYTES / (1024 * 1024)} MB. Either travels end-to-end encrypted in pieces the relay cannot read.",
-                    color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
-                OutlinedButton(onClick = onGallery, shape = CShape, border = BorderStroke(1.dp, CAccent), modifier = Modifier.fillMaxWidth()) {
-                    Text("CHOOSE FROM GALLERY", color = CAccent, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                }
-                OutlinedButton(onClick = onPhoto, shape = CShape, border = BorderStroke(1.dp, CClear), modifier = Modifier.fillMaxWidth()) {
-                    Text("TAKE A PHOTO", color = CClear, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                }
-                OutlinedButton(onClick = onVideo, shape = CShape, border = BorderStroke(1.dp, CClear), modifier = Modifier.fillMaxWidth()) {
-                    Text("RECORD A VIDEO", color = CClear, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                }
+                SecondaryButton("Choose from gallery", onClick = onGallery, modifier = Modifier.fillMaxWidth())
+                SecondaryButton("Take a photo", onClick = onPhoto, modifier = Modifier.fillMaxWidth())
+                SecondaryButton("Record a video", onClick = onVideo, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral) }
     )
 }
 
@@ -1441,7 +1444,7 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Box(Modifier.fillMaxSize().background(Color(0xF20A0D12))) {
             if (media == null) {
-                Text("This attachment cannot be shown", color = CCritical, modifier = Modifier.align(Alignment.Center))
+                Text("This attachment cannot be shown", color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
             } else if (media.isVideo) {
                 var file by remember { mutableStateOf<File?>(null) }
                 var missing by remember { mutableStateOf(false) }
@@ -1474,9 +1477,9 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
                         modifier = Modifier.fillMaxSize().padding(vertical = 48.dp)
                     )
                 } else if (missing) {
-                    Text("The video is no longer on this phone", color = CCritical, modifier = Modifier.align(Alignment.Center))
+                    Text("The video is no longer on this phone", color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
                 } else {
-                    CircularProgressIndicator(color = CAccent, modifier = Modifier.align(Alignment.Center))
+                    CircularProgressIndicator(color = ClairixTheme.colors.accent, modifier = Modifier.align(Alignment.Center))
                 }
             } else {
                 val image by produceState<ImageBitmap?>(initialValue = null, m.id) {
@@ -1488,7 +1491,7 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
                 if (bitmap != null) {
                     Image(bitmap, contentDescription = media.label(), modifier = Modifier.fillMaxSize().clickable(onClick = onDismiss), contentScale = ContentScale.Fit)
                 } else {
-                    CircularProgressIndicator(color = CAccent, modifier = Modifier.align(Alignment.Center))
+                    CircularProgressIndicator(color = ClairixTheme.colors.accent, modifier = Modifier.align(Alignment.Center))
                 }
             }
             Row(
@@ -1497,13 +1500,17 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
             ) {
                 Text(
                     media?.let { (if (it.isVideo) "Video · ${durationLabel(it.durationMs)}" else "Photo · ${it.width}×${it.height}") + " · ${sizeLabel(it.size)}" } ?: "",
-                    color = CInkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f)
+                    style = MaterialTheme.typography.monoSmall,
+                    color = ClairixTheme.colors.textMuted,
+                    modifier = Modifier.weight(1f)
                 )
-                SmallButton("CLOSE", CAccent, onClick = onDismiss)
+                GhostButton("Close", onClick = onDismiss)
             }
             if (media != null && media.caption.isNotBlank()) {
                 Text(
-                    media.caption, color = CInk, fontSize = 14.sp, lineHeight = 19.sp,
+                    media.caption,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.text,
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().fillMaxWidth().background(Color(0xB00E1116)).padding(16.dp)
                 )
             }
@@ -1554,53 +1561,56 @@ private fun PayDialog(contact: Contact, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = { if (!sending) onDismiss() },
-        containerColor = CPanel,
-        title = { Text("Pay ${contactLabel(contact)}", color = CInk, fontWeight = FontWeight.Bold) },
+        containerColor = ClairixTheme.colors.surface,
+        title = { Text("Pay ${contactLabel(contact)}", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     if (state.balance >= 0L) "Balance: ${state.balance} $COIN_SYMBOL on this relay" else "Balance: asking the relay…",
-                    color = if (coins != null && state.balance >= 0L && coins > state.balance) CCritical else CInkDim,
-                    fontSize = 12.sp, fontFamily = FontFamily.Monospace
+                    style = MaterialTheme.typography.monoSmall,
+                    color = if (coins != null && state.balance >= 0L && coins > state.balance) ClairixTheme.colors.danger else ClairixTheme.colors.textMuted
                 )
                 OutlinedTextField(
                     value = amount, onValueChange = { v -> amount = v.filter { it.isDigit() }.take(7); error = null },
                     label = { Text("Amount ($COIN_SYMBOL)") }, singleLine = true, enabled = !sending,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), colors = fieldColors()
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), colors = clairixTextFieldColors()
                 )
                 OutlinedTextField(
                     value = note, onValueChange = { note = it.take(140) },
-                    label = { Text("Note (optional, encrypted)") }, maxLines = 3, enabled = !sending, colors = fieldColors()
+                    label = { Text("Note (optional, encrypted)") }, maxLines = 3, enabled = !sending, colors = clairixTextFieldColors()
                 )
                 Text(
                     "ClairixCoin is this relay's own currency. The relay moves the coins on your signed request; the note goes to ${contactLabel(contact)} end-to-end encrypted.",
-                    color = CMuted, fontSize = 11.sp, lineHeight = 15.sp
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textSubtle
                 )
-                error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             }
         },
         confirmButton = {
-            TextButton(
-                enabled = canPay,
+            GhostButton(
+                if (sending) "Paying…" else "Pay",
                 onClick = {
-                    val value = coins ?: return@TextButton
-                    sending = true
-                    error = null
-                    scope.launch {
-                        CommsRepository.sendPayment(contact, value, note)
-                            .onSuccess {
-                                Toast.makeText(context, "Paid $value $COIN_SYMBOL to ${contactLabel(contact)}", Toast.LENGTH_SHORT).show()
-                                onDismiss()
-                            }
-                            .onFailure {
-                                sending = false
-                                error = it.message ?: "Payment failed"
-                            }
-                    }
-                }
-            ) { Text(if (sending) "PAYING…" else "PAY", color = if (canPay) CAccent else CMuted, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                        val value = coins ?: return@GhostButton
+                        sending = true
+                        error = null
+                        scope.launch {
+                            CommsRepository.sendPayment(contact, value, note)
+                                .onSuccess {
+                                    Toast.makeText(context, "Paid $value $COIN_SYMBOL to ${contactLabel(contact)}", Toast.LENGTH_SHORT).show()
+                                    onDismiss()
+                                }
+                                .onFailure {
+                                    sending = false
+                                    error = it.message ?: "Payment failed"
+                                }
+                        }
+                    },
+                tone = if (canPay) Tone.Accent else Tone.Neutral,
+                enabled = canPay
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !sending) { Text("CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral, enabled = !sending) }
     )
 }
 
@@ -1611,30 +1621,30 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
     val now = rememberTick(1_000L)
     val accept = rememberMicrophoneGate { CallManager.accept() }
     val (title, colour) = when (call.phase) {
-        CallPhase.INCOMING -> "INCOMING CALL" to CClear
-        CallPhase.DIALING -> if (call.ringing) "RINGING" to CClear else "CALLING" to CMuted
-        CallPhase.CONNECTING -> "CONNECTING" to CMuted
-        CallPhase.CONNECTED -> "ENCRYPTED CALL" to CClear
-        CallPhase.RECONNECTING -> "RECONNECTING" to CCaution
-        CallPhase.ENDED -> "CALL ENDED" to CMuted
+        CallPhase.INCOMING -> "INCOMING CALL" to ClairixTheme.colors.safe
+        CallPhase.DIALING -> if (call.ringing) "RINGING" to ClairixTheme.colors.safe else "CALLING" to ClairixTheme.colors.textSubtle
+        CallPhase.CONNECTING -> "CONNECTING" to ClairixTheme.colors.textSubtle
+        CallPhase.CONNECTED -> "ENCRYPTED CALL" to ClairixTheme.colors.safe
+        CallPhase.RECONNECTING -> "RECONNECTING" to ClairixTheme.colors.caution
+        CallPhase.ENDED -> "CALL ENDED" to ClairixTheme.colors.textSubtle
     }
     Column(
         modifier.fillMaxSize().padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(title, color = colour, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text(title, style = MaterialTheme.typography.labelSmall, color = colour)
         Spacer(Modifier.height(12.dp))
-        Text(contactLabel(call.peer), color = CInk, fontSize = 26.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Text(contactLabel(call.peer), style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
         Spacer(Modifier.height(4.dp))
         Text(
             formatClairixNumber(call.peer.number) + when {
-                call.peer.keyChanged -> " · KEYS CHANGED"
+                call.peer.keyChanged -> " · Keys changed"
                 call.peer.verified -> " · verified"
                 else -> " · unverified"
             },
-            color = if (call.peer.verified && !call.peer.keyChanged) CMuted else CCaution,
-            fontSize = 12.sp, fontFamily = FontFamily.Monospace
+            style = MaterialTheme.typography.monoSmall,
+            color = if (call.peer.verified && !call.peer.keyChanged) ClairixTheme.colors.textSubtle else ClairixTheme.colors.caution
         )
         Spacer(Modifier.height(6.dp))
         Text(
@@ -1647,14 +1657,14 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
                 call.phase == CallPhase.RECONNECTING -> "The connection dropped; bringing it back"
                 else -> "Connecting the encrypted audio"
             },
-            color = if (call.phase == CallPhase.ENDED && call.connectedAt == 0L) CCaution else CInkDim,
-            fontSize = 14.sp, fontFamily = FontFamily.Monospace
+            style = MaterialTheme.typography.mono,
+            color = if (call.phase == CallPhase.ENDED && call.connectedAt == 0L) ClairixTheme.colors.caution else ClairixTheme.colors.textMuted
         )
         Spacer(Modifier.height(48.dp))
         when (call.phase) {
             CallPhase.INCOMING -> Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                CallButton("DECLINE", CCritical) { CallManager.reject() }
-                CallButton("ACCEPT", CClear) { accept() }
+                CallButton("DECLINE", ClairixTheme.colors.danger) { CallManager.reject() }
+                CallButton("ACCEPT", ClairixTheme.colors.safe) { accept() }
             }
             CallPhase.ENDED -> Unit
             else -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -1662,7 +1672,7 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
                     ToggleChip(if (call.muted) "UNMUTE" else "MUTE", call.muted) { CallManager.toggleMute() }
                     ToggleChip("SPEAKER", call.speaker) { CallManager.toggleSpeaker() }
                 }
-                CallButton("HANG UP", CCritical) { CallManager.hangUp() }
+                CallButton("HANG UP", ClairixTheme.colors.danger) { CallManager.hangUp() }
             }
         }
         Spacer(Modifier.height(40.dp))
@@ -1671,7 +1681,9 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
                 append("End-to-end encrypted: the keys for the audio were exchanged inside your encrypted session, so the relay cannot listen or step in.")
                 if (call.relayed) append(" Audio is being forwarded by a TURN relay, which carries it but cannot decrypt it.")
             },
-            color = CMuted, fontSize = 11.sp, lineHeight = 15.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -1683,17 +1695,12 @@ private fun CallButton(label: String, colour: Color, onClick: () -> Unit) {
         colors = ButtonDefaults.buttonColors(containerColor = colour, contentColor = Color(0xFF12161D)),
         shape = RoundedCornerShape(28.dp),
         modifier = Modifier.height(56.dp).widthIn(min = 140.dp)
-    ) { Text(label, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
 }
 
 @Composable
 private fun ToggleChip(label: String, on: Boolean, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, if (on) CAccent else CRule),
-        colors = ButtonDefaults.textButtonColors(containerColor = if (on) CAccent.copy(alpha = 0.15f) else CPanel)
-    ) { Text(label, color = if (on) CAccent else CInkDim, fontSize = 12.sp, letterSpacing = 1.sp) }
+    GhostButton(label, onClick = onClick, tone = if (on) Tone.Accent else Tone.Neutral)
 }
 
 // ── Verify a contact ─────────────────────────────────────────────────────────
@@ -1731,77 +1738,76 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            containerColor = CPanel,
-            title = { Text("Remove ${contactLabel(c)}?", color = CInk, fontWeight = FontWeight.Bold) },
-            text = { Text("Their keys, the encrypted session and every message with them are deleted from this phone.", color = CInkDim, fontSize = 13.sp, lineHeight = 18.sp) },
+            containerColor = ClairixTheme.colors.surface,
+            title = { Text("Remove ${contactLabel(c)}?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            text = { Text("Their keys, the encrypted session and every message with them are deleted from this phone.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) },
             confirmButton = {
-                TextButton(onClick = { confirmDelete = false; scope.launch { CommsRepository.deleteContact(c.number); onDeleted() } }) {
-                    Text("REMOVE", color = CCritical, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                GhostButton(
+                    "Remove",
+                    onClick = { confirmDelete = false; scope.launch { CommsRepository.deleteContact(c.number); onDeleted() } },
+                    tone = Tone.Danger
+                )
             },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+            dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = false }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
         Header(contactLabel(c), onBack = onBack)
-        Text("${formatClairixNumber(c.number)} · Clairix number, not a phone number", color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        Text("${formatClairixNumber(c.number)} · Clairix number, not a phone number", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
 
-        Card {
+        ClairixCard {
             val (label, colour) = when {
-                c.keyChanged -> "KEYS CHANGED — verify again" to CCritical
-                c.verified -> "VERIFIED" to CClear
-                else -> "UNVERIFIED" to CCaution
+                c.keyChanged -> "KEYS CHANGED — verify again" to ClairixTheme.colors.danger
+                c.verified -> "VERIFIED" to ClairixTheme.colors.safe
+                else -> "UNVERIFIED" to ClairixTheme.colors.caution
             }
-            Text(label, color = colour, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = colour)
             Text(
                 if (c.verified && !c.keyChanged) "You scanned this contact's code or compared safety numbers, so their keys came from them, not from the relay."
                 else "Their keys came from the relay (or from their first message). A relay that lied could put itself in between. Verifying rules that out.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
 
-        Card {
-            Text("Safety number", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text("Both phones show the same 60 digits for this pair. Compare them in person or over a call you trust.", color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        ClairixCard {
+            Text("Safety number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text("Both phones show the same 60 digits for this pair. Compare them in person or over a call you trust.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             if (safety != null) {
                 val groups = safety.split(" ")
-                Column(Modifier.fillMaxWidth().background(CGround, CShape).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.base, ClairixShapes.Card).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     groups.chunked(4).forEach { row ->
-                        Text(row.joinToString("   "), color = CInk, fontSize = 15.sp, fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                        Text(row.joinToString("   "), style = MaterialTheme.typography.mono, color = ClairixTheme.colors.text, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SmallButton("COPY", CInkDim) { clipboard.setText(AnnotatedString(safety)) }
-                    if (!c.verified || c.keyChanged) SmallButton("THEY MATCH — MARK VERIFIED", CClear) { scope.launch { CommsRepository.markVerified(c.number) } }
+                    GhostButton("Copy", onClick = { clipboard.setText(AnnotatedString(safety)) }, tone = Tone.Neutral)
+                    if (!c.verified || c.keyChanged) GhostButton("They match — mark verified", onClick = { scope.launch { CommsRepository.markVerified(c.number) } }, tone = Tone.Safe)
                 }
             } else {
-                Text("Safety number unavailable: this device has no identity", color = CCritical, fontSize = 12.sp)
+                Text("Safety number unavailable: this device has no identity", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
             }
         }
 
-        Card {
-            Text("Or scan their code", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text("Their MY CODE screen carries their keys. A matching scan verifies them in one step.", color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
-            OutlinedButton(onClick = { error = null; scan() }, shape = CShape, border = BorderStroke(1.dp, CClear), modifier = Modifier.fillMaxWidth()) {
-                Text("SCAN THEIR CODE", color = CClear, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-            }
-            error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+        ClairixCard {
+            Text("Or scan their code", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text("Their MY CODE screen carries their keys. A matching scan verifies them in one step.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            SecondaryButton("Scan their code", onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
+            error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
 
-        Card {
-            Text("Name", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        ClairixCard {
+            Text("Name", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it.take(40) }, singleLine = true, modifier = Modifier.weight(1f), colors = fieldColors())
-                SmallButton("SAVE", CAccent, enabled = name.trim() != c.name) { scope.launch { CommsRepository.renameContact(c.number, name) } }
+                OutlinedTextField(value = name, onValueChange = { name = it.take(40) }, singleLine = true, modifier = Modifier.weight(1f), colors = clairixTextFieldColors())
+                GhostButton("Save", onClick = { scope.launch { CommsRepository.renameContact(c.number, name) } }, enabled = name.trim() != c.name)
             }
-            Text("Identity key ${c.ed25519.take(16)}…", color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("Identity key ${c.ed25519.take(16)}…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
         }
 
-        TextButton(onClick = { confirmDelete = true }, contentPadding = PaddingValues(0.dp)) {
-            Text("REMOVE CONTACT", color = CCritical, fontSize = 11.sp, letterSpacing = 1.sp)
-        }
+        GhostButton("Remove contact", onClick = { confirmDelete = true }, tone = Tone.Danger)
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -1838,54 +1844,60 @@ private fun InviteScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("INVITE", onBack = onBack)
-        Card {
-            Text("Invite someone to Clairix", color = CInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Header("Invite", onBack = onBack)
+        ClairixCard {
+            Text("Invite someone to Clairix", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "An invite lets one person get a Clairix number on your relay without the relay URL or its enrollment secret. " +
                     "It works once and expires after seven days. They start with you as a verified contact, and you get a message when they join.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
             if (invite == null) {
                 PrimaryButton(if (busy) "MAKING INVITE…" else "MAKE AN INVITE", enabled = !busy, onClick = create)
             }
-            error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+            error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
         if (invite != null) {
             val link = invite.first.inviteLink()
-            Card {
-                Text("Next to you: let them scan this", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text("In Clairix on their phone: COMMS → SCAN INVITE.", color = CMuted, fontSize = 12.sp)
+            ClairixCard {
+                Text("Next to you: let them scan this", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text("In Clairix on their phone: COMMS → SCAN INVITE.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 if (bitmap != null) {
                     Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                         Image(bitmap.asImageBitmap(), contentDescription = "Clairix invite code", modifier = Modifier.size(260.dp).clip(RoundedCornerShape(6.dp)))
                     }
                 }
             }
-            Card {
-                Text("Far away: send them the link", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            ClairixCard {
+                Text("Far away: send them the link", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
                     "The link opens a page with the Clairix download and an OPEN IN CLAIRIX button. Anyone who gets the link can use it, " +
                         "so send it only to the person you mean. Works once, until $until.",
-                    color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PrimaryButton("SHARE LINK") {
-                        val text = "Join me on Clairix for end-to-end encrypted messages and calls: $link\n" +
-                            "The invite works once, until $until."
-                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-                        runCatching { context.startActivity(Intent.createChooser(send, "Send invite").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                    }
+                    PrimaryButton(
+                        "Share link",
+                        onClick = {
+                            val text = "Join me on Clairix for end-to-end encrypted messages and calls: $link\n" +
+                                "The invite works once, until $until."
+                            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                            runCatching { context.startActivity(Intent.createChooser(send, "Send invite").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SmallButton("COPY LINK", CInkDim) { clipboard.setText(AnnotatedString(link)) }
-                    SmallButton("NEW INVITE", CInkDim, enabled = !busy) { made = null; create() }
+                    GhostButton("Copy link", onClick = { clipboard.setText(AnnotatedString(link)) }, tone = Tone.Neutral)
+                    GhostButton("New invite", onClick = { made = null; create() }, tone = Tone.Neutral, enabled = !busy)
                 }
             }
         }
-        Card {
-            Text("Not a phone number", color = CCaution, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(NOT_A_PHONE, color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        ClairixCard {
+            Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -1899,29 +1911,33 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
     val mine = CommsRepository.state.collectAsStateWithLifecycle().value.number == code.number
     AlertDialog(
         onDismissRequest = onDone,
-        containerColor = CPanel,
-        title = { Text(if (mine) "Your own invite" else "Add ${code.name.ifBlank { formatClairixNumber(code.number) }}?", color = CInk, fontWeight = FontWeight.Bold) },
+        containerColor = ClairixTheme.colors.surface,
+        title = { Text(if (mine) "Your own invite" else "Add ${code.name.ifBlank { formatClairixNumber(code.number) }}?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     if (mine) "This invite is for someone who does not have Clairix yet. Send them the link."
                     else "This phone already has a Clairix number, so the invite is not needed. You can add " +
                         "${formatClairixNumber(code.number)} as a verified contact from it; the invite stays unused.",
-                    color = CInkDim, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
-                error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             }
         },
         confirmButton = {
-            if (!mine) TextButton(onClick = {
-                scope.launch {
-                    CommsRepository.addContactFromCode(code.copy(invite = null))
-                        .onSuccess { onDone(); onAdded(it.number) }
-                        .onFailure { error = it.message }
+            if (!mine) GhostButton(
+                "Add contact",
+                onClick = {
+                    scope.launch {
+                        CommsRepository.addContactFromCode(code.copy(invite = null))
+                            .onSuccess { onDone(); onAdded(it.number) }
+                            .onFailure { error = it.message }
+                    }
                 }
-            }) { Text("ADD CONTACT", color = CAccent, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+            )
         },
-        dismissButton = { TextButton(onClick = onDone) { Text(if (mine) "OK" else "CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+        dismissButton = { GhostButton(if (mine) "OK" else "Cancel", onClick = onDone, tone = Tone.Neutral) }
     )
 }
 
@@ -1935,11 +1951,11 @@ private fun MyCodeScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("MY CODE", onBack = onBack)
-        Card {
-            Text(state.number?.let { formatClairixNumber(it) } ?: "—", color = CAccent, fontSize = 30.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            if (state.displayName.isNotBlank()) Text(state.displayName, color = CInkDim, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            Text("Clairix number · ${if (state.listed) "listed" else "unlisted"}", color = CMuted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        Header("My code", onBack = onBack)
+        ClairixCard {
+            Text(state.number?.let { formatClairixNumber(it) } ?: "—", style = MaterialTheme.typography.monoLarge, color = ClairixTheme.colors.accent, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            if (state.displayName.isNotBlank()) Text(state.displayName, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text("Clairix number · ${if (state.listed) "listed" else "unlisted"}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             if (bitmap != null) {
                 Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                     Image(bitmap.asImageBitmap(), contentDescription = "Your Clairix pairing code", modifier = Modifier.size(260.dp).clip(RoundedCornerShape(6.dp)))
@@ -1947,22 +1963,23 @@ private fun MyCodeScreen(onBack: () -> Unit) {
             }
             Text(
                 "Let a contact scan this to add you with your keys pinned and verified. The code holds your relay, number and public keys only.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.number?.let { n -> SmallButton("COPY NUMBER", CInkDim) { clipboard.setText(AnnotatedString(formatClairixNumber(n))) } }
-                code?.let { c -> SmallButton("COPY CODE TEXT", CInkDim) { clipboard.setText(AnnotatedString(c.encode())) } }
+                state.number?.let { n -> GhostButton("Copy number", onClick = { clipboard.setText(AnnotatedString(formatClairixNumber(n))) }, tone = Tone.Neutral) }
+                code?.let { c -> GhostButton("Copy code text", onClick = { clipboard.setText(AnnotatedString(c.encode())) }, tone = Tone.Neutral) }
             }
         }
-        Card {
-            Text("Not a phone number", color = CCaution, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(NOT_A_PHONE, color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        ClairixCard {
+            Text("Not a phone number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
         }
         if (myKey != null) {
-            Card {
-                Text("Identity key", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(myKey, color = CInkDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                Text("Generated on this phone; the private half never leaves it. A reinstall makes a new identity and a new number.", color = CMuted, fontSize = 11.sp, lineHeight = 15.sp)
+            ClairixCard {
+                Text("Identity key", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(myKey, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
+                Text("Generated on this phone; the private half never leaves it. A reinstall makes a new identity and a new number.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -2020,79 +2037,93 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
     if (confirmUnpair) {
         AlertDialog(
             onDismissRequest = { confirmUnpair = false },
-            containerColor = CPanel,
-            title = { Text("Give up this Clairix number?", color = CInk, fontWeight = FontWeight.Bold) },
+            containerColor = ClairixTheme.colors.surface,
+            title = { Text("Give up this Clairix number?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(
                     "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
                         "Registering again gives a different number; contacts will have to add you afresh.",
-                    color = CInkDim, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
-                TextButton(onClick = { confirmUnpair = false; scope.launch { CommsRepository.unpair() } }) {
-                    Text("DELETE EVERYTHING", color = CCritical, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                GhostButton(
+                    "Delete everything",
+                    onClick = { confirmUnpair = false; scope.launch { CommsRepository.unpair() } },
+                    tone = Tone.Danger
+                )
             },
-            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("CANCEL", color = CMuted, letterSpacing = 1.sp) } }
+            dismissButton = { GhostButton("Cancel", onClick = { confirmUnpair = false }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("COMMS SETTINGS", onBack = onBack)
-        Text("${state.number?.let { formatClairixNumber(it) } ?: "—"} on ${state.relayUrl ?: "—"}", color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        Header("Comms settings", onBack = onBack)
+        Text("${state.number?.let { formatClairixNumber(it) } ?: "—"} on ${state.relayUrl ?: "—"}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
 
-        Card {
-            Text("Delivery", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        ClairixCard {
+            Text("Delivery", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             ToggleRow(
-                "Online",
-                "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way.",
-                state.online
-            ) { CommsRepository.setOnline(it) }
+                title = "Online",
+                checked = state.online,
+                onCheckedChange = { CommsRepository.setOnline(it) },
+                subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way."
+            )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Push wake-ups", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Push wake-ups", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text(
                         if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing."
                         else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap SET UP. No Google services are used.",
-                        color = CMuted, fontSize = 11.sp, lineHeight = 15.sp
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
-                SmallButton(if (state.pushRegistered) "RENEW" else "SET UP", CAccent) {
-                    context.findActivity()?.let { CommsRepository.registerPush(it) }
-                }
+                GhostButton(
+                    if (state.pushRegistered) "Renew" else "Set up",
+                    onClick = {
+                        context.findActivity()?.let { CommsRepository.registerPush(it) }
+                    }
+                )
             }
             if (!notificationsGranted) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Notifications are off, so new messages and incoming calls will not show until you open Clairix.", color = CCaution, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                    SmallButton("ALLOW", CAccent, onClick = allowNotifications)
+                    Text("Notifications are off, so new messages and incoming calls will not show until you open Clairix.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.weight(1f))
+                    GhostButton("Allow", onClick = allowNotifications)
                 }
             } else if (!callsChannelOk) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Incoming-call notifications are switched off or set to silent, so calls do not ring or pop up. Set \"Incoming calls\" to alert.",
-                        color = CCaution, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.weight(1f)
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClairixTheme.colors.caution,
+                        modifier = Modifier.weight(1f)
                     )
-                    SmallButton("FIX", CAccent) { CommsNotifications.openCallsChannelSettings(context) }
+                    GhostButton("Fix", onClick = { CommsNotifications.openCallsChannelSettings(context) })
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (microphoneGranted) "Microphone: allowed for calls."
                     else "Microphone: not allowed. Calls cannot be made or answered until it is.",
-                    color = if (microphoneGranted) CMuted else CCaution, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.weight(1f)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (microphoneGranted) ClairixTheme.colors.textSubtle else ClairixTheme.colors.caution,
+                    modifier = Modifier.weight(1f)
                 )
-                if (!microphoneGranted) SmallButton("ALLOW", CAccent) { askMicrophone.launch(Manifest.permission.RECORD_AUDIO) }
+                if (!microphoneGranted) GhostButton("Allow", onClick = { askMicrophone.launch(Manifest.permission.RECORD_AUDIO) })
             }
             val batteryFree by rememberBatteryUnrestricted()
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (batteryFree) "Battery: unrestricted. Android will not cut the background connection."
                     else "Battery: optimised. Android may cut the background connection, and then calls do not ring.",
-                    color = if (batteryFree) CMuted else CCaution, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.weight(1f)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (batteryFree) ClairixTheme.colors.textSubtle else ClairixTheme.colors.caution,
+                    modifier = Modifier.weight(1f)
                 )
-                if (!batteryFree) SmallButton("ALLOW", CAccent) { openBatterySettings(context) }
+                if (!batteryFree) GhostButton("Allow", onClick = { openBatterySettings(context) })
             }
             var fullScreen by remember { mutableStateOf(CommsNotifications.canUseFullScreen(context)) }
             DisposableEffect(lifecycleOwner) {
@@ -2106,74 +2137,84 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Full-screen calls: off. On a locked phone an incoming call shows only as a notification.",
-                        color = CCaution, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.weight(1f)
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClairixTheme.colors.caution,
+                        modifier = Modifier.weight(1f)
                     )
-                    SmallButton("ALLOW", CAccent) { CommsNotifications.openFullScreenSettings(context) }
+                    GhostButton("Allow", onClick = { CommsNotifications.openFullScreenSettings(context) })
                 }
             }
             Text(
                 "Relay one-time keys: ${if (state.relayOneTimeKeys >= 0) state.relayOneTimeKeys else "unknown"} · topped up on sync",
-                color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                style = MaterialTheme.typography.monoSmall,
+                color = ClairixTheme.colors.textSubtle
             )
         }
 
-        Card {
-            Text("Identity", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        ClairixCard {
+            Text("Identity", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
-                    label = { Text("Name shown to contacts", fontSize = 12.sp) }, singleLine = true,
-                    modifier = Modifier.weight(1f), colors = fieldColors()
+                    label = { Text("Name shown to contacts", style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
+                    modifier = Modifier.weight(1f), colors = clairixTextFieldColors()
                 )
-                SmallButton("SAVE", CAccent, enabled = name.trim() != state.displayName) { scope.launch { CommsRepository.setDisplayName(name) } }
+                GhostButton("Save", onClick = { scope.launch { CommsRepository.setDisplayName(name) } }, enabled = name.trim() != state.displayName)
             }
             ToggleRow(
-                "Listed number",
-                if (state.listed) "Anyone on this relay who knows your number can look up your keys and message you."
-                else "Unlisted: only people who scanned your code can reach you. Lookups by number fail.",
-                state.listed, enabled = !state.busy
-            ) { scope.launch { CommsRepository.setListed(it) } }
+                title = "Listed number",
+                checked = state.listed,
+                onCheckedChange = { scope.launch { CommsRepository.setListed(it) } },
+                subtitle = if (state.listed) "Anyone on this relay who knows your number can look up your keys and message you."
+                    else "Unlisted: only people who scanned your code can reach you. Lookups by number fail.",
+                enabled = !state.busy
+            )
         }
 
         // The app-wide settings — passcode, biometric unlock, duress code — live on
         // their own screen. In the full app that is reached from the Scan header
         // too; in the comms-only build this row is the only way to it.
         if (onAppSettings != null) {
-            Card {
+            ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("App passcode and lock", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("App passcode and lock", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
                             "A passcode for the app itself, biometric unlock, a duress code that wipes everything, and the version.",
-                            color = CMuted, fontSize = 11.sp, lineHeight = 15.sp
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    SmallButton("OPEN", CAccent, onClick = onAppSettings)
+                    GhostButton("Open", onClick = onAppSettings)
                 }
             }
         }
 
-        Card {
-            Text("About Clairix numbers", color = CCaution, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(NOT_A_PHONE, color = CMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        ClairixCard {
+            Text("About Clairix numbers", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+            Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             Text(
                 "Numbers are random and handed out by your relay at registration. Two people on different relays cannot message each other.",
-                color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
 
         state.error?.let {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(it, color = CCritical, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                SmallButton("DISMISS", CMuted) { CommsRepository.clearError() }
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.weight(1f))
+                GhostButton("Dismiss", onClick = { CommsRepository.clearError() }, tone = Tone.Neutral)
             }
         }
 
         DiagnosticsCard()
 
-        TextButton(onClick = { confirmUnpair = true }, contentPadding = PaddingValues(0.dp), enabled = !state.busy) {
-            Text("DELETE IDENTITY AND NUMBER", color = CCritical, fontSize = 11.sp, letterSpacing = 1.sp)
-        }
+        GhostButton(
+            "Delete identity and number",
+            onClick = { confirmUnpair = true },
+            tone = Tone.Danger,
+            enabled = !state.busy
+        )
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -2270,23 +2311,25 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
         Header(group?.name ?: "Group", onBack = onBack) {
-            SmallButton("MEMBERS", CInkDim, onClick = onMembers)
+            GhostButton("Members", onClick = onMembers, tone = Tone.Neutral)
         }
         Spacer(Modifier.height(4.dp))
         Text(
             "${members.size} member${if (members.size == 1) "" else "s"} · end-to-end encrypted",
-            color = CMuted, fontSize = 11.sp
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle
         )
         Spacer(Modifier.height(8.dp))
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (messages.isEmpty()) {
                 item {
-                    Card {
-                        Text("No messages yet", color = CInkDim, fontSize = 13.sp)
+                    ClairixCard {
+                        Text("No messages yet", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                         Text(
                             "Messages are encrypted for every member individually and sent to the relay once per member.",
-                            color = CMuted, fontSize = 11.sp, lineHeight = 15.sp
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                 }
@@ -2300,7 +2343,8 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                     if (!isOut && msg.sender != null) {
                         Text(
                             senderName(msg.sender),
-                            color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.monoSmall,
+                            color = ClairixTheme.colors.textSubtle,
                             modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
                         )
                     }
@@ -2308,21 +2352,22 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                         Modifier
                             .widthIn(max = 280.dp)
                             .background(
-                                if (isOut) CAccent.copy(alpha = 0.20f) else CPanel,
-                                CShape
+                                if (isOut) ClairixTheme.colors.accent.copy(alpha = 0.20f) else ClairixTheme.colors.surface,
+                                ClairixShapes.Card
                             )
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(msg.body, color = CInk, fontSize = 14.sp, lineHeight = 20.sp)
+                            Text(msg.body, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 Text(
                                     timeFmt.format(Date(msg.ts)),
-                                    color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                                    style = MaterialTheme.typography.monoSmall,
+                                    color = ClairixTheme.colors.textSubtle
                                 )
                                 if (isOut && msg.status == "failed") {
                                     Spacer(Modifier.width(4.dp))
-                                    Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = CCritical, modifier = Modifier.size(12.dp))
+                                    Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = ClairixTheme.colors.danger, modifier = Modifier.size(12.dp))
                                 }
                             }
                         }
@@ -2333,32 +2378,36 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
         }
 
         sendError?.let {
-            Text(it, color = CCritical, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.padding(vertical = 4.dp))
         }
 
         if (topThreat != null) {
             Spacer(Modifier.height(4.dp))
             Row(
-                Modifier.fillMaxWidth().background(CCritical.copy(alpha = 0.10f), CShape).padding(8.dp),
+                Modifier.fillMaxWidth().background(ClairixTheme.colors.danger.copy(alpha = 0.10f), ClairixShapes.Card).padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Active tracker: ${topThreat.tracker?.label ?: topThreat.name}", color = CCritical, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Tap to share with the group", color = CMuted, fontSize = 10.sp)
+                    Text("Active tracker: ${topThreat.tracker?.label ?: topThreat.name}", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger)
+                    Text("Tap to share with the group", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                 }
-                SmallButton("SHARE THREAT", CCritical) {
-                    scope.launch {
-                        CommsRepository.shareThreats(
-                            gid = groupId,
-                            kind = "FOLLOWING",
-                            severity = topThreat.threat.name,
-                            lat = status.lat,
-                            lon = status.lon,
-                            title = topThreat.tracker?.label ?: topThreat.name,
-                            detail = "Clairix has detected a possible following tracker."
-                        ).onFailure { sendError = it.message }
-                    }
-                }
+                GhostButton(
+                    "Share threat",
+                    onClick = {
+                        scope.launch {
+                            CommsRepository.shareThreats(
+                                gid = groupId,
+                                kind = "FOLLOWING",
+                                severity = topThreat.threat.name,
+                                lat = status.lat,
+                                lon = status.lon,
+                                title = topThreat.tracker?.label ?: topThreat.name,
+                                detail = "Clairix has detected a possible following tracker."
+                            ).onFailure { sendError = it.message }
+                        }
+                    },
+                    tone = Tone.Danger
+                )
             }
         }
 
@@ -2367,31 +2416,26 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Message", color = CMuted, fontSize = 14.sp) },
+                placeholder = { Text("Message", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
                 maxLines = 4,
-                colors = fieldColors()
+                colors = clairixTextFieldColors()
             )
             Spacer(Modifier.width(8.dp))
-            Button(
+            PrimaryButton(
+                "Send",
                 onClick = {
-                    val text = draft.trim()
-                    if (text.isEmpty()) return@Button
-                    val toSend = text
-                    sendError = null
-                    draft = ""
-                    scope.launch {
-                        CommsRepository.sendGroupMessage(groupId, toSend)
-                            .onFailure { sendError = it.message ?: "Could not send" }
-                    }
-                },
-                enabled = draft.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = CAccent, contentColor = Color(0xFF12161D),
-                    disabledContainerColor = CPanelHi, disabledContentColor = CMuted
-                ),
-                shape = CShape,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
-            ) { Text("SEND", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp) }
+                        val text = draft.trim()
+                        if (text.isEmpty()) return@PrimaryButton
+                        val toSend = text
+                        sendError = null
+                        draft = ""
+                        scope.launch {
+                            CommsRepository.sendGroupMessage(groupId, toSend)
+                                .onFailure { sendError = it.message ?: "Could not send" }
+                        }
+                    },
+                enabled = draft.isNotBlank()
+            )
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -2428,46 +2472,51 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
     if (leaveConfirm) {
         AlertDialog(
             onDismissRequest = { leaveConfirm = false },
-            containerColor = CPanel,
-            title = { Text("Leave group?", color = CInk, fontWeight = FontWeight.Bold) },
+            containerColor = ClairixTheme.colors.surface,
+            title = { Text("Leave group?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(
                     "You will leave \"${group?.name ?: "this group"}\" and will no longer receive its messages.",
-                    color = CMuted, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    leaveConfirm = false
-                    scope.launch {
-                        CommsRepository.leaveGroup(groupId)
-                            .onSuccess { onLeft() }
-                            .onFailure { error = it.message }
-                    }
-                }) { Text("LEAVE", color = CCritical, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                GhostButton(
+                    "Leave",
+                    onClick = {
+                        leaveConfirm = false
+                        scope.launch {
+                            CommsRepository.leaveGroup(groupId)
+                                .onSuccess { onLeft() }
+                                .onFailure { error = it.message }
+                        }
+                    },
+                    tone = Tone.Danger
+                )
             },
-            dismissButton = { TextButton(onClick = { leaveConfirm = false }) { Text("CANCEL", color = CMuted) } }
+            dismissButton = { GhostButton("Cancel", onClick = { leaveConfirm = false }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(20.dp))
         Header(group?.name ?: "Group", onBack = onBack) {
-            if (myRole == OrgRole.ADMIN) SmallButton("+ ADD", CClear) { addMember = true }
+            if (myRole == OrgRole.ADMIN) GhostButton("+ Add", onClick = { addMember = true }, tone = Tone.Safe)
         }
         Spacer(Modifier.height(4.dp))
-        Text("${members.size} member${if (members.size == 1) "" else "s"}", color = CMuted, fontSize = 11.sp)
+        Text("${members.size} member${if (members.size == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         Spacer(Modifier.height(12.dp))
 
         error?.let {
-            Text(it, color = CCritical, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.padding(bottom = 8.dp))
         }
 
-        SectionLabel("MEMBERS")
+        SectionHeader("MEMBERS")
         Spacer(Modifier.height(6.dp))
-        Card {
+        ClairixCard {
             if (members.isEmpty()) {
-                Text("No members yet.", color = CMuted, fontSize = 13.sp)
+                Text("No members yet.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     members.forEach { member ->
@@ -2475,23 +2524,30 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
                                     member.name.ifBlank { formatClairixNumber(member.number) },
-                                    color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = ClairixTheme.colors.text,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     formatClairixNumber(member.number),
-                                    color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                                    style = MaterialTheme.typography.monoSmall,
+                                    color = ClairixTheme.colors.textSubtle
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
-                            Badge(member.role.name, if (member.role == OrgRole.ADMIN) CAccent else CInkDim)
+                            StatusPill(member.role.name, if (member.role == OrgRole.ADMIN) Tone.Accent else Tone.Neutral)
                             if (myRole == OrgRole.ADMIN && member.number != myNumber) {
-                                SmallButton("REMOVE", CCritical) {
-                                    scope.launch {
-                                        CommsRepository.removeGroupMember(groupId, member.number)
-                                            .onFailure { error = it.message }
-                                    }
-                                }
+                                GhostButton(
+                                    "Remove",
+                                    onClick = {
+                                        scope.launch {
+                                            CommsRepository.removeGroupMember(groupId, member.number)
+                                                .onFailure { error = it.message }
+                                        }
+                                    },
+                                    tone = Tone.Danger
+                                )
                             }
                         }
                     }
@@ -2500,15 +2556,15 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
-        SectionLabel("ACTIONS")
+        SectionHeader("ACTIONS")
         Spacer(Modifier.height(6.dp))
-        Card {
+        ClairixCard {
             Row(
                 Modifier.fillMaxWidth().clickable { leaveConfirm = true }.padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Leave group", color = CCritical, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                Text("›", color = CCritical, fontSize = 16.sp)
+                Text("Leave group", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.weight(1f))
+                Text("›", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.danger)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -2529,65 +2585,62 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        containerColor = CPanel,
-        title = { Text("Add member", color = CInk, fontWeight = FontWeight.Bold) },
+        containerColor = ClairixTheme.colors.surface,
+        title = { Text("Add member", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (available.isEmpty()) {
                     Text(
                         if (contacts.isEmpty()) "Add contacts first, then add them to groups."
                         else "All your contacts are already in this group.",
-                        color = CMuted, fontSize = 13.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 } else {
-                    Text("Choose a contact to add:", color = CMuted, fontSize = 12.sp)
+                    Text("Choose a contact to add:", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                     LazyColumn(modifier = Modifier.heightIn(max = 240.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         items(available, key = { it.number }) { c ->
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clip(CShape)
-                                    .background(if (selected?.number == c.number) CAccent.copy(alpha = 0.15f) else CPanelHi)
+                                    .clip(ClairixShapes.Card)
+                                    .background(if (selected?.number == c.number) ClairixTheme.colors.accent.copy(alpha = 0.15f) else ClairixTheme.colors.surfaceRaised)
                                     .clickable { selected = c }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(c.name, color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(formatClairixNumber(c.number), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    Text(c.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(formatClairixNumber(c.number), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                 }
                                 if (selected?.number == c.number) {
-                                    Icon(Icons.Filled.Check, contentDescription = "Selected", tint = CAccent, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Filled.Check, contentDescription = "Selected", tint = ClairixTheme.colors.accent, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
                     }
                 }
-                error?.let { Text(it, color = CCritical, fontSize = 12.sp) }
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             }
         },
         confirmButton = {
-            TextButton(
+            GhostButton(
+                if (busy) "Adding…" else "Add",
                 onClick = {
-                    val c = selected ?: return@TextButton
-                    busy = true
-                    error = null
-                    scope.launch {
-                        CommsRepository.addGroupMember(groupId, c.number)
-                            .onSuccess { onDismiss() }
-                            .onFailure { busy = false; error = it.message ?: "Could not add member" }
-                    }
-                },
+                        val c = selected ?: return@GhostButton
+                        busy = true
+                        error = null
+                        scope.launch {
+                            CommsRepository.addGroupMember(groupId, c.number)
+                                .onSuccess { onDismiss() }
+                                .onFailure { busy = false; error = it.message ?: "Could not add member" }
+                        }
+                    },
+                tone = if (selected != null && !busy) Tone.Accent else Tone.Neutral,
                 enabled = selected != null && !busy
-            ) {
-                Text(
-                    if (busy) "ADDING…" else "ADD",
-                    color = if (selected != null && !busy) CAccent else CMuted,
-                    fontWeight = FontWeight.Bold, letterSpacing = 1.sp
-                )
-            }
+            )
         },
-        dismissButton = { TextButton(onClick = { if (!busy) onDismiss() }, enabled = !busy) { Text("CANCEL", color = CMuted) } }
+        dismissButton = { GhostButton("Cancel", onClick = { if (!busy) onDismiss() }, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
@@ -2615,32 +2668,38 @@ private fun DiagnosticsCard() {
     val entries by CommsLog.entries.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     var expanded by rememberSaveable { mutableStateOf(false) }
-    Card {
+    ClairixCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Diagnostics", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            SmallButton("COPY", CAccent, enabled = entries.isNotEmpty()) {
-                val text = entries.joinToString("\n") { "${logTimeFmt.format(Date(it.ts))}  ${it.text}" }
-                clipboard.setText(AnnotatedString("Clairix comms log\n$text"))
-            }
-            SmallButton("CLEAR", CMuted, enabled = entries.isNotEmpty()) { CommsLog.clear() }
+            Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
+            GhostButton(
+                "Copy",
+                onClick = {
+                    val text = entries.joinToString("\n") { "${logTimeFmt.format(Date(it.ts))}  ${it.text}" }
+                    clipboard.setText(AnnotatedString("Clairix comms log\n$text"))
+                },
+                enabled = entries.isNotEmpty()
+            )
+            GhostButton("Clear", onClick = { CommsLog.clear() }, tone = Tone.Neutral, enabled = entries.isNotEmpty())
         }
         Text(
             "What happened with the relay, calls and envelopes on this phone. No message text is kept. " +
                 "If a call or message goes missing, COPY this and send it along.",
-            color = CMuted, fontSize = 11.sp, lineHeight = 15.sp
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle
         )
         if (entries.isEmpty()) {
-            Text("Nothing recorded yet.", color = CMuted, fontSize = 11.sp)
+            Text("Nothing recorded yet.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         } else {
             val shown = entries.asReversed().let { if (expanded) it else it.take(12) }
             for (e in shown) {
                 Text(
                     "${logTimeFmt.format(Date(e.ts))}  ${e.text}",
-                    color = CInkDim, fontSize = 10.sp, lineHeight = 13.sp, fontFamily = FontFamily.Monospace
+                    style = MaterialTheme.typography.monoSmall,
+                    color = ClairixTheme.colors.textMuted
                 )
             }
             if (entries.size > 12) {
-                SmallButton(if (expanded) "SHOW LESS" else "SHOW ALL ${entries.size}", CMuted) { expanded = !expanded }
+                GhostButton(if (expanded) "Show less" else "Show all ${entries.size}", onClick = { expanded = !expanded }, tone = Tone.Neutral)
             }
         }
     }

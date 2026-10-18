@@ -40,15 +40,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
-
-private val LkGround  = Color(0xFF0E1116)
-private val LkPanel   = Color(0xFF161B23)
-private val LkInk     = Color(0xFFE6EAF1)
-private val LkInkDim  = Color(0xFFA8B2C1)
-private val LkMuted   = Color(0xFF6F7A8B)
-private val LkRule    = Color(0xFF262E3A)
-private val LkAccent  = Color(0xFFFF7A3D)
-private val LkCrit    = Color(0xFFF2545B)
+import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.material3.MaterialTheme
+import app.clairix.ui.theme.monoSmall
 
 /**
  * Full-screen PIN entry that gates the rest of the app.
@@ -170,7 +164,7 @@ fun LockScreen() {
     Box(
         Modifier
             .fillMaxSize()
-            .background(LkGround)
+            .background(ClairixTheme.colors.base)
             .windowInsetsPadding(WindowInsets.systemBars),
         contentAlignment = Alignment.Center
     ) {
@@ -181,16 +175,13 @@ fun LockScreen() {
             // ── Wordmark ───────────────────────────────────────────────
             Text(
                 "CLAIRIX",
-                color = LkInk,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 3.sp
+                style = MaterialTheme.typography.headlineMedium,
+                color = ClairixTheme.colors.text
             )
             Text(
                 "Enter passcode to continue",
-                color = LkMuted,
-                fontSize = 13.sp,
-                letterSpacing = 0.5.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
 
             // ── Dots ───────────────────────────────────────────────────
@@ -206,9 +197,9 @@ fun LockScreen() {
                         Modifier
                             .size(dotSize)
                             .clip(CircleShape)
-                            .background(if (filled) LkAccent else LkRule)
+                            .background(if (filled) ClairixTheme.colors.accent else ClairixTheme.colors.border)
                             .then(
-                                if (!filled) Modifier.border(1.dp, LkMuted, CircleShape)
+                                if (!filled) Modifier.border(1.dp, ClairixTheme.colors.textSubtle, CircleShape)
                                 else Modifier
                             )
                     )
@@ -227,7 +218,7 @@ fun LockScreen() {
                     }
                     else -> errorText
                 }
-                Text(msg, color = LkCrit, fontSize = 12.sp, textAlign = TextAlign.Center)
+                Text(msg, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, textAlign = TextAlign.Center)
             }
 
             // ── Numpad ─────────────────────────────────────────────────
@@ -257,13 +248,11 @@ fun LockScreen() {
             if (code.length in AppLock.MIN_LENGTH until maxLen) {
                 Text(
                     "UNLOCK",
-                    color = if (active) LkAccent else LkMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (active) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(LkAccent.copy(alpha = 0.12f))
+                        .background(ClairixTheme.colors.accent.copy(alpha = 0.12f))
                         .clickable(enabled = active) { submit() }
                         .padding(horizontal = 24.dp, vertical = 10.dp)
                 )
@@ -272,11 +261,9 @@ fun LockScreen() {
             // ── Biometric unlock button ────────────────────────────────
             if (biometricEnabled && activity != null && code.isEmpty()) {
                 Text(
-                    "USE BIOMETRICS",
-                    color = if (active) LkInkDim else LkMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 1.5.sp,
+                    "Use biometrics",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (active) ClairixTheme.colors.textMuted else ClairixTheme.colors.textSubtle,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .clickable(enabled = active) { promptBiometric() }
@@ -324,14 +311,14 @@ private const val KEY_BACKSPACE = "backspace"
 
 @Composable
 private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
-    val bg    = if (active) LkPanel else LkGround
-    val color = if (active) (if (accent) LkInk else LkInkDim) else LkMuted
+    val bg    = if (active) ClairixTheme.colors.surface else ClairixTheme.colors.base
+    val color = if (active) (if (accent) ClairixTheme.colors.text else ClairixTheme.colors.textMuted) else ClairixTheme.colors.textSubtle
     Box(
         Modifier
             .size(68.dp)
             .clip(CircleShape)
             .background(bg)
-            .border(1.dp, LkRule, CircleShape)
+            .border(1.dp, ClairixTheme.colors.border, CircleShape)
             .then(if (active) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center
     ) {
@@ -340,10 +327,9 @@ private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onCli
         } else {
             Text(
                 label,
+                style = MaterialTheme.typography.monoSmall,
                 color = color,
-                fontSize = if (label.length == 1) 22.sp else 18.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium
+                fontSize = if (label.length == 1) 22.sp else 18.sp
             )
         }
     }

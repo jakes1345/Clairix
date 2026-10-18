@@ -37,6 +37,18 @@ import app.clairix.security.AppLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import app.clairix.ui.theme.ClairixThemeName
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.mono
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.Tone
 
 // ── AppSettings singleton ──────────────────────────────────────────────────────
 
@@ -53,6 +65,7 @@ object AppSettings {
     private const val KEY_PERSISTENCE_THRESHOLD = "persistence_threshold_min"
     private const val KEY_SCAN_ENABLED = "scan_enabled"
     private const val KEY_RESUME_AFTER_REBOOT = "resume_after_reboot"
+    private const val KEY_THEME = "theme"
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
     const val DEFAULT_PERSISTENCE_THRESHOLD_MIN = 10f
@@ -65,6 +78,13 @@ object AppSettings {
     @Volatile private var _persistenceThresholdMin = DEFAULT_PERSISTENCE_THRESHOLD_MIN
     @Volatile private var _scanEnabled = false
     @Volatile private var _resumeAfterReboot = false
+    private val _theme = MutableStateFlow(ClairixThemeName.ACID)
+
+    /**
+     * The colour theme the user picked in Settings > Appearance. Acid, the brand's
+     * own colour, until they choose another. Every Activity's content follows it live.
+     */
+    val theme: StateFlow<ClairixThemeName> = _theme.asStateFlow()
 
     val aggressiveScan: Boolean get() = _aggressiveScan
     val followThresholdM: Float get() = _followThresholdM
@@ -99,6 +119,15 @@ object AppSettings {
             .coerceIn(MIN_PERSISTENCE_THRESHOLD_MIN, MAX_PERSISTENCE_THRESHOLD_MIN)
         _scanEnabled = p.getBoolean(KEY_SCAN_ENABLED, false)
         _resumeAfterReboot = p.getBoolean(KEY_RESUME_AFTER_REBOOT, false)
+        // A name from a later version that this one does not know reads as the default.
+        val savedTheme = p.getString(KEY_THEME, null)
+        _theme.value = ClairixThemeName.entries.firstOrNull { it.name == savedTheme } ?: ClairixThemeName.ACID
+    }
+
+    fun setTheme(context: Context, value: ClairixThemeName) {
+        _theme.value = value
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_THEME, value.name).apply()
     }
 
     fun setResumeAfterReboot(context: Context, value: Boolean) {
@@ -134,16 +163,6 @@ object AppSettings {
 }
 
 // ── Private colour tokens (local to this file) ─────────────────────────────────
-
-private val SGroundClr   = Color(0xFF0E1116)
-private val SPanelClr    = Color(0xFF161B23)
-private val SInkClr      = Color(0xFFE6EAF1)
-private val SInkDimClr   = Color(0xFFA8B2C1)
-private val SMutedClr    = Color(0xFF6F7A8B)
-private val SRuleClr     = Color(0xFF262E3A)
-private val SAccentClr   = Color(0xFFFF7A3D)
-private val SCriticalClr = Color(0xFFF2545B)
-private val SCardShape   = RoundedCornerShape(4.dp)
 
 // ── SettingsScreen composable ──────────────────────────────────────────────────
 
@@ -251,41 +270,45 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
     if (showBackgroundDialog) {
         AlertDialog(
             onDismissRequest = { showBackgroundDialog = false; backgroundOutcome(false) },
-            containerColor = SPanelClr,
+            containerColor = ClairixTheme.colors.surface,
             title = {
-                Text("Allow location all the time", color = SInkClr, fontWeight = FontWeight.Bold)
+                Text("Allow location all the time", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             },
             text = {
                 Text(
                     "Android only lets Clairix restart scanning after a reboot if location access " +
                     "is set to \"Allow all the time\". Android will open the location permission " +
                     "page for Clairix — choose \"Allow all the time\" there, then come back.",
-                    color = SInkDimClr, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showBackgroundDialog = false
-                    if (has(Manifest.permission.ACCESS_FINE_LOCATION)) {
-                        backgroundLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                    } else {
-                        // Android 12+ ignores a request for fine location that does
-                        // not also name coarse; both have to be in the same request.
-                        foregroundLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION
+                GhostButton(
+                    "Continue",
+                    onClick = {
+                        showBackgroundDialog = false
+                        if (has(Manifest.permission.ACCESS_FINE_LOCATION)) {
+                            backgroundLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        } else {
+                            // Android 12+ ignores a request for fine location that does
+                            // not also name coarse; both have to be in the same request.
+                            foregroundLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
                             )
-                        )
+                        }
                     }
-                }) {
-                    Text("CONTINUE", color = SAccentClr, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showBackgroundDialog = false; backgroundOutcome(false) }) {
-                    Text("CANCEL", color = SMutedClr, letterSpacing = 1.sp)
-                }
+                GhostButton(
+                    "Cancel",
+                    onClick = { showBackgroundDialog = false; backgroundOutcome(false) },
+                    tone = Tone.Neutral
+                )
             }
         )
     }
@@ -293,33 +316,34 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            containerColor = SPanelClr,
+            containerColor = ClairixTheme.colors.surface,
             title = {
-                Text("Clear all data?", color = SInkClr, fontWeight = FontWeight.Bold)
+                Text("Clear all data?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             },
             text = {
                 Text(
                     "This removes all detections, the cellular baseline and all timeline events. " +
                     "This cannot be undone.",
-                    color = SInkDimClr, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    // The scanner owns the baseline and the event log in memory, so it
-                    // has to do the clearing. Deleting the files from here only worked
-                    // while the service was stopped — otherwise the next flush wrote
-                    // everything straight back.
-                    onClearData()
-                    showClearDialog = false
-                }) {
-                    Text("CLEAR", color = SCriticalClr, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                GhostButton(
+                    "Clear",
+                    onClick = {
+                        // The scanner owns the baseline and the event log in memory, so it
+                        // has to do the clearing. Deleting the files from here only worked
+                        // while the service was stopped — otherwise the next flush wrote
+                        // everything straight back.
+                        onClearData()
+                        showClearDialog = false
+                    },
+                    tone = Tone.Danger
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) {
-                    Text("CANCEL", color = SMutedClr, letterSpacing = 1.sp)
-                }
+                GhostButton("Cancel", onClick = { showClearDialog = false }, tone = Tone.Neutral)
             }
         )
     }
@@ -327,7 +351,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
     LazyColumn(
         Modifier
             .fillMaxSize()
-            .background(SGroundClr)
+            .background(ClairixTheme.colors.base)
             // This screen replaces the whole tab tree, so it does not inherit the
             // insets applied around the tabs and has to keep clear of the system
             // bars itself — otherwise the BACK row sits under the status bar.
@@ -343,12 +367,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) {
-                    Text("‹ BACK", color = SAccentClr, fontSize = 13.sp, letterSpacing = 1.sp)
-                }
+                GhostButton("‹ Back", onClick = onBack)
                 Text(
-                    "SETTINGS", color = SInkClr,
-                    fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp
+                    "SETTINGS",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = ClairixTheme.colors.text
                 )
                 Spacer(Modifier.width(60.dp))
             }
@@ -361,7 +384,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
 
             item(key = "§aggressive") {
                 Column(
-                    Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                    Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
@@ -371,12 +394,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     ) {
                         Column(Modifier.weight(1f).padding(end = 8.dp)) {
                             Text(
-                                "Aggressive scan mode", color = SInkClr,
-                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                                "Aggressive scan mode",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = ClairixTheme.colors.text
                             )
                             Text(
                                 "Higher detection rate at the cost of battery life",
-                                color = SMutedClr, fontSize = 12.sp
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClairixTheme.colors.textSubtle
                             )
                         }
                         Switch(
@@ -386,15 +411,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                                 AppSettings.setAggressiveScan(context, v)
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = SAccentClr,
-                                checkedTrackColor = SAccentClr.copy(alpha = 0.4f)
+                                checkedThumbColor = ClairixTheme.colors.accent,
+                                checkedTrackColor = ClairixTheme.colors.accent.copy(alpha = 0.4f)
                             )
                         )
                     }
                     Text(
                         if (aggressiveScan) "SCAN_MODE_LOW_LATENCY — faster detection, higher battery drain"
                         else "SCAN_MODE_BALANCED — standard detection, recommended for field use",
-                        color = SMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                        style = MaterialTheme.typography.monoSmall,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
             }
@@ -402,7 +428,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
             item(key = "§resume-reboot") {
                 val active = resumeWanted && backgroundGranted
                 Column(
-                    Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                    Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
@@ -412,12 +438,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     ) {
                         Column(Modifier.weight(1f).padding(end = 8.dp)) {
                             Text(
-                                "Resume scanning after reboot", color = SInkClr,
-                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                                "Resume scanning after reboot",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = ClairixTheme.colors.text
                             )
                             Text(
                                 "Restarts the scanner when the phone boots, if it was running before",
-                                color = SMutedClr, fontSize = 12.sp
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClairixTheme.colors.textSubtle
                             )
                         }
                         Switch(
@@ -434,8 +462,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                                 }
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = SAccentClr,
-                                checkedTrackColor = SAccentClr.copy(alpha = 0.4f)
+                                checkedThumbColor = ClairixTheme.colors.accent,
+                                checkedTrackColor = ClairixTheme.colors.accent.copy(alpha = 0.4f)
                             )
                         )
                     }
@@ -444,31 +472,31 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             "Needs location access set to \"Allow all the time\". Android asks for this " +
                             "separately: turning this on sends you to the location permission page for " +
                             "Clairix, where you pick \"Allow all the time\".",
-                            color = SMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                         if (awaitingBackground) {
                             // After a refusal Android stops opening the page on request, so
                             // offer the app's own settings page as the way there. The
                             // grant is picked up on return and only then stored as wanted.
-                            TextButton(
+                            GhostButton(
+                                "Open app settings",
                                 onClick = {
-                                    context.startActivity(
-                                        Intent(
-                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                            Uri.fromParts("package", context.packageName, null)
-                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                },
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text("OPEN APP SETTINGS", color = SAccentClr, fontSize = 11.sp, letterSpacing = 1.sp)
-                            }
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                Uri.fromParts("package", context.packageName, null)
+                                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    }
+                            )
                         }
                     } else if (!resumeWanted) {
                         Text(
                             "\"Allow all the time\" is granted but not used while this is off. You can " +
                             "reduce it to \"Only while using the app\" in Android settings.",
-                            color = SMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                 }
@@ -476,7 +504,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
 
             item(key = "§follow-thresh") {
                 Column(
-                    Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                    Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
@@ -486,18 +514,20 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     ) {
                         Text(
                             "Following confirmation threshold",
-                            color = SInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ClairixTheme.colors.text,
                             modifier = Modifier.weight(1f)
                         )
                         Text(
                             "${followThreshold.toInt()} m",
-                            color = SAccentClr, fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.mono,
+                            color = ClairixTheme.colors.accent
                         )
                     }
                     Text(
                         "Minimum displacement required to confirm a device is following you",
-                        color = SMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                     Slider(
                         value = followThreshold,
@@ -506,22 +536,22 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         valueRange = 100f..500f,
                         steps = 7,
                         colors = SliderDefaults.colors(
-                            thumbColor = SAccentClr,
-                            activeTrackColor = SAccentClr,
-                            inactiveTrackColor = SRuleClr
+                            thumbColor = ClairixTheme.colors.accent,
+                            activeTrackColor = ClairixTheme.colors.accent,
+                            inactiveTrackColor = ClairixTheme.colors.border
                         )
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("100 m", color = SMutedClr, fontSize = 11.sp)
-                        Text("Default: 300 m", color = SMutedClr, fontSize = 11.sp)
-                        Text("500 m", color = SMutedClr, fontSize = 11.sp)
+                        Text("100 m", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                        Text("Default: 300 m", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                        Text("500 m", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                     }
                 }
             }
 
             item(key = "§persist-thresh") {
                 Column(
-                    Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                    Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
@@ -531,13 +561,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     ) {
                         Text(
                             "Persistence threshold",
-                            color = SInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ClairixTheme.colors.text,
                             modifier = Modifier.weight(1f)
                         )
                         Text(
                             "${persistenceThreshold.toInt()} min",
-                            color = SAccentClr, fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.mono,
+                            color = ClairixTheme.colors.accent
                         )
                     }
                     Text(
@@ -545,7 +576,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             "Capped at ${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min: some trackers " +
                             "(Samsung SmartTag) change their Bluetooth address about every 15 minutes, and a " +
                             "longer threshold would let one rotate before it could ever be flagged.",
-                        color = SMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                     Slider(
                         value = persistenceThreshold,
@@ -557,15 +589,15 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         // One stop per whole minute.
                         steps = (AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN - AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN).toInt() - 1,
                         colors = SliderDefaults.colors(
-                            thumbColor = SAccentClr,
-                            activeTrackColor = SAccentClr,
-                            inactiveTrackColor = SRuleClr
+                            thumbColor = ClairixTheme.colors.accent,
+                            activeTrackColor = ClairixTheme.colors.accent,
+                            inactiveTrackColor = ClairixTheme.colors.border
                         )
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("${AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN.toInt()} min", color = SMutedClr, fontSize = 11.sp)
-                        Text("Default: ${AppSettings.DEFAULT_PERSISTENCE_THRESHOLD_MIN.toInt()} min", color = SMutedClr, fontSize = 11.sp)
-                        Text("${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min", color = SMutedClr, fontSize = 11.sp)
+                        Text("${AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN.toInt()} min", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                        Text("Default: ${AppSettings.DEFAULT_PERSISTENCE_THRESHOLD_MIN.toInt()} min", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                        Text("${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                     }
                 }
             }
@@ -577,14 +609,15 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
             if (trusted.isEmpty()) {
                 item(key = "§trusted-empty") {
                     Column(
-                        Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                        Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("No trusted devices yet", color = SInkDimClr, fontSize = 13.sp)
+                        Text("No trusted devices yet", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                         Text(
                             "Mark any detection card as safe on the SCAN tab. " +
                             "Its Bluetooth address is automatically added here.",
-                            color = SMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                 }
@@ -593,27 +626,25 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .background(SPanelClr, SCardShape)
+                            .background(ClairixTheme.colors.surface, ClairixShapes.Card)
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            addr, color = SInkDimClr, fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f)
+                            addr,
+                            style = MaterialTheme.typography.mono,
+                            color = ClairixTheme.colors.textMuted,
+                            modifier = Modifier.weight(1f)
                         )
-                        TextButton(
-                            onClick = { Registry.untrust(addr) },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) {
-                            Text("REMOVE", color = SCriticalClr, fontSize = 11.sp, letterSpacing = 1.sp)
-                        }
+                        GhostButton("Remove", onClick = { Registry.untrust(addr) }, tone = Tone.Danger)
                     }
                 }
                 item(key = "§trusted-hint") {
                     Text(
                         "Tap MARK SAFE on a detection card on the Scan tab to add a device here.",
-                        color = SMutedClr, fontSize = 12.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
             }
@@ -625,7 +656,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
 
         item(key = "§lock-controls") {
             Column(
-                Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Row(
@@ -636,7 +667,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             if (lockEnabled) "App passcode is ON" else "App passcode is OFF",
-                            color = SInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ClairixTheme.colors.text
                         )
                         Text(
                             if (lockEnabled)
@@ -646,31 +678,24 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                                     "Clairix locks when you leave. Repeated wrong passcodes lock you out for longer each time."
                             else
                                 "Set a 6–12 digit passcode. All app data is wiped after too many wrong guesses.",
-                            color = SMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                 }
                 if (lockEnabled) {
-                    Button(
+                    SecondaryButton(
+                        "Change passcode",
                         onClick = { showPasscodeSetup = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SAccentClr.copy(alpha = 0.15f),
-                            contentColor = SAccentClr
-                        ),
-                        shape = SCardShape, modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("CHANGE PASSCODE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    }
-                    Button(
+                        tone = Tone.Accent,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SecondaryButton(
+                        "Turn off passcode",
                         onClick = { showPasscodeDisable = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SCriticalClr.copy(alpha = 0.10f),
-                            contentColor = SCriticalClr
-                        ),
-                        shape = SCardShape, modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("TURN OFF PASSCODE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    }
+                        tone = Tone.Danger,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     if (canUseBiometric) {
                         Row(
                             Modifier.fillMaxWidth(),
@@ -680,11 +705,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     "Biometric unlock",
-                                    color = SInkClr, fontSize = 14.sp, fontWeight = FontWeight.Medium
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = ClairixTheme.colors.text
                                 )
                                 Text(
                                     "Use fingerprint or face to unlock instead of typing your passcode",
-                                    color = SMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ClairixTheme.colors.textSubtle
                                 )
                             }
                             Spacer(Modifier.width(12.dp))
@@ -720,7 +747,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             scope.launch(Dispatchers.IO) { AppLock.setRelockAfterMs(context, choice) }
                         }
                     )
-                    HorizontalDivider(color = SRuleClr, thickness = 0.5.dp)
+                    HorizontalDivider(color = ClairixTheme.colors.border, thickness = 0.5.dp)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             Modifier.fillMaxWidth(),
@@ -730,59 +757,40 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     if (hasDuress) "Duress code is set" else "Duress code",
-                                    color = SInkClr, fontSize = 14.sp, fontWeight = FontWeight.Medium
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = ClairixTheme.colors.text
                                 )
                                 Text(
                                     "A second code that silently wipes Clairix — looks like any wrong passcode",
-                                    color = SMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ClairixTheme.colors.textSubtle
                                 )
                             }
                         }
                         if (hasDuress) {
-                            Button(
+                            SecondaryButton(
+                                "Change duress code",
                                 onClick = { showDuressSetup = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = SAccentClr.copy(alpha = 0.12f),
-                                    contentColor = SAccentClr
-                                ),
-                                shape = SCardShape, modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("CHANGE DURESS CODE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                            }
-                            Button(
+                                tone = Tone.Accent,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            SecondaryButton(
+                                "Remove duress code",
                                 onClick = { showDuressRemove = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = SCriticalClr.copy(alpha = 0.08f),
-                                    contentColor = SCriticalClr
-                                ),
-                                shape = SCardShape, modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("REMOVE DURESS CODE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                            }
+                                tone = Tone.Danger,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         } else {
-                            Button(
+                            SecondaryButton(
+                                "Set duress code",
                                 onClick = { showDuressSetup = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = SAccentClr.copy(alpha = 0.12f),
-                                    contentColor = SAccentClr
-                                ),
-                                shape = SCardShape, modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("SET DURESS CODE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                            }
+                                tone = Tone.Accent,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 } else {
-                    Button(
-                        onClick = { showPasscodeSetup = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SAccentClr,
-                            contentColor = Color(0xFF12161D)
-                        ),
-                        shape = SCardShape, modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("SET PASSCODE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    }
+                    PrimaryButton("Set passcode", onClick = { showPasscodeSetup = true }, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -837,34 +845,23 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
 
         if (BuildConfig.FULL_ACCESS) item(key = "§data-actions") {
             Column(
-                Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Button(
+                PrimaryButton(
+                    "Export evidence",
                     onClick = {
-                        val intent = Report.share(context, status, detections, timeline, cell, nfc)
-                        context.startActivity(Intent.createChooser(intent, "Share evidence report"))
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SAccentClr,
-                        contentColor = Color(0xFF12161D)
-                    ),
-                    shape = SCardShape,
+                            val intent = Report.share(context, status, detections, timeline, cell, nfc)
+                            context.startActivity(Intent.createChooser(intent, "Share evidence report"))
+                        },
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("EXPORT EVIDENCE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
-                Button(
+                )
+                SecondaryButton(
+                    "Clear all data",
                     onClick = { showClearDialog = true },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SCriticalClr.copy(alpha = 0.15f),
-                        contentColor = SCriticalClr
-                    ),
-                    shape = SCardShape,
+                    tone = Tone.Danger,
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("CLEAR ALL DATA", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                )
             }
         }
 
@@ -874,7 +871,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
 
         item(key = "§about") {
             Column(
-                Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+                Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 SSettingsKv("App", context.getString(R.string.app_name))
@@ -886,11 +883,12 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                 SSettingsKv("Edition", if (BuildConfig.FULL_ACCESS) "Full — scanner, tools and COMMS" else "COMMS only")
 
                 if (BuildConfig.FULL_ACCESS) {
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(SRuleClr))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(ClairixTheme.colors.border))
 
                     Text(
                         "Legal disclaimer",
-                        color = SInkClr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.titleSmall,
+                        color = ClairixTheme.colors.text
                     )
                     Text(
                         "Clairix is a counter-surveillance research tool intended for lawful personal " +
@@ -898,15 +896,17 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         "surveillance. Always verify findings through multiple methods before acting. " +
                         "Users are responsible for complying with all applicable laws regarding electronic " +
                         "surveillance detection in their jurisdiction.",
-                        color = SMutedClr, fontSize = 12.sp, lineHeight = 18.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
 
-                Box(Modifier.fillMaxWidth().height(1.dp).background(SRuleClr))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(ClairixTheme.colors.border))
 
                 Text(
                     "Privacy",
-                    color = SInkClr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClairixTheme.colors.text
                 )
                 Text(
                     if (BuildConfig.FULL_ACCESS)
@@ -920,7 +920,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         "nor who sent them. Your keys, contacts and message history are stored on this " +
                         "device only. Location is read at the moment you press SOS, to attach to that " +
                         "alert, and at no other time.",
-                    color = SMutedClr, fontSize = 12.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
             }
         }
@@ -933,8 +934,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
 private fun SSettingsSectionLabel(text: String) {
     Text(
         text,
-        color = SAccentClr, fontSize = 10.sp,
-        fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
+        style = MaterialTheme.typography.labelSmall,
+        color = ClairixTheme.colors.accent,
         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
     )
 }
@@ -942,8 +943,8 @@ private fun SSettingsSectionLabel(text: String) {
 @Composable
 private fun SSettingsKv(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = SMutedClr, fontSize = 12.sp)
-        Text(value, color = SInkDimClr, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+        Text(value, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
     }
 }
 
@@ -980,18 +981,12 @@ private fun <T> SChoiceRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = SInkClr, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(subtitle, color = SMutedClr, fontSize = 12.sp, lineHeight = 16.sp)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
         }
         Spacer(Modifier.width(12.dp))
         Box {
-            TextButton(
-                onClick = { expanded = true },
-                colors = ButtonDefaults.textButtonColors(contentColor = SAccentClr),
-                shape = SCardShape
-            ) {
-                Text(label(selected), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            }
+            GhostButton(label(selected), onClick = { expanded = true })
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 for (choice in choices) {
                     DropdownMenuItem(
@@ -1028,7 +1023,7 @@ private fun PasscodeSetupPanel(
     val scope = rememberCoroutineScope()
 
     Column(
-        Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+        Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         val title = when {
@@ -1036,9 +1031,9 @@ private fun PasscodeSetupPanel(
             step == 1 -> "Choose a new passcode (6–12 digits)"
             else -> "Confirm the new passcode"
         }
-        Text(title, color = SInkClr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
         if (error.isNotEmpty()) {
-            Text(error, color = SCriticalClr, fontSize = 12.sp)
+            Text(error, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
         }
         OutlinedTextField(
             value = when (step) { 0 -> currentCode; 1 -> code1; else -> code2 },
@@ -1047,13 +1042,13 @@ private fun PasscodeSetupPanel(
                 when (step) { 0 -> currentCode = digits; 1 -> code1 = digits; else -> code2 = digits }
                 error = ""
             },
-            label = { Text("Digits", color = SMutedClr) },
+            label = { Text("Digits", color = ClairixTheme.colors.textSubtle) },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = SInkClr,
-                unfocusedTextColor = SInkClr,
-                focusedBorderColor = SAccentClr,
-                unfocusedBorderColor = SRuleClr
+                focusedTextColor = ClairixTheme.colors.text,
+                unfocusedTextColor = ClairixTheme.colors.text,
+                focusedBorderColor = ClairixTheme.colors.accent,
+                unfocusedBorderColor = ClairixTheme.colors.border
             ),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
@@ -1061,46 +1056,41 @@ private fun PasscodeSetupPanel(
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onCancel) {
-                Text("CANCEL", color = SMutedClr, letterSpacing = 1.sp)
-            }
+            GhostButton("Cancel", onClick = onCancel, tone = Tone.Neutral)
             Spacer(Modifier.weight(1f))
-            Button(
+            PrimaryButton(
+                if (step < 2) "Next" else "Save",
                 onClick = {
-                    scope.launch {
-                        error = ""
-                        when (step) {
-                            0 -> {
-                                val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    AppLock.attempt(context, currentCode, unlockOnSuccess = false)
+                        scope.launch {
+                            error = ""
+                            when (step) {
+                                0 -> {
+                                    val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        AppLock.attempt(context, currentCode, unlockOnSuccess = false)
+                                    }
+                                    when (v) {
+                                        AppLock.Verdict.Accepted -> step = 1
+                                        is AppLock.Verdict.Rejected -> error = "Wrong passcode"
+                                        is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
+                                        AppLock.Verdict.Wiping -> onCancel()
+                                        is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                                    }
                                 }
-                                when (v) {
-                                    AppLock.Verdict.Accepted -> step = 1
-                                    is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                                    is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
-                                    AppLock.Verdict.Wiping -> onCancel()
-                                    is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                                1 -> {
+                                    AppLock.problem(code1)?.let { error = it; return@launch }
+                                    step = 2
                                 }
-                            }
-                            1 -> {
-                                AppLock.problem(code1)?.let { error = it; return@launch }
-                                step = 2
-                            }
-                            2 -> {
-                                if (code1 != code2) { error = "Passcodes do not match"; return@launch }
-                                val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    AppLock.setPasscode(context, code1)
+                                2 -> {
+                                    if (code1 != code2) { error = "Passcodes do not match"; return@launch }
+                                    val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        AppLock.setPasscode(context, code1)
+                                    }
+                                    r.onSuccess { onDone() }.onFailure { error = it.message ?: "Failed" }
                                 }
-                                r.onSuccess { onDone() }.onFailure { error = it.message ?: "Failed" }
                             }
                         }
                     }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = SAccentClr, contentColor = Color(0xFF12161D)),
-                shape = SCardShape
-            ) {
-                Text(if (step < 2) "NEXT" else "SAVE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            }
+            )
         }
     }
 }
@@ -1116,22 +1106,25 @@ private fun PasscodeDisablePanel(
     val scope = rememberCoroutineScope()
 
     Column(
-        Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+        Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("Enter your passcode to turn off the lock", color = SInkClr, fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold)
-        if (error.isNotEmpty()) Text(error, color = SCriticalClr, fontSize = 12.sp)
+        Text(
+            "Enter your passcode to turn off the lock",
+            style = MaterialTheme.typography.titleSmall,
+            color = ClairixTheme.colors.text
+        )
+        if (error.isNotEmpty()) Text(error, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
         OutlinedTextField(
             value = code,
             onValueChange = { v -> code = v.filter { it.isDigit() }.take(AppLock.MAX_LENGTH); error = "" },
-            label = { Text("Current passcode", color = SMutedClr) },
+            label = { Text("Current passcode", color = ClairixTheme.colors.textSubtle) },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = SInkClr,
-                unfocusedTextColor = SInkClr,
-                focusedBorderColor = SAccentClr,
-                unfocusedBorderColor = SRuleClr
+                focusedTextColor = ClairixTheme.colors.text,
+                unfocusedTextColor = ClairixTheme.colors.text,
+                focusedBorderColor = ClairixTheme.colors.accent,
+                unfocusedBorderColor = ClairixTheme.colors.border
             ),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
@@ -1139,38 +1132,31 @@ private fun PasscodeDisablePanel(
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onCancel) {
-                Text("CANCEL", color = SMutedClr, letterSpacing = 1.sp)
-            }
+            GhostButton("Cancel", onClick = onCancel, tone = Tone.Neutral)
             Spacer(Modifier.weight(1f))
-            Button(
+            SecondaryButton(
+                "Turn off",
                 onClick = {
-                    scope.launch {
-                        val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            AppLock.attempt(context, code, unlockOnSuccess = false)
-                        }
-                        when (v) {
-                            AppLock.Verdict.Accepted -> {
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    AppLock.disable(context)
-                                }
-                                onDone()
+                        scope.launch {
+                            val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                AppLock.attempt(context, code, unlockOnSuccess = false)
                             }
-                            is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                            is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
-                            AppLock.Verdict.Wiping -> onCancel()
-                            is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                            when (v) {
+                                AppLock.Verdict.Accepted -> {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        AppLock.disable(context)
+                                    }
+                                    onDone()
+                                }
+                                is AppLock.Verdict.Rejected -> error = "Wrong passcode"
+                                is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
+                                AppLock.Verdict.Wiping -> onCancel()
+                                is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                            }
                         }
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SCriticalClr.copy(alpha = 0.15f),
-                    contentColor = SCriticalClr
-                ),
-                shape = SCardShape
-            ) {
-                Text("TURN OFF", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            }
+                    },
+                tone = Tone.Danger
+            )
         }
     }
 }
@@ -1190,7 +1176,7 @@ private fun DuressSetupPanel(
     val scope = rememberCoroutineScope()
 
     Column(
-        Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+        Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
@@ -1199,15 +1185,17 @@ private fun DuressSetupPanel(
                 1 -> "Choose a duress code (6–12 digits)"
                 else -> "Confirm the duress code"
             },
-            color = SInkClr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+            style = MaterialTheme.typography.titleSmall,
+            color = ClairixTheme.colors.text
         )
         if (step != 0) {
             Text(
                 "Must differ from your main passcode. Entering it silently wipes Clairix.",
-                color = SMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
-        if (error.isNotEmpty()) Text(error, color = SCriticalClr, fontSize = 12.sp)
+        if (error.isNotEmpty()) Text(error, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
         OutlinedTextField(
             value = when (step) { 0 -> currentCode; 1 -> code1; else -> code2 },
             onValueChange = { v ->
@@ -1215,13 +1203,13 @@ private fun DuressSetupPanel(
                 when (step) { 0 -> currentCode = digits; 1 -> code1 = digits; else -> code2 = digits }
                 error = ""
             },
-            label = { Text(if (step == 0) "Current passcode" else "Digits", color = SMutedClr) },
+            label = { Text(if (step == 0) "Current passcode" else "Digits", color = ClairixTheme.colors.textSubtle) },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = SInkClr,
-                unfocusedTextColor = SInkClr,
-                focusedBorderColor = SAccentClr,
-                unfocusedBorderColor = SRuleClr
+                focusedTextColor = ClairixTheme.colors.text,
+                unfocusedTextColor = ClairixTheme.colors.text,
+                focusedBorderColor = ClairixTheme.colors.accent,
+                unfocusedBorderColor = ClairixTheme.colors.border
             ),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
@@ -1229,48 +1217,41 @@ private fun DuressSetupPanel(
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onCancel) {
-                Text("CANCEL", color = SMutedClr, letterSpacing = 1.sp)
-            }
+            GhostButton("Cancel", onClick = onCancel, tone = Tone.Neutral)
             Spacer(Modifier.weight(1f))
-            Button(
+            PrimaryButton(
+                if (step < 2) "Next" else "Save",
                 onClick = {
-                    scope.launch {
-                        error = ""
-                        when (step) {
-                            0 -> {
-                                val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    AppLock.attempt(context, currentCode, unlockOnSuccess = false)
+                        scope.launch {
+                            error = ""
+                            when (step) {
+                                0 -> {
+                                    val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        AppLock.attempt(context, currentCode, unlockOnSuccess = false)
+                                    }
+                                    when (v) {
+                                        AppLock.Verdict.Accepted -> step = 1
+                                        is AppLock.Verdict.Rejected -> error = "Wrong passcode"
+                                        is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
+                                        AppLock.Verdict.Wiping -> onCancel()
+                                        is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                                    }
                                 }
-                                when (v) {
-                                    AppLock.Verdict.Accepted -> step = 1
-                                    is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                                    is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
-                                    AppLock.Verdict.Wiping -> onCancel()
-                                    is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                                1 -> {
+                                    AppLock.problem(code1)?.let { error = it; return@launch }
+                                    step = 2
                                 }
-                            }
-                            1 -> {
-                                AppLock.problem(code1)?.let { error = it; return@launch }
-                                step = 2
-                            }
-                            else -> {
-                                if (code1 != code2) { error = "Codes do not match"; return@launch }
-                                val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    AppLock.setDuress(context, code1)
+                                else -> {
+                                    if (code1 != code2) { error = "Codes do not match"; return@launch }
+                                    val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        AppLock.setDuress(context, code1)
+                                    }
+                                    r.onSuccess { onDone() }.onFailure { error = it.message ?: "Failed" }
                                 }
-                                r.onSuccess { onDone() }.onFailure { error = it.message ?: "Failed" }
                             }
                         }
                     }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SAccentClr, contentColor = Color(0xFF12161D)
-                ),
-                shape = SCardShape
-            ) {
-                Text(if (step < 2) "NEXT" else "SAVE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            }
+            )
         }
     }
 }
@@ -1286,22 +1267,25 @@ private fun DuressRemovePanel(
     val scope = rememberCoroutineScope()
 
     Column(
-        Modifier.fillMaxWidth().background(SPanelClr, SCardShape).padding(14.dp),
+        Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("Enter your passcode to remove the duress code", color = SInkClr, fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold)
-        if (error.isNotEmpty()) Text(error, color = SCriticalClr, fontSize = 12.sp)
+        Text(
+            "Enter your passcode to remove the duress code",
+            style = MaterialTheme.typography.titleSmall,
+            color = ClairixTheme.colors.text
+        )
+        if (error.isNotEmpty()) Text(error, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
         OutlinedTextField(
             value = code,
             onValueChange = { v -> code = v.filter { it.isDigit() }.take(AppLock.MAX_LENGTH); error = "" },
-            label = { Text("Passcode", color = SMutedClr) },
+            label = { Text("Passcode", color = ClairixTheme.colors.textSubtle) },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = SInkClr,
-                unfocusedTextColor = SInkClr,
-                focusedBorderColor = SAccentClr,
-                unfocusedBorderColor = SRuleClr
+                focusedTextColor = ClairixTheme.colors.text,
+                unfocusedTextColor = ClairixTheme.colors.text,
+                focusedBorderColor = ClairixTheme.colors.accent,
+                unfocusedBorderColor = ClairixTheme.colors.border
             ),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
@@ -1309,38 +1293,31 @@ private fun DuressRemovePanel(
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onCancel) {
-                Text("CANCEL", color = SMutedClr, letterSpacing = 1.sp)
-            }
+            GhostButton("Cancel", onClick = onCancel, tone = Tone.Neutral)
             Spacer(Modifier.weight(1f))
-            Button(
+            SecondaryButton(
+                "Remove",
                 onClick = {
-                    scope.launch {
-                        val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            AppLock.attempt(context, code, unlockOnSuccess = false)
-                        }
-                        when (v) {
-                            AppLock.Verdict.Accepted -> {
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    AppLock.setDuress(context, null)
-                                }
-                                onDone()
+                        scope.launch {
+                            val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                AppLock.attempt(context, code, unlockOnSuccess = false)
                             }
-                            is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                            is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
-                            AppLock.Verdict.Wiping -> onCancel()
-                            is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                            when (v) {
+                                AppLock.Verdict.Accepted -> {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        AppLock.setDuress(context, null)
+                                    }
+                                    onDone()
+                                }
+                                is AppLock.Verdict.Rejected -> error = "Wrong passcode"
+                                is AppLock.Verdict.LockedOut -> error = "Too many attempts — try later"
+                                AppLock.Verdict.Wiping -> onCancel()
+                                is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                            }
                         }
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SCriticalClr.copy(alpha = 0.15f),
-                    contentColor = SCriticalClr
-                ),
-                shape = SCardShape
-            ) {
-                Text("REMOVE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            }
+                    },
+                tone = Tone.Danger
+            )
         }
     }
 }

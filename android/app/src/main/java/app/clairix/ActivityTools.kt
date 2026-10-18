@@ -71,6 +71,20 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.mono
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.ClairixCard
+import app.clairix.ui.components.ClairixTextField
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.KeyValueRow
+import app.clairix.ui.components.LoadingBlock
+import app.clairix.ui.components.Notice
+import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.SectionHeader
+import app.clairix.ui.components.StatusPill
+import app.clairix.ui.components.Tone
 
 // The Activity tab's analysis pages: pattern of life and the unlock ledger.
 
@@ -107,53 +121,55 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
     if (showClear) {
         AlertDialog(
             onDismissRequest = { showClear = false },
-            containerColor = TPanelClr,
-            title = { Text("Clear location history?", color = TInkClr, fontWeight = FontWeight.Bold) },
+            containerColor = ClairixTheme.colors.surface,
+            title = { Text("Clear location history?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(
                     "This deletes the $fixes stored GPS fixes the route analysis reads. Detections and " +
                     "the timeline are not affected. This cannot be undone.",
-                    color = TInkDimClr, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showClear = false
-                    scope.launch {
-                        withContext(Dispatchers.IO) { runCatching { LocationHistory.clear(context) } }
-                        fixes = 0
-                        report = null
-                        analyse()
-                    }
-                }) {
-                    Text("CLEAR", color = TCriticalClr, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                GhostButton(
+                    "Clear",
+                    onClick = {
+                        showClear = false
+                        scope.launch {
+                            withContext(Dispatchers.IO) { runCatching { LocationHistory.clear(context) } }
+                            fixes = 0
+                            report = null
+                            analyse()
+                        }
+                    },
+                    tone = Tone.Danger
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showClear = false }) {
-                    Text("CANCEL", color = TMutedClr, letterSpacing = 1.sp)
-                }
+                GhostButton("Cancel", onClick = { showClear = false }, tone = Tone.Neutral)
             }
         )
     }
 
     ToolPageList(title = "PATTERN OF LIFE", onBack = onBack) {
-        if (analysing) item(key = "§progress") { TProgress("Analysing $fixes fixes — stops, departures and routes…") }
-        error?.let { e -> item(key = "§error") { TNotice(TCriticalClr, "ERROR", e) } }
+        if (analysing) item(key = "§progress") { LoadingBlock("Analysing $fixes fixes — stops, departures and routes…") }
+        error?.let { e -> item(key = "§error") { Notice(Tone.Danger, e, title = "Error") } }
 
         val r = report
         if (r != null && !analysing) {
             if (r.fixes == 0 || r.clusters.isEmpty()) {
                 item(key = "§empty") {
-                    TCard {
-                        Text("Not enough history yet", color = TInkDimClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    ClairixCard {
+                        Text("Not enough history yet", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.textMuted)
                         Text(
                             "The analysis needs a few days of fixes with the scanner running and a GPS lock. " +
                             "Stops are found from the fixes alone; nothing is sent anywhere.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
-                        TKv("Fixes recorded", "$fixes")
-                        TKv("Days covered", "${r.daysCovered}")
+                        KeyValueRow("Fixes recorded", "$fixes")
+                        KeyValueRow("Days covered", "${r.daysCovered}")
                     }
                 }
             } else {
@@ -165,52 +181,55 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
                         score < 0.75f -> "High"
                         else -> "Clockwork"
                     }
-                    TCard {
+                    ClairixCard {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("Predictability", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Predictability", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                             Text(
-                                "$label · ${(score * 100).toInt()}%", color = tMeterColor(score),
-                                fontSize = 14.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                                "$label · ${(score * 100).toInt()}%",
+                                style = MaterialTheme.typography.mono,
+                                color = meterColor(score)
                             )
                         }
-                        Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(TRuleClr)) {
-                            Box(Modifier.fillMaxWidth(score.coerceAtLeast(0.02f)).fillMaxHeight().background(tMeterColor(score)))
+                        Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(ClairixTheme.colors.border)) {
+                            Box(Modifier.fillMaxWidth(score.coerceAtLeast(0.02f)).fillMaxHeight().background(meterColor(score)))
                         }
                         Text(
                             "How well someone who watched for a week could guess where you will be and when. " +
                             "0 is unpredictable, 100 is clockwork.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
-                        TKv(
+                        KeyValueRow(
                             "Weekday departure window",
                             if (r.weekdayDepartureWindowMin > 0) "${r.weekdayDepartureWindowMin} min" else "too few to say"
                         )
-                        TKv("Route repetition", if (r.trips > 0) "%.0f%%".format(Locale.US, r.routeRepetitionPct) else "no trips yet")
-                        TKv("Trips between places", "${r.trips}")
-                        TKv("Days covered", "${r.daysCovered}")
-                        TKv("Fixes analysed", "${r.fixes}")
+                        KeyValueRow("Route repetition", if (r.trips > 0) "%.0f%%".format(Locale.US, r.routeRepetitionPct) else "no trips yet")
+                        KeyValueRow("Trips between places", "${r.trips}")
+                        KeyValueRow("Days covered", "${r.daysCovered}")
+                        KeyValueRow("Fixes analysed", "${r.fixes}")
                     }
                 }
 
-                item(key = "§places-hdr") { TSectionLabel("PLACES") }
+                item(key = "§places-hdr") { SectionHeader("PLACES") }
                 items(r.clusters, key = { "place|${it.id}" }) { c ->
-                    TCard(spacing = 4) {
+                    ClairixCard(spacing = 4.dp) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(c.label, color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                            Text(c.label, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
                             Text(
                                 "%.5f, %.5f".format(Locale.US, c.lat, c.lon),
-                                color = TMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                                style = MaterialTheme.typography.monoSmall,
+                                color = ClairixTheme.colors.textSubtle
                             )
                         }
-                        TKv("Visits", "${c.visits} on ${c.days} ${if (c.days == 1) "day" else "days"}")
-                        TKv("Time here", "${c.dwellMinutes / 60} h ${c.dwellMinutes % 60} min")
-                        TKv("Seen", "${tDay(c.firstSeen)} – ${tDay(c.lastSeen)}")
+                        KeyValueRow("Visits", "${c.visits} on ${c.days} ${if (c.days == 1) "day" else "days"}")
+                        KeyValueRow("Time here", "${c.dwellMinutes / 60} h ${c.dwellMinutes % 60} min")
+                        KeyValueRow("Seen", "${tDay(c.firstSeen)} – ${tDay(c.lastSeen)}")
                         if (c.departures.isNotEmpty()) {
-                            Text("Usual departures", color = TMutedClr, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                            Text("Usual departures", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle, modifier = Modifier.padding(top = 4.dp))
                             for (d in c.departures) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(d.label, color = TInkDimClr, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                                    Text("${d.samples}×", color = TMutedClr, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                    Text(d.label, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
+                                    Text("${d.samples}×", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                 }
                             }
                         }
@@ -218,11 +237,11 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
                 }
 
                 if (r.suggestions.isNotEmpty()) {
-                    item(key = "§suggest-hdr") { TSectionLabel("SUGGESTIONS") }
+                    item(key = "§suggest-hdr") { SectionHeader("SUGGESTIONS") }
                     item(key = "§suggest") {
-                        TCard(spacing = 6) {
+                        ClairixCard(spacing = 6.dp) {
                             for (s in r.suggestions) {
-                                Text("• $s", color = TInkDimClr, fontSize = 12.sp, lineHeight = 17.sp)
+                                Text("• $s", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                             }
                         }
                     }
@@ -230,17 +249,18 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§data-hdr") { TSectionLabel("DATA") }
+        item(key = "§data-hdr") { SectionHeader("DATA") }
         item(key = "§data") {
-            TCard {
-                TKv("Fixes recorded", "$fixes of ${LocationHistory.CAP}")
+            ClairixCard {
+                KeyValueRow("Fixes recorded", "$fixes of ${LocationHistory.CAP}")
                 Text(
                     "The GPS log the analysis reads. It stays on this phone and is also removed by " +
                     "CLEAR ALL DATA in Settings.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
-                TButton("ANALYSE AGAIN", onClick = { analyse() }, enabled = !analysing)
-                TButton("CLEAR HISTORY", onClick = { showClear = true }, style = TButtonStyle.CRITICAL, enabled = fixes > 0 && !analysing)
+                SecondaryButton("Analyse again", onClick = { analyse() }, tone = Tone.Accent, enabled = !analysing, modifier = Modifier.fillMaxWidth())
+                SecondaryButton("Clear history", onClick = { showClear = true }, tone = Tone.Danger, enabled = fixes > 0 && !analysing, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -320,144 +340,159 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
     val endMin = sleepEnd.toIntOrNull()
 
     ToolPageList(title = "UNLOCK LEDGER", onBack = onBack) {
-        item(key = "§sources-hdr") { TSectionLabel("SOURCES") }
+        item(key = "§sources-hdr") { SectionHeader("SOURCES") }
         item(key = "§sources") {
-            TCard {
+            ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Device admin", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Device admin", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
                             "Reports every successful and failed unlock and any PIN change as it happens. " +
                             "Clairix never locks, wipes or sets a policy with it.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    TBadge(if (adminActive) "ACTIVE" else "OFF", if (adminActive) TClearClr else TCautionClr)
+                    StatusPill(if (adminActive) "ACTIVE" else "OFF", if (adminActive) Tone.Safe else Tone.Caution)
                 }
                 if (!adminActive) {
-                    TButton("ENABLE DEVICE ADMIN", onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) })
+                    SecondaryButton("Enable device admin", onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 }
-                HorizontalDivider(color = TRuleClr, thickness = 0.5.dp)
+                HorizontalDivider(color = ClairixTheme.colors.border, thickness = 0.5.dp)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Usage access", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Usage access", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
                             "Lets the ledger read the platform's own lock, unlock and screen events for the " +
                             "last few days, including from before the admin was enabled.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    TBadge(if (usageAccess) "GRANTED" else "OFF", if (usageAccess) TClearClr else TCautionClr)
+                    StatusPill(if (usageAccess) "GRANTED" else "OFF", if (usageAccess) Tone.Safe else Tone.Caution)
                 }
                 if (!usageAccess) {
-                    TButton("GRANT USAGE ACCESS", onClick = { openExternal(context, UnlockLedger.usageAccessIntent()) })
+                    SecondaryButton("Grant usage access", onClick = { openExternal(context, UnlockLedger.usageAccessIntent()) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
         item(key = "§tripwire") {
             val t = tripwire
-            TCard(spacing = 4) {
+            ClairixCard(spacing = 4.dp) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Biometric tripwire", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Biometric tripwire", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
                             "A Keystore key that dies the moment a fingerprint or face is added or removed.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                     when (t) {
-                        null -> TBadge("CHECKING", TMutedClr)
-                        BiometricTripwireResult.OK -> TBadge("INTACT", TClearClr)
-                        BiometricTripwireResult.FIRST_INIT -> TBadge("ARMED", TBlueClr)
-                        is BiometricTripwireResult.TRIGGERED -> TBadge("TRIGGERED", TCriticalClr)
-                        is BiometricTripwireResult.UNAVAILABLE -> TBadge("UNAVAILABLE", TCautionClr)
+                        null -> StatusPill("CHECKING", Tone.Neutral)
+                        BiometricTripwireResult.OK -> StatusPill("INTACT", Tone.Safe)
+                        BiometricTripwireResult.FIRST_INIT -> StatusPill("ARMED", Tone.Info)
+                        is BiometricTripwireResult.TRIGGERED -> StatusPill("TRIGGERED", Tone.Danger)
+                        is BiometricTripwireResult.UNAVAILABLE -> StatusPill("UNAVAILABLE", Tone.Caution)
                     }
                 }
                 when (t) {
                     is BiometricTripwireResult.TRIGGERED ->
-                        Text("The enrolled biometrics changed; noticed ${tFull(t.ts)}.", color = TCriticalClr, fontSize = 12.sp, lineHeight = 16.sp)
+                        Text("The enrolled biometrics changed; noticed ${tFull(t.ts)}.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
                     is BiometricTripwireResult.UNAVAILABLE ->
-                        Text(t.reason, color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp)
+                        Text(t.reason, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                     BiometricTripwireResult.FIRST_INIT ->
-                        Text("Armed just now against the biometrics enrolled at this moment.", color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp)
+                        Text("Armed just now against the biometrics enrolled at this moment.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                     else -> Unit
                 }
             }
         }
 
-        item(key = "§sleep-hdr") { TSectionLabel("SLEEP WINDOW") }
+        item(key = "§sleep-hdr") { SectionHeader("SLEEP WINDOW") }
         item(key = "§sleep") {
-            TCard {
+            ClairixCard {
                 Text(
                     "An unlock inside this window is reported as an anomaly. Times are minutes after " +
                     "midnight (23:00 is 1380, 07:00 is 420); the window may cross midnight.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TField(
+                    ClairixTextField(
                         value = sleepStart,
                         onValueChange = { sleepStart = it.filter { c -> c.isDigit() }.take(4); sleepError = null; sleepSaved = false },
-                        label = "Start (min)", keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f)
+                        label = "Start (min)",
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
                     )
-                    TField(
+                    ClairixTextField(
                         value = sleepEnd,
                         onValueChange = { sleepEnd = it.filter { c -> c.isDigit() }.take(4); sleepError = null; sleepSaved = false },
-                        label = "End (min)", keyboardType = KeyboardType.Number, modifier = Modifier.weight(1f)
+                        label = "End (min)",
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
                     )
                 }
-                TKv(
+                KeyValueRow(
                     "Window",
                     if (startMin != null && endMin != null && startMin in 0 until 1440 && endMin in 0 until 1440)
-                        "${clock(startMin)} – ${clock(endMin)}"
-                    else "—"
+                            "${clock(startMin)} – ${clock(endMin)}"
+                        else "—"
                 )
-                sleepError?.let { Text(it, color = TCriticalClr, fontSize = 12.sp) }
-                if (sleepSaved) Text("Saved", color = TClearClr, fontSize = 12.sp)
-                TButton("SAVE SLEEP WINDOW", onClick = {
-                    if (startMin == null || endMin == null || startMin !in 0 until 1440 || endMin !in 0 until 1440) {
-                        sleepError = "Both values must be between 0 and 1439"
-                    } else {
-                        UnlockLedger.setSleepWindow(context, startMin, endMin)
-                        sleepSaved = true
-                    }
-                })
+                sleepError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+                if (sleepSaved) Text("Saved", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.safe)
+                SecondaryButton(
+                    "Save sleep window",
+                    onClick = {
+                        if (startMin == null || endMin == null || startMin !in 0 until 1440 || endMin !in 0 until 1440) {
+                            sleepError = "Both values must be between 0 and 1439"
+                        } else {
+                            UnlockLedger.setSleepWindow(context, startMin, endMin)
+                            sleepSaved = true
+                        }
+                    },
+                    tone = Tone.Accent,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
-        item(key = "§events-hdr") { TSectionLabel("LAST 7 DAYS") }
+        item(key = "§events-hdr") { SectionHeader("LAST 7 DAYS") }
         val list = events
         when {
-            list == null -> item(key = "§events-progress") { TProgress("Reading the ledger…") }
+            list == null -> item(key = "§events-progress") { LoadingBlock("Reading the ledger…") }
             list.isEmpty() -> item(key = "§events-empty") {
-                TCard {
-                    Text("No events recorded yet", color = TInkDimClr, fontSize = 13.sp)
+                ClairixCard {
+                    Text("No events recorded yet", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                     Text(
                         "Rows appear once the device admin is active or usage access is granted and the " +
                         "phone has been locked and unlocked.",
-                        color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.textSubtle
                     )
                 }
             }
             else -> items(list, key = { "ev|${it.id}" }) { e ->
                 val anomaly = e.kind.isUnlock && UnlockLedger.inSleepWindow(e.ts)
                 val tone = when {
-                    anomaly -> TCautionClr
-                    e.kind == UnlockKind.PASSWORD_FAILED || e.kind == UnlockKind.PASSWORD_CHANGED || e.kind == UnlockKind.ADMIN_DISABLED -> TCriticalClr
-                    e.kind.isUnlock -> TInkClr
-                    else -> TMutedClr
+                    anomaly -> ClairixTheme.colors.caution
+                    e.kind == UnlockKind.PASSWORD_FAILED || e.kind == UnlockKind.PASSWORD_CHANGED || e.kind == UnlockKind.ADMIN_DISABLED -> ClairixTheme.colors.danger
+                    e.kind.isUnlock -> ClairixTheme.colors.text
+                    else -> ClairixTheme.colors.textSubtle
                 }
                 Row(
-                    Modifier.fillMaxWidth().background(TPanelClr, TCardShape).padding(horizontal = 14.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Icon(unlockIcon(e.kind), contentDescription = null, tint = tone, modifier = Modifier.size(20.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(unlockLabel(e.kind) + if (anomaly) " · in sleep window" else "", color = tone, fontSize = 13.sp)
+                        Text(unlockLabel(e.kind) + if (anomaly) " · in sleep window" else "", style = MaterialTheme.typography.bodyMedium, color = tone)
                         Text(
                             tFull(e.ts) + (e.extra?.let { "  ·  $it" } ?: ""),
-                            color = TMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace
+                            style = MaterialTheme.typography.monoSmall,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                 }

@@ -114,6 +114,9 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.components.SecondaryButton
 
 private const val M_PER_MILE = 1609.344
 private const val FT_PER_M = 3.28084
@@ -695,9 +698,9 @@ private fun SearchBar(
                 trailingIcon = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (state.query.isNotEmpty()) {
-                            TextButton(onClick = { focus.clearFocus(); onClear() }) { Text("Clear") }
+                            GhostButton("Clear", onClick = { focus.clearFocus(); onClear() })
                         }
-                        TextButton(onClick = { focus.clearFocus(); onSubmit() }, enabled = state.query.isNotBlank()) { Text("Go") }
+                        GhostButton("Go", onClick = { focus.clearFocus(); onSubmit() }, enabled = state.query.isNotBlank())
                     }
                 },
             )
@@ -711,7 +714,7 @@ private fun SearchBar(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = onShowRegions) { Text("$regionName map") }
+                GhostButton("$regionName map", onClick = onShowRegions)
             }
         }
     }
@@ -732,7 +735,7 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(place.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(place.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 place.displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -764,7 +767,7 @@ private fun PermissionCard(onRequest: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.width(8.dp))
-            Button(onClick = onRequest) { Text("Allow") }
+            PrimaryButton("Allow", onClick = onRequest)
         }
     }
 }
@@ -778,7 +781,7 @@ private fun StatusCard(text: String, busy: Boolean, onCancel: (() -> Unit)?) {
                 Spacer(Modifier.width(12.dp))
             }
             Text(text, Modifier.weight(1f))
-            if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel") }
+            if (onCancel != null) GhostButton("Cancel", onClick = onCancel)
         }
     }
 }
@@ -818,7 +821,7 @@ private fun RouteOptionsSheet(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                TextButton(onClick = onClose) { Text("Close") }
+                GhostButton("Close", onClick = onClose)
             }
             if (options.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 4.dp))
             options.error?.let {
@@ -862,7 +865,7 @@ private fun RouteOptionsSheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = onEditFuel) { Text("Change") }
+                GhostButton("Change", onClick = onEditFuel)
             }
         }
     }
@@ -891,7 +894,7 @@ private fun RouteCard(
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(fmtDuration(route.durationSec), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text(fmtDuration(route.durationSec), style = MaterialTheme.typography.headlineMedium)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         "arrive ${fmtClock(context, System.currentTimeMillis() + (route.durationSec * 1000).toLong())}",
@@ -914,8 +917,7 @@ private fun RouteCard(
                         delayMin >= 10 -> TRAFFIC_HEAVY
                         delayMin >= 3 -> TRAFFIC_SLOW
                         else -> TRAFFIC_FREE
-                    },
-                    fontWeight = FontWeight.SemiBold,
+                    }
                 )
                 Text(
                     buildString {
@@ -934,7 +936,7 @@ private fun RouteCard(
                 modifier = Modifier.size(64.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = TRAFFIC_FREE, contentColor = Color.White),
-            ) { Text("GO", fontWeight = FontWeight.Black, fontSize = 18.sp) }
+            ) { Text("Go", style = MaterialTheme.typography.labelLarge) }
         }
     }
 }
@@ -957,8 +959,8 @@ private fun FuelPriceDialog(current: Double, onSave: (Double) -> Unit, onDismiss
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
         },
-        confirmButton = { TextButton(onClick = { if (valid) onSave(value!!) }, enabled = valid) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { GhostButton("Save", onClick = { if (valid) onSave(value!!) }, enabled = valid) },
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss) },
     )
 }
 
@@ -981,14 +983,13 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
                 Column(Modifier.weight(1f)) {
                     Text(
                         if (m != null) fmtDistance(nav.distanceToManeuverM) else fmtDistance(nav.remainingDistanceM),
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.headlineLarge
                     )
                     Text(
                         m?.instruction ?: "Continue to your destination",
-                        fontSize = 18.sp,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1003,7 +1004,7 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
 
 @Composable
 private fun BannerNote(text: String) {
-    Text(text, Modifier.padding(top = 6.dp), fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
@@ -1024,7 +1025,7 @@ private fun NavBottomBar(
         Column(Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(fmtClock(context, nav.etaEpochMs), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = TRAFFIC_FREE)
+                    Text(fmtClock(context, nav.etaEpochMs), style = MaterialTheme.typography.headlineLarge, color = TRAFFIC_FREE)
                     Text(
                         "${fmtDuration(nav.remainingSec)} · ${fmtDistance(nav.remainingDistanceM)}",
                         style = MaterialTheme.typography.bodyLarge,
@@ -1041,7 +1042,7 @@ private fun NavBottomBar(
                     onClick = onEnd,
                     colors = ButtonDefaults.buttonColors(containerColor = DANGER, contentColor = Color.White),
                 ) { Text("End") }
-                OutlinedButton(onClick = onMute) { Text(if (muted) "Unmute" else "Mute") }
+                SecondaryButton(if (muted) "Unmute" else "Mute", onClick = onMute)
                 FilledTonalButton(onClick = onReport) { Text("Report") }
             }
         }
@@ -1064,11 +1065,10 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     mph?.toString() ?: "–",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurface
                 )
-                Text("mph", fontSize = 10.sp, color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("mph", style = MaterialTheme.typography.bodySmall, color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (limit != null) {
@@ -1082,8 +1082,8 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
                     .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("SPEED\nLIMIT", fontSize = 7.sp, lineHeight = 8.sp, color = Color.Black, textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
-                Text("$limit", fontSize = 20.sp, color = Color.Black, fontWeight = FontWeight.Black)
+                Text("SPEED\nLIMIT", style = MaterialTheme.typography.labelSmall, color = Color.Black, textAlign = TextAlign.Center)
+                Text("$limit", style = MaterialTheme.typography.headlineMedium, color = Color.Black)
             }
         }
     }
@@ -1103,13 +1103,13 @@ private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDi
             Column(Modifier.weight(1f)) {
                 Text(
                     "${incidentLabel(ahead.incident.type)} in ${fmtDistance(ahead.distanceM)}",
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 Text("Still there?", style = MaterialTheme.typography.bodyMedium)
             }
-            TextButton(onClick = { onVote(true) }) { Text("Yes") }
-            TextButton(onClick = { onVote(false) }) { Text("No") }
-            TextButton(onClick = onDismiss) { Text("Skip") }
+            GhostButton("Yes", onClick = { onVote(true) })
+            GhostButton("No", onClick = { onVote(false) })
+            GhostButton("Skip", onClick = onDismiss)
         }
     }
 }
@@ -1149,7 +1149,7 @@ private fun ReportDialog(onReport: (String) -> Unit, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss) },
     )
 }
 
@@ -1294,7 +1294,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         item {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Offline road map", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                if (onClose != null) TextButton(onClick = onClose) { Text("Done") }
+                if (onClose != null) GhostButton("Done", onClick = onClose)
             }
             Text(
                 "Routes are planned on your phone from a road map of one state. Download your state once; " +
@@ -1310,7 +1310,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
             is GraphState.Failed -> item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("The ${g.name} map could not be opened", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Text("The ${g.name} map could not be opened", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(g.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(
                             "Delete it and download it again.",
@@ -1331,7 +1331,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                 Card {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(r.name, fontWeight = FontWeight.SemiBold)
+                            Text(r.name, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 String.format(Locale.US, "%.0f MB · built %s", r.sizeBytes / 1_048_576.0,
                                     DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(r.builtAtEpochSec * 1000))),
@@ -1342,9 +1342,9 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                         if (r.slug == currentSlug && graphState is GraphState.Ready) {
                             Text("In use", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                         } else {
-                            TextButton(onClick = { vm.selectRegion(r.slug); onClose?.invoke() }) { Text("Use") }
+                            GhostButton("Use", onClick = { vm.selectRegion(r.slug); onClose?.invoke() })
                         }
-                        TextButton(onClick = { confirmDelete = r }, enabled = !busy) { Text("Delete") }
+                        GhostButton("Delete", onClick = { confirmDelete = r }, enabled = !busy)
                     }
                 }
             }
@@ -1393,7 +1393,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
             confirmButton = {
                 TextButton(onClick = { vm.deleteRegion(r.slug); confirmDelete = null }) { Text("Delete", color = DANGER) }
             },
-            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+            dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = null }) },
         )
     }
 }
@@ -1405,8 +1405,8 @@ private fun DownloadStatus(download: GraphDownload, regions: List<MapRegion>, on
         is GraphDownload.Downloading -> Card {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Downloading ${name(download.slug)}", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                    TextButton(onClick = onCancel) { Text("Cancel") }
+                    Text("Downloading ${name(download.slug)}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    GhostButton("Cancel", onClick = onCancel)
                 }
                 val f = download.fraction
                 if (f != null) LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth())

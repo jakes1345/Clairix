@@ -64,6 +64,18 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.mono
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.ClairixCard
+import app.clairix.ui.components.ClairixTextField
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.SectionHeader
+import app.clairix.ui.components.StatusPill
+import app.clairix.ui.components.Tone
 
 // The personal-safety pages reached from the Comms tab: fake call and the
 // duress phrase.
@@ -107,7 +119,8 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
             Text(
                 "A way out of a conversation or a situation that is going wrong. The phone rings with " +
                 "its own ringtone and shows an incoming call from whoever you name here.",
-                color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
 
@@ -115,56 +128,59 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         if (pending != null) {
             item(key = "§pending") {
                 val secs = ((pending - now) / 1000L).coerceAtLeast(0L)
-                TCard {
+                ClairixCard {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("Rings in ${secs / 60}:${"%02d".format(Locale.US, secs % 60)}", color = TInkClr, fontSize = 16.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Text("Rings in ${secs / 60}:${"%02d".format(Locale.US, secs % 60)}", style = MaterialTheme.typography.mono, color = ClairixTheme.colors.text)
                             Text(
                                 "Put the phone away; it will ring on its own." +
                                     (connectTo?.let { " Answering calls ${it.name} for real." } ?: ""),
-                                color = TMutedClr, fontSize = 12.sp
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClairixTheme.colors.textSubtle
                             )
                         }
-                        TBadge("SCHEDULED", TAccentClr)
+                        StatusPill("SCHEDULED", Tone.Accent)
                     }
-                    TButton("CANCEL", onClick = { FakeCall.cancel(context); pendingAt = null }, style = TButtonStyle.CRITICAL)
+                    SecondaryButton("Cancel", onClick = { FakeCall.cancel(context); pendingAt = null }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
-        item(key = "§caller-hdr") { TSectionLabel("CALLER") }
+        item(key = "§caller-hdr") { SectionHeader("CALLER") }
         item(key = "§caller") {
-            TCard {
-                TField(value = name, onValueChange = { name = it.take(40) }, label = "Name shown", placeholder = "Mum")
-                TField(value = number, onValueChange = { number = it.take(24) }, label = "Number shown (optional)", keyboardType = KeyboardType.Phone)
+            ClairixCard {
+                ClairixTextField(value = name, onValueChange = { name = it.take(40) }, label = "Name shown", placeholder = "Mum", modifier = Modifier.fillMaxWidth())
+                ClairixTextField(value = number, onValueChange = { number = it.take(24) }, label = "Number shown (optional)", keyboardType = KeyboardType.Phone, modifier = Modifier.fillMaxWidth())
                 Text(
                     "Saved when a call is scheduled. The name and number are only what appears on the " +
                     "screen; no real call is made unless you pick a contact below.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
             }
         }
 
-        item(key = "§connect-hdr") { TSectionLabel("ON ANSWER") }
+        item(key = "§connect-hdr") { SectionHeader("ON ANSWER") }
         item(key = "§connect") {
-            TCard {
+            ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Connect to a real contact", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text("Connect to a real contact", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
                             "Answering places an encrypted Clairix call to this contact instead of a pretend " +
                             "one. Leave empty to talk to nobody.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
                     Spacer(Modifier.width(12.dp))
                     Box {
                         TextButton(
                             onClick = { pickerOpen = true },
-                            colors = ButtonDefaults.textButtonColors(contentColor = TAccentClr),
-                            shape = TCardShape
+                            colors = ButtonDefaults.textButtonColors(contentColor = ClairixTheme.colors.accent),
+                            shape = ClairixShapes.Card
                         ) {
-                            Text(connectTo?.name ?: "Nobody", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(connectTo?.name ?: "Nobody", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
                             DropdownMenuItem(
@@ -176,7 +192,7 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                                     text = {
                                         Column {
                                             Text(c.name, fontWeight = if (connectTo?.number == c.number) FontWeight.Bold else FontWeight.Normal)
-                                            Text(formatClairixNumber(c.number), fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = TMutedClr)
+                                            Text(formatClairixNumber(c.number), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                         }
                                     },
                                     onClick = { pickerOpen = false; connectTo = c }
@@ -186,28 +202,29 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                     }
                 }
                 if (contacts.isEmpty()) {
-                    Text("No Clairix contacts yet — add one on the Comms tab.", color = TMutedClr, fontSize = 12.sp)
+                    Text("No Clairix contacts yet — add one on the Comms tab.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 }
             }
         }
 
-        item(key = "§when-hdr") { TSectionLabel("RING IN") }
+        item(key = "§when-hdr") { SectionHeader("RING IN") }
         item(key = "§when") {
-            TCard {
+            ClairixCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TButton("30 S", onClick = { schedule(FakeCall.DELAY_30S) }, style = TButtonStyle.PRIMARY, modifier = Modifier.weight(1f))
-                    TButton("2 MIN", onClick = { schedule(FakeCall.DELAY_2MIN) }, style = TButtonStyle.PRIMARY, modifier = Modifier.weight(1f))
-                    TButton("5 MIN", onClick = { schedule(FakeCall.DELAY_5MIN) }, style = TButtonStyle.PRIMARY, modifier = Modifier.weight(1f))
+                    PrimaryButton("30 S", onClick = { schedule(FakeCall.DELAY_30S) }, modifier = Modifier.weight(1f))
+                    PrimaryButton("2 Min", onClick = { schedule(FakeCall.DELAY_2MIN) }, modifier = Modifier.weight(1f))
+                    PrimaryButton("5 Min", onClick = { schedule(FakeCall.DELAY_5MIN) }, modifier = Modifier.weight(1f))
                 }
                 if (!canExact) {
                     Text(
                         "Exact alarms are not allowed for Clairix, so Android may ring a little late while " +
                         "the phone is idle. Allow them for the call to land on the second.",
-                        color = TCautionClr, fontSize = 12.sp, lineHeight = 16.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.caution
                     )
-                    TButton("ALLOW EXACT ALARMS", onClick = { FakeCall.requestExactAlarms(context) })
+                    SecondaryButton("Allow exact alarms", onClick = { FakeCall.requestExactAlarms(context) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 } else {
-                    Text("Exact alarms allowed — the call rings on time even with the screen off.", color = TMutedClr, fontSize = 12.sp)
+                    Text("Exact alarms allowed — the call rings on time even with the screen off.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 }
             }
         }
@@ -236,69 +253,74 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
     if (showClear) {
         AlertDialog(
             onDismissRequest = { showClear = false },
-            containerColor = TPanelClr,
-            title = { Text("Remove the duress phrase?", color = TInkClr, fontWeight = FontWeight.Bold) },
+            containerColor = ClairixTheme.colors.surface,
+            title = { Text("Remove the duress phrase?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(
                     "Typing the phrase into a conversation will no longer send an SOS.",
-                    color = TInkDimClr, fontSize = 13.sp, lineHeight = 18.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showClear = false
-                    DuressPhrase.clear(context)
-                    configured = false
-                    message = "Duress phrase removed"
-                    messageIsError = false
-                }) {
-                    Text("REMOVE", color = TCriticalClr, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                GhostButton(
+                    "Remove",
+                    onClick = {
+                        showClear = false
+                        DuressPhrase.clear(context)
+                        configured = false
+                        message = "Duress phrase removed"
+                        messageIsError = false
+                    },
+                    tone = Tone.Danger
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showClear = false }) {
-                    Text("CANCEL", color = TMutedClr, letterSpacing = 1.sp)
-                }
+                GhostButton("Cancel", onClick = { showClear = false }, tone = Tone.Neutral)
             }
         )
     }
 
     ToolPageList(title = "DURESS PHRASE", onBack = onBack) {
         item(key = "§status") {
-            TCard {
+            ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
                         Text(
                             if (configured) "Duress phrase is set" else "No duress phrase",
-                            color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ClairixTheme.colors.text
                         )
                         Text(
                             "An ordinary-looking sentence you can type into any Clairix conversation. The " +
                             "message goes out as written, so anyone watching the screen sees a normal chat; " +
                             "underneath, the SOS fires to your groups with your last known position.",
-                            color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    TBadge(if (configured) "CONFIGURED" else "NOT SET", if (configured) TClearClr else TMutedClr)
+                    StatusPill(if (configured) "CONFIGURED" else "NOT SET", if (configured) Tone.Safe else Tone.Neutral)
                 }
                 if (tooShortStored) {
                     Text(
                         "The saved phrase is shorter than the current minimum and will not send an SOS. " +
                         "Replace it below.",
-                        color = TCriticalClr, fontSize = 12.sp, lineHeight = 16.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.danger
                     )
                 }
             }
         }
 
-        item(key = "§set-hdr") { TSectionLabel(if (configured) "REPLACE PHRASE" else "SET PHRASE") }
+        item(key = "§set-hdr") { SectionHeader(if (configured) "REPLACE PHRASE" else "SET PHRASE") }
         item(key = "§set") {
-            TCard {
-                TField(
+            ClairixCard {
+                ClairixTextField(
                     value = phrase,
                     onValueChange = { phrase = it.take(120); message = null },
                     label = "New phrase",
-                    placeholder = "e.g. did you remember to feed the cat"
+                    placeholder = "e.g. did you remember to feed the cat",
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Text(
                     "Pick something you would plausibly say but never would by accident — at least " +
@@ -306,53 +328,55 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     "Matching ignores " +
                     "case and extra spaces. The phrase is stored encrypted and is never shown again — " +
                     "not here, not in the timeline, not in a notification.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
-                message?.let { Text(it, color = if (messageIsError) TCriticalClr else TClearClr, fontSize = 12.sp) }
-                TButton(
-                    if (configured) "REPLACE PHRASE" else "SAVE PHRASE",
+                message?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (messageIsError) ClairixTheme.colors.danger else ClairixTheme.colors.safe) }
+                PrimaryButton(
+                    if (configured) "Replace phrase" else "Save phrase",
                     onClick = {
-                        val value = phrase
-                        val problem = DuressPhrase.validate(value)
-                        if (problem != null) {
-                            message = problem
-                            messageIsError = true
-                            return@TButton
-                        }
-                        scope.launch {
-                            val r = withContext(Dispatchers.IO) { runCatching { DuressPhrase.set(context, value) } }
-                            r.onSuccess {
-                                phrase = ""
-                                configured = DuressPhrase.isConfigured(context)
-                                tooShortStored = false
-                                message = if (configured) "Saved" else "A blank phrase clears the setting"
-                                messageIsError = false
-                            }.onFailure {
-                                message = if (it is IllegalArgumentException) it.message ?: DuressPhrase.TOO_SHORT_MESSAGE
-                                    else "Could not save: ${it.message ?: it.javaClass.simpleName}"
+                            val value = phrase
+                            val problem = DuressPhrase.validate(value)
+                            if (problem != null) {
+                                message = problem
                                 messageIsError = true
+                                return@PrimaryButton
                             }
-                        }
-                    },
-                    style = TButtonStyle.PRIMARY,
-                    enabled = phrase.isNotBlank()
+                            scope.launch {
+                                val r = withContext(Dispatchers.IO) { runCatching { DuressPhrase.set(context, value) } }
+                                r.onSuccess {
+                                    phrase = ""
+                                    configured = DuressPhrase.isConfigured(context)
+                                    tooShortStored = false
+                                    message = if (configured) "Saved" else "A blank phrase clears the setting"
+                                    messageIsError = false
+                                }.onFailure {
+                                    message = if (it is IllegalArgumentException) it.message ?: DuressPhrase.TOO_SHORT_MESSAGE
+                                        else "Could not save: ${it.message ?: it.javaClass.simpleName}"
+                                    messageIsError = true
+                                }
+                            }
+                        },
+                    enabled = phrase.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
                 )
                 if (configured) {
-                    TButton("CLEAR PHRASE", onClick = { showClear = true }, style = TButtonStyle.CRITICAL)
+                    SecondaryButton("Clear phrase", onClick = { showClear = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
         item(key = "§how") {
-            TCard(spacing = 6) {
-                Text("How it works", color = TInkClr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            ClairixCard(spacing = 6.dp) {
+                Text("How it works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
                     "• Type the phrase as a message to any contact or group and send it as usual.\n" +
                     "• The message is delivered normally, so the conversation looks unremarkable.\n" +
                     "• At the same time an SOS goes to all your groups with your last known location, " +
                     "and the timeline records only that an SOS was triggered — never the phrase itself.\n" +
                     "• Nothing on screen changes. Carry on as if nothing happened.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
             }
         }

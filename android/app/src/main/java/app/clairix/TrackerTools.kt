@@ -66,6 +66,19 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.ClairixCard
+import app.clairix.ui.components.KeyValueRow
+import app.clairix.ui.components.LoadingBlock
+import app.clairix.ui.components.Notice
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.SectionHeader
+import app.clairix.ui.components.StatusPill
+import app.clairix.ui.components.Tone
+import app.clairix.ui.components.color
 
 // The Trackers category's actions: walking to a tracker by signal strength
 // and the self-test beacon.
@@ -98,21 +111,22 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
     ToolPageList(title = "FIND A TRACKER", onBack = onBack) {
         if (!status.scanning) {
             item(key = "§not-scanning") {
-                TNotice(TCautionClr, "SCANNER OFF", "The locator listens to the scanner's packets. Start scanning in Scan > Trackers first.")
+                Notice(Tone.Caution, "The locator listens to the scanner's packets. Start scanning in Scan > Trackers first.", title = "Scanner off")
             }
         }
         item(key = "§intro") {
             Text(
                 "Pick a detection, then hold the phone in front of you and turn slowly. The signal is " +
                 "strongest when the phone faces the tracker and weakest when your body is in the way.",
-                color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
         if (ordered.isEmpty()) {
             item(key = "§empty") {
-                TCard {
-                    Text("Nothing detected right now", color = TInkDimClr, fontSize = 13.sp)
-                    Text("Detections appear here as the scanner finds them; trusted devices are left out.", color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp)
+                ClairixCard {
+                    Text("Nothing detected right now", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+                    Text("Detections appear here as the scanner finds them; trusted devices are left out.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 }
             }
         } else {
@@ -120,32 +134,40 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clip(TCardShape)
-                        .background(TPanelClr, TCardShape)
+                        .clip(ClairixShapes.Card)
+                        .background(ClairixTheme.colors.surface, ClairixShapes.Card)
                         .clickable { selectedKey = d.key }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(d.tracker?.label ?: d.name, color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(d.tracker?.label ?: d.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            d.dultLabel ?: d.summary, color = TMutedClr, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                            d.dultLabel ?: d.summary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClairixTheme.colors.textSubtle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        Text(d.address, color = TMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text(d.address, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                     }
                     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (d.following) TBadge("FOLLOWING", TCriticalClr)
-                        else TBadge(d.threat.name, when (d.threat) {
-                            Threat.CRITICAL -> TCriticalClr; Threat.HIGH -> TAccentClr
-                            Threat.MEDIUM -> TCautionClr; Threat.LOW -> TMutedClr; Threat.NONE -> TClearClr
-                        })
+                        if (d.following) StatusPill("FOLLOWING", Tone.Danger)
+                        else StatusPill(
+                            d.threat.name,
+                            when (d.threat) {
+                                Threat.CRITICAL -> Tone.Danger; Threat.HIGH -> Tone.Accent
+                                Threat.MEDIUM -> Tone.Caution; Threat.LOW -> Tone.Neutral; Threat.NONE -> Tone.Safe
+                            }
+                        )
                         Text(
                             if (d.rssi == 0) "— dBm" else "${d.rssi} dBm",
-                            color = TInkDimClr, fontSize = 12.sp, fontFamily = FontFamily.Monospace
+                            style = MaterialTheme.typography.monoSmall,
+                            color = ClairixTheme.colors.textMuted
                         )
                     }
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = TMutedClr)
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = ClairixTheme.colors.textSubtle)
                 }
             }
         }
@@ -186,38 +208,38 @@ private fun TrackerLocator(detection: Detection, onBack: () -> Unit) {
 
     ToolPageList(title = detection.tracker?.label?.uppercase(Locale.US) ?: "LOCATE", onBack = onBack) {
         item(key = "§who") {
-            TCard(spacing = 4) {
-                Text(detection.tracker?.label ?: detection.name, color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                detection.dultLabel?.let { Text(it, color = TInkDimClr, fontSize = 12.sp) }
-                TKv("Address", detection.address)
-                TKv("Last RSSI", if (detection.rssi == 0) "—" else "${detection.rssi} dBm")
-                if (detection.following) TKv("Status", "FOLLOWING", TCriticalClr)
+            ClairixCard(spacing = 4.dp) {
+                Text(detection.tracker?.label ?: detection.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                detection.dultLabel?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) }
+                KeyValueRow("Address", detection.address)
+                KeyValueRow("Last RSSI", if (detection.rssi == 0) "—" else "${detection.rssi} dBm")
+                if (detection.following) KeyValueRow("Status", "FOLLOWING", valueColor = ClairixTheme.colors.danger)
             }
         }
         if (!status.scanning) {
             item(key = "§not-scanning") {
-                TNotice(TCautionClr, "SCANNER OFF", "No packets arrive while the scanner is stopped. Start it in Scan > Trackers.")
+                Notice(Tone.Caution, "No packets arrive while the scanner is stopped. Start it in Scan > Trackers.", title = "Scanner off")
             }
         }
         item(key = "§dial") {
             val s = state
             if (s == null) {
-                TProgress("Listening for ${detection.address}…")
+                LoadingBlock("Listening for ${detection.address}…")
             } else {
-                Column(Modifier.fillMaxWidth().background(TPanelClr, TCardShape).padding(12.dp)) {
+                Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(12.dp)) {
                     RssiLocatorView(state = s, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
-                    TKv("Samples", "${s.samples}")
-                    TKv("Confidence", "${(s.confidence * 100).toInt()}%")
-                    s.lastRssi?.let { TKv("Last RSSI", "$it dBm") }
-                    s.lastSeenAgoMs?.let { TKv("Last heard", if (it < 1000) "just now" else "${it / 1000} s ago") }
+                    KeyValueRow("Samples", "${s.samples}")
+                    KeyValueRow("Confidence", "${(s.confidence * 100).toInt()}%")
+                    s.lastRssi?.let { KeyValueRow("Last RSSI", "$it dBm") }
+                    s.lastSeenAgoMs?.let { KeyValueRow("Last heard", if (it < 1000) "just now" else "${it / 1000} s ago") }
                 }
             }
         }
         item(key = "§beep") {
             val r = soundState
-            TCard {
-                Text("Make it beep", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            ClairixCard {
+                Text("Make it beep", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
                     if (canBeep)
                         "This tracker answered over the DULT non-owner service, so it is away from its owner " +
@@ -225,21 +247,22 @@ private fun TrackerLocator(detection: Detection, onBack: () -> Unit) {
                     else
                         "Only a tracker that has answered over the DULT non-owner service can be asked to " +
                         "sound. This one has not — it may still be with its owner, or not support DULT.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 if (r != null) {
                     when {
-                        r.error != null -> Text(r.error, color = TCautionClr, fontSize = 12.sp)
-                        r.soundStarted -> Text("Beeping — follow the sound.", color = TClearClr, fontSize = 12.sp)
-                        r.complete -> Text("Command sent.", color = TInkDimClr, fontSize = 12.sp)
+                        r.error != null -> Text(r.error, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution)
+                        r.soundStarted -> Text("Beeping — follow the sound.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.safe)
+                        r.complete -> Text("Command sent.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                     }
                 }
                 if (soundBusy) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TAccentClr, trackColor = TRuleClr)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ClairixTheme.colors.accent, trackColor = ClairixTheme.colors.border)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TButton("MAKE IT BEEP", onClick = { sound(true) }, style = TButtonStyle.PRIMARY, enabled = canBeep && !soundBusy, modifier = Modifier.weight(1f))
-                    TButton("STOP SOUND", onClick = { sound(false) }, enabled = canBeep && !soundBusy, modifier = Modifier.weight(1f))
+                    PrimaryButton("Make it beep", onClick = { sound(true) }, enabled = canBeep && !soundBusy, modifier = Modifier.weight(1f))
+                    SecondaryButton("Stop sound", onClick = { sound(false) }, tone = Tone.Accent, enabled = canBeep && !soundBusy, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -253,17 +276,17 @@ private const val CANARY_DURATION_MS = 60_000L
 private fun canaryLabel(s: BleCanaryState): String = when (s) {
     BleCanaryState.Starting -> "Starting the advertiser"
     is BleCanaryState.Advertising -> "Advertising as a separated AirTag"
-    is BleCanaryState.Detected -> "DETECTED by the scanner at ${s.rssi} dBm (${s.address})"
+    is BleCanaryState.Detected -> "Detected by the scanner at ${s.rssi} dBm (${s.address})"
     BleCanaryState.Stopped -> "Stopped — the minute is up"
     is BleCanaryState.Error -> "Error: ${s.message}"
 }
 
-private fun canaryColor(s: BleCanaryState): Color = when (s) {
-    BleCanaryState.Starting -> TMutedClr
-    is BleCanaryState.Advertising -> TBlueClr
-    is BleCanaryState.Detected -> TClearClr
-    BleCanaryState.Stopped -> TInkDimClr
-    is BleCanaryState.Error -> TCriticalClr
+private fun canaryTone(s: BleCanaryState): Tone = when (s) {
+    BleCanaryState.Starting -> Tone.Neutral
+    is BleCanaryState.Advertising -> Tone.Info
+    is BleCanaryState.Detected -> Tone.Safe
+    BleCanaryState.Stopped -> Tone.Neutral
+    is BleCanaryState.Error -> Tone.Danger
 }
 
 @Composable
@@ -311,16 +334,17 @@ internal fun SelfTestPage(onBack: (() -> Unit)? = null) {
                 "The phone advertises as an AirTag that has been separated from its owner for sixty " +
                 "seconds, with a random key, and the detector has to notice. The scanner recognises " +
                 "the payload as its own and never turns it into a detection or an alert.",
-                color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
             )
         }
         if (!status.scanning) {
             item(key = "§not-scanning") {
-                TNotice(TCautionClr, "SCANNER OFF", "The test can only be heard by the running scanner. Start scanning in Scan > Trackers first.")
+                Notice(Tone.Caution, "The test can only be heard by the running scanner. Start scanning in Scan > Trackers first.", title = "Scanner off")
             }
         }
         item(key = "§control") {
-            TCard {
+            ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -332,74 +356,79 @@ internal fun SelfTestPage(onBack: (() -> Unit)? = null) {
                                 advertising -> "Advertised, not heard"
                                 else -> "Finished"
                             },
-                            color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ClairixTheme.colors.text
                         )
                         if (running) {
-                            Text("Keep the phone where it is; the scanner needs a few seconds.", color = TMutedClr, fontSize = 12.sp)
+                            Text("Keep the phone where it is; the scanner needs a few seconds.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                         }
                     }
                     when {
-                        running -> TBadge("LIVE", TBlueClr)
-                        detected -> TBadge("DETECTED", TClearClr)
-                        failed -> TBadge("ERROR", TCriticalClr)
-                        advertising -> TBadge("NOT HEARD", TCautionClr)
+                        running -> StatusPill("LIVE", Tone.Info)
+                        detected -> StatusPill("DETECTED", Tone.Safe)
+                        failed -> StatusPill("ERROR", Tone.Danger)
+                        advertising -> StatusPill("NOT HEARD", Tone.Caution)
                         else -> Unit
                     }
                 }
                 if (running) {
                     LinearProgressIndicator(
                         progress = { ((now - startedAt).toFloat() / CANARY_DURATION_MS).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth(), color = TAccentClr, trackColor = TRuleClr
+                        modifier = Modifier.fillMaxWidth(), color = ClairixTheme.colors.accent, trackColor = ClairixTheme.colors.border
                     )
-                    TButton("STOP", onClick = { stop() }, style = TButtonStyle.CRITICAL)
+                    SecondaryButton("Stop", onClick = { stop() }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 } else {
-                    TButton("START 60 S TEST", onClick = { start() }, style = TButtonStyle.PRIMARY)
+                    PrimaryButton("Start 60 s test", onClick = { start() }, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
         if (transitions.isNotEmpty()) {
-            item(key = "§log-hdr") { TSectionLabel("WHAT HAPPENED") }
+            item(key = "§log-hdr") { SectionHeader("WHAT HAPPENED") }
             itemsIndexed(transitions, key = { i, _ -> "t|$i" }) { _, (ts, state) ->
                 Row(
-                    Modifier.fillMaxWidth().background(TPanelClr, TCardShape).padding(horizontal = 14.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().background(ClairixTheme.colors.surface, ClairixShapes.Card).padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(tTime(ts), color = TMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                    Text(canaryLabel(state), color = canaryColor(state), fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+                    Text(tTime(ts), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                    Text(canaryLabel(state), style = MaterialTheme.typography.bodyMedium, color = canaryTone(state).color(), modifier = Modifier.weight(1f))
                 }
             }
             if (!running && advertising && !detected && !failed) {
                 item(key = "§caveat") {
-                    TNotice(
-                        TCautionClr, "NOT HEARD",
+                    Notice(
+                        Tone.Caution,
                         "The advertiser worked, but this phone's Bluetooth controller does not report its own " +
-                        "packets to the scanner — many do not. A second phone running Clairix nearby is what " +
-                        "proves the scanner; it should show an AirTag during the test."
+                            "packets to the scanner — many do not. A second phone running Clairix nearby is what " +
+                            "proves the scanner; it should show an AirTag during the test.",
+                        title = "Not heard"
                     )
                 }
             }
         }
 
-        item(key = "§meaning-hdr") { TSectionLabel("WHAT THE RESULTS MEAN") }
+        item(key = "§meaning-hdr") { SectionHeader("WHAT THE RESULTS MEAN") }
         item(key = "§meaning") {
-            TCard(spacing = 6) {
+            ClairixCard(spacing = 6.dp) {
                 Text(
                     "DETECTED means the scanner received the fake AirTag's advertisement and matched its " +
                     "random key: the whole chain from radio to classifier is working on this phone. The " +
                     "address shown is the random one the Bluetooth stack chose for the test.",
-                    color = TInkDimClr, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
                 )
                 Text(
                     "ADVERTISING without DETECTED means the beacon went on the air but this controller does " +
                     "not hear itself. That is a property of the chip, not a fault in the detector.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
                 Text(
                     "An ERROR before advertising means Bluetooth is off, advertising is not permitted, or " +
                     "this phone cannot advertise at all.",
-                    color = TMutedClr, fontSize = 12.sp, lineHeight = 17.sp
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
                 )
             }
         }

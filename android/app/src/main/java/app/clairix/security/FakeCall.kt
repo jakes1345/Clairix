@@ -383,7 +383,7 @@ private fun Avatar(name: String) {
         Modifier.size(112.dp).background(FcAvatar, CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        Text(initials, color = FcInk, fontSize = 40.sp, fontWeight = FontWeight.Medium)
+        Text(initials, style = MaterialTheme.typography.headlineLarge, color = FcInk)
     }
 }
 
@@ -394,20 +394,20 @@ private fun Ringing(who: FakeCall.Caller, onDecline: () -> Unit, onAnswer: () ->
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
-        Text("Incoming call", color = FcDim, fontSize = 15.sp)
+        Text("Incoming call", style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.height(28.dp))
         Avatar(who.name)
         Spacer(Modifier.height(20.dp))
-        Text(who.name, color = FcInk, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(who.name, style = MaterialTheme.typography.headlineLarge, color = FcInk, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
-        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", color = FcDim, fontSize = 15.sp)
+        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Button(onClick = onDecline, colors = ButtonDefaults.buttonColors(containerColor = FcDecline), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-                Text("End", color = FcInk, fontSize = 14.sp)
+                Text("End", style = MaterialTheme.typography.labelLarge, color = FcInk)
             }
             Button(onClick = onAnswer, colors = ButtonDefaults.buttonColors(containerColor = FcAnswer), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-                Text("Answer", color = FcInk, fontSize = 14.sp)
+                Text("Answer", style = MaterialTheme.typography.labelLarge, color = FcInk)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -429,16 +429,16 @@ private fun InCall(who: FakeCall.Caller, onEnd: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
-        Text(clock, color = FcDim, fontSize = 15.sp)
+        Text(clock, style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.height(28.dp))
         Avatar(who.name)
         Spacer(Modifier.height(20.dp))
-        Text(who.name, color = FcInk, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(who.name, style = MaterialTheme.typography.headlineLarge, color = FcInk, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
-        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", color = FcDim, fontSize = 15.sp)
+        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.weight(1f))
         Button(onClick = onEnd, colors = ButtonDefaults.buttonColors(containerColor = FcDecline), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-            Text("End", color = FcInk, fontSize = 14.sp)
+            Text("End", style = MaterialTheme.typography.labelLarge, color = FcInk)
         }
         Spacer(Modifier.height(24.dp))
     }

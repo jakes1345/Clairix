@@ -6,42 +6,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,42 +33,41 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.CameraFinding
 import app.clairix.analysis.HiddenCameraScanner
+import app.clairix.ui.components.BottomBarItem
+import app.clairix.ui.components.ClairixBottomBar
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.ClairixTopBar
+import app.clairix.ui.components.IconWell
+import app.clairix.ui.components.LogoMark
+import app.clairix.ui.components.ScreenList
+import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.SectionHeader
+import app.clairix.ui.components.SegmentedTabs
+import app.clairix.ui.components.StatusHero
+import app.clairix.ui.components.Tone
+import app.clairix.ui.components.color
+import app.clairix.ui.theme.ClairixTheme
 
 /*
  * The app shell: four top-level tabs (Scan, Comms, Drive, Activity) under a top
- * app bar that always carries the Settings gear. Scan opens on a hub of
- * category cards; each card opens that category's screen, which the top bar's
- * back arrow and the system back button both close again.
+ * app bar that always carries the Settings gear. Scan opens on a hub: a status
+ * hero that says in one line whether anything needs a look, then a tile per
+ * category with its live status. Each tile opens that category's screen, which
+ * the top bar's back arrow and the system back button both close again.
  *
- * What the destinations are, and the status line each hub card shows, live
+ * What the destinations are, and the status line each hub tile shows, live
  * here. Which existing screen is drawn for each destination is decided in
  * MainApp, which holds the callbacks those screens need.
  */
-
-// ── Colour tokens (the app's dark scheme, as every screen file keeps them) ──
-
-private val ShGround   = Color(0xFF0E1116)
-private val ShPanel    = Color(0xFF161B23)
-private val ShPanelHi  = Color(0xFF1D2430)
-private val ShInk      = Color(0xFFE6EAF1)
-private val ShInkDim   = Color(0xFFA8B2C1)
-private val ShMuted    = Color(0xFF6F7A8B)
-private val ShRule     = Color(0xFF262E3A)
-private val ShAccent   = Color(0xFFFF7A3D)
-private val ShCritical = Color(0xFFF2545B)
-private val ShCaution  = Color(0xFFE8B33D)
-private val ShClear    = Color(0xFF3DB88A)
-
-private val HubCardShape = RoundedCornerShape(8.dp)
 
 // ── Destinations ─────────────────────────────────────────────────────────────
 
@@ -263,11 +245,12 @@ internal fun rememberCategoryStatuses(): Map<ScanCategory, CategoryStatus> {
     )
 }
 
-private fun toneColor(tone: StatusTone): Color = when (tone) {
-    StatusTone.NEUTRAL -> ShMuted
-    StatusTone.CLEAR -> ShClear
-    StatusTone.CAUTION -> ShCaution
-    StatusTone.ALERT -> ShCritical
+/** How a hub status reads, as a status tone. */
+internal fun StatusTone.tone(): Tone = when (this) {
+    StatusTone.NEUTRAL -> Tone.Neutral
+    StatusTone.CLEAR -> Tone.Safe
+    StatusTone.CAUTION -> Tone.Caution
+    StatusTone.ALERT -> Tone.Danger
 }
 
 // ── Top and bottom bars ──────────────────────────────────────────────────────
@@ -276,10 +259,10 @@ private fun toneColor(tone: StatusTone): Color = when (tone) {
 internal class ShellMenuItem(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
 /**
- * The top app bar: [title], a back arrow when [onBack] is given, an overflow
- * menu when [menu] has entries, and the Settings gear on every screen.
+ * The top app bar: [title], the logo mark on a top-level screen or a back arrow
+ * when [onBack] is given, an overflow menu when [menu] has entries, and the
+ * Settings gear on every screen.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ShellTopBar(
     title: String,
@@ -288,55 +271,39 @@ internal fun ShellTopBar(
     menu: List<ShellMenuItem> = emptyList()
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    TopAppBar(
-        title = {
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        },
-        navigationIcon = {
-            if (onBack != null) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    val c = ClairixTheme.colors
+    ClairixTopBar(title = title, onBack = onBack) {
+        if (menu.isNotEmpty()) {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = c.textMuted)
                 }
-            }
-        },
-        actions = {
-            if (menu.isNotEmpty()) {
-                Box {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "More options")
-                    }
-                    DropdownMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                        containerColor = ShPanelHi
-                    ) {
-                        menu.forEach { item ->
-                            DropdownMenuItem(
-                                text = { Text(item.label, color = ShInk) },
-                                leadingIcon = { Icon(item.icon, contentDescription = null, tint = ShInkDim) },
-                                onClick = {
-                                    menuOpen = false
-                                    item.onClick()
-                                }
-                            )
-                        }
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                    containerColor = c.surfaceRaised,
+                    shape = ClairixShapes.Card
+                ) {
+                    menu.forEach { item ->
+                        DropdownMenuItem(
+                            text = { Text(item.label, style = MaterialTheme.typography.bodyLarge, color = c.text) },
+                            leadingIcon = { Icon(item.icon, contentDescription = null, tint = c.accent) },
+                            onClick = {
+                                menuOpen = false
+                                item.onClick()
+                            }
+                        )
                     }
                 }
             }
-            IconButton(onClick = onSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = "Settings")
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = ShGround,
-            titleContentColor = ShInk,
-            navigationIconContentColor = ShInk,
-            actionIconContentColor = ShInkDim
-        )
-    )
+        }
+        IconButton(onClick = onSettings) {
+            Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = c.textMuted)
+        }
+    }
 }
 
-/** The bottom navigation bar. A tab for which [alert] is true carries a red dot. */
+/** The bottom navigation bar. A tab for which [alert] is true carries a danger dot. */
 @Composable
 internal fun ShellBottomBar(
     tabs: List<HomeTab>,
@@ -344,128 +311,152 @@ internal fun ShellBottomBar(
     alert: (HomeTab) -> Boolean,
     onSelect: (HomeTab) -> Unit
 ) {
-    NavigationBar(
-        containerColor = ShPanel,
-        tonalElevation = 0.dp,
-        modifier = Modifier.fillMaxWidth().navigationBarsPadding()
-    ) {
-        tabs.forEach { tab ->
-            NavigationBarItem(
+    ClairixBottomBar(
+        tabs.map { tab ->
+            BottomBarItem(
+                label = tab.label,
+                icon = tab.icon,
                 selected = tab == selected,
-                onClick = { onSelect(tab) },
-                icon = {
-                    BadgedBox(badge = { if (alert(tab)) Badge(containerColor = ShCritical) }) {
-                        Icon(tab.icon, contentDescription = null)
-                    }
-                },
-                label = { Text(tab.label, fontSize = 12.sp, maxLines = 1) },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = ShAccent,
-                    selectedTextColor = ShAccent,
-                    indicatorColor = ShAccent.copy(alpha = 0.15f),
-                    unselectedIconColor = ShMuted,
-                    unselectedTextColor = ShMuted
-                )
+                badge = alert(tab),
+                onClick = { onSelect(tab) }
             )
         }
-    }
+    )
 }
 
-/** Sub-tabs under the top bar, for a destination with more than one screen. */
+/** Sub-pages under the top bar, for a destination with more than one screen. */
 @Composable
 internal fun ShellSubTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    TabRow(
-        selectedTabIndex = selected.coerceIn(0, labels.lastIndex),
-        containerColor = ShGround,
-        contentColor = ShAccent,
-        divider = { HorizontalDivider(color = ShRule) }
-    ) {
-        labels.forEachIndexed { index, label ->
-            Tab(
-                selected = index == selected,
-                onClick = { onSelect(index) },
-                text = { Text(label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                selectedContentColor = ShAccent,
-                unselectedContentColor = ShMuted
-            )
-        }
-    }
+    SegmentedTabs(labels, selected.coerceIn(0, labels.lastIndex), onSelect)
 }
 
 // ── Scan hub ─────────────────────────────────────────────────────────────────
 
-/** The Scan tab's landing screen: one large card per category, each with its live status. */
+/** What the hub's hero says, from every category's status. */
+internal data class HubVerdict(val headline: String, val body: String, val tone: Tone)
+
+internal fun hubVerdict(scanning: Boolean, statuses: Collection<CategoryStatus>): HubVerdict {
+    val alerts = statuses.count { it.tone == StatusTone.ALERT }
+    val cautions = statuses.count { it.tone == StatusTone.CAUTION }
+    val toCheck = alerts + cautions
+    return when {
+        toCheck > 0 -> HubVerdict(
+            headline = if (toCheck == 1) "1 thing needs a look" else "$toCheck things need a look",
+            body = if (alerts > 0) "Open the flagged checks below. Each one says what was found and what to do next."
+            else "Nothing urgent. Have a look at the checks marked below when you have a minute.",
+            tone = if (alerts > 0) Tone.Danger else Tone.Caution
+        )
+        scanning -> HubVerdict(
+            headline = "All clear",
+            body = "Nothing found in what Clairix checked. The scanner keeps watching in the background.",
+            tone = Tone.Safe
+        )
+        else -> HubVerdict(
+            headline = "Standing by",
+            body = "Nothing flagged so far. Turn the scanner on to watch for trackers and fake towers as you move.",
+            tone = Tone.Neutral
+        )
+    }
+}
+
+/**
+ * The Scan tab's landing screen: the status hero, then a tile per category with
+ * its live status line.
+ */
 @Composable
 internal fun ScanHub(
     scanning: Boolean,
     statuses: Map<ScanCategory, CategoryStatus>,
     onOpen: (ScanCategory) -> Unit
 ) {
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item(key = "§scanner") {
-            Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(Modifier.size(8.dp).background(if (scanning) ShClear else ShMuted, CircleShape))
-                Text(
-                    if (scanning) "Background scanner on" else "Background scanner off",
-                    color = ShInkDim, fontSize = 13.sp
-                )
-            }
-        }
-        items(ScanCategory.entries, key = { it.name }) { category ->
-            HubCard(
-                category = category,
-                status = statuses[category] ?: CategoryStatus("", StatusTone.NEUTRAL),
-                onClick = { onOpen(category) }
+    val verdict = hubVerdict(scanning, statuses.values)
+    ScreenList {
+        item(key = "§hero") {
+            StatusHero(
+                eyebrow = if (scanning) "Scanner live" else "Scanner off",
+                headline = verdict.headline,
+                body = verdict.body,
+                tone = verdict.tone,
+                modifier = Modifier.padding(top = 8.dp),
+                trailing = { LogoMark(size = 48.dp, contentDescription = null) },
+                footer = if (!scanning) {
+                    {
+                        SecondaryButton(
+                            "Open the scanner",
+                            onClick = { onOpen(ScanCategory.TRACKERS) },
+                            tone = Tone.Accent,
+                            icon = ClairixIcons.TrackChanges,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                } else null
             )
         }
-        // Clear of the floating SOS button at the bottom right.
-        item(key = "§footer") { Spacer(Modifier.height(88.dp)) }
+        item(key = "§checks") { SectionHeader("Checks", supporting = "${ScanCategory.entries.size} areas") }
+        ScanCategory.entries.chunked(2).forEach { pair ->
+            item(key = "row-" + pair.joinToString("-") { it.name }) {
+                Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    pair.forEach { category ->
+                        HubTile(
+                            category = category,
+                            status = statuses[category] ?: CategoryStatus("", StatusTone.NEUTRAL),
+                            onClick = { onOpen(category) },
+                            modifier = Modifier.weight(1f).fillMaxHeight()
+                        )
+                    }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun HubCard(category: ScanCategory, status: CategoryStatus, onClick: () -> Unit) {
-    val tone = toneColor(status.tone)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 96.dp)
-            .clip(HubCardShape)
-            .background(ShPanel, HubCardShape)
-            .then(if (status.alert) Modifier.border(1.dp, ShCritical.copy(alpha = 0.6f), HubCardShape) else Modifier)
-            .clickable(onClickLabel = "Open ${category.title}", onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+private fun HubTile(category: ScanCategory, status: CategoryStatus, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val c = ClairixTheme.colors
+    val tone = status.tone.tone()
+    val flagged = status.tone == StatusTone.ALERT || status.tone == StatusTone.CAUTION
+    val shape = ClairixShapes.Card
+    Column(
+        modifier
+            .heightIn(min = 152.dp)
+            .clip(shape)
+            .background(c.surface, shape)
+            .border(1.dp, if (flagged) tone.color().copy(alpha = 0.6f) else c.border, shape)
+            .clickable(onClickLabel = "Open ${category.title}", role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${category.title}. ${category.description}. ${status.text}"
+            }
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Box(
-            Modifier.size(48.dp).background(ShPanelHi, RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(category.icon, contentDescription = null, tint = if (status.alert) ShCritical else ShAccent)
+        Row(verticalAlignment = Alignment.Top) {
+            IconWell(category.icon, if (flagged) tone else Tone.Accent)
+            Spacer(Modifier.weight(1f))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = c.textSubtle)
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(category.title, color = ShInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Text(category.description, color = ShMuted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (status.text.isNotEmpty()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(top = 4.dp)
-                ) {
-                    Box(Modifier.size(6.dp).background(tone, CircleShape))
-                    Text(status.text, color = tone, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+        Spacer(Modifier.weight(1f))
+        Text(category.title, style = MaterialTheme.typography.titleMedium, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (status.text.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .padding(top = 6.dp)
+                        .size(6.dp)
+                        .background(if (status.tone == StatusTone.NEUTRAL) c.textSubtle else tone.color(), ClairixShapes.Tag)
+                )
+                Text(
+                    status.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (status.tone == StatusTone.NEUTRAL) c.textSubtle else tone.color(),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = ShMuted)
     }
 }
 
@@ -473,21 +464,16 @@ private fun HubCard(category: ScanCategory, status: CategoryStatus, onClick: () 
 @Composable
 internal fun TrackerActionsRow(onAction: (TrackerAction) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         TrackerAction.entries.forEach { action ->
-            OutlinedButton(
+            SecondaryButton(
+                action.title,
                 onClick = { onAction(action) },
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = ShInk),
-                border = androidx.compose.foundation.BorderStroke(1.dp, ShRule)
-            ) {
-                Icon(action.icon, contentDescription = null, tint = ShAccent, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.size(8.dp))
-                Text(action.title, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+                icon = action.icon,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

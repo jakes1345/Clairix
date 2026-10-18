@@ -20,6 +20,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.components.Tone
 
 private const val ONBOARDING_PREFS = "prefs"
 private const val ONBOARDING_DONE_KEY = "onboarding_done"
@@ -39,16 +43,6 @@ fun markOnboardingDone(context: Context) =
 
 // ── Colour tokens local to this file ──────────────────────────────────────────
 
-private val OGroundClr    = Color(0xFF0E1116)
-private val OPanelClr     = Color(0xFF161B23)
-private val OInkClr       = Color(0xFFE6EAF1)
-private val OInkDimClr    = Color(0xFFA8B2C1)
-private val OMutedClr     = Color(0xFF6F7A8B)
-private val OAccentClr    = Color(0xFFFF7A3D)
-private val OClearClr     = Color(0xFF3DB88A)
-private val OCriticalClr  = Color(0xFFF2545B)
-private val OBlueClr      = Color(0xFF4A8FD4)
-
 // ── OnboardingScreen ───────────────────────────────────────────────────────────
 
 @Composable
@@ -63,7 +57,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
         onComplete()
     }
 
-    Box(Modifier.fillMaxSize().background(OGroundClr)) {
+    Box(Modifier.fillMaxSize().background(ClairixTheme.colors.base)) {
         // Pages
         HorizontalPager(
             state = pagerState,
@@ -87,18 +81,11 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
 
         // Skip button — top right, hidden on last page
         if (pagerState.currentPage < TOTAL_PAGES - 1) {
-            TextButton(
+            GhostButton(
+                "Skip",
                 onClick = { scope.launch { pagerState.scrollToPage(TOTAL_PAGES - 1) } },
-                // The window is edge-to-edge, so the system bars are measured, not
-                // guessed: a fixed 48 dp put SKIP under a tall status bar and left a
-                // gap under a short one.
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(top = 8.dp, end = 16.dp)
-            ) {
-                Text("SKIP", color = OMutedClr, fontSize = 12.sp, letterSpacing = 1.sp)
-            }
+                tone = Tone.Neutral
+            )
         }
 
         // Page indicator dots + NEXT button — pinned at bottom
@@ -119,7 +106,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                             .size(if (active) 10.dp else 7.dp)
                             .clip(CircleShape)
                             .background(
-                                if (active) OAccentClr else OMutedClr.copy(alpha = 0.5f)
+                                if (active) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle.copy(alpha = 0.5f)
                             )
                     )
                 }
@@ -127,21 +114,15 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
 
             // NEXT button — hidden on the last page (which has its own Start button)
             if (pagerState.currentPage < TOTAL_PAGES - 1) {
-                Button(
+                PrimaryButton(
+                    "Next",
                     onClick = {
-                        scope.launch {
-                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = OAccentClr,
-                        contentColor = Color(0xFF12161D)
-                    ),
-                    shape = RoundedCornerShape(6.dp),
+                            scope.launch {
+                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                            }
+                        },
                     modifier = Modifier.width(200.dp)
-                ) {
-                    Text("NEXT", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                }
+                )
             }
         }
     }
@@ -162,21 +143,23 @@ private fun OPage1() {
         Box(
             Modifier
                 .size(120.dp)
-                .background(OPanelClr, RoundedCornerShape(60.dp)),
+                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text("A", color = OAccentClr, fontSize = 44.sp, fontWeight = FontWeight.Black)
+            Text("A", style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.accent)
         }
         Spacer(Modifier.height(36.dp))
         Text(
             "Clairix",
-            color = OInkClr, fontSize = 30.sp, fontWeight = FontWeight.Black,
-            letterSpacing = 1.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "Counter-surveillance for professionals",
-            color = OAccentClr, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.titleMedium,
+            color = ClairixTheme.colors.accent,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(24.dp))
@@ -185,14 +168,17 @@ private fun OPage1() {
             "Bluetooth trackers, IMSI catchers (fake cell towers), rogue WiFi access " +
             "points, and NFC tags — so you can detect and document covert monitoring " +
             "in real time.",
-            color = OInkDimClr, fontSize = 14.sp, textAlign = TextAlign.Center,
-            lineHeight = 22.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textMuted,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(20.dp))
         Text(
             "Detection data stays on this device. The Map tab downloads map tiles from " +
             "OpenStreetMap, which sees your IP address and the area you're viewing.",
-            color = OMutedClr, fontSize = 12.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(120.dp))
     }
@@ -211,13 +197,16 @@ private fun OPage2() {
     ) {
         Text(
             "Permissions",
-            color = OInkClr, fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(6.dp))
         Text(
             "Three permissions are needed for full functionality:",
-            color = OMutedClr, fontSize = 13.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(24.dp))
 
@@ -243,7 +232,9 @@ private fun OPage2() {
         Spacer(Modifier.height(16.dp))
         Text(
             "You will be prompted for permissions when you start scanning.",
-            color = OMutedClr, fontSize = 11.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -253,7 +244,7 @@ private fun OPermissionItem(label: String, desc: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(OPanelClr, RoundedCornerShape(8.dp))
+            .background(ClairixTheme.colors.surface, RoundedCornerShape(8.dp))
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top
@@ -262,11 +253,11 @@ private fun OPermissionItem(label: String, desc: String) {
             Modifier
                 .padding(top = 3.dp)
                 .size(8.dp)
-                .background(OAccentClr, CircleShape)
+                .background(ClairixTheme.colors.accent, CircleShape)
         )
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, color = OInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text(desc, color = OInkDimClr, fontSize = 12.sp, lineHeight = 17.sp)
+            Text(label, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(desc, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
         }
     }
 }
@@ -284,13 +275,14 @@ private fun OPage3() {
     ) {
         Text(
             "How It Works",
-            color = OInkClr, fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(24.dp))
 
         OHowItWorksItem(
-            color = OAccentClr,
+            color = ClairixTheme.colors.accent,
             title = "BLE Tracker Detection",
             text = "Bluetooth trackers broadcast advertising packets continuously. Clairix " +
                    "matches known signatures (AirTag, Tile, SmartTag) and monitors whether a device " +
@@ -299,7 +291,7 @@ private fun OPage3() {
         )
         Spacer(Modifier.height(10.dp))
         OHowItWorksItem(
-            color = OBlueClr,
+            color = ClairixTheme.colors.info,
             title = "IMSI Catcher Detection",
             text = "Clairix builds a local baseline of your usual cell towers, then watches " +
                    "for anomalies — forced technology downgrades, unknown cells at familiar " +
@@ -308,7 +300,7 @@ private fun OPage3() {
         )
         Spacer(Modifier.height(10.dp))
         OHowItWorksItem(
-            color = OMutedClr,
+            color = ClairixTheme.colors.textSubtle,
             title = "WiFi & NFC",
             text = "Rogue access points mimic carrier networks to intercept traffic. NFC tags " +
                    "hidden in objects can track location. Clairix flags suspicious SSIDs " +
@@ -322,7 +314,7 @@ private fun OHowItWorksItem(color: Color, title: String, text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(OPanelClr, RoundedCornerShape(8.dp))
+            .background(ClairixTheme.colors.surface, RoundedCornerShape(8.dp))
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top
@@ -334,8 +326,8 @@ private fun OHowItWorksItem(color: Color, title: String, text: String) {
                 .background(color, RoundedCornerShape(2.dp))
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(title, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(text, color = OInkDimClr, fontSize = 12.sp, lineHeight = 17.sp)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = color)
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
         }
     }
 }
@@ -354,21 +346,23 @@ private fun OCommsPage1() {
         Box(
             Modifier
                 .size(120.dp)
-                .background(OPanelClr, RoundedCornerShape(60.dp)),
+                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text("A", color = OAccentClr, fontSize = 44.sp, fontWeight = FontWeight.Black)
+            Text("A", style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.accent)
         }
         Spacer(Modifier.height(36.dp))
         Text(
             "Clairix Comms",
-            color = OInkClr, fontSize = 30.sp, fontWeight = FontWeight.Black,
-            letterSpacing = 1.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "Private messages and calls for your circle",
-            color = OAccentClr, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.titleMedium,
+            color = ClairixTheme.colors.accent,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(24.dp))
@@ -377,13 +371,16 @@ private fun OCommsPage1() {
             "can read it. The relay that carries it sees neither what a message says nor who " +
             "sent it. Calls are encrypted the same way. No phone number, no Google account and " +
             "no carrier are involved.",
-            color = OInkDimClr, fontSize = 14.sp, textAlign = TextAlign.Center,
-            lineHeight = 22.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textMuted,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(20.dp))
         Text(
             "Your keys, contacts and message history stay on this device.",
-            color = OMutedClr, fontSize = 12.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(120.dp))
     }
@@ -402,13 +399,16 @@ private fun OCommsPage2() {
     ) {
         Text(
             "Permissions",
-            color = OInkClr, fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(6.dp))
         Text(
             "Each one is asked for when it is first needed:",
-            color = OMutedClr, fontSize = 13.sp, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(24.dp))
 
@@ -448,15 +448,16 @@ private fun OCommsPage3(onStart: () -> Unit) {
         Box(
             Modifier
                 .size(120.dp)
-                .background(OPanelClr, RoundedCornerShape(60.dp)),
+                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Check, contentDescription = null, tint = OClearClr, modifier = Modifier.size(64.dp))
+            Icon(Icons.Filled.Check, contentDescription = null, tint = ClairixTheme.colors.safe, modifier = Modifier.size(64.dp))
         }
         Spacer(Modifier.height(36.dp))
         Text(
             "You need an invite",
-            color = OInkClr, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(16.dp))
@@ -464,33 +465,20 @@ private fun OCommsPage3(onStart: () -> Unit) {
             "The person who gave you this app sends you an invite link or shows you a QR code. " +
             "Opening it registers you with their relay and gives you a Clairix number; it also adds " +
             "them as your first contact.",
-            color = OInkDimClr, fontSize = 14.sp, textAlign = TextAlign.Center,
-            lineHeight = 21.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textMuted,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(14.dp))
         Text(
             "A Clairix number is not a phone number. It reaches other Clairix apps on the same relay " +
             "and nothing else. Keep COMMS set to Online so calls ring while the app is closed.",
-            color = OMutedClr, fontSize = 12.sp, textAlign = TextAlign.Center,
-            lineHeight = 18.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(44.dp))
-        Button(
-            onClick = onStart,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = OAccentClr,
-                contentColor = Color(0xFF12161D)
-            ),
-            shape = RoundedCornerShape(6.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                "GET STARTED",
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                letterSpacing = 1.sp
-            )
-        }
+        PrimaryButton("Get started", onClick = onStart, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(140.dp))
     }
 }
@@ -509,47 +497,35 @@ private fun OPage4(onStart: () -> Unit) {
         Box(
             Modifier
                 .size(120.dp)
-                .background(OPanelClr, RoundedCornerShape(60.dp)),
+                .background(ClairixTheme.colors.surface, RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Check, contentDescription = null, tint = OClearClr, modifier = Modifier.size(64.dp))
+            Icon(Icons.Filled.Check, contentDescription = null, tint = ClairixTheme.colors.safe, modifier = Modifier.size(64.dp))
         }
         Spacer(Modifier.height(36.dp))
         Text(
             "Ready to Scan",
-            color = OInkClr, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineLarge,
+            color = ClairixTheme.colors.text,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(16.dp))
         Text(
             "Clairix is ready. Start scanning now to begin monitoring for surveillance devices.",
-            color = OInkDimClr, fontSize = 14.sp, textAlign = TextAlign.Center,
-            lineHeight = 21.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textMuted,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(14.dp))
         Text(
             "For best results: keep the app running while travelling. Confirming a tracker " +
             "is following typically requires 10 minutes and 300 metres of shared movement.",
-            color = OMutedClr, fontSize = 12.sp, textAlign = TextAlign.Center,
-            lineHeight = 18.sp
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(44.dp))
-        Button(
-            onClick = onStart,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = OAccentClr,
-                contentColor = Color(0xFF12161D)
-            ),
-            shape = RoundedCornerShape(6.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                "START SCANNING",
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                letterSpacing = 1.sp
-            )
-        }
+        PrimaryButton("Start scanning", onClick = onStart, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(140.dp))
     }
 }
