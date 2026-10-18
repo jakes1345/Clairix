@@ -179,18 +179,29 @@ object StalkwareScanner {
         "app.clairix"
     )
 
+    /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
     private val SUSPECT_PERMISSIONS = linkedMapOf(
-        Manifest.permission.BIND_ACCESSIBILITY_SERVICE to (2 to "declares an accessibility service (reads every screen, every tap)"),
         Manifest.permission.READ_SMS to (2 to "can read SMS (including one-time codes)"),
         Manifest.permission.RECEIVE_SMS to (1 to "receives SMS as they arrive"),
         Manifest.permission.READ_CALL_LOG to (2 to "can read the call log"),
         Manifest.permission.PROCESS_OUTGOING_CALLS to (1 to "sees outgoing calls as they are placed"),
         Manifest.permission.SYSTEM_ALERT_WINDOW to (1 to "can draw over other apps"),
         Manifest.permission.RECORD_AUDIO to (1 to "can record audio"),
-        Manifest.permission.ACCESS_BACKGROUND_LOCATION to (1 to "can read location in the background"),
+        Manifest.permission.ACCESS_BACKGROUND_LOCATION to (1 to "can read location in the background")
+    )
+
+    /**
+     * Permissions an app *protects its own components with* (`android:permission` on
+     * a `<service>` or `<receiver>`), with their weight and reason. These are how a
+     * component declares itself an accessibility service, device admin, notification
+     * listener or VPN: the system alone holds the BIND_ permission, and an app never
+     * requests it, so looking for them among requested permissions matched nothing.
+     */
+    private val SUSPECT_BINDINGS = linkedMapOf(
+        Manifest.permission.BIND_ACCESSIBILITY_SERVICE to (2 to "declares an accessibility service (reads every screen, every tap)"),
         Manifest.permission.BIND_DEVICE_ADMIN to (1 to "declares a device admin (can resist uninstall)"),
         Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE to (1 to "declares a notification listener"),
-        "android.permission.BIND_VPN_SERVICE" to (0 to "declares a VPN service")
+        Manifest.permission.BIND_VPN_SERVICE to (0 to "declares a VPN service")
     )
 
     /** Whether the hidden-service signal is available: Settings → Usage access → Clairix. */
@@ -233,13 +244,7 @@ object StalkwareScanner {
         val usageAccess = hasUsageAccess(app)
         val (fgsPkgs, resumedPkgs) = if (usageAccess) usageSignals(app) else emptySet<String>() to emptySet()
 
-        val flags = PackageManager.GET_PERMISSIONS
-        val packages: List<PackageInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(flags.toLong()))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledPackages(flags)
-        }
+        val packages = installedPackages(pm)
 
         val found = ArrayList<SuspiciousApp>()
         for (pkg in packages) {
@@ -283,6 +288,13 @@ object StalkwareScanner {
             val requested = pkg.requestedPermissions?.toSet() ?: emptySet()
             for ((perm, weight) in SUSPECT_PERMISSIONS) {
                 if (perm in requested) {
+                    score += weight.first
+                    reasons += weight.second
+                }
+            }
+            val declared = declaredBindings(pkg)
+            for ((perm, weight) in SUSPECT_BINDINGS) {
+                if (perm in declared) {
                     score += weight.first
                     reasons += weight.second
                 }
@@ -341,6 +353,48 @@ object StalkwareScanner {
         )
         _results.value = result
         return result
+    }
+
+    /** What [scan] needs of every package: requested permissions, services and receivers. */
+    private const val PACKAGE_FLAGS =
+        PackageManager.GET_PERMISSIONS or PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS
+
+    /**
+     * Every installed package with its permissions and components. Asking for the
+     * components of every package at once can exceed the binder transaction limit on
+     * a phone with many large apps; then the list is taken with permissions only and
+     * each package's components are read on their own.
+     */
+    private fun installedPackages(pm: PackageManager): List<PackageInfo> {
+        runCatching { return installed(pm, PACKAGE_FLAGS) }
+        val bare = installed(pm, PackageManager.GET_PERMISSIONS)
+        return bare.map { pkg ->
+            runCatching { packageInfo(pm, pkg.packageName, PACKAGE_FLAGS) }.getOrNull() ?: pkg
+        }
+    }
+
+    private fun installed(pm: PackageManager, flags: Int): List<PackageInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(flags.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledPackages(flags)
+        }
+
+    private fun packageInfo(pm: PackageManager, name: String, flags: Int): PackageInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getPackageInfo(name, PackageManager.PackageInfoFlags.of(flags.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(name, flags)
+        }
+
+    /** The permissions [pkg]'s services and receivers are protected with. */
+    private fun declaredBindings(pkg: PackageInfo): Set<String> {
+        val out = HashSet<String>()
+        pkg.services?.forEach { s -> s.permission?.let(out::add) }
+        pkg.receivers?.forEach { r -> r.permission?.let(out::add) }
+        return out
     }
 
     private fun installerOf(pm: PackageManager, packageName: String): String? = runCatching {
