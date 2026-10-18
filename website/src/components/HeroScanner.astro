@@ -121,7 +121,8 @@ const readouts = [
     transform: scale(0.97);
   }
   .beam {
-    z-index: 3;
+    /* Passes behind the mark: the logo itself never carries a glow. */
+    z-index: 1;
     width: 58%;
     height: 2px;
     align-self: start;
