@@ -1,0 +1,33 @@
+---
+import DocLayout from '../layouts/DocLayout.astro';
+import Icon from '../components/Icon.astro';
+import { Content, getHeadings } from '../content/docs/press.md';
+import { pages, SUPPORT_EMAIL, PRESS_ASSETS_URL } from '../config/site';
+---
+
+<DocLayout meta={pages.press} label="Press" title="Press kit<em>.</em>" headings={getHeadings()}>
+  <div slot="lede" class="press-lede">
+    <p class="lede">
+      Media enquiries: <a class="text-link" href={`mailto:${SUPPORT_EMAIL}?subject=Press`}>{SUPPORT_EMAIL}</a>, with “Press” in
+      the subject line.
+    </p>
+    {
+      PRESS_ASSETS_URL && (
+        <p class="lede">
+          Logo files, screenshots and the app icon:{' '}
+          <a class="text-link" href={PRESS_ASSETS_URL} rel="noopener">
+            press assets <Icon name="external" size={14} />
+          </a>
+        </p>
+      )
+    }
+  </div>
+  <article class="prose"><Content /></article>
+</DocLayout>
+
+<style>
+  .press-lede {
+    display: grid;
+    gap: 8px;
+  }
+</style>

@@ -1,0 +1,134 @@
+---
+import DocLayout from '../layouts/DocLayout.astro';
+import Icon from '../components/Icon.astro';
+import { Content, getHeadings } from '../content/docs/support.md';
+import raw from '../content/docs/support.md?raw';
+import { pages, SUPPORT_EMAIL, SECURITY_EMAIL } from '../config/site';
+import { openCollectiveUrl } from '../config/release';
+import { faqPage, toPlainText } from '../lib/schema';
+
+// FAQPage structured data from the troubleshooting entries ("### question" + answer).
+const problems = raw.split(/^## /m).find((s) => s.startsWith('Common problems')) ?? '';
+const faq = problems
+  .split(/^### /m)
+  .slice(1)
+  .map((block) => {
+    const [q, ...rest] = block.split('\n');
+    return { q: q.replace(/^"|"$/g, '').trim(), a: toPlainText(rest.join('\n').replace(/^\s*(\d+\.|-)\s+/gm, '')) };
+  })
+  .filter((i) => i.q && i.a);
+---
+
+<DocLayout
+  meta={pages.support}
+  label="Support"
+  title="We answer our own email<em>.</em>"
+  headings={getHeadings()}
+  tocDepths={[2, 3]}
+  tocTitle="Troubleshooting"
+  jsonLd={[faqPage(faq)]}
+>
+  <p class="lede" slot="lede">
+    There is no chatbot and no ticket portal. Please include your phone model, Android version and Clairix version (shown at
+    the bottom of Settings). Do not send message content or screenshots of conversations; we never need them and do not want
+    them.
+  </p>
+
+  <section slot="before" class="contact" aria-labelledby="contact-title">
+    <div class="wrap">
+      <h2 id="contact-title" class="visually-hidden">Contact</h2>
+      <div class="contact-grid">
+        <a class="contact-card panel cham" href={`mailto:${SUPPORT_EMAIL}`}>
+          <span class="icon-tile cham cham--oct"><Icon name="mail" /></span>
+          <span class="label label--plain">General help</span>
+          <span class="contact-value">{SUPPORT_EMAIL}</span>
+        </a>
+        <div class="contact-card panel cham">
+          <span class="icon-tile cham cham--oct"><Icon name="shield" /></span>
+          <span class="label label--plain">Security vulnerabilities</span>
+          <a class="contact-value" href={`mailto:${SECURITY_EMAIL}`}>{SECURITY_EMAIL}</a>
+          <a class="text-link contact-sub" href="/security#disclosure">How we handle reports</a>
+        </div>
+        <a class="contact-card panel cham" href="/delete-account">
+          <span class="icon-tile cham cham--oct"><Icon name="wipe" /></span>
+          <span class="label label--plain">Account deletion</span>
+          <span class="contact-value">clairix.app/delete-account</span>
+        </a>
+        {
+          openCollectiveUrl && (
+            <a class="contact-card contact-card--accent panel cham" href={openCollectiveUrl} rel="noopener">
+              <span class="icon-tile cham cham--oct">
+                <Icon name="heart" />
+              </span>
+              <span class="label label--plain">Support Clairix</span>
+              <span class="contact-value">
+                Open Collective <Icon name="external" size={16} />
+              </span>
+            </a>
+          )
+        }
+      </div>
+      <p class="danger-note">
+        <Icon name="sos" size={20} />
+        If you believe you are in immediate danger, contact local emergency services first.
+      </p>
+    </div>
+  </section>
+
+  <article class="prose"><Content /></article>
+</DocLayout>
+
+<style>
+  .contact {
+    padding-top: clamp(40px, 5vw, 64px);
+  }
+  .contact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+  .contact-card {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+    text-decoration: none;
+    color: var(--clx-text);
+  }
+  a.contact-card:hover {
+    --cham-border: var(--clx-accent);
+  }
+  .contact-card .icon-tile {
+    margin-bottom: 8px;
+  }
+  .contact-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 1.0625rem;
+    color: var(--clx-text);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+  a.contact-value:hover {
+    color: var(--clx-accent);
+  }
+  .contact-sub {
+    font-size: 0.875rem;
+  }
+  .contact-card--accent {
+    --cham-border: var(--clx-accent);
+  }
+  .danger-note {
+    margin-top: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--clx-text-muted);
+    font-size: 0.9375rem;
+  }
+  .danger-note :global(.icon) {
+    color: var(--clx-danger);
+    flex: none;
+  }
+</style>
