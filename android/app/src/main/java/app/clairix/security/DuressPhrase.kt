@@ -44,25 +44,27 @@ object DuressPhrase {
 
     /** A phrase must have at least this many words… */
     const val MIN_WORDS = 3
-    /** …or at least this many characters (after collapsing spaces). */
+    /** …and at least this many characters, not counting spaces. */
     const val MIN_CHARS = 12
 
-    /** What the owner is told when a phrase is too short; shown by the Settings screen. */
+    /** What the owner is told when a phrase is too short; shown by the Duress screen. */
     const val TOO_SHORT_MESSAGE =
-        "Too short. Use at least $MIN_WORDS words or $MIN_CHARS characters — a short phrase like " +
-            "\"ok\" is typed by accident and would send an SOS."
+        "Too short. Use at least $MIN_WORDS words and $MIN_CHARS letters (spaces don't count) — " +
+            "a short phrase like \"on my way\" is typed by accident and would send an SOS."
 
     /**
      * Why [phrase] cannot be the duress phrase, or null when it can. A blank phrase is
-     * valid: it clears the setting. Anything else needs [MIN_WORDS] words or
-     * [MIN_CHARS] characters, so an everyday reply ("ok", "yes", "on my way") cannot
-     * trigger an SOS by accident.
+     * valid: it clears the setting. Anything else needs [MIN_WORDS] words *and*
+     * [MIN_CHARS] characters other than spaces. Either rule alone lets everyday
+     * replies through — "on my way", "see you soon" and "i love you" all have three
+     * words — and those must never be able to send an SOS by accident.
      */
     fun validate(phrase: String): String? {
         val norm = normalise(phrase)
         if (norm.isEmpty()) return null
         val words = norm.split(' ').size
-        return if (words >= MIN_WORDS || norm.length >= MIN_CHARS) null else TOO_SHORT_MESSAGE
+        val letters = norm.count { it != ' ' }
+        return if (words >= MIN_WORDS && letters >= MIN_CHARS) null else TOO_SHORT_MESSAGE
     }
 
     /**
@@ -88,12 +90,32 @@ object DuressPhrase {
     fun isConfigured(context: Context): Boolean = prefs(context).contains(KEY_PHRASE)
 
     /**
+     * True when a phrase is stored that fails [validate] — one saved before the
+     * length rule — and so never fires until it is replaced. Decrypts; call off the
+     * main thread.
+     */
+    fun needsReplacing(context: Context): Boolean {
+        val phrase = cached ?: load(context) ?: return false
+        return validate(phrase) != null
+    }
+
+    /**
      * True when [body] is the duress phrase. Decrypts on first use; a Keystore
      * that refuses (key gone after an unpair, say) reads as "not configured".
+     *
+     * A stored phrase that fails [validate] never matches: one saved before the
+     * length rule existed ("ok") would otherwise still fire on an everyday reply.
+     * The owner sees the setting as configured and is asked to replace it there.
      */
     fun check(body: String, context: Context): Boolean {
         val phrase = cached ?: load(context) ?: return false
-        return constantTimeEquals(normalise(body), phrase)
+        return matches(body, phrase)
+    }
+
+    /** [check] against an already-decrypted, normalised [stored] phrase. */
+    internal fun matches(body: String, stored: String): Boolean {
+        if (validate(stored) != null) return false
+        return constantTimeEquals(normalise(body), stored)
     }
 
     /**

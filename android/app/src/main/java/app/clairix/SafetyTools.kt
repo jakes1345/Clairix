@@ -225,6 +225,13 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
     var message by remember { mutableStateOf<String?>(null) }
     var messageIsError by remember { mutableStateOf(false) }
     var showClear by remember { mutableStateOf(false) }
+    // A phrase saved before the length rule is never matched; say so instead of
+    // letting the owner believe it still works.
+    var tooShortStored by remember { mutableStateOf(false) }
+    LaunchedEffect(configured) {
+        tooShortStored = configured &&
+            withContext(Dispatchers.IO) { runCatching { DuressPhrase.needsReplacing(context) }.getOrDefault(false) }
+    }
 
     if (showClear) {
         AlertDialog(
@@ -274,6 +281,13 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     }
                     TBadge(if (configured) "CONFIGURED" else "NOT SET", if (configured) TClearClr else TMutedClr)
                 }
+                if (tooShortStored) {
+                    Text(
+                        "The saved phrase is shorter than the current minimum and will not send an SOS. " +
+                        "Replace it below.",
+                        color = TCriticalClr, fontSize = 12.sp, lineHeight = 16.sp
+                    )
+                }
             }
         }
 
@@ -288,7 +302,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                 )
                 Text(
                     "Pick something you would plausibly say but never would by accident — at least " +
-                    "${DuressPhrase.MIN_WORDS} words or ${DuressPhrase.MIN_CHARS} characters. Matching ignores " +
+                    "${DuressPhrase.MIN_WORDS} words and ${DuressPhrase.MIN_CHARS} letters, not counting spaces. " +
+                    "Matching ignores " +
                     "case and extra spaces. The phrase is stored encrypted and is never shown again — " +
                     "not here, not in the timeline, not in a notification.",
                     color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
@@ -309,6 +324,7 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                             r.onSuccess {
                                 phrase = ""
                                 configured = DuressPhrase.isConfigured(context)
+                                tooShortStored = false
                                 message = if (configured) "Saved" else "A blank phrase clears the setting"
                                 messageIsError = false
                             }.onFailure {
