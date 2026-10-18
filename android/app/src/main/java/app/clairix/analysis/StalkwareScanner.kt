@@ -294,7 +294,14 @@ object StalkwareScanner {
             }
             val declared = declaredBindings(pkg)
             for ((perm, weight) in SUSPECT_BINDINGS) {
-                if (perm in declared) {
+                // A known screen reader, password manager or wearable companion
+                // declaring the service it exists to provide is not a signal.
+                val vouched = when (perm) {
+                    Manifest.permission.BIND_ACCESSIBILITY_SERVICE -> name in KNOWN_ACCESSIBILITY
+                    Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE -> name in KNOWN_LISTENERS
+                    else -> false
+                }
+                if (perm in declared && !vouched) {
                     score += weight.first
                     reasons += weight.second
                 }
@@ -355,9 +362,15 @@ object StalkwareScanner {
         return result
     }
 
-    /** What [scan] needs of every package: requested permissions, services and receivers. */
+    /**
+     * What [scan] needs of every package: requested permissions, services and
+     * receivers — including components disabled in the manifest. Monitoring apps
+     * commonly ship their accessibility service or admin receiver disabled and
+     * enable it during setup; without MATCH_DISABLED_COMPONENTS those are omitted.
+     */
     private const val PACKAGE_FLAGS =
-        PackageManager.GET_PERMISSIONS or PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS
+        PackageManager.GET_PERMISSIONS or PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS or
+            PackageManager.MATCH_DISABLED_COMPONENTS
 
     /**
      * Every installed package with its permissions and components. Asking for the
