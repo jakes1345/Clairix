@@ -95,16 +95,18 @@ def is_http_url(url: str) -> bool:
     return bool(HTTP_URL_RE.match(url))
 
 
-# Redirect targets a feed may not send the job to: the runner itself, its private networks and
-# link-local addresses such as the cloud metadata service (169.254.169.254).
+# Addresses the job never fetches from, as a feed URL or a redirect target: the runner itself,
+# private and carrier-grade NAT networks, link-local addresses such as the cloud metadata service
+# (169.254.169.254), multicast and broadcast, and NAT64 (64:ff9b::/96 can embed any IPv4 address).
 BLOCKED_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
-    "0.0.0.0/8", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
-    "::1/128", "::/128", "fc00::/7", "fe80::/10",
+    "0.0.0.0/8", "127.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "172.16.0.0/12", "192.168.0.0/16",
+    "169.254.0.0/16", "224.0.0.0/4", "255.255.255.255/32",
+    "::1/128", "::/128", "64:ff9b::/96", "fc00::/7", "fe80::/10",
 ))
 
 
 class RedirectRefused(ValueError):
-    """A feed redirected somewhere the job does not fetch from; not retried."""
+    """A feed URL, or a redirect, points somewhere the job does not fetch from; not retried."""
 
 
 def blocked_address(ip: str) -> bool:
@@ -114,41 +116,48 @@ def blocked_address(ip: str) -> bool:
     return any(addr in net for net in BLOCKED_NETWORKS)
 
 
-def check_redirect_target(url: str) -> None:
+def check_target(url: str, what: str = "a redirect") -> None:
     """Raise RedirectRefused unless url is http(s) to a host that resolves only to public addresses.
 
-    A name that does not resolve is refused too: the check must not pass by failing.
+    Applied to every feed URL before it is opened and to every redirect target before it is
+    followed. A name that does not resolve is refused too: the check must not pass by failing.
+
+    Accepted limitation, DNS rebinding: the name is resolved here and again by the connection, so
+    a host could answer with a public address now and a private one a moment later. Pinning the
+    connection to the checked address would need a custom HTTPS handler; the impact is low
+    because the job only reads the response as GeoJSON work zones, and errors report a status or
+    exception type, never the response body, so nothing read from a private address is published.
     """
     if not is_http_url(url):
-        raise RedirectRefused("refusing a redirect to a non-http(s) URL")
+        raise RedirectRefused(f"refusing {what} to a non-http(s) URL")
     host = urllib.parse.urlsplit(url).hostname
     if not host:
-        raise RedirectRefused("refusing a redirect without a host")
+        raise RedirectRefused(f"refusing {what} without a host")
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, UnicodeError) as e:
-        raise RedirectRefused(f"refusing a redirect to a host that does not resolve ({type(e).__name__})") from None
+        raise RedirectRefused(f"refusing {what} to a host that does not resolve ({type(e).__name__})") from None
     addresses = {info[4][0] for info in infos}
     if not addresses or any(blocked_address(a) for a in addresses):
-        raise RedirectRefused("refusing a redirect to a loopback, private or link-local address")
+        raise RedirectRefused(f"refusing {what} to a loopback, private, link-local or otherwise non-public address")
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follows a redirect only to a URL that check_redirect_target allows."""
+    """Follows a redirect only to a URL that check_target allows."""
 
     def http_error_302(self, req, fp, code, msg, headers):
         # Checked before the stdlib's own handling, which turns some schemes (file:) into a
         # generic, retried HTTPError instead of a refusal.
         location = headers.get("location") or headers.get("uri")
         if location:
-            check_redirect_target(urllib.parse.urljoin(req.full_url, location))
+            check_target(urllib.parse.urljoin(req.full_url, location))
         return super().http_error_302(req, fp, code, msg, headers)
 
     http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # newurl is already absolute here; checked again so no path past http_error_30x skips it.
-        check_redirect_target(newurl)
+        check_target(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -212,6 +221,7 @@ def fetch_bytes(url: str, timeout: float = FETCH_TIMEOUT_S, cap: int = MAX_BYTES
                 retries: int | None = None) -> bytes:
     if not is_http_url(url):
         raise ValueError("refusing a non-http(s) URL")
+    check_target(url, "a feed URL")
     retries = RETRIES if retries is None else retries
     last: Exception | None = None
     for attempt in range(retries + 1):

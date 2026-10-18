@@ -5,6 +5,7 @@ import math
 import os
 import pathlib
 import threading
+import urllib.parse
 
 import pytest
 
@@ -73,6 +74,16 @@ def www(monkeypatch):
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     server = _Www()
+    # Feed URLs and redirects to loopback are refused; only this server's own origin is let
+    # through, so every other target (localhost, 127.0.0.1 on another port) still is.
+    real_check = agg.check_target
+    origin = f"127.0.0.1:{server.server.server_address[1]}"
+
+    def check(url, what="a redirect"):
+        if urllib.parse.urlsplit(url).netloc == origin:
+            return
+        real_check(url, what)
+    monkeypatch.setattr(agg, "check_target", check)
     yield server
     server.close()
 
@@ -322,6 +333,29 @@ def test_redirects_to_unsafe_targets_are_refused_without_retry(www, target, reas
     assert agg.fetch_bytes(feed) == b'{"type": "FeatureCollection", "features": []}'
 
 
+@pytest.mark.parametrize("url", [
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    "http://100.100.100.200/latest/meta-data/",   # a cloud metadata address in carrier-grade NAT space
+])
+def test_a_feed_url_to_the_metadata_service_is_refused_before_connecting(url, monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("the connection must not be opened")
+    monkeypatch.setattr(agg.OPENER, "open", never)
+    with pytest.raises(agg.RedirectRefused, match="a feed URL"):
+        agg.fetch_bytes(url, retries=2)
+    status, items = agg.process_feed({"name": "m", "state": "ohio", "source": "x", "url": url}, NOW)
+    assert not status["ok"] and items == [] and "refusing a feed URL" in status["error"]
+
+
+def test_a_feed_url_to_loopback_is_refused(www):
+    # The test server's own origin is exempt; the same host on another port is not.
+    with pytest.raises(agg.RedirectRefused, match="a feed URL"):
+        agg.fetch_bytes("http://127.0.0.1:1/feed", retries=0)
+    with pytest.raises(agg.RedirectRefused, match="a feed URL"):
+        agg.fetch_bytes("http://localhost/feed", retries=0)
+
+
 def test_refused_redirect_is_reported_on_the_feed(www):
     www.redirects["/meta"] = "http://169.254.169.254/latest/meta-data/iam/"
     status, items = agg.process_feed({"name": "m", "state": "ohio", "source": "x", "url": www.url("/meta")}, NOW)
@@ -349,19 +383,22 @@ def test_a_redirect_host_resolving_anywhere_private_is_refused(monkeypatch):
         (agg.socket.AF_INET, agg.socket.SOCK_STREAM, 6, "", ("192.168.1.10", 0)),
     ])
     with pytest.raises(agg.RedirectRefused):
-        agg.check_redirect_target("https://mixed.example.org/feed")
+        agg.check_target("https://mixed.example.org/feed")
 
     def fail(*a, **k):
         raise agg.socket.gaierror("no such host")
     monkeypatch.setattr(agg.socket, "getaddrinfo", fail)
     with pytest.raises(agg.RedirectRefused, match="does not resolve"):
-        agg.check_redirect_target("https://nowhere.example.org/feed")
+        agg.check_target("https://nowhere.example.org/feed")
 
 
 @pytest.mark.parametrize("ip, blocked", [
     ("169.254.169.254", True), ("127.0.0.1", True), ("10.1.2.3", True), ("172.16.0.1", True),
     ("172.31.255.255", True), ("192.168.0.1", True), ("::1", True), ("fc00::1", True), ("fd12::1", True),
     ("fe80::1%eth0", True), ("::ffff:127.0.0.1", True), ("::ffff:169.254.169.254", True),
+    ("100.64.0.1", True), ("100.127.255.255", True), ("224.0.0.1", True), ("239.255.255.250", True),
+    ("255.255.255.255", True), ("64:ff9b::a9fe:a9fe", True), ("64:ff9b::808:808", True),
+    ("100.128.0.1", False), ("100.63.255.255", False), ("223.255.255.255", False),
     ("172.32.0.1", False), ("8.8.8.8", False), ("2606:4700::1111", False),
 ])
 def test_blocked_address(ip, blocked):
