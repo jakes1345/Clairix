@@ -1,5 +1,9 @@
 package app.clairix
 
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.layout
+import androidx.compose.foundation.shape.CutCornerShape
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -3475,16 +3479,50 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
                     )
                 }
             } else {
-                item(key = "§nearby") {
-                    ListGroup {
-                        wifi.nearby.forEachIndexed { i, n ->
-                            if (i > 0) Hairline()
-                            NearbyWifiRow(n)
-                        }
-                    }
+                // One lazy item per network, each drawing its slice of the group's
+                // chamfered frame, so a long list of networks stays lazy.
+                itemsIndexed(wifi.nearby, key = { _, n -> "ap|${n.bssid}" }) { i, n ->
+                    NearbyWifiGroupItem(n, first = i == 0, last = i == wifi.nearby.lastIndex)
                 }
             }
         }
+    }
+}
+
+/**
+ * One network in the "In range" group, as a lazy item. Each item draws its own
+ * piece of the group's frame: the cut corner on top of the first, on the bottom
+ * of the last, and a hairline between neighbours. The list spaces its items
+ * 8 dp apart; every item but the last reports itself 8 dp shorter, so the next
+ * one starts right under it and the group reads as one card.
+ */
+/** The gap ScreenList leaves between items. */
+private val LIST_SPACING = 8.dp
+
+@Composable
+private fun NearbyWifiGroupItem(n: WifiNetwork, first: Boolean, last: Boolean) {
+    val c = ClairixTheme.colors
+    val shape = CutCornerShape(topStart = if (first) 12.dp else 0.dp, bottomEnd = if (last) 12.dp else 0.dp)
+    Column(
+        Modifier
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                val overlap = if (last) 0 else LIST_SPACING.roundToPx()
+                layout(placeable.width, placeable.height - overlap) { placeable.place(0, 0) }
+            }
+            .fillMaxWidth()
+            .clip(shape)
+            .background(c.surface, shape)
+            .drawBehind {
+                val w = 1.dp.toPx()
+                drawRect(c.border, size = Size(w, size.height))
+                drawRect(c.border, topLeft = Offset(size.width - w, 0f), size = Size(w, size.height))
+                if (first) drawRect(c.border, size = Size(size.width, w))
+                if (last) drawRect(c.border, topLeft = Offset(0f, size.height - w), size = Size(size.width, w))
+            }
+    ) {
+        if (!first) Hairline()
+        NearbyWifiRow(n)
     }
 }
 

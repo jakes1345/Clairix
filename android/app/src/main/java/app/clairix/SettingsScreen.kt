@@ -318,9 +318,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         color = c.textSubtle,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
+                    // One radio group for all four themes, across both rows.
+                    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ClairixThemeName.entries.chunked(2).forEach { pair ->
                         Row(
-                            Modifier.fillMaxWidth().height(IntrinsicSize.Min).selectableGroup(),
+                            Modifier.fillMaxWidth().height(IntrinsicSize.Min),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             pair.forEach { option ->
@@ -332,6 +334,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                                 )
                             }
                         }
+                    }
                     }
                 }
             }

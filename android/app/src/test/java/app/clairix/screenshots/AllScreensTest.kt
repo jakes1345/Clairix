@@ -17,6 +17,10 @@ import app.clairix.SosButton
 import app.clairix.TimelineScreen
 import app.clairix.TrackerActionsRow
 import app.clairix.WifiScreen
+import app.clairix.Registry
+import app.clairix.WifiNetwork
+import app.clairix.WifiSecurity
+import app.clairix.WifiStatus
 import app.clairix.homeTabsFor
 import app.clairix.DuressPage
 import app.clairix.FakeCallPage
@@ -76,6 +80,40 @@ class AllScreensTest {
     fun wifi() = shot("wifi") {
         Frame(ScanCategory.WIFI.title, HomeTab.SCAN, onBack = {}) { WifiScreen() }
     }
+
+    /** The "In range" group with networks in it, drawn as lazy items that join into one card. */
+    @Test
+    fun wifiInRange() {
+        Registry.publishWifiStatus(
+            WifiStatus(
+                available = true,
+                wifiEnabled = true,
+                nearby = listOf(
+                    network("Harbour Café", "a4:2b:b0:11:3c:01", -48, 4, WifiSecurity.WPA2, "Wi-Fi 6"),
+                    network("Harbour Café Guest", "a6:2b:b0:11:3c:02", -55, 3, WifiSecurity.OPEN, "Wi-Fi 6"),
+                    network("DIRECT-7F-Printer", "0e:9a:41:77:20:9f", -71, 2, WifiSecurity.WPA2, "Wi-Fi 4"),
+                    network("", "3c:84:6a:d2:51:7e", -83, 1, WifiSecurity.WPA3, null, hidden = true)
+                )
+            )
+        )
+        try {
+            shot("wifi_in_range") {
+                Frame(ScanCategory.WIFI.title, HomeTab.SCAN, onBack = {}) { WifiScreen() }
+            }
+        } finally {
+            Registry.publishWifiStatus(WifiStatus())
+        }
+    }
+
+    private fun network(
+        ssid: String, bssid: String, rssi: Int, level: Int, security: WifiSecurity, standard: String?,
+        hidden: Boolean = false
+    ) = WifiNetwork(
+        ssid = ssid, bssid = bssid, rssi = rssi, level = level, frequencyMhz = 5180, channel = 36,
+        band = "5 GHz", security = security, standard = standard, hidden = hidden,
+        flags = if (security.secure) emptyList() else listOf("Open network: traffic can be read nearby"),
+        connected = false, ageMs = 0L
+    )
 
     @Test
     fun nfc() = shot("nfc") {

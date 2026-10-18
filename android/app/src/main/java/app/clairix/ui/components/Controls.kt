@@ -1,5 +1,7 @@
 package app.clairix.ui.components
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -330,11 +332,11 @@ fun SegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, 
             val on = index == selected
             Box(
                 Modifier
-                    .heightIn(min = 40.dp)
+                    .heightIn(min = 48.dp)
                     .background(if (on) c.accent else c.surface, ClairixShapes.Control)
                     .border(1.dp, if (on) c.accent else c.border, ClairixShapes.Control)
                     .selectable(selected = on, role = Role.Tab, onClick = { onSelect(index) })
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -349,9 +351,11 @@ fun SegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, 
 }
 
 /**
- * A row of choices where exactly one is picked, such as a wipe limit. Each
- * option is a 48 dp target and reads as a radio button.
+ * Choices where exactly one is picked, such as a wipe limit. The chips wrap onto
+ * further lines rather than scroll, so every option stays visible on a narrow
+ * phone. Each option is a 48 dp target and reads as a radio button.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun <T> ChoiceChips(
     choices: List<T>,
@@ -361,9 +365,10 @@ fun <T> ChoiceChips(
     modifier: Modifier = Modifier
 ) {
     val c = ClairixTheme.colors
-    Row(
-        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    FlowRow(
+        modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         choices.forEach { choice ->
             val on = choice == selected
