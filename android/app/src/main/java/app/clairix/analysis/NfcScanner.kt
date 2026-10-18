@@ -1,5 +1,6 @@
 package app.clairix.analysis
 
+import android.content.Context
 import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.Tag
@@ -30,7 +31,19 @@ object NfcScanner {
         "A0000003241010" to "UnionPay"
     )
 
-    fun parse(tag: Tag): NfcTag {
+    /**
+     * MIFARE Classic is NXP's proprietary protocol; only phones with an NXP controller
+     * can read it, and they say so with this system feature. Elsewhere Android never
+     * offers the MifareClassic tech, for a genuine card or otherwise.
+     */
+    fun readsMifareClassic(context: Context): Boolean =
+        runCatching { context.packageManager.hasSystemFeature(FEATURE_NXP_MIFARE) }.getOrDefault(false)
+
+    /**
+     * Reads [tag]. [mifareClassicSupported] is [readsMifareClassic] for this phone;
+     * the emulator heuristic depends on it.
+     */
+    fun parse(tag: Tag, mifareClassicSupported: Boolean): NfcTag {
         val uid = tag.id.hex()
         val techs = tag.techList.map { it.substringAfterLast('.') }
 
@@ -61,15 +74,7 @@ object NfcScanner {
 
         // Skimmer heuristics
         val flags = mutableListOf<String>()
-        if (atqa != null && sak != null) {
-            val sakByte = sak!!.toInt(16)
-            val atqaIsMifareClassicRange = atqa in setOf("4400", "0400", "6200")
-            val sakHasIsoDepBit = (sakByte and 0x20) != 0
-            // MIFARE Classic ATQA + ISO-DEP SAK without MifareClassic tech = likely emulator chip
-            if (atqaIsMifareClassicRange && sakHasIsoDepBit && !techs.contains("MifareClassic")) {
-                flags += "ATQA/SAK mismatch — possible card emulator (clone/skimmer hardware)"
-            }
-        }
+        classicEmulatorFlag(techs, atqa, sak, mifareClassicSupported)?.let(flags::add)
         // Unidentified ISO-DEP with no NDEF, no payment signature, not a known access card type
         if (techs.contains("IsoDep") && !isPayment && payload == null &&
             profile == CardProfile.UNKNOWN) {
@@ -113,6 +118,50 @@ object NfcScanner {
             apduPairs     = apduPairs
         )
     }
+
+    /**
+     * The emulator heuristic, on its own so it can be tested without a tag.
+     *
+     * A tag that answers anticollision with a MIFARE Classic ATQA *and* a Classic
+     * SAK, on a phone whose controller reads Classic, is offered the MifareClassic
+     * tech by Android. One that claims Classic in both and still is not was not
+     * accepted as Classic by the controller: what clone and emulation hardware
+     * answering with copied anticollision values looks like.
+     *
+     * The ISO-DEP bit alone says nothing. SAK 0x20 with ATQA 0x0004 is plain ISO
+     * 14443-4 — JCOP badges, YubiKeys, phones in host card emulation — and used to be
+     * flagged as a skimmer because 0x0004 is also Classic's ATQA. A Classic SAK is
+     * now required; 0x20 is not one. Nor is anything flagged on a phone that cannot
+     * read Classic at all, where a genuine Classic card lacks the tech too.
+     */
+    internal fun classicEmulatorFlag(
+        techs: List<String>, atqa: String?, sak: String?, mifareClassicSupported: Boolean
+    ): String? {
+        if (!mifareClassicSupported) return null
+        if (atqa == null || atqa.uppercase() !in CLASSIC_ATQAS) return null
+        val sakByte = sak?.toIntOrNull(16) ?: return null
+        if (sakByte !in CLASSIC_SAKS) return null
+        if (techs.contains("MifareClassic")) return null
+        return "ATQA/SAK claim MIFARE Classic but the phone's reader does not accept it as Classic — " +
+            "possible card emulator (clone/skimmer hardware)"
+    }
+
+    /** System feature an NXP controller declares; see [readsMifareClassic]. */
+    private const val FEATURE_NXP_MIFARE = "com.nxp.mifare"
+
+    /**
+     * ATQA as [NfcA.getAtqa] returns it (least significant byte first): Classic 1K
+     * with a 4- or 7-byte UID, Classic 4K with a 4- or 7-byte UID, and 0x0062, which
+     * was in the original list.
+     */
+    private val CLASSIC_ATQAS = setOf("0400", "4400", "0200", "4200", "6200")
+
+    /**
+     * SAKs of MIFARE Classic and of chips running Classic alongside ISO-DEP: Mini
+     * 0x09, 1K 0x08, 4K 0x18, and the SmartMX/JCOP Classic-emulation values 0x28 and
+     * 0x38. 0x20 — ISO-DEP alone — is deliberately absent.
+     */
+    private val CLASSIC_SAKS = setOf(0x08, 0x09, 0x18, 0x28, 0x38)
 
     // ── Profile resolution ──────────────────────────────────────────────────
 

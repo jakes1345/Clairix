@@ -564,7 +564,13 @@ object HiddenCameraScanner {
     /** A fresh session id per camera bind, so track ids from different binds never collide. */
     @Volatile private var opticalSession = 0L
 
+    /**
+     * The optical sweep's camera session is starting. Claims the camera with
+     * [PhoneHealthMonitor] first, so the sweep's own camera is not reported as another
+     * app using it; [opticalError] and [opticalStopped] release the claim.
+     */
     fun opticalStarting(mode: OpticalMode) {
+        PhoneHealthMonitor.ownCameraStarted(CAMERA_CLAIM)
         opticalSession = System.currentTimeMillis()
         _optical.value = OpticalState(mode = mode, running = true, torchOn = mode.torch)
     }
@@ -572,10 +578,17 @@ object HiddenCameraScanner {
     fun publishOptical(state: OpticalState) { _optical.value = state }
 
     fun opticalError(mode: OpticalMode, message: String?) {
+        PhoneHealthMonitor.ownCameraStopped(CAMERA_CLAIM)
         _optical.value = OpticalState(mode = mode, running = false, error = message ?: "Camera could not be opened")
     }
 
-    fun opticalStopped(mode: OpticalMode) { _optical.value = OpticalState(mode = mode, running = false) }
+    fun opticalStopped(mode: OpticalMode) {
+        PhoneHealthMonitor.ownCameraStopped(CAMERA_CLAIM)
+        _optical.value = OpticalState(mode = mode, running = false)
+    }
+
+    /** The name the sweep's camera claim is held under; see [PhoneHealthMonitor.ownCameraStarted]. */
+    private const val CAMERA_CLAIM = "sweep"
 
     /** Called by the analyzer when a spot has held still long enough. */
     fun opticalCandidate(context: Context, mode: OpticalMode, blob: GlintBlob) {

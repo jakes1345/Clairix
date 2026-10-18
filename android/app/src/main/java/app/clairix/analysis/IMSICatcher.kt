@@ -17,8 +17,21 @@ import org.json.JSONObject
  * Eight heuristics, each with a score weight. The scores accumulate until
  * they cross a Threat threshold. A single indicator is noise; three at once
  * is a problem.
+ *
+ * Several heuristics describe what travelling normally looks like and only mean
+ * something while the phone stands still: RAT downgrade and oscillation, area
+ * change, cell flapping, signal spike, and the two ephemeral-cell rules. They run
+ * only when the phone is known to be stationary — a fresh fix reporting a low
+ * speed, or two fresh fixes close enough in time whose implied speed is low.
+ * Without a usable fix (none, a stale one, a first fix with no speed, or a
+ * previous fix too old to compare) motion is unknown, unknown is treated as
+ * moving, and those rules stay quiet.
  */
-class IMSICatcher(private val store: Store) {
+class IMSICatcher(
+    private val store: Store,
+    /** Wall clock; a parameter so the JVM tests can drive time. */
+    private val clock: () -> Long = System::currentTimeMillis
+) {
 
     private data class HistEntry(val cell: ServingCell, val ts: Long)
     private data class Ephemeral(
@@ -34,7 +47,14 @@ class IMSICatcher(private val store: Store) {
         var vanishedAt: Long? = null,
         var gone: Boolean = false,
         var reported: Boolean = false,
-        var reportedLoose: Boolean = false
+        var reportedLoose: Boolean = false,
+        /**
+         * Set when the phone was moving, or its motion was unknown, at any reading
+         * while this cell was serving or at the reading where it stopped. A cell that
+         * serves briefly and is gone is exactly what an ordinary handoff looks like
+         * from a moving car, so neither ephemeral-cell heuristic applies to it.
+         */
+        var movedDuring: Boolean = false
     )
 
     private val recent = ArrayDeque<HistEntry>()
@@ -48,7 +68,10 @@ class IMSICatcher(private val store: Store) {
     private val ratRanks = ArrayDeque<Pair<Long, Int>>()
 
     private var prev: ServingCell? = null
+    /** The newest distinct fix seen (by fix time). */
     private var prevFix: Fix? = null
+    /** The distinct fix before [prevFix], for when a reading repeats the newest one. */
+    private var olderFix: Fix? = null
 
     init {
         store.load {
@@ -64,17 +87,18 @@ class IMSICatcher(private val store: Store) {
 
     @Synchronized
     fun recordAndAnalyze(cell: ServingCell, fix: Fix?): List<CatcherFinding> {
-        val now = System.currentTimeMillis()
+        val now = clock()
         pruneRecent(now)
-        updateEphemeral(cell, now)
-        recent.addLast(HistEntry(cell, now))
 
         // Several heuristics only mean anything while you are standing still: crossing
         // cells, swapping radio technology and signal jumps are all what travelling
         // normally looks like. Speed is authoritative when the fix reports it;
-        // otherwise fall back to how far the last two fixes are apart.
-        val stationary = isStationary(fix)
+        // otherwise fall back to the speed implied by the last two distinct fixes.
+        val stationary = isStationary(fix, now)
         if (!stationary) ratRanks.clear()
+
+        updateEphemeral(cell, now, stationary)
+        recent.addLast(HistEntry(cell, now))
 
         val findings = runChecks(cell, fix, now, stationary)
         // Recorded after the checks so the downgrade test compares against what was
@@ -83,24 +107,42 @@ class IMSICatcher(private val store: Store) {
         updateBaseline(cell, now)
 
         prev = cell
-        prevFix = fix
+        rememberFix(fix)
         return findings
     }
 
-    private fun isStationary(fix: Fix?): Boolean {
+    /** Keeps the last two *distinct* fixes; a poll that sees the same fix again changes nothing. */
+    private fun rememberFix(fix: Fix?) {
+        if (fix == null) return
+        val newest = prevFix
+        if (newest == null || fix.time > newest.time) {
+            olderFix = newest
+            prevFix = fix
+        }
+    }
+
+    private fun isStationary(fix: Fix?, now: Long): Boolean {
         // LocationTrack.current is never expired, so when GPS stops (subway, indoors)
         // the last fix lingers with zero speed and read as "standing still", arming
         // every motion-gated heuristic while the user was in fact travelling. No fix,
         // or one older than FIX_STALE_MS, means movement is unknown — and unknown is
         // not stationary.
-        if (fix == null || System.currentTimeMillis() - fix.time > FIX_STALE_MS) return false
+        if (fix == null || now - fix.time > FIX_STALE_MS) return false
         val speed = fix.speed
-        val previousFix = prevFix
-        return when {
-            speed != null -> speed < MOVING_SPEED_MS
-            previousFix != null -> haversine(previousFix, fix) < 200.0
-            else -> true
-        }
+        if (speed != null) return speed < MOVING_SPEED_MS
+        // No reported speed: derive one from the previous distinct fix, the way
+        // LocationTrack.isMoving() does. This used to call anything under 200 m
+        // between fixes "stationary" — with fixes about 15 s apart that is 48 km/h,
+        // so a car in town read as standing still and armed every motion-gated rule.
+        // When this reading repeats the newest fix, compare against the one before.
+        val newest = prevFix
+        val previousFix = if (newest != null && fix.time <= newest.time) olderFix else newest
+        // No previous fix, or one from long ago that averages a drive and a stop
+        // together: the speed is unknown, and unknown is not stationary.
+        if (previousFix == null || fix.time - previousFix.time > FIX_STALE_MS) return false
+        val dtSeconds = (fix.time - previousFix.time) / 1000.0
+        if (dtSeconds <= 0) return false
+        return haversine(previousFix, fix) / dtSeconds < MOVING_SPEED_MS
     }
 
     private fun pruneRecent(now: Long) {
@@ -110,19 +152,25 @@ class IMSICatcher(private val store: Store) {
         while (ratRanks.isNotEmpty() && ratRanks.first().first < ratCutoff) ratRanks.removeFirst()
     }
 
-    private fun updateEphemeral(current: ServingCell, now: Long) {
+    private fun updateEphemeral(current: ServingCell, now: Long, stationary: Boolean) {
         val activeKeys = recent.map { it.cell.key }.toSet()
         for (e in ephemeral.values) {
             if (e.cell.key == current.key) continue
             // Not serving any more: this is where its lifetime ends. `gone` below is
             // the later confirmation that it stayed away, not the end of the stint.
-            if (e.vanishedAt == null) e.vanishedAt = now
+            // Moving at the reading that ended the stint is a handoff on the move.
+            if (e.vanishedAt == null) {
+                e.vanishedAt = now
+                if (!stationary) e.movedDuring = true
+            }
             if (!e.gone && !activeKeys.contains(e.cell.key) && now - e.registeredAt > 60_000L) {
                 e.gone = true
             }
         }
         // Serving again (or for the first time): the stint is open, so no vanish time.
-        ephemeral.getOrPut(current.key) { Ephemeral(current, now) }.vanishedAt = null
+        val serving = ephemeral.getOrPut(current.key) { Ephemeral(current, now) }
+        serving.vanishedAt = null
+        if (!stationary) serving.movedDuring = true
         if (ephemeral.size > 200) {
             val iter = ephemeral.iterator()
             var n = 0
@@ -229,8 +277,10 @@ class IMSICatcher(private val store: Store) {
         // 6 — Ephemeral cell.
         // The id carries the cell so two vanished towers stay two findings; the UI
         // lists findings by id and duplicates used to take the Cell tab down.
+        // A cell that served while the phone was moving is a handoff, not a tower
+        // being driven away, so it is skipped (see [Ephemeral.movedDuring]).
         for ((key, e) in ephemeral) {
-            if (e.gone && !e.reportedLoose && key != cell.key) {
+            if (e.gone && !e.reportedLoose && !e.movedDuring && key != cell.key) {
                 val vanishedAt = e.vanishedAt ?: continue
                 val lifetime = vanishedAt - e.registeredAt
                 if (lifetime < 5 * 60_000L) {
@@ -315,9 +365,10 @@ class IMSICatcher(private val store: Store) {
             )
         }
 
-        // 12 — Cell active for < 90s then replaced (ephemeral, stricter threshold)
+        // 12 — Cell active for < 90s then replaced (ephemeral, stricter threshold).
+        // Same motion gate as 6: from a car, ninety seconds on one cell is normal.
         for ((key, e) in ephemeral) {
-            if (e.gone && key != cell.key && !e.reported) {
+            if (e.gone && key != cell.key && !e.reported && !e.movedDuring) {
                 val vanishedAt = e.vanishedAt ?: continue
                 val lifetime = vanishedAt - e.registeredAt
                 if (lifetime in 30_000L..90_000L) {
@@ -409,6 +460,15 @@ class IMSICatcher(private val store: Store) {
         return score to level
     }
 
+    /**
+     * Writes the baseline now. Synchronized on this object, the lock every mutation
+     * of the store's JSON happens under, so the snapshot cannot race one; see [Store].
+     */
+    @Synchronized
+    fun flush() {
+        store.flush()
+    }
+
     /** Wipes the learned baseline and the in-memory history behind it. */
     @Synchronized
     fun resetBaseline() {
@@ -417,6 +477,7 @@ class IMSICatcher(private val store: Store) {
         ratRanks.clear()
         prev = null
         prevFix = null
+        olderFix = null
         store.replace(
             JSONObject()
                 .put("cells", JSONObject())

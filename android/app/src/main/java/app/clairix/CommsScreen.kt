@@ -32,6 +32,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -73,6 +78,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.comms.ActiveCall
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
@@ -408,21 +414,35 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/** The name the QR scanner's camera claim is held under; see [PhoneHealthMonitor.ownCameraStarted]. */
+private const val QR_CAMERA_CLAIM = "qr"
+
 /** Launches the QR scanner and hands back the decoded pairing code. */
 @Composable
 private fun rememberCodeScanner(onCode: (PairingCode?) -> Unit): () -> Unit {
+    // The scanner activity opens the camera in this app's process; the claim keeps
+    // that from being reported as another app using the camera. The result arrives
+    // on cancel and on failure too, and that is where the claim is released.
     val launcher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        PhoneHealthMonitor.ownCameraStopped(QR_CAMERA_CLAIM)
         val text = result.contents
         if (text != null) onCode(PairingCode.decode(text))
     }
     return {
-        launcher.launch(
-            ScanOptions()
-                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("Point at the other person's Clairix code")
-                .setBeepEnabled(false)
-                .setOrientationLocked(true)
-        )
+        PhoneHealthMonitor.ownCameraStarted(QR_CAMERA_CLAIM)
+        try {
+            launcher.launch(
+                ScanOptions()
+                    .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    .setPrompt("Point at the other person's Clairix code")
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(true)
+            )
+        } catch (e: RuntimeException) {
+            // No result will come for a launch that never happened.
+            PhoneHealthMonitor.ownCameraStopped(QR_CAMERA_CLAIM)
+            throw e
+        }
     }
 }
 
@@ -1251,15 +1271,7 @@ private fun MessageBubble(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(timeFmt.format(Date(m.ts)), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 if (mine) {
-                    val (glyph, colour) = when (m.status) {
-                        "queued" -> "…" to CMuted
-                        "sent" -> "✓" to CMuted
-                        "delivered" -> "✓✓" to CMuted
-                        "read" -> "✓✓" to CClear
-                        "failed" -> "!" to CCritical
-                        else -> "" to CMuted
-                    }
-                    Text(glyph, color = colour, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    DeliveryMark(m.status)
                 }
             }
         }
@@ -1279,14 +1291,22 @@ private fun sizeLabel(bytes: Long): String = when {
     else -> "${(bytes + 1023) / 1024} KB"
 }
 
-/** The glyph a message's delivery status shows after its time, for the sender. */
-private fun statusGlyph(status: String): Pair<String, Color> = when (status) {
-    "queued" -> "…" to CMuted
-    "sent" -> "✓" to CMuted
-    "delivered" -> "✓✓" to CMuted
-    "read" -> "✓✓" to CClear
-    "failed" -> "!" to CCritical
-    else -> "" to CMuted
+/**
+ * The mark a message's delivery status shows after its time, for the sender:
+ * a clock-face ellipsis while queued, one tick when sent, two when delivered,
+ * two in green when read, and a warning when it failed.
+ */
+@Composable
+private fun DeliveryMark(status: String) {
+    val size = Modifier.size(12.dp)
+    when (status) {
+        "queued" -> Text("…", color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        "sent" -> Icon(Icons.Filled.Done, contentDescription = "Sent", tint = CMuted, modifier = size)
+        "delivered" -> Icon(ClairixIcons.DoneAll, contentDescription = "Delivered", tint = CMuted, modifier = size)
+        "read" -> Icon(ClairixIcons.DoneAll, contentDescription = "Read", tint = CClear, modifier = size)
+        "failed" -> Icon(Icons.Filled.Warning, contentDescription = "Not sent", tint = CCritical, modifier = size)
+        else -> Unit
+    }
 }
 
 /**
@@ -1367,8 +1387,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                     color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                 )
                 if (mine) {
-                    val (glyph, colour) = statusGlyph(m.status)
-                    Text(glyph, color = colour, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    DeliveryMark(m.status)
                 }
             }
         }
@@ -2303,7 +2322,7 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 )
                                 if (isOut && msg.status == "failed") {
                                     Spacer(Modifier.width(4.dp))
-                                    Text("✕", color = CCritical, fontSize = 10.sp)
+                                    Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = CCritical, modifier = Modifier.size(12.dp))
                                 }
                             }
                         }
@@ -2538,7 +2557,7 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
                                     Text(formatClairixNumber(c.number), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                                 }
                                 if (selected?.number == c.number) {
-                                    Text("✓", color = CAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                    Icon(Icons.Filled.Check, contentDescription = "Selected", tint = CAccent, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }

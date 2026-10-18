@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -97,7 +98,15 @@ class ObdBluetoothManager(private val context: Context) {
             while (isActive) {
                 try {
                     pollLoop()
-                } catch (_: IOException) {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // IOException is the link dropping. Anything else is a bug or a reply
+                    // nothing anticipated; it used to escape this handler, end the
+                    // coroutine and leave the gauges frozen on their last values while
+                    // still showing "connected". Either way the link is reset and
+                    // re-established below.
+                    if (e !is IOException) Log.w(TAG, "OBD poll failed; reconnecting", e)
                     closeLink()
                     _data.update {
                         it.copy(
@@ -182,6 +191,10 @@ class ObdBluetoothManager(private val context: Context) {
         } catch (_: IOException) {
             abandon()
         } catch (_: SecurityException) {
+            abandon()
+        } catch (e: RuntimeException) {
+            // A reply that trips the parser during setup must not take the caller down.
+            Log.w(TAG, "OBD link setup failed", e)
             abandon()
         }
     }
@@ -273,11 +286,30 @@ class ObdBluetoothManager(private val context: Context) {
         return code in 6..12
     }
 
-    private suspend fun queryPid(cmd: String, pid: Int): List<Int>? =
-        ObdParser.pidData(exchange(cmd, COMMAND_TIMEOUT_MS).text, cmd, pid, isCan)
+    /**
+     * One PID. A reply the parser cannot make sense of reads as "no value" for this
+     * cycle and is logged; it does not stop the polling. Link failures
+     * (IOException from [exchange]) still propagate.
+     */
+    private suspend fun queryPid(cmd: String, pid: Int): List<Int>? {
+        val raw = exchange(cmd, COMMAND_TIMEOUT_MS).text
+        return try {
+            ObdParser.pidData(raw, cmd, pid, isCan)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Unparseable reply to $cmd", e)
+            null
+        }
+    }
 
-    private suspend fun readDtcs(): List<String> =
-        ObdParser.dtcs(exchange("03", DTC_TIMEOUT_MS).text, isCan)
+    private suspend fun readDtcs(): List<String> {
+        val raw = exchange("03", DTC_TIMEOUT_MS).text
+        return try {
+            ObdParser.dtcs(raw, isCan)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Unparseable reply to 03", e)
+            emptyList()
+        }
+    }
 
     private suspend fun exchange(cmd: String, timeoutMs: Long): Reply = ioMutex.withLock {
         withContext(Dispatchers.IO) {
@@ -325,6 +357,7 @@ class ObdBluetoothManager(private val context: Context) {
     }
 
     private companion object {
+        const val TAG = "ObdBluetooth"
         val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         val DEVICE_KEYWORDS = listOf("OBD", "ELM", "V-LINK", "OBDII")
         const val COMMAND_TIMEOUT_MS = 1_000L

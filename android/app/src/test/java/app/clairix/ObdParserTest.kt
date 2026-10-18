@@ -68,6 +68,33 @@ class ObdParserTest {
     }
 
     @Test
+    fun spacesOffStillParses() {
+        assertEquals(listOf(0x32), ObdParser.pidData("7E803410D32\r", "010D", 0x0D, isCan = true))
+    }
+
+    @Test
+    fun overlongTokensAreRejectedNotThrown() {
+        // A noisy link glues bytes together; toInt(16) on these used to throw
+        // NumberFormatException out of the poll loop.
+        assertNull(ObdParser.pidData("7E8 410D32AABBCCDDEEFF00112233\r", "010D", 0x0D, isCan = true))
+        assertNull(ObdParser.pidData("7E8 03 41 0D 3200000000000000000\r", "010D", 0x0D, isCan = true))
+        assertNull(ObdParser.pidData("7E8 03 41 0D 323\r", "010D", 0x0D, isCan = null))
+        assertEquals(emptyList<String>(), ObdParser.dtcs("7E8 06 43 0201330200000000000000\r", isCan = true))
+    }
+
+    @Test
+    fun aGarbageLineDoesNotHideTheGoodOne() {
+        val raw = "7E9 FFFFFFFFFFFFFFFFFFFF\r7E8 03 41 0D 32\r"
+        assertEquals(listOf(0x32), ObdParser.pidData(raw, "010D", 0x0D, isCan = true))
+    }
+
+    @Test
+    fun anEndlessLineIsRejected() {
+        val raw = "7E8" + "41".repeat(500) + "\r"
+        assertNull(ObdParser.pidData(raw, "0141", 0x41, isCan = true))
+    }
+
+    @Test
     fun dtcLetters() {
         assertEquals("P0300", ObdParser.decodeDtc(0x03, 0x00))
         assertEquals("C1234", ObdParser.decodeDtc(0x52, 0x34))

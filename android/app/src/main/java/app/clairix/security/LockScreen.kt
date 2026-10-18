@@ -18,6 +18,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import app.clairix.ClairixIcons
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -243,11 +245,11 @@ fun LockScreen() {
                         }
                     }
                 }
-                // Bottom row: empty · 0 · ⌫
+                // Bottom row: empty · 0 · backspace
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     Box(Modifier.size(68.dp))
                     NumKey(label = "0", active = active) { tap('0') }
-                    NumKey(label = "⌫", active = active && code.isNotEmpty(), accent = false) { backspace() }
+                    NumKey(label = KEY_BACKSPACE, active = active && code.isNotEmpty(), accent = false) { backspace() }
                 }
             }
 
@@ -317,6 +319,9 @@ private fun showBiometricPrompt(activity: FragmentActivity, cipher: Cipher, onEr
     runCatching { prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher)) }
 }
 
+/** The keypad's delete key, drawn as the Material backspace icon. */
+private const val KEY_BACKSPACE = "backspace"
+
 @Composable
 private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
     val bg    = if (active) LkPanel else LkGround
@@ -330,12 +335,16 @@ private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onCli
             .then(if (active) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            label,
-            color = color,
-            fontSize = if (label.length == 1) 22.sp else 18.sp,
-            fontFamily = if (label == "⌫") FontFamily.Default else FontFamily.Monospace,
-            fontWeight = FontWeight.Medium
-        )
+        if (label == KEY_BACKSPACE) {
+            Icon(ClairixIcons.Backspace, contentDescription = "Delete", tint = color, modifier = Modifier.size(24.dp))
+        } else {
+            Text(
+                label,
+                color = color,
+                fontSize = if (label.length == 1) 22.sp else 18.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }

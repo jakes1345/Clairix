@@ -28,6 +28,17 @@ import kotlin.math.sqrt
  * nothing, on the same principle as the identity resolver: a wrong merge is worse
  * than a missed one.
  *
+ * Two rules keep a family's shared traits from being mistaken for one device's.
+ * The new address must have *measured* its own interval: a family's nominal
+ * cadence describes every AirTag, so on its own it identifies none (two AirTags of
+ * one firmware used to score about 0.9 on the prior alone and be stitched, the
+ * second inheriting the first's history and its "following" verdict). And when
+ * both sides belong to the same family and every confirming feature is equal —
+ * which for two units of one product is the normal case — those features carry no
+ * information, so the decision rests on the measured cadence of both sides and on
+ * the hand-over itself: the old address must have gone quiet shortly before the
+ * new one appeared, as it does in a rotation.
+ *
  * Timing comes from [ScanResult.getTimestampNanos], which is the controller's
  * receive time, so a busy main thread does not smear the intervals.
  */
@@ -77,6 +88,46 @@ class CadenceFingerprinter(
         val payloadLength: Int
     )
 
+    /**
+     * The outcome of a stitch: the logical id the address belongs to, and whether the
+     * evidence was strong enough to treat the two histories as one without reserve
+     * (see [Match.certain]).
+     */
+    data class Match(
+        val logicalId: String,
+        /**
+         * Both sides measured their own cadence, the quiet address over at least
+         * [CERTAIN_SAMPLES] intervals; the pair was not two units of one tracker
+         * family that only the cadence tells apart; the score cleared
+         * [CERTAIN_SCORE]; and no other candidate reached the threshold. Callers may
+         * then merge histories wholesale; otherwise they should not let the merge
+         * extend how long the device appears to have been present.
+         */
+        val certain: Boolean
+    )
+
+    /**
+     * What one packet tells the matcher, independent of [ScanResult] so the matching
+     * can run, and be tested, without the Bluetooth stack.
+     */
+    internal class Packet(
+        val address: String,
+        /** Controller receive time, nanoseconds (see [ScanResult.getTimestampNanos]). */
+        val timestampNanos: Long,
+        /** Wall-clock time the packet was handled. */
+        val nowMs: Long,
+        val rssi: Int,
+        val primaryPhy: Int,
+        val advertisingSid: Int,
+        /** False when the scan carried no advertisement record; the fields below are then ignored. */
+        val hasRecord: Boolean,
+        val txPower: Int?,
+        val company: Int?,
+        val mfrPayload: ByteArray?,
+        val services: Set<Int>,
+        val payloadLength: Int
+    )
+
     private class Track(val address: String, val firstSeenMs: Long) {
         val deltas = LongArray(RING)
         var count = 0
@@ -102,12 +153,17 @@ class CadenceFingerprinter(
         /** The id this address carried before a late stitch moved it; handed over once. */
         var supersededId: String? = null
         var attempts = 0
+        /** Whether the stitch that gave this address its id was [Match.certain]. */
+        var stitchCertain = false
 
         fun push(deltaMs: Long) {
             deltas[head] = deltaMs
             head = (head + 1) % RING
             if (count < RING) count++
         }
+
+        /** Number of usable intervals behind [interval]. */
+        fun samples(): Int = (0 until count).count { deltas[it] > 0 }
 
         /**
          * Mean and standard deviation of the advertising interval. Missed packets
@@ -144,29 +200,40 @@ class CadenceFingerprinter(
      * of its choosing through [assign], so a later stitch can hand that same id on.
      */
     @Synchronized
-    fun stitch(scan: ScanResult): String? {
-        val address = BleNames.formatMac(scan.device?.address ?: return null)
-        val nowMs = System.currentTimeMillis()
+    fun stitch(scan: ScanResult): Match? {
+        val address = scan.device?.address ?: return null
+        return stitch(packetOf(address, scan, System.currentTimeMillis()))
+    }
+
+    /** [stitch] for an already-decoded packet. */
+    @Synchronized
+    internal fun stitch(packet: Packet): Match? {
+        val address = BleNames.formatMac(packet.address)
+        val nowMs = packet.nowMs
         if (nowMs - lastPruneMs > PRUNE_EVERY_MS || tracks.size > MAX_TRACKS) prune(nowMs)
 
         val existing = tracks[address]
         val track = existing ?: Track(address, nowMs).also { tracks[address] = it }
-        record(track, scan, nowMs)
+        record(track, packet)
 
-        if (track.stitched) return track.logicalId
+        if (track.stitched) return Match(track.logicalId, track.stitchCertain)
 
-        // A fresh address may not have enough timing yet to be scored honestly; it is
-        // re-tried on the next few packets until it has, or until it is clearly its
-        // own device.
-        if (track.attempts >= MAX_ATTEMPTS || nowMs - track.firstSeenMs > ATTEMPT_WINDOW_MS) return null
+        // A fresh address is scored only once it has measured its own cadence; until
+        // then it has nothing that is its own to compare. Packets before that point
+        // are not attempts. After it, it is re-tried on the next few packets, until
+        // it matches or is clearly its own device.
+        if (nowMs - track.firstSeenMs > ATTEMPT_WINDOW_MS) return null
+        if (track.interval() == null) return null
+        if (track.attempts >= MAX_ATTEMPTS) return null
         track.attempts++
 
-        val match = bestCandidate(track, nowMs) ?: return null
-        match.consumed = true
+        val best = bestCandidate(track, nowMs) ?: return null
+        best.candidate.consumed = true
         if (track.logicalId != track.address) track.supersededId = track.logicalId
-        track.logicalId = match.logicalId
+        track.logicalId = best.candidate.logicalId
         track.stitched = true
-        return track.logicalId
+        track.stitchCertain = best.certain
+        return Match(track.logicalId, track.stitchCertain)
     }
 
     /**
@@ -218,8 +285,30 @@ class CadenceFingerprinter(
 
     // ── Recording ────────────────────────────────────────────────────────────
 
-    private fun record(track: Track, scan: ScanResult, nowMs: Long) {
-        val ts = scan.timestampNanos
+    private fun packetOf(address: String, scan: ScanResult, nowMs: Long): Packet {
+        val record = scan.scanRecord
+        val mfr = record?.manufacturerSpecificData?.takeIf { it.size() > 0 }
+        val shorts = HashSet<Int>()
+        record?.serviceUuids?.forEach { shortUuid(it.uuid.toString())?.let(shorts::add) }
+        record?.serviceData?.keys?.forEach { shortUuid(it.uuid.toString())?.let(shorts::add) }
+        return Packet(
+            address = address,
+            timestampNanos = scan.timestampNanos,
+            nowMs = nowMs,
+            rssi = scan.rssi,
+            primaryPhy = scan.primaryPhy,
+            advertisingSid = scan.advertisingSid,
+            hasRecord = record != null,
+            txPower = record?.txPowerLevel?.takeIf { it != Int.MIN_VALUE },
+            company = mfr?.keyAt(0),
+            mfrPayload = mfr?.valueAt(0),
+            services = shorts,
+            payloadLength = record?.let(::advertisedLength) ?: 0
+        )
+    }
+
+    private fun record(track: Track, packet: Packet) {
+        val ts = packet.timestampNanos
         if (track.lastTsNanos != 0L && ts > track.lastTsNanos) {
             val deltaMs = (ts - track.lastTsNanos) / 1_000_000L
             // Below 20 ms it is the same advertising event heard on another channel,
@@ -227,27 +316,23 @@ class CadenceFingerprinter(
             if (deltaMs in 20..silentMaxMs) track.push(deltaMs)
         }
         track.lastTsNanos = ts
-        track.lastSeenMs = nowMs
-        track.lastRssi = scan.rssi
-        track.primaryPhy = scan.primaryPhy
-        track.advertisingSid = scan.advertisingSid
+        track.lastSeenMs = packet.nowMs
+        track.lastRssi = packet.rssi
+        track.primaryPhy = packet.primaryPhy
+        track.advertisingSid = packet.advertisingSid
 
-        val record = scan.scanRecord ?: return
-        record.txPowerLevel.takeIf { it != Int.MIN_VALUE }?.let { track.txPower = it }
-        val mfr = record.manufacturerSpecificData
-        if (mfr != null && mfr.size() > 0) {
-            val company = mfr.keyAt(0)
-            val payload = mfr.valueAt(0)
+        if (!packet.hasRecord) return
+        packet.txPower?.let { track.txPower = it }
+        val company = packet.company
+        if (company != null) {
+            val payload = packet.mfrPayload
             track.company = company
             track.mfrPayload = payload?.size ?: 0
             track.mfrType = payload?.getOrNull(0)?.toInt()?.and(0xFF)
             track.mfrLen = payload?.getOrNull(1)?.toInt()?.and(0xFF)
         }
-        val shorts = HashSet<Int>()
-        record.serviceUuids?.forEach { shortUuid(it.uuid.toString())?.let(shorts::add) }
-        record.serviceData?.keys?.forEach { shortUuid(it.uuid.toString())?.let(shorts::add) }
-        if (shorts.isNotEmpty()) track.services = shorts
-        track.payloadLength = advertisedLength(record)
+        if (packet.services.isNotEmpty()) track.services = packet.services
+        track.payloadLength = packet.payloadLength
     }
 
     /**
@@ -276,9 +361,18 @@ class CadenceFingerprinter(
 
     // ── Matching ─────────────────────────────────────────────────────────────
 
-    private fun bestCandidate(fresh: Track, nowMs: Long): Track? {
+    private class Best(val candidate: Track, val certain: Boolean)
+
+    /** A score and the facts about the comparison that decide whether a stitch on it is certain. */
+    private class Score(val value: Double, val bothMeasured: Boolean, val indistinguishable: Boolean) {
+        companion object {
+            val NONE = Score(0.0, bothMeasured = false, indistinguishable = false)
+        }
+    }
+
+    private fun bestCandidate(fresh: Track, nowMs: Long): Best? {
         var best: Track? = null
-        var bestScore = 0.0
+        var bestScore = Score.NONE
         var second = 0.0
         for (candidate in tracks.values) {
             if (candidate === fresh || candidate.consumed) continue
@@ -286,69 +380,100 @@ class CadenceFingerprinter(
             val quiet = nowMs - candidate.lastSeenMs
             if (quiet < silentMinMs || quiet > silentMaxMs) continue
             val s = score(fresh, candidate)
-            if (s > bestScore) {
-                second = bestScore
+            if (s.value > bestScore.value) {
+                second = bestScore.value
                 bestScore = s
                 best = candidate
-            } else if (s > second) {
-                second = s
+            } else if (s.value > second) {
+                second = s.value
             }
         }
-        if (best == null || bestScore < threshold) return null
-        if (bestScore - second < ambiguityMargin) return null
-        return best
+        if (best == null || bestScore.value < threshold) return null
+        if (bestScore.value - second < ambiguityMargin) return null
+        val certain = bestScore.bothMeasured && !bestScore.indistinguishable &&
+            best.samples() >= CERTAIN_SAMPLES &&
+            bestScore.value >= CERTAIN_SCORE && second < threshold
+        return Best(best, certain)
     }
 
     /**
-     * How alike two addresses' radios are, 0..1.
+     * How alike two addresses' radios are, 0..1. [fresh] is the address just
+     * heard, [candidate] one that has gone quiet.
      *
      * Interval is the heaviest term, because it is the one thing a rotating tracker
-     * cannot hide; without an interval on both sides — measured, or a family prior —
-     * the ceiling is 0.60 and nothing stitches. The others are cheap confirmations:
-     * transmit power as advertised, PHY and advertising set, the shape of the
-     * manufacturer data, and the total advertised length.
+     * cannot hide. The fresh side must have measured its own; the candidate may fall
+     * back to its family's prior when it was heard too briefly to measure. Without
+     * either the score is zero. The others are cheap confirmations: transmit power
+     * as advertised, PHY and advertising set, the shape of the manufacturer data,
+     * and the total advertised length.
+     *
+     * When both sides are of the same family and those confirmations are all equal,
+     * they are what every unit of the product shares and confirm nothing. Then both
+     * intervals must be measured, the hand-over must look like a rotation, and the
+     * score is the interval agreement alone.
      */
-    private fun score(a: Track, b: Track): Double {
-        val fa = familyOf(a)
-        val fb = familyOf(b)
-        if (fa != null && fb != null && fa !== fb) return 0.0
-        if (a.company != null && b.company != null && a.company != b.company) return 0.0
+    private fun score(fresh: Track, candidate: Track): Score {
+        val fa = familyOf(fresh)
+        val fb = familyOf(candidate)
+        if (fa != null && fb != null && fa !== fb) return Score.NONE
+        if (fresh.company != null && candidate.company != null && fresh.company != candidate.company) return Score.NONE
 
-        val (meanA, stdA) = a.interval() ?: fa?.let { it.intervalMs.toDouble() to it.toleranceMs.toDouble() } ?: return 0.0
-        val (meanB, stdB) = b.interval() ?: fb?.let { it.intervalMs.toDouble() to it.toleranceMs.toDouble() } ?: return 0.0
+        // Heard at the same time means two radios; a rotation never overlaps.
+        val gapMs = fresh.firstSeenMs - candidate.lastSeenMs
+        if (gapMs < -OVERLAP_SLACK_MS) return Score.NONE
+
+        val measuredFresh = fresh.interval() ?: return Score.NONE
+        val measuredCandidate = candidate.interval()
+        val (meanA, stdA) = measuredFresh
+        val (meanB, stdB) = measuredCandidate
+            ?: fb?.let { it.intervalMs.toDouble() to it.toleranceMs.toDouble() }
+            ?: return Score.NONE
+        val bothMeasured = measuredCandidate != null
         val spread = max(max(stdA, stdB), MIN_SPREAD_MS)
         val meanScore = (1.0 - abs(meanA - meanB) / (2 * spread + MIN_SPREAD_MS)).coerceIn(0.0, 1.0)
         val stdScore = (1.0 - abs(stdA - stdB) / spread).coerceIn(0.0, 1.0)
         val interval = 0.75 * meanScore + 0.25 * stdScore
+        // A rotation does not teleport the device: a 20 dB jump is a different place.
+        val rssiFactor = if (abs(fresh.lastRssi - candidate.lastRssi) > 20) 0.85 else 1.0
 
-        val txA = a.txPower
-        val txB = b.txPower
+        val indistinguishable = fa != null && fa === fb &&
+            fresh.txPower == candidate.txPower &&
+            fresh.mfrType == candidate.mfrType && fresh.mfrLen == candidate.mfrLen &&
+            fresh.mfrPayload == candidate.mfrPayload && fresh.services == candidate.services &&
+            fresh.payloadLength == candidate.payloadLength
+        if (indistinguishable) {
+            if (!bothMeasured) return Score.NONE
+            if (gapMs > HANDOVER_MAX_MS) return Score.NONE
+            return Score(interval * rssiFactor, bothMeasured = true, indistinguishable = true)
+        }
+
+        val txA = fresh.txPower
+        val txB = candidate.txPower
         val tx = when {
             txA != null && txB != null -> when (abs(txA - txB)) { 0 -> 1.0; 1, 2 -> 0.5; else -> 0.0 }
             txA == null && txB == null -> 0.6
             else -> 0.2
         }
 
-        val phy = (if (a.primaryPhy == b.primaryPhy) 0.6 else 0.0) +
-            (if (a.advertisingSid == b.advertisingSid) 0.4 else 0.0)
+        val phy = (if (fresh.primaryPhy == candidate.primaryPhy) 0.6 else 0.0) +
+            (if (fresh.advertisingSid == candidate.advertisingSid) 0.4 else 0.0)
 
         val mfr = when {
-            a.company != null && b.company != null -> when {
-                a.mfrType == b.mfrType && a.mfrLen == b.mfrLen && a.mfrPayload == b.mfrPayload -> 1.0
-                a.mfrType == b.mfrType -> 0.5
+            fresh.company != null && candidate.company != null -> when {
+                fresh.mfrType == candidate.mfrType && fresh.mfrLen == candidate.mfrLen &&
+                    fresh.mfrPayload == candidate.mfrPayload -> 1.0
+                fresh.mfrType == candidate.mfrType -> 0.5
                 else -> 0.2
             }
-            a.company == null && b.company == null -> if (a.services == b.services) 1.0 else 0.0
+            fresh.company == null && candidate.company == null -> if (fresh.services == candidate.services) 1.0 else 0.0
             else -> 0.0
         }
 
-        val length = when (abs(a.payloadLength - b.payloadLength)) { 0 -> 1.0; 1, 2 -> 0.5; else -> 0.0 }
+        val length = when (abs(fresh.payloadLength - candidate.payloadLength)) { 0 -> 1.0; 1, 2 -> 0.5; else -> 0.0 }
 
         var s = 0.40 * interval + 0.15 * tx + 0.10 * phy + 0.25 * mfr + 0.10 * length
         if (fa != null && fa === fb) s = min(1.0, s + 0.05)
-        // A rotation does not teleport the device: a 20 dB jump is a different place.
-        if (abs(a.lastRssi - b.lastRssi) > 20) s *= 0.85
-        return s
+        return Score(s * rssiFactor, bothMeasured, indistinguishable = false)
     }
 
     private fun familyOf(t: Track): Family? = FAMILIES.firstOrNull { f ->
@@ -379,6 +504,19 @@ class CadenceFingerprinter(
         private const val ATTEMPT_WINDOW_MS = 90_000L
         /** Nothing is steadier than this; keeps the interval term from dividing by a near-zero spread. */
         private const val MIN_SPREAD_MS = 40.0
+        /** Wall-clock slack when deciding two addresses were heard at the same time. */
+        private const val OVERLAP_SLACK_MS = 2_000L
+        /**
+         * Between two addresses nothing but cadence tells apart, the longest quiet
+         * gap that still reads as one device rotating. A rotation is immediate; this
+         * allows for duty-cycled scanning and missed packets, not for another unit of
+         * the same product wandering into range a quarter of an hour later.
+         */
+        private const val HANDOVER_MAX_MS = 120_000L
+        /** Intervals the quiet address must have measured before a stitch on it can be [Match.certain]. */
+        private const val CERTAIN_SAMPLES = 6
+        /** Score a stitch must reach to be [Match.certain]. */
+        private const val CERTAIN_SCORE = 0.90
         private const val BASE_UUID_TAIL = "-0000-1000-8000-00805f9b34fb"
 
         /**

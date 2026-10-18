@@ -61,7 +61,9 @@ object LocationHistory {
                 arr = trimmed
                 root.put(KEY, arr)
             }
-            s.touch(60_000L)
+            // Up to ~1.5 MB of JSON: serialised on the IO dispatcher under [lock],
+            // not here on the main thread.
+            s.touch(60_000L, guard = lock)
         }
     }
 
@@ -88,7 +90,8 @@ object LocationHistory {
         }
     }
 
-    fun flush() { store?.flush() }
+    /** Serialised under [lock], the lock [record] mutates the JSON under; see [Store]. */
+    fun flush() { synchronized(lock) { store?.flush() } }
 }
 
 // ── Report types ──────────────────────────────────────────────────────────────

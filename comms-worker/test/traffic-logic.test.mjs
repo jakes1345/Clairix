@@ -11,6 +11,7 @@ import {
   liveSegments,
   median,
   parseWzdx,
+  wzdxDescription,
   readTextCapped,
   robustBBox,
   weekSlot,
@@ -225,6 +226,20 @@ test("WZDx work zones become closures or hazards", () => {
   assert.equal(b.endsAt, null);
   assert.equal(b.description, null);
   assert.deepEqual(parseWzdx("x", { nope: true }, NOW), []);
+});
+
+test("wzdxDescription names the roads, a one-way direction and the description", () => {
+  assert.equal(
+    wzdxDescription({ road_names: ["I-71"], direction: "northbound", description: "Bridge deck repair" }),
+    "Work zone on I-71 (northbound): Bridge deck repair",
+  );
+  assert.equal(wzdxDescription({ road_names: ["I-71", "US-33"], direction: "Southbound" }), "Work zone on I-71, US-33 (southbound)");
+  // "both", "unknown" and free text are not one way of travel.
+  assert.equal(wzdxDescription({ road_names: ["SR-315"], direction: "both" }), "Work zone on SR-315");
+  assert.equal(wzdxDescription({ road_names: ["SR-315"], direction: "unknown" }), "Work zone on SR-315");
+  // Without a road there is nothing to attach the direction to.
+  assert.equal(wzdxDescription({ direction: "eastbound", description: "Paving" }), "Paving");
+  assert.equal(wzdxDescription({}), null);
 });
 
 function streamOf(chunks, onCancel) {
