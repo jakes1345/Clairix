@@ -1,6 +1,8 @@
 package app.clairix.analysis
 
 import android.Manifest
+import app.clairix.Severity
+import app.clairix.analysis.StalkwareScanner.AppFacts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,59 +11,146 @@ import org.junit.Test
 class StalkwareScannerTest {
     private val gboard = "com.google.android.inputmethod.latin"
     private val rogue = "com.example.keylogger"
+    private val play = "com.android.vending"
 
-    private fun score(
-        name: String,
-        declared: Set<String> = emptySet(),
-        ime: Boolean = false,
-        admin: Boolean = false,
-    ): Int = StalkwareScanner.componentSignals(name, declared, ime, admin).sumOf { it.points }
+    /** A keyboard's ordinary manifest: its IME service, voice typing and a suggestion overlay. */
+    private val keyboardManifest = AppFacts(
+        name = rogue, system = false, installer = play, hasLauncher = true,
+        requested = setOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.SYSTEM_ALERT_WINDOW),
+        declared = setOf(Manifest.permission.BIND_INPUT_METHOD),
+        imeEnabled = true,
+    )
+
+    private fun score(f: AppFacts): Int = StalkwareScanner.assess(f).sumOf { it.points }
+
+    /** The severity the scanner reports for [f], with the same thresholds. */
+    private fun severity(f: AppFacts): Severity = StalkwareScanner.SuspiciousApp(
+        f.name, f.name, score(f), emptyList(), 0, 0, f.sideloaded, f.hasLauncher, false, false, false,
+        f.imeEnabled, f.deviceAdminActive, f.installer,
+    ).severity
+
+    // ── Keyboards ─────────────────────────────────────────────────────────────
 
     @Test
-    fun anUnknownEnabledKeyboardScoresOnlyTheKeyboardSignal() {
-        // Its own BIND_INPUT_METHOD service is what made it a keyboard; counted once, not twice.
-        val signals = StalkwareScanner.componentSignals(rogue, setOf(Manifest.permission.BIND_INPUT_METHOD), true, false)
-        assertEquals(StalkwareScanner.IME_ENABLED_SCORE, signals.sumOf { it.points })
-        assertEquals(1, signals.size)
-        assertTrue(signals.single().reason.contains("keystroke"))
+    fun anUnknownStoreKeyboardAloneIsMediumNotHigh() {
+        // IME service, microphone and overlay are how a keyboard works: counted once, as the keyboard.
+        assertEquals(StalkwareScanner.IME_ENABLED_SCORE, score(keyboardManifest))
+        assertEquals(Severity.MEDIUM, severity(keyboardManifest))
     }
 
     @Test
-    fun aKnownEnabledKeyboardIsListedButNotScored() {
-        val signals = StalkwareScanner.componentSignals(gboard, setOf(Manifest.permission.BIND_INPUT_METHOD), true, false)
-        assertEquals(0, signals.sumOf { it.points })
-        assertEquals(listOf("is an enabled keyboard (a known app)"), signals.map { it.reason })
-    }
-
-    @Test
-    fun aDeclaredButDisabledKeyboardIsAWeakSignalUnlessKnown() {
-        assertEquals(1, score(rogue, setOf(Manifest.permission.BIND_INPUT_METHOD)))
-        assertEquals(0, score(gboard, setOf(Manifest.permission.BIND_INPUT_METHOD)))
-    }
-
-    @Test
-    fun anActiveDeviceAdminAddsToItsDeclaredReceiver() {
-        assertEquals(1, score(rogue, setOf(Manifest.permission.BIND_DEVICE_ADMIN)))
+    fun anUnknownKeyboardReachesHighOnlyWithAnIndependentSignal() {
+        assertEquals(Severity.HIGH, severity(keyboardManifest.copy(installer = "com.android.packageinstaller")))
+        assertEquals(Severity.HIGH, severity(keyboardManifest.copy(accessibilityEnabled = true)))
+        assertEquals(Severity.HIGH, severity(keyboardManifest.copy(deviceAdminActive = true)))
+        assertEquals(Severity.HIGH, severity(keyboardManifest.copy(hasLauncher = false)))
         assertEquals(
-            1 + StalkwareScanner.DEVICE_ADMIN_ACTIVE_SCORE,
-            score(rogue, setOf(Manifest.permission.BIND_DEVICE_ADMIN), admin = true),
+            Severity.HIGH,
+            severity(keyboardManifest.copy(requested = keyboardManifest.requested + Manifest.permission.READ_SMS + Manifest.permission.READ_CALL_LOG)),
         )
     }
 
     @Test
-    fun aHiddenKeyloggerWithAdminReachesHighOnTheseSignalsAlone() {
-        val declared = setOf(Manifest.permission.BIND_INPUT_METHOD, Manifest.permission.BIND_DEVICE_ADMIN)
-        // 4 (enabled keyboard) + 1 (admin receiver) + 3 (active admin), at or above HIGH (5).
-        assertEquals(8, score(rogue, declared, ime = true, admin = true))
+    fun microphoneAndOverlayStillCountForAnAppThatIsNotAnEnabledKeyboard() {
+        val notIme = keyboardManifest.copy(imeEnabled = false, declared = emptySet())
+        assertEquals(2, score(notIme))
     }
 
     @Test
+    fun aKnownKeyboardIsListedButNotScored() {
+        val signals = StalkwareScanner.assess(keyboardManifest.copy(name = gboard))
+        assertEquals(0, signals.sumOf { it.points })
+        assertTrue("is an enabled keyboard (a known app)" in signals.map { it.reason })
+    }
+
+    @Test
+    fun aDeclaredButDisabledKeyboardIsAWeakSignalUnlessKnown() {
+        val declared = AppFacts(rogue, false, play, true, declared = setOf(Manifest.permission.BIND_INPUT_METHOD))
+        assertEquals(1, score(declared))
+        assertEquals(0, score(declared.copy(name = gboard)))
+    }
+
+    @Test
+    fun oemKeyboardsAreKnown() {
+        for (oem in listOf(
+            "com.baidu.input_huawei", "com.huawei.ohos.inputmethod", "com.sohu.inputmethod.sogou.xiaomi",
+            "com.iflytek.inputmethod.miui", "com.baidu.input_vivo", "com.oplus.securitykeyboard",
+            "com.touchtype.swiftkey", "org.futo.inputmethod.latin", "helium314.keyboard",
+        )) {
+            assertEquals(oem, 0, score(keyboardManifest.copy(name = oem, system = true, installer = null, hasLauncher = false)))
+        }
+    }
+
+    @Test
+    fun anUnknownPreloadedKeyboardIsListedButNotScoredOnItsOwn() {
+        val preloaded = keyboardManifest.copy(name = "com.vendor.ime", system = true, installer = null, hasLauncher = false)
+        val signals = StalkwareScanner.assess(preloaded)
+        assertEquals(0, signals.sumOf { it.points })
+        assertEquals(listOf("is an enabled keyboard (preloaded by the phone maker)"), signals.map { it.reason })
+        // A preloaded app without a drawer icon is normal: no signal for it.
+        assertFalse(signals.any { "app drawer" in it.reason })
+    }
+
+    @Test
+    fun anUnknownPreloadedKeyboardIsScoredWithAnotherSignal() {
+        val preloaded = keyboardManifest.copy(name = "com.vendor.ime", system = true, installer = null, hasLauncher = false)
+        val withSms = preloaded.copy(requested = preloaded.requested + Manifest.permission.READ_SMS)
+        assertEquals(2 + StalkwareScanner.IME_ENABLED_SCORE, score(withSms))
+        assertEquals(Severity.HIGH, severity(withSms))
+    }
+
+    @Test
+    fun noLauncherIconCountsOnlyForUserApps() {
+        assertEquals(StalkwareScanner.NO_LAUNCHER_SCORE, score(AppFacts(rogue, false, play, hasLauncher = false)))
+        assertEquals(0, score(AppFacts(rogue, true, null, hasLauncher = false)))
+    }
+
+    // ── Device admins ─────────────────────────────────────────────────────────
+
+    @Test
+    fun anActiveAdminScoresTheGrantNotAlsoTheReceiver() {
+        val declaredOnly = AppFacts(rogue, false, play, true, declared = setOf(Manifest.permission.BIND_DEVICE_ADMIN))
+        assertEquals(1, score(declaredOnly))
+        assertEquals(StalkwareScanner.DEVICE_ADMIN_ACTIVE_SCORE, score(declaredOnly.copy(deviceAdminActive = true)))
+    }
+
+    @Test
+    fun knownAdminsAreListedButNotScored() {
+        for (known in listOf(
+            "com.google.android.gms", "com.microsoft.windowsintune.companyportal", "com.airwatch.androidagent",
+            "com.samsung.android.fmm", "com.google.android.apps.work.clouddpc", "com.microsoft.office.outlook",
+        )) {
+            val f = AppFacts(known, false, play, true, declared = setOf(Manifest.permission.BIND_DEVICE_ADMIN), deviceAdminActive = true)
+            val signals = StalkwareScanner.assess(f)
+            assertEquals(known, 0, signals.sumOf { it.points })
+            assertTrue(known, "device admin is active (a known app)" in signals.map { it.reason })
+            assertTrue(StalkwareScanner.isKnownAdmin(known))
+        }
+        assertFalse(StalkwareScanner.isKnownAdmin(rogue))
+    }
+
+    // ── Existing behaviour kept ───────────────────────────────────────────────
+
+    @Test
     fun vouchedBindingsStillExemptKnownApps() {
-        assertEquals(0, score("com.google.android.marvin.talkback", setOf(Manifest.permission.BIND_ACCESSIBILITY_SERVICE)))
-        assertEquals(2, score(rogue, setOf(Manifest.permission.BIND_ACCESSIBILITY_SERVICE)))
-        assertEquals(0, score("com.whatsapp", setOf(Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE)))
-        assertEquals(1, score(rogue, setOf(Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE)))
-        assertEquals(0, score(rogue, setOf(Manifest.permission.BIND_VPN_SERVICE)))
+        fun declared(name: String, perm: String) = score(AppFacts(name, false, play, true, declared = setOf(perm)))
+        assertEquals(0, declared("com.google.android.marvin.talkback", Manifest.permission.BIND_ACCESSIBILITY_SERVICE))
+        assertEquals(2, declared(rogue, Manifest.permission.BIND_ACCESSIBILITY_SERVICE))
+        assertEquals(0, declared("com.whatsapp", Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE))
+        assertEquals(1, declared(rogue, Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE))
+        assertEquals(0, declared(rogue, Manifest.permission.BIND_VPN_SERVICE))
+    }
+
+    @Test
+    fun sideloadedHiddenSpywareIsStillHigh() {
+        val spy = AppFacts(
+            rogue, false, installer = null, hasLauncher = false,
+            requested = setOf(Manifest.permission.READ_SMS),
+            accessibilityEnabled = true, hiddenService = true,
+        )
+        // 3 sideload + 2 no icon + 2 SMS + 3 accessibility + 2 hidden service.
+        assertEquals(12, score(spy))
+        assertEquals(Severity.HIGH, severity(spy))
     }
 
     @Test

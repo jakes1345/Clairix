@@ -131,7 +131,8 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                     TKv("Accessibility services", "${r.accessibilityServices.size}")
                     TKv("VPN-capable apps", "${r.vpnApps.size}")
                     TKv("Unknown keyboards", "${r.suspiciousImes.size}")
-                    TKv("Active device admins", "${r.activeDeviceAdmins.size}")
+                    val unknownAdmins = r.activeDeviceAdmins.count { !StalkwareScanner.isKnownAdmin(it) }
+                    TKv("Active device admins", "${r.activeDeviceAdmins.size} ($unknownAdmins unknown)")
                 }
             }
             if (r.high.isEmpty() && r.medium.isEmpty()) {
@@ -191,6 +192,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                         context = context,
                         actionLabel = "OPEN IN SETTINGS",
                         action = StalkwareScanner.appDetailsIntent(pkg),
+                        known = StalkwareScanner.isKnownAdmin(pkg),
                     )
                 }
             }
@@ -206,6 +208,7 @@ private fun GrantCard(
     context: Context,
     actionLabel: String,
     action: Intent,
+    known: Boolean = false,
 ) {
     val label = remember(packageName) { StalkwareScanner.appLabel(context, packageName) }
     TCard {
@@ -215,6 +218,7 @@ private fun GrantCard(
                 Text(packageName, color = TMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
             if (flagged != null) TBadge("${flagged.severity.name} · ${flagged.score}", tSeverityColor(flagged.severity))
+            else if (known) TBadge("KNOWN APP", TClearClr)
         }
         TButton(actionLabel, onClick = { openExternal(context, action) })
     }

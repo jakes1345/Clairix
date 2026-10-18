@@ -190,38 +190,120 @@ object StalkwareScanner {
         "app.clairix"
     )
 
-    /** Keyboards (input methods) that ship on stock phones or are well-known store apps. */
+    /**
+     * Keyboards (input methods) preloaded by phone makers or widely installed from a
+     * store. Every name is a real package (seen in the Play Store, F-Droid, a system-app
+     * database or a debloat list); an invented name here would hand a disguise to any
+     * app willing to take it.
+     */
     private val KNOWN_IMES = setOf(
-        "com.google.android.inputmethod.latin",       // Gboard
-        "com.samsung.android.honeyboard",              // Samsung Keyboard
-        "com.swiftkey.swiftkeyapp",                    // SwiftKey (Microsoft)
-        "com.touchtype.swiftkey",
-        "com.nuance.swype.dtc",                        // Swype
-        "com.nuance.swype.trial",
-        "com.lge.ime",                                 // LG Keyboard
-        "com.motorola.process.system",                 // Moto Keyboard
-        "com.htc.sense.ime",                           // HTC Sense
-        "jp.co.omronsoft.openwnn",
-        "com.sec.android.inputmethod",                 // older Samsung default
-        "com.android.inputmethod.latin",               // AOSP Latin IME
-        "com.android.inputmethod.pinyin",
-        "com.google.android.inputmethod.pinyin",
+        // Google
+        "com.google.android.inputmethod.latin",            // Gboard
         "com.google.android.inputmethod.japanese",
         "com.google.android.inputmethod.korean",
-        "com.google.android.inputmethod.hindi",
-        "com.samsung.android.svoice",
-        "com.greyc.greyckeyboard",
-        "com.fleksy.app",
-        "com.minuum.keyboard",
-        "com.syntellia.fleksy.kb",
-        "io.verbit.keyboards",
+        "com.google.android.inputmethod.pinyin",
+        "com.google.android.apps.inputmethod.hindi",
+        "com.google.android.apps.handwriting.ime",
+        // AOSP
+        "com.android.inputmethod.latin",
+        "com.android.inputmethod.pinyin",
+        // Samsung
+        "com.samsung.android.honeyboard",                  // Samsung Keyboard
+        "com.sec.android.inputmethod",                     // older Samsung Keyboard
+        "com.sec.android.inputmethod.beta",
+        "com.sec.android.inputmethod.iwnnime.japan",
+        "com.samsung.android.svoiceime",                   // Samsung voice input
+        // Huawei / Honor
+        "com.huawei.ohos.inputmethod",                     // Celia Keyboard
+        "com.huawei.secime",                               // secure password keyboard
+        "com.baidu.input_huawei",
+        "com.kikaoem.hw.qisiemoji.inputmethod",
+        "com.nuance.swype.emui",
+        // Xiaomi / Redmi / POCO
+        "com.miui.securityinputmethod",                    // Mi Secure Keyboard
+        "com.baidu.input_mi",
+        "com.sohu.inputmethod.sogou.xiaomi",
+        "com.iflytek.inputmethod.miui",
+        "com.facemoji.lite.xiaomi",
+        "com.facemoji.lite.xiaomi.gp",
+        "com.preff.kb.xm",
+        // OPPO / OnePlus / realme
+        "com.oplus.securitykeyboard",
+        "com.coloros.securitykeyboard",
+        "com.preff.kb.op",
+        // vivo
+        "com.baidu.input_vivo",
+        "com.vivo.secime.service",
+        // Meizu, nubia and other Chinese ROMs
+        "com.sohu.inputmethod.sogou.meizu",
+        "com.sohu.inputmethod.sogou.nubia",
+        "com.sohu.inputmethod.sogou.oem",
+        "com.sohu.inputmethod.sogouoem",
+        // Transsion (Tecno, Infinix, itel), Lenovo, TCL, LG, Sony, Onyx, iQQi
+        "com.facemoji.lite.transsion",
+        "com.transsion.sk",
+        "com.zui.oneime",
+        "com.tct.smartkeyboard",
+        "com.lge.ime",
+        "com.sonyericsson.textinput.chinese",
+        "com.sonymobile.pobox",
+        "com.onyx.latinime",
+        "com.iqqi.imeservice",
+        "jp.co.omronsoft.openwnn",
+        "jp.co.omronsoft.iwnnime.ml",
+        // Chinese store keyboards
+        "com.sohu.inputmethod.sogou",                      // Sogou
+        "com.baidu.input",                                 // Baidu
+        "com.iflytek.inputmethod",                         // iFlytek
+        // Popular store and open-source keyboards
+        "com.touchtype.swiftkey",                          // Microsoft SwiftKey
+        "com.touchtype.swiftkey.beta",
+        "com.nuance.swype.input",
+        "com.grammarly.android.keyboard",
+        "com.syntellia.fleksy.keyboard",                   // Fleksy
+        "ch.icoaching.typewise",
+        "ru.yandex.androidkeyboard",
+        "com.mint.keyboard",                               // Bobble
+        "com.qisiemoji.inputmethod",                       // Kika
+        "com.menny.android.anysoftkeyboard",
+        "dev.patrickgold.florisboard",
+        "dev.patrickgold.florisboard.beta",
+        "helium314.keyboard",                              // HeliBoard
+        "org.dslul.openboard.inputmethod.latin",           // OpenBoard
+        "org.futo.inputmethod.latin",                      // FUTO Keyboard
+        "org.futo.inputmethod.latin.playstore",
+        "rkr.simplekeyboard.inputmethod",
+        "org.pocketworkstation.pckeyboard",                // Hacker's Keyboard
         "app.clairix"
+    )
+
+    /**
+     * Apps that hold a device-admin grant for a stated, legitimate purpose: finding a
+     * lost phone, a work or school profile, or the policies an Exchange mail account
+     * imposes. Listed, not scored, as for [KNOWN_LISTENERS].
+     */
+    private val KNOWN_ADMINS = setOf(
+        "com.google.android.gms",                          // Play services: Find My Device
+        "com.google.android.apps.adm",                     // Google Find My Device
+        "com.google.android.apps.work.clouddpc",           // Android Device Policy
+        "com.google.android.apps.enterprise.dmagent",      // Google Apps Device Policy
+        "com.microsoft.windowsintune.companyportal",       // Intune Company Portal
+        "com.airwatch.androidagent",                       // Workspace ONE Intelligent Hub
+        "com.samsung.android.fmm",                         // Samsung Find My Mobile
+        "com.samsung.android.knox.containercore",          // Knox work profile
+        "com.sec.enterprise.knox.cloudmdm.smdms",          // Knox enrollment
+        "com.google.android.gm",                           // Gmail (Exchange accounts)
+        "com.microsoft.office.outlook",                    // Outlook (Exchange accounts)
+        "com.samsung.android.email.provider"               // Samsung Email (Exchange accounts)
     )
 
     /** Score for an enabled keyboard that is not in [KNOWN_IMES]: it sees every keystroke. */
     internal const val IME_ENABLED_SCORE = 4
-    /** Score for an active device-admin grant, on top of declaring the admin receiver. */
+    /** Score for an active device-admin grant held by an app not in [KNOWN_ADMINS]. */
     internal const val DEVICE_ADMIN_ACTIVE_SCORE = 3
+    internal const val SIDELOAD_SCORE = 3
+    internal const val NO_LAUNCHER_SCORE = 2
+    internal const val HIDDEN_SERVICE_SCORE = 2
 
     /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
     private val SUSPECT_PERMISSIONS = linkedMapOf(
@@ -235,11 +317,21 @@ object StalkwareScanner {
     )
 
     /**
+     * What a keyboard requests to do its job: the microphone for voice typing and an
+     * overlay for its suggestion strip and pop-ups. For an enabled keyboard these are the
+     * keyboard signal itself, so they are not counted again.
+     */
+    private val KEYBOARD_PERMISSIONS = setOf(
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.SYSTEM_ALERT_WINDOW
+    )
+
+    /**
      * Permissions an app *protects its own components with* (`android:permission` on
      * a `<service>` or `<receiver>`), with their weight and reason. These are how a
      * component declares itself an accessibility service, device admin, notification
-     * listener or VPN: the system alone holds the BIND_ permission, and an app never
-     * requests it, so looking for them among requested permissions matched nothing.
+     * listener, VPN or keyboard: the system alone holds the BIND_ permission, and an app
+     * never requests it, so looking for them among requested permissions matched nothing.
      */
     private val SUSPECT_BINDINGS = linkedMapOf(
         Manifest.permission.BIND_ACCESSIBILITY_SERVICE to (2 to "declares an accessibility service (reads every screen, every tap)"),
@@ -252,43 +344,101 @@ object StalkwareScanner {
     /** One scoring signal: the points it adds and the reason shown for it. */
     internal data class Signal(val points: Int, val reason: String)
 
+    /** Everything [assess] needs to know about one installed package. */
+    internal data class AppFacts(
+        val name: String,
+        val system: Boolean,
+        val installer: String?,
+        val hasLauncher: Boolean,
+        val requested: Set<String> = emptySet(),
+        /** The BIND_ permissions its services and receivers are protected with. */
+        val declared: Set<String> = emptySet(),
+        val notificationListener: Boolean = false,
+        val accessibilityEnabled: Boolean = false,
+        val vpnCapable: Boolean = false,
+        val imeEnabled: Boolean = false,
+        val deviceAdminActive: Boolean = false,
+        /** Started a foreground service this week without ever showing a screen (usage access only). */
+        val hiddenService: Boolean = false,
+    ) {
+        /** Installed by something other than a store; preloaded apps never are. */
+        val sideloaded: Boolean get() = !system && (installer == null || installer !in STORES)
+    }
+
     /**
-     * The signals from what package [name] declares and holds: the BIND_ permissions
-     * its components are protected with ([declared]), whether it is an enabled
-     * keyboard, and whether it holds an active device-admin grant.
-     *
-     * A known app declaring the service it exists to provide is not a signal. An
-     * enabled keyboard is scored by the enabled-keyboard signal alone: its own
-     * BIND_INPUT_METHOD service is what made it a keyboard, so counting that too
-     * would score the one fact twice. An active admin keeps both: declaring an admin
-     * receiver is common, holding the grant is what blocks the uninstall.
+     * Scores one package. Each fact is counted once, by its strongest reading:
+     * - An enabled keyboard is scored by the enabled-keyboard signal alone; its own
+     *   BIND_INPUT_METHOD service, its microphone (voice typing) and its overlay
+     *   (suggestion strip) are how a keyboard works, not further evidence.
+     * - An active device admin is scored by the grant; the receiver it declared to hold
+     *   it is not counted again.
+     * - A preloaded app is not something an abuser installed: missing from the app
+     *   drawer is normal for one, and an unknown preloaded keyboard (an OEM's own) is
+     *   listed but scores only alongside some other, independent signal.
+     * - Known apps declaring or holding the access they exist to provide are listed
+     *   with "(a known app)" and score nothing.
      */
-    internal fun componentSignals(
-        name: String,
-        declared: Set<String>,
-        imeEnabled: Boolean,
-        deviceAdminActive: Boolean,
-    ): List<Signal> {
+    internal fun assess(f: AppFacts): List<Signal> {
         val out = ArrayList<Signal>()
+        val name = f.name
+
+        if (f.sideloaded) {
+            out += Signal(SIDELOAD_SCORE, when (f.installer) {
+                null, "com.android.shell" -> "installed from a computer (adb) or an unknown source"
+                "com.android.packageinstaller", "com.google.android.packageinstaller",
+                "com.samsung.android.packageinstaller" -> "installed from an APK file, not a store"
+                else -> "installed by ${f.installer}, not a store"
+            })
+        }
+        val hidden = !f.system && !f.hasLauncher
+        if (hidden) out += Signal(NO_LAUNCHER_SCORE, "has no icon in the app drawer")
+
+        for ((perm, weight) in SUSPECT_PERMISSIONS) {
+            if (perm !in f.requested) continue
+            if (f.imeEnabled && perm in KEYBOARD_PERMISSIONS) continue
+            out += Signal(weight.first, weight.second)
+        }
         for ((perm, weight) in SUSPECT_BINDINGS) {
-            if (perm !in declared) continue
+            if (perm !in f.declared) continue
             val skip = when (perm) {
                 Manifest.permission.BIND_ACCESSIBILITY_SERVICE -> name in KNOWN_ACCESSIBILITY
                 Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE -> name in KNOWN_LISTENERS
-                Manifest.permission.BIND_INPUT_METHOD -> name in KNOWN_IMES || imeEnabled
+                Manifest.permission.BIND_INPUT_METHOD -> name in KNOWN_IMES || f.imeEnabled
+                Manifest.permission.BIND_DEVICE_ADMIN -> name in KNOWN_ADMINS || f.deviceAdminActive
                 else -> false
             }
             if (!skip) out += Signal(weight.first, weight.second)
         }
-        if (imeEnabled) {
-            out += if (name !in KNOWN_IMES) {
-                Signal(IME_ENABLED_SCORE, "is an enabled keyboard (can log every keystroke, passwords included)")
+
+        if (f.accessibilityEnabled) {
+            out += if (name !in KNOWN_ACCESSIBILITY) Signal(3, "accessibility service is switched ON")
+            else Signal(0, "accessibility service is on (a known app)")
+        }
+        if (f.notificationListener) {
+            out += if (name !in KNOWN_LISTENERS) Signal(3, "notification access is switched ON (reads every notification)")
+            else Signal(0, "notification access is on (a known app)")
+        }
+        if (f.vpnCapable) {
+            out += Signal(if (f.sideloaded || hidden) 2 else 1, "can act as the VPN and see all traffic")
+        }
+        if (f.deviceAdminActive) {
+            out += if (name !in KNOWN_ADMINS) {
+                Signal(DEVICE_ADMIN_ACTIVE_SCORE, "device admin is ACTIVE (can block its own uninstall; may lock or wipe the phone)")
             } else {
-                Signal(0, "is an enabled keyboard (a known app)")
+                Signal(0, "device admin is active (a known app)")
             }
         }
-        if (deviceAdminActive) {
-            out += Signal(DEVICE_ADMIN_ACTIVE_SCORE, "device admin is ACTIVE (can block its own uninstall; may lock or wipe the phone)")
+        if (f.hiddenService) {
+            out += Signal(HIDDEN_SERVICE_SCORE, "ran a background service this week without ever showing a screen")
+        }
+
+        if (f.imeEnabled) {
+            out += when {
+                name in KNOWN_IMES -> Signal(0, "is an enabled keyboard (a known app)")
+                // Checked last so "another signal" means everything above, none of it the keyboard itself.
+                f.system && out.none { it.points > 0 } -> Signal(0, "is an enabled keyboard (preloaded by the phone maker)")
+                else -> Signal(IME_ENABLED_SCORE, "is an enabled keyboard (can log every keystroke, passwords included)")
+            }
         }
         return out
     }
@@ -306,6 +456,9 @@ object StalkwareScanner {
     /** Enabled keyboards that are not in [KNOWN_IMES], sorted. */
     internal fun suspiciousImes(enabledImes: Collection<String>): List<String> =
         enabledImes.filter { it !in KNOWN_IMES }.distinct().sorted()
+
+    /** Whether [packageName] holds device admin for a known, legitimate purpose. */
+    fun isKnownAdmin(packageName: String): Boolean = packageName in KNOWN_ADMINS
 
     /** Whether the hidden-service signal is available: Settings → Usage access → Clairix. */
     fun hasUsageAccess(context: Context): Boolean {
@@ -364,64 +517,24 @@ object StalkwareScanner {
             val admin = name in deviceAdminPkgs
             if (system && !systemAppWorthScoring(name, listener, a11y, ime)) continue
 
-            val reasons = ArrayList<String>()
-            var score = 0
-
             val installer = installerOf(pm, name)
-            val sideloaded = !system && (installer == null || installer !in STORES)
-            if (sideloaded) {
-                score += 3
-                reasons += when (installer) {
-                    null, "com.android.shell" -> "installed from a computer (adb) or an unknown source"
-                    "com.android.packageinstaller", "com.google.android.packageinstaller",
-                    "com.samsung.android.packageinstaller" -> "installed from an APK file, not a store"
-                    else -> "installed by $installer, not a store"
-                }
-            }
-
-            val hasLauncher = name in launcherPkgs
-            if (!hasLauncher) {
-                score += 2
-                reasons += "has no icon in the app drawer"
-            }
-
-            val requested = pkg.requestedPermissions?.toSet() ?: emptySet()
-            for ((perm, weight) in SUSPECT_PERMISSIONS) {
-                if (perm in requested) {
-                    score += weight.first
-                    reasons += weight.second
-                }
-            }
-            for (signal in componentSignals(name, declaredBindings(pkg), ime, admin)) {
-                score += signal.points
-                reasons += signal.reason
-            }
-
-            if (a11y) {
-                if (name !in KNOWN_ACCESSIBILITY) {
-                    score += 3
-                    reasons += "accessibility service is switched ON"
-                } else {
-                    reasons += "accessibility service is on (a known app)"
-                }
-            }
-            if (listener) {
-                if (name !in KNOWN_LISTENERS) {
-                    score += 3
-                    reasons += "notification access is switched ON (reads every notification)"
-                } else {
-                    reasons += "notification access is on (a known app)"
-                }
-            }
-            if (vpn) {
-                score += if (sideloaded || !hasLauncher) 2 else 1
-                reasons += "can act as the VPN and see all traffic"
-            }
-
-            if (usageAccess && name in fgsPkgs && name !in resumedPkgs) {
-                score += 2
-                reasons += "ran a background service this week without ever showing a screen"
-            }
+            val facts = AppFacts(
+                name = name,
+                system = system,
+                installer = installer,
+                hasLauncher = name in launcherPkgs,
+                requested = pkg.requestedPermissions?.toSet() ?: emptySet(),
+                declared = declaredBindings(pkg),
+                notificationListener = listener,
+                accessibilityEnabled = a11y,
+                vpnCapable = vpn,
+                imeEnabled = ime,
+                deviceAdminActive = admin,
+                hiddenService = usageAccess && name in fgsPkgs && name !in resumedPkgs,
+            )
+            val signals = assess(facts)
+            val score = signals.sumOf { it.points }
+            val reasons = signals.map { it.reason }
 
             if (score < MEDIUM_SCORE) continue
             found += SuspiciousApp(
@@ -431,8 +544,8 @@ object StalkwareScanner {
                 reasons = reasons,
                 installTs = pkg.firstInstallTime,
                 lastUpdateTs = pkg.lastUpdateTime,
-                sideloaded = sideloaded,
-                hasLauncherIcon = hasLauncher,
+                sideloaded = facts.sideloaded,
+                hasLauncherIcon = facts.hasLauncher,
                 vpnCapable = vpn,
                 notificationListener = listener,
                 accessibilityEnabled = a11y,
