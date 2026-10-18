@@ -1,0 +1,472 @@
+{
+  "generated": "node brand/tokens/build.mjs",
+  "standard": "WCAG 2.x relative luminance",
+  "modes": {
+    "light": [
+      {
+        "fg": "text",
+        "bg": "background",
+        "fgHex": "#0B0F18",
+        "bgHex": "#F9FAFB",
+        "ratio": 18.34,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "text",
+        "bg": "surface",
+        "fgHex": "#0B0F18",
+        "bgHex": "#FFFFFF",
+        "ratio": 19.16,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textSecondary",
+        "bg": "surface",
+        "fgHex": "#545B66",
+        "bgHex": "#FFFFFF",
+        "ratio": 6.85,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textSecondary",
+        "bg": "background",
+        "fgHex": "#545B66",
+        "bgHex": "#F9FAFB",
+        "ratio": 6.56,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textTertiary",
+        "bg": "surface",
+        "fgHex": "#6D737E",
+        "bgHex": "#FFFFFF",
+        "ratio": 4.77,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textTertiary",
+        "bg": "background",
+        "fgHex": "#6D737E",
+        "bgHex": "#F9FAFB",
+        "ratio": 4.56,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "primary",
+        "bg": "surface",
+        "fgHex": "#0C71D1",
+        "bgHex": "#FFFFFF",
+        "ratio": 4.89,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onPrimary",
+        "bg": "primary",
+        "fgHex": "#FFFFFF",
+        "bgHex": "#0C71D1",
+        "ratio": 4.89,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onPrimaryContainer",
+        "bg": "primaryContainer",
+        "fgHex": "#154384",
+        "bgHex": "#DDEDFF",
+        "ratio": 8.13,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "safe",
+        "bg": "surface",
+        "fgHex": "#007D51",
+        "bgHex": "#FFFFFF",
+        "ratio": 5.18,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onSafe",
+        "bg": "safe",
+        "fgHex": "#FFFFFF",
+        "bgHex": "#007D51",
+        "ratio": 5.18,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onSafeContainer",
+        "bg": "safeContainer",
+        "fgHex": "#006943",
+        "bgHex": "#DDF8E8",
+        "ratio": 6.02,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onCaution",
+        "bg": "caution",
+        "fgHex": "#0B0F18",
+        "bgHex": "#EFA831",
+        "ratio": 9.41,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onCautionContainer",
+        "bg": "cautionContainer",
+        "fgHex": "#965719",
+        "bgHex": "#FFF2D8",
+        "ratio": 5.16,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "danger",
+        "bg": "surface",
+        "fgHex": "#C53732",
+        "bgHex": "#FFFFFF",
+        "ratio": 5.29,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onDanger",
+        "bg": "danger",
+        "fgHex": "#FFFFFF",
+        "bgHex": "#C53732",
+        "ratio": 5.29,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onDangerContainer",
+        "bg": "dangerContainer",
+        "fgHex": "#B02B27",
+        "bgHex": "#FFEBE9",
+        "ratio": 5.69,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "info",
+        "bg": "surface",
+        "fgHex": "#00769D",
+        "bgHex": "#FFFFFF",
+        "ratio": 5.15,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onInfo",
+        "bg": "info",
+        "fgHex": "#FFFFFF",
+        "bgHex": "#00769D",
+        "ratio": 5.15,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onInfoContainer",
+        "bg": "infoContainer",
+        "fgHex": "#006387",
+        "bgHex": "#DFF4FD",
+        "ratio": 5.9,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "glint",
+        "bg": "surface",
+        "fgHex": "#2489EA",
+        "bgHex": "#FFFFFF",
+        "ratio": 3.6,
+        "min": 3,
+        "aa": false,
+        "aaLarge": true,
+        "pass": true
+      }
+    ],
+    "dark": [
+      {
+        "fg": "text",
+        "bg": "background",
+        "fgHex": "#F9FAFB",
+        "bgHex": "#050810",
+        "ratio": 19.16,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "text",
+        "bg": "surface",
+        "fgHex": "#F9FAFB",
+        "bgHex": "#0B0F18",
+        "ratio": 18.34,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textSecondary",
+        "bg": "surface",
+        "fgHex": "#D0D4DB",
+        "bgHex": "#0B0F18",
+        "ratio": 12.89,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textSecondary",
+        "bg": "background",
+        "fgHex": "#D0D4DB",
+        "bgHex": "#050810",
+        "ratio": 13.47,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textTertiary",
+        "bg": "surface",
+        "fgHex": "#9FA5AE",
+        "bgHex": "#0B0F18",
+        "ratio": 7.73,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "textTertiary",
+        "bg": "background",
+        "fgHex": "#9FA5AE",
+        "bgHex": "#050810",
+        "ratio": 8.07,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "primary",
+        "bg": "surface",
+        "fgHex": "#5BA5F6",
+        "bgHex": "#0B0F18",
+        "ratio": 7.44,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onPrimary",
+        "bg": "primary",
+        "fgHex": "#0B1B3B",
+        "bgHex": "#5BA5F6",
+        "ratio": 6.61,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onPrimaryContainer",
+        "bg": "primaryContainer",
+        "fgHex": "#DDEDFF",
+        "bgHex": "#122E5D",
+        "ratio": 11.2,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "safe",
+        "bg": "surface",
+        "fgHex": "#68D7A1",
+        "bgHex": "#0B0F18",
+        "ratio": 10.79,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onSafe",
+        "bg": "safe",
+        "fgHex": "#0A3123",
+        "bgHex": "#68D7A1",
+        "ratio": 8.01,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onSafeContainer",
+        "bg": "safeContainer",
+        "fgHex": "#68D7A1",
+        "bgHex": "#0A3123",
+        "ratio": 8.01,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onCaution",
+        "bg": "caution",
+        "fgHex": "#3B260C",
+        "bgHex": "#F7C15F",
+        "ratio": 8.68,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onCautionContainer",
+        "bg": "cautionContainer",
+        "fgHex": "#F7C15F",
+        "bgHex": "#3B260C",
+        "ratio": 8.68,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "danger",
+        "bg": "surface",
+        "fgHex": "#F7958D",
+        "bgHex": "#0B0F18",
+        "ratio": 8.8,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onDanger",
+        "bg": "danger",
+        "fgHex": "#481B19",
+        "bgHex": "#F7958D",
+        "ratio": 6.66,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onDangerContainer",
+        "bg": "dangerContainer",
+        "fgHex": "#F7958D",
+        "bgHex": "#481B19",
+        "ratio": 6.66,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "info",
+        "bg": "surface",
+        "fgHex": "#74CFF2",
+        "bgHex": "#0B0F18",
+        "ratio": 10.91,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onInfo",
+        "bg": "info",
+        "fgHex": "#0A2C3E",
+        "bgHex": "#74CFF2",
+        "ratio": 8.28,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "onInfoContainer",
+        "bg": "infoContainer",
+        "fgHex": "#74CFF2",
+        "bgHex": "#0A2C3E",
+        "ratio": 8.28,
+        "min": 4.5,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      },
+      {
+        "fg": "glint",
+        "bg": "surface",
+        "fgHex": "#5BA5F6",
+        "bgHex": "#0B0F18",
+        "ratio": 7.44,
+        "min": 3,
+        "aa": true,
+        "aaLarge": true,
+        "pass": true
+      }
+    ]
+  }
+}
