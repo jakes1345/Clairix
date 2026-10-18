@@ -6,8 +6,10 @@ import {
   DELIVERY_TOKEN_RE,
   expireClaims,
   groupByShard,
+  MemoryBuckets,
   OTK_CLAIM_WINDOW_MS,
-  pairBucket,
+  DELIVERY_TOKEN_TTL_MS,
+  tokenBatchExpiry,
   parseIceServers,
   randomToken,
   tokenHash,
@@ -33,11 +35,29 @@ test("token hashes pick one of 256 shards", async () => {
   assert.deepEqual([...groups], [["dtok:aa", ["aa01", "aa02"]], ["dtok:bb", ["bb03"]]]);
 });
 
-test("claim-rate buckets name the target only by a hash", async () => {
-  const b = await pairBucket("123456789");
-  assert.match(b, /^claim:[0-9a-f]{32}$/);
-  assert.ok(!b.includes("123456789"));
-  assert.notEqual(b, await pairBucket("123456780"));
+test("in-memory buckets limit per key, refill, and forget the oldest keys", () => {
+  const b = new MemoryBuckets(1, 2, 3);
+  const t = 1_000_000;
+  assert.equal(b.take("a", t), true);
+  assert.equal(b.take("a", t), true);
+  assert.equal(b.take("a", t), false);
+  assert.equal(b.take("b", t), true);
+  assert.equal(b.take("a", t + 60_000), true);
+  // Only three keys are kept: "a" is forgotten once three others were used after it.
+  for (const k of ["c", "d", "e"]) b.take(k, t + 60_000);
+  assert.equal(b.take("a", t + 60_000), true);
+  assert.equal(b.take("a", t + 60_000), true);
+});
+
+test("a token batch expires on the hour, jittered by up to twelve hours", () => {
+  const hour = 60 * 60_000;
+  const now = 1_760_000_123_456;
+  for (const r of [0, 0.25, 0.5, 0.999999]) {
+    const e = tokenBatchExpiry(now, () => r);
+    assert.equal(e % hour, 0);
+    assert.ok(e > now + DELIVERY_TOKEN_TTL_MS - hour && e <= now + DELIVERY_TOKEN_TTL_MS + 12 * hour);
+  }
+  assert.notEqual(tokenBatchExpiry(now, () => 0), tokenBatchExpiry(now, () => 0.5));
 });
 
 test("claims past their window are split off", () => {

@@ -5,17 +5,14 @@ import {
   DELIVERY_TOKEN_BURST,
   DELIVERY_TOKEN_PER_MINUTE,
   DELIVERY_TOKEN_RE,
-  DELIVERY_TOKEN_TTL_MS,
   groupByShard,
-  OTK_CLAIMS_PER_PAIR_BURST,
-  OTK_CLAIMS_PER_PAIR_PER_MINUTE,
-  pairBucket,
   parseIceServers,
   PUSH_CHALLENGE_PREFIX,
   randomToken,
   STUN_ONLY,
   tokenHash,
   tokenShardName,
+  tokenBatchExpiry,
   TURN_TTL_S,
   type IceServer,
 } from "./comms-logic";
@@ -232,7 +229,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (taken.granted === 0) throw new HttpError(429, "Too many messages; try again shortly", taken.retryAfter);
     const tokens = Array.from({ length: taken.granted }, () => randomToken());
     const hashes = await Promise.all(tokens.map((t) => tokenHash(t)));
-    const expiresAt = Date.now() + DELIVERY_TOKEN_TTL_MS;
+    const expiresAt = tokenBatchExpiry(Date.now());
     // Stored by hash in shard objects that never learn the account: the only
     // link between this caller and these tokens is this response.
     await Promise.all(
@@ -253,10 +250,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     // owner's identity key (from a QR scan) and proves it with its fingerprint.
     // The pin is checked before any key is claimed, so a wrong pin neither
     // reveals the bundle nor consumes a one-time key.
-    // Each caller may take only a few one-time keys from each number, and each
-    // number hands out only so many in all; past either limit the fallback key
-    // is offered, which starts a session just as well and drains nothing.
-    const mayClaim = target !== profile.number && (await me.rateOk(await pairBucket(target), OTK_CLAIMS_PER_PAIR_PER_MINUTE, OTK_CLAIMS_PER_PAIR_BURST)).ok;
+    // Each caller may take only a few one-time keys from each number and so
+    // many in all, and each number hands out only so many; past any limit the
+    // fallback key is offered, which starts a session just as well and drains
+    // nothing. Who looked up whom is never stored.
+    const mayClaim = target !== profile.number && (await me.mayClaimFrom(target));
     let bundle = null;
     if (pin === null) {
       bundle = await them.bundle(true, mayClaim);

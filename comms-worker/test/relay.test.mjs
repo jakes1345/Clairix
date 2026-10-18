@@ -206,18 +206,84 @@ test("a number hands out at most twenty one-time keys at once, whoever asks", as
   assert.equal(fallbacks, 1);
 });
 
-test("a claimed key that no send follows up goes back into the pool", async () => {
+test("a claimed key that no send follows up goes back into the pool, last", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay, { oneTimeKeys: 3 });
+  assert.equal(await bob.oneTimeKeys(), 3);
+  const b = (await alice.bundle(bob.number)).json.bundle;
+  assert.equal(await bob.oneTimeKeys(), 2);
+  advance(OTK_CLAIM_WINDOW_MS + 1);
+  assert.equal(await bob.oneTimeKeys(), 3);
+  // It is offered again only after every key that was never handed out.
+  const carol = await makePhone(relay);
+  const offered = [];
+  for (let i = 0; i < 3; i++) offered.push((await carol.bundle(bob.number)).json.bundle.oneTimeKey.id);
+  assert.equal(offered[2], b.oneTimeKey.id);
+  assert.ok(!offered.slice(0, 2).includes(b.oneTimeKey.id));
+});
+
+test("a late claim takes its key back out of the pool: no two lookups get the same key", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay, { oneTimeKeys: 4 });
+  const first = (await alice.bundle(bob.number)).json.bundle;
+  // Alice was offline past the window; the key went back into the pool.
+  advance(OTK_CLAIM_WINDOW_MS + 1);
+  assert.equal(await bob.oneTimeKeys(), 4);
+  // Her first envelope still presents the ticket, late.
+  const [token] = await alice.tokens(1);
+  assert.equal((await alice.send(token, bob.number, "AAAA", first.claim)).status, 202);
+  assert.equal(await bob.oneTimeKeys(), 3);
+  // Every later lookup, by anyone, gets some other key.
+  const seen = new Set([first.oneTimeKey.id]);
+  const askers = [await makePhone(relay), await makePhone(relay)];
+  for (const a of askers) {
+    for (let i = 0; i < 3; i++) {
+      const k = (await a.bundle(bob.number)).json.bundle.oneTimeKey;
+      if (!k) continue;
+      assert.ok(!seen.has(k.id), `key ${k.id} handed out twice`);
+      seen.add(k.id);
+    }
+  }
+  assert.equal(seen.size, 4);
+  // And it cannot be republished.
+  const again = await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [first.oneTimeKey] });
+  assert.equal(again.json.oneTimeKeys, 0);
+});
+
+test("one requester claims at most ten keys at once in all, whoever from", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const targets = [];
+  for (let i = 0; i < 4; i++) targets.push(await makePhone(relay, { oneTimeKeys: 5 }));
+  let keys = 0;
+  for (const t of targets) for (let i = 0; i < 3; i++) if ((await alice.bundle(t.number)).json.bundle.oneTimeKey) keys++;
+  assert.equal(keys, 10);
+});
+
+test("who looked up whom is never stored", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);
   const bob = await makePhone(relay, { oneTimeKeys: 5 });
-  assert.equal(await bob.oneTimeKeys(), 5);
-  const b = (await alice.bundle(bob.number)).json.bundle;
-  assert.equal(await bob.oneTimeKeys(), 4);
-  advance(OTK_CLAIM_WINDOW_MS + 1);
-  assert.equal(await bob.oneTimeKeys(), 5);
-  // And it is the next one offered.
-  const carol = await makePhone(relay);
-  assert.equal((await carol.bundle(bob.number)).json.bundle.oneTimeKey.id, b.oneTimeKey.id);
+  await alice.bundle(bob.number);
+  await alice.signed("GET", `/v1/identity/${bob.number}`);
+  const stored = everythingStored(relay, (n) => n === alice.number);
+  assert.ok(!stored.includes(bob.number), "the target's number is in the requester's storage");
+  // Nor any hash of it: no stored key or value mentions a digest of the number.
+  for (const prefix of ["", "otk-pair|"]) {
+    const h = await tokenHash(prefix + bob.number);
+    assert.ok(!stored.includes(h.slice(0, 16)));
+  }
+  assert.ok(![...relay.env.MAILBOX.storageOf(alice.number).keys()].some((k) => k.startsWith("bucket:claim")));
+});
+
+test("token batches expire on the hour", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const res = await alice.signed("POST", "/v1/tokens", { count: 3 });
+  assert.equal(res.json.expiresAt % (60 * 60_000), 0);
+  assert.ok(res.json.expiresAt > Date.now() + 13 * 24 * 60 * 60_000);
 });
 
 test("a send that presents the claim ticket spends the key for good", async () => {

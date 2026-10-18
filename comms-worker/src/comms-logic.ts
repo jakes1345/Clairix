@@ -84,14 +84,37 @@ export interface OtkClaim {
 
 /** How long a claimed key waits for the send that uses it. */
 export const OTK_CLAIM_WINDOW_MS = 15 * 60_000;
-/** One-time keys one requester may claim from one target: three an hour. */
+/**
+ * One-time keys one requester may claim in all, from anyone: thirty an hour,
+ * ten at once. The bucket is the requester's own and names no target.
+ */
+export const OTK_CLAIMS_PER_REQUESTER_PER_MINUTE = 0.5;
+export const OTK_CLAIMS_PER_REQUESTER_BURST = 10;
+/**
+ * One-time keys one requester may claim from one target: three an hour. Kept
+ * only in the requester's object's memory, never in storage, so the relay
+ * keeps no record of who looked whom up (a hash of a nine-digit number would
+ * be no protection: there are only a billion of them).
+ */
 export const OTK_CLAIMS_PER_PAIR_PER_MINUTE = 3 / 60;
 export const OTK_CLAIMS_PER_PAIR_BURST = 3;
 /** One-time keys a target hands out in all: sixty an hour, twenty at once. */
 export const OTK_CLAIMS_PER_TARGET_PER_MINUTE = 1;
 export const OTK_CLAIMS_PER_TARGET_BURST = 20;
-/** Claim-rate buckets older than this are deleted by the daily cleanup. */
-export const OTK_PAIR_BUCKET_TTL_MS = 24 * 60 * 60_000;
+/**
+ * How long the ticket of a claim whose window passed is remembered. A send
+ * that presents it late (the phone was offline) still spends the key, which
+ * by then is back in the pool and must not be handed out again.
+ */
+export const OTK_LAPSED_TICKET_TTL_MS = 30 * 24 * 60 * 60_000;
+export const OTK_LAPSED_TICKETS_MAX = 2000;
+
+/** A claim whose window passed: its ticket and the id of the key that went back into the pool. */
+export interface LapsedClaim {
+  ticket: string;
+  keyId: string;
+  at: number;
+}
 
 /** Splits claims into those still waiting and those whose window has passed. */
 export function expireClaims(claims: OtkClaim[], now: number, windowMs = OTK_CLAIM_WINDOW_MS): { kept: OtkClaim[]; expired: OtkClaim[] } {
@@ -101,9 +124,51 @@ export function expireClaims(claims: OtkClaim[], now: number, windowMs = OTK_CLA
   return { kept, expired };
 }
 
-/** The rate-bucket name for one requester claiming from one target; the target appears only hashed. */
-export async function pairBucket(target: string): Promise<string> {
-  return `claim:${(await tokenHash(`otk-pair|${target}`)).slice(0, 32)}`;
+/**
+ * An in-memory token bucket per key, for limits whose keys must never be
+ * written to storage. It forgets everything when the object is evicted, which
+ * at worst lets a requester claim a few more keys sooner; the stored
+ * per-requester and per-target limits still hold.
+ */
+export class MemoryBuckets {
+  private readonly buckets = new Map<string, { tokens: number; at: number }>();
+  private readonly perMinute: number;
+  private readonly burst: number;
+  private readonly maxKeys: number;
+
+  constructor(perMinute: number, burst: number, maxKeys = 1000) {
+    this.perMinute = perMinute;
+    this.burst = burst;
+    this.maxKeys = maxKeys;
+  }
+
+  take(key: string, now: number): boolean {
+    const b = this.buckets.get(key) ?? { tokens: this.burst, at: now };
+    b.tokens = Math.min(this.burst, b.tokens + ((now - b.at) * this.perMinute) / 60_000);
+    b.at = now;
+    const ok = b.tokens >= 1;
+    if (ok) b.tokens -= 1;
+    this.buckets.delete(key);
+    this.buckets.set(key, b);
+    // Oldest first: the map keeps insertion order, and every use re-inserts.
+    while (this.buckets.size > this.maxKeys) {
+      const oldest = this.buckets.keys().next().value;
+      if (oldest === undefined) break;
+      this.buckets.delete(oldest);
+    }
+    return ok;
+  }
+}
+
+/**
+ * When a batch of delivery tokens expires: the TTL plus up to twelve hours of
+ * jitter, rounded down to the hour, so the expiry the relay returns (and
+ * stores with every hash) does not give away the second the batch was issued.
+ */
+export function tokenBatchExpiry(now: number, random: () => number = Math.random): number {
+  const hour = 60 * 60_000;
+  const jitter = Math.floor(random() * 12 * hour);
+  return Math.floor((now + DELIVERY_TOKEN_TTL_MS + jitter) / hour) * hour;
 }
 
 // ── Push endpoints ──────────────────────────────────────────────────────────

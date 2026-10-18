@@ -4,9 +4,16 @@ import type { Env } from "./env";
 import {
   DELIVERY_TOKEN_TTL_MS,
   expireClaims,
+  MemoryBuckets,
+  OTK_CLAIMS_PER_PAIR_BURST,
+  OTK_CLAIMS_PER_PAIR_PER_MINUTE,
+  OTK_CLAIMS_PER_REQUESTER_BURST,
+  OTK_CLAIMS_PER_REQUESTER_PER_MINUTE,
   OTK_CLAIMS_PER_TARGET_BURST,
   OTK_CLAIMS_PER_TARGET_PER_MINUTE,
-  OTK_PAIR_BUCKET_TTL_MS,
+  OTK_LAPSED_TICKET_TTL_MS,
+  OTK_LAPSED_TICKETS_MAX,
+  type LapsedClaim,
   PUSH_CHALLENGE_TTL_MS,
   randomToken,
   tokenHash,
@@ -265,8 +272,12 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /**
-   * Puts the keys of claims whose window has passed back at the front of the
-   * pool, and returns the pool. A claim nobody followed up costs the owner nothing.
+   * Puts the keys of claims whose window has passed back at the end of the
+   * pool, and returns the pool. A claim nobody followed up costs the owner
+   * nothing. Each lapsed ticket is remembered with its key's id, so a send
+   * that presents it late still takes the key out of the pool (see
+   * [confirmClaim]); at the end of the pool the key is the last to be offered
+   * again in the meantime.
    */
   private async releaseExpiredClaims(now = Date.now()): Promise<SignedKey[]> {
     const otks = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
@@ -274,9 +285,27 @@ export class Mailbox extends DurableObject<Env> {
     if (claims.length === 0) return otks;
     const { kept, expired } = expireClaims(claims, now);
     if (expired.length === 0) return otks;
-    const pool = expired.map((c) => c.key).concat(otks).slice(0, MAX_ONE_TIME_KEYS);
-    await this.ctx.storage.put({ otks: pool, claims: kept });
+    const pool = otks.concat(expired.map((c) => c.key)).slice(-MAX_ONE_TIME_KEYS);
+    const lapsed = ((await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [])
+      .concat(expired.map((c) => ({ ticket: c.ticket, keyId: c.key.id, at: now })))
+      .filter((l) => now - l.at < OTK_LAPSED_TICKET_TTL_MS)
+      .slice(-OTK_LAPSED_TICKETS_MAX);
+    await this.ctx.storage.put({ otks: pool, claims: kept, lapsedClaims: lapsed });
     return pool;
+  }
+
+  /** Per-requester-per-target claim limits: in this object's memory only, never stored. */
+  private pairClaims: MemoryBuckets | null = null;
+
+  /**
+   * Whether this mailbox's owner may claim a one-time key from [target] now:
+   * within its own total (stored, naming no target) and within its limit for
+   * that target (kept in memory only, so no contact graph is ever written).
+   */
+  async mayClaimFrom(target: string): Promise<boolean> {
+    this.pairClaims ??= new MemoryBuckets(OTK_CLAIMS_PER_PAIR_PER_MINUTE, OTK_CLAIMS_PER_PAIR_BURST);
+    if (!this.pairClaims.take(target, Date.now())) return false;
+    return (await this.rateOk("otk-claims-out", OTK_CLAIMS_PER_REQUESTER_PER_MINUTE, OTK_CLAIMS_PER_REQUESTER_BURST)).ok;
   }
 
   /**
@@ -314,16 +343,31 @@ export class Mailbox extends DurableObject<Env> {
     };
   }
 
-  /** Spends the one-time key claimed with [ticket], so it is never offered again. False when no claim matches. */
+  /**
+   * Spends the one-time key claimed with [ticket], so it is never offered
+   * again. A ticket presented after its window (the sender was offline) still
+   * spends its key: the key is taken back out of the pool it returned to.
+   * False when no claim, current or lapsed, matches.
+   */
   private async confirmClaim(ticket: string): Promise<boolean> {
     const hash = await tokenHash(ticket);
     const claims = (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? [];
-    const i = claims.findIndex((c) => c.ticket === hash);
-    if (i < 0) return false;
-    const [used] = claims.splice(i, 1);
     const spent = (await this.ctx.storage.get<string[]>("claimedOtks")) ?? [];
-    if (used) spent.push(used.key.id);
-    await this.ctx.storage.put({ claims, claimedOtks: spent.slice(-MAX_CLAIMED_IDS) });
+    const i = claims.findIndex((c) => c.ticket === hash);
+    if (i >= 0) {
+      const [used] = claims.splice(i, 1);
+      if (used) spent.push(used.key.id);
+      await this.ctx.storage.put({ claims, claimedOtks: spent.slice(-MAX_CLAIMED_IDS) });
+      return true;
+    }
+    const lapsed = (await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [];
+    const j = lapsed.findIndex((l) => l.ticket === hash);
+    if (j < 0) return false;
+    const [late] = lapsed.splice(j, 1);
+    if (!late) return false;
+    const otks = ((await this.ctx.storage.get<SignedKey[]>("otks")) ?? []).filter((k) => k.id !== late.keyId);
+    spent.push(late.keyId);
+    await this.ctx.storage.put({ otks, lapsedClaims: lapsed, claimedOtks: spent.slice(-MAX_CLAIMED_IDS) });
     return true;
   }
 
@@ -722,11 +766,6 @@ export class Mailbox extends DurableObject<Env> {
       console.error("envelope cleanup failed", e);
     }
     try {
-      // Per-number claim buckets: a full bucket says nothing a missing one does not.
-      const old = Date.now() - OTK_PAIR_BUCKET_TTL_MS;
-      const buckets = await this.ctx.storage.list<{ tokens: number; at: number }>({ prefix: "bucket:claim:" });
-      const stale = [...buckets].filter(([, b]) => b.at < old).map(([k]) => k);
-      if (stale.length > 0) await this.deleteKeys(stale);
       await this.releaseExpiredClaims();
     } catch (e) {
       console.error("claim cleanup failed", e);
