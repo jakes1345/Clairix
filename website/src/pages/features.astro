@@ -1,0 +1,207 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Icon from '../components/Icon.astro';
+import FeatureVisual, { type VisualVariant } from '../components/FeatureVisual.astro';
+import PlayButton from '../components/PlayButton.astro';
+import { Content as Also } from '../content/features/_also.md';
+import type { IconName } from '../lib/icons';
+import type { AstroComponentFactory } from 'astro/runtime/server/index.js';
+import { pages } from '../config/site';
+
+interface FeatureModule {
+  frontmatter: {
+    id: string;
+    order: number;
+    title: string;
+    kicker: string;
+    icon: IconName;
+    variant: VisualVariant;
+    visualLabel: string;
+    visualCaption: string;
+  };
+  Content: AstroComponentFactory;
+}
+
+const modules = import.meta.glob<FeatureModule>('../content/features/[0-9]*.md', { eager: true });
+const features = Object.values(modules).sort((a, b) => a.frontmatter.order - b.frontmatter.order);
+---
+
+<BaseLayout meta={pages.features}>
+  <section class="page-hero">
+    <div class="wrap">
+      <p class="label">Features</p>
+      <h1 class="display h1 slit features-title">
+        <span>What it finds<em>.</em></span>
+        <span class="dim">What it can’t<em>.</em></span>
+      </h1>
+      <p class="lede">
+        Each section below covers three things: what the feature does, how it does it, and what it cannot do. The third part
+        matters as much as the first two. A security tool you trust too much is as dangerous as one you ignore.
+      </p>
+      <nav class="jump" aria-label="Features on this page">
+        {
+          features.map((f) => (
+            <a class="jump-link cham cham--oct" href={`#${f.frontmatter.id}`}>
+              <Icon name={f.frontmatter.icon} size={18} />
+              {f.frontmatter.kicker}
+            </a>
+          ))
+        }
+        <a class="jump-link cham cham--oct" href="#also">
+          <Icon name="plus" size={18} />
+          Also in Clairix
+        </a>
+      </nav>
+    </div>
+  </section>
+
+  {
+    features.map((f, i) => {
+      const { Content, frontmatter: fm } = f;
+      return (
+        <section class="section fsec" id={fm.id} aria-labelledby={`${fm.id}-title`}>
+          <div class="wrap fsec-grid">
+            <div class="fsec-side">
+              <p class="label">
+                <span class="num">{String(i + 1).padStart(2, '0')}</span> {fm.kicker}
+              </p>
+              <h2 id={`${fm.id}-title`} class="display h2">
+                {fm.title}
+              </h2>
+              <FeatureVisual variant={fm.variant} label={fm.visualLabel} caption={fm.visualCaption} />
+            </div>
+            <div class="prose fsec-body">
+              <Content />
+            </div>
+          </div>
+        </section>
+      );
+    })
+  }
+
+  <section class="section" id="also" aria-labelledby="also-title">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="label">More</p>
+        <h2 id="also-title" class="display h2">Also in Clairix</h2>
+      </div>
+      <div class="prose also">
+        <Also />
+      </div>
+    </div>
+  </section>
+
+  <section class="section cta-band">
+    <div class="wrap cta-inner">
+      <h2 class="display h2">Every feature, free<em>.</em></h2>
+      <div class="btn-row">
+        <PlayButton size="lg" />
+        <a class="btn btn--lg btn--ghost cham cham--oct" href="/download#clairix-full">
+          Download Clairix Full
+          <Icon name="arrowDown" size={18} />
+        </a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .features-title .dim {
+    color: var(--clx-text-subtle);
+  }
+  .jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .jump-link {
+    --c: 7px;
+    --cham-border: var(--clx-border-strong);
+    --cham-fill: var(--clx-base);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    color: var(--clx-text);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.875rem;
+  }
+  .jump-link :global(.icon) {
+    color: var(--clx-accent);
+  }
+  .jump-link:hover {
+    --cham-border: var(--clx-accent);
+    --cham-fill: var(--clx-surface);
+  }
+
+  .fsec-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    gap: clamp(40px, 6vw, 96px);
+    align-items: start;
+  }
+  .fsec-side {
+    position: sticky;
+    top: calc(var(--header-h) + 32px);
+    display: grid;
+    gap: 22px;
+    justify-items: start;
+  }
+  .fsec-side .h2 {
+    font-size: clamp(2rem, 4vw, 3.25rem);
+  }
+  .fsec-body {
+    max-width: none;
+  }
+  @media (max-width: 960px) {
+    .fsec-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .fsec-side {
+      position: static;
+    }
+  }
+
+  .also :global(p) {
+    margin: 0;
+  }
+  .also {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    max-width: none;
+  }
+  .also :global(p) {
+    padding: 26px 24px;
+    background: var(--clx-surface);
+    border: 1px solid var(--clx-border);
+    border-top: 3px solid var(--clx-accent);
+  }
+  .also :global(p > strong:first-child) {
+    display: block;
+    margin-bottom: 10px;
+    font-family: var(--clx-font-display);
+    font-stretch: 125%;
+    font-weight: 900;
+    font-size: 1.125rem;
+    text-transform: uppercase;
+  }
+  @media (max-width: 860px) {
+    .also {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .cta-band {
+    background: var(--clx-surface);
+  }
+  .cta-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 32px;
+  }
+</style>

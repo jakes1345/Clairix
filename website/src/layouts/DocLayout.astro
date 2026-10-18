@@ -1,0 +1,90 @@
+---
+/**
+ * Long-form page: hero, sticky contents built from the Markdown's h2s, and the
+ * prose. Used by Security, Support, Press, Privacy, Terms and Delete account.
+ */
+import BaseLayout from './BaseLayout.astro';
+import type { PageMeta } from '../config/site';
+
+interface Props {
+  meta: PageMeta;
+  label: string;
+  title: string;
+  headings?: { depth: number; slug: string; text: string }[];
+  /** Short tags under the lede, e.g. the effective date. */
+  tags?: string[];
+  jsonLd?: Record<string, unknown>[];
+  tocTitle?: string;
+  /** Heading levels listed in the contents. */
+  tocDepths?: number[];
+}
+
+const { meta, label, title, headings = [], tags = [], jsonLd, tocTitle = 'On this page', tocDepths = [2] } = Astro.props;
+const toc = headings.filter((h) => tocDepths.includes(h.depth));
+const minDepth = Math.min(...tocDepths);
+---
+
+<BaseLayout meta={meta} jsonLd={jsonLd}>
+  <section class="page-hero">
+    <div class="wrap">
+      <p class="label">{label}</p>
+      <h1 class="display h1 slit"><span set:html={title} /></h1>
+      <slot name="lede" />
+      {
+        tags.length > 0 && (
+          <div class="page-hero-meta">
+            {tags.map((t) => (
+              <span class="tag tag--line cham cham--oct">{t}</span>
+            ))}
+          </div>
+        )
+      }
+    </div>
+  </section>
+
+  <slot name="before" />
+
+  <div class="section doc-section">
+    <div class="wrap doc">
+      {
+        toc.length > 0 ? (
+          <nav class="toc" aria-labelledby="toc-title" data-toc>
+            <p class="label label--plain" id="toc-title">
+              {tocTitle}
+            </p>
+            <ol>
+              {toc.map((h) => (
+                <li class:list={{ 'toc-sub': h.depth > minDepth }}>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
+              ))}
+            </ol>
+          </nav>
+        ) : (
+          <div />
+        )
+      }
+      <div class="doc-main">
+        <slot />
+      </div>
+    </div>
+  </div>
+
+  <slot name="after" />
+</BaseLayout>
+
+<style>
+  .doc-section {
+    padding-top: clamp(48px, 6vw, 88px);
+  }
+  .doc-main {
+    min-width: 0;
+  }
+  .toc-sub a {
+    padding-left: 30px;
+    font-size: 0.8125rem;
+  }
+  .page-hero .h1 {
+    font-size: clamp(2.5rem, 7.4vw, 6.25rem);
+  }
+</style>
