@@ -1,0 +1,18 @@
+{
+  "name": "aegis-comms-worker",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Cloudflare Worker relay for Aegis comms: store-and-forward of end-to-end encrypted envelopes between Aegis apps, addressed by Aegis number.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260921.1",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.136.0"
+  }
+}
