@@ -19,11 +19,13 @@ import concurrent.futures
 import gzip
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import math
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -93,6 +95,67 @@ def is_http_url(url: str) -> bool:
     return bool(HTTP_URL_RE.match(url))
 
 
+# Redirect targets a feed may not send the job to: the runner itself, its private networks and
+# link-local addresses such as the cloud metadata service (169.254.169.254).
+BLOCKED_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+    "::1/128", "::/128", "fc00::/7", "fe80::/10",
+))
+
+
+class RedirectRefused(ValueError):
+    """A feed redirected somewhere the job does not fetch from; not retried."""
+
+
+def blocked_address(ip: str) -> bool:
+    addr = ipaddress.ip_address(ip.split("%", 1)[0])  # drop an IPv6 zone id
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return any(addr in net for net in BLOCKED_NETWORKS)
+
+
+def check_redirect_target(url: str) -> None:
+    """Raise RedirectRefused unless url is http(s) to a host that resolves only to public addresses.
+
+    A name that does not resolve is refused too: the check must not pass by failing.
+    """
+    if not is_http_url(url):
+        raise RedirectRefused("refusing a redirect to a non-http(s) URL")
+    host = urllib.parse.urlsplit(url).hostname
+    if not host:
+        raise RedirectRefused("refusing a redirect without a host")
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError) as e:
+        raise RedirectRefused(f"refusing a redirect to a host that does not resolve ({type(e).__name__})") from None
+    addresses = {info[4][0] for info in infos}
+    if not addresses or any(blocked_address(a) for a in addresses):
+        raise RedirectRefused("refusing a redirect to a loopback, private or link-local address")
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to a URL that check_redirect_target allows."""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        # Checked before the stdlib's own handling, which turns some schemes (file:) into a
+        # generic, retried HTTPError instead of a refusal.
+        location = headers.get("location") or headers.get("uri")
+        if location:
+            check_redirect_target(urllib.parse.urljoin(req.full_url, location))
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # newurl is already absolute here; checked again so no path past http_error_30x skips it.
+        check_redirect_target(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+# Used for every fetch, in place of urlopen's default opener (which follows any redirect).
+OPENER = urllib.request.build_opener(SafeRedirectHandler)
+
+
 def registry_url_of(entry: dict) -> str | None:
     u = entry.get("url")
     if isinstance(u, dict):
@@ -160,7 +223,7 @@ def fetch_bytes(url: str, timeout: float = FETCH_TIMEOUT_S, cap: int = MAX_BYTES
                 "Accept": "application/geo+json, application/json;q=0.9, */*;q=0.5",
                 "Accept-Encoding": "gzip",
             })
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with OPENER.open(req, timeout=timeout) as resp:
                 data = read_capped(resp, cap)
             # Some servers gzip without saying so, so trust the magic bytes over the header.
             if data[:2] == b"\x1f\x8b":
@@ -170,6 +233,8 @@ def fetch_bytes(url: str, timeout: float = FETCH_TIMEOUT_S, cap: int = MAX_BYTES
             last = e
             if 400 <= e.code < 500 and e.code not in (408, 429):
                 break
+        except RedirectRefused:
+            raise
         except Exception as e:  # noqa: BLE001 - any transport failure is retried, then reported
             last = e
     assert last is not None

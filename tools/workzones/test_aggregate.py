@@ -28,10 +28,20 @@ class _Www:
 
     def __init__(self):
         self.files: dict[str, bytes] = {}
+        self.redirects: dict[str, str] = {}
+        self.hits: list[str] = []
         www = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802 - http.server's naming
+                www.hits.append(self.path)
+                target = www.redirects.get(self.path)
+                if target is not None:
+                    self.send_response(302)
+                    self.send_header("Location", target)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 body = www.files.get(self.path)
                 self.send_response(200 if body is not None else 404)
                 self.send_header("Content-Length", str(len(body or b"")))
@@ -288,8 +298,74 @@ def test_fetch_bytes_refuses_non_http_urls(url, monkeypatch):
     def never(*a, **k):
         raise AssertionError("urlopen must not be reached")
     monkeypatch.setattr(agg.urllib.request, "urlopen", never)
+    monkeypatch.setattr(agg.OPENER, "open", never)
     with pytest.raises(ValueError, match="non-http"):
         agg.fetch_bytes(url, retries=0)
+
+
+@pytest.mark.parametrize("target, reason", [
+    ("ftp://ex.org/feed.geojson", "non-http"),
+    ("file:///etc/passwd", "non-http"),
+    ("http://169.254.169.254/latest/meta-data/", "link-local"),
+    ("http://[fe80::1]/x", "link-local"),
+    ("http://10.0.0.5/feed", "private"),
+    ("http://localhost/feed", "loopback"),
+])
+def test_redirects_to_unsafe_targets_are_refused_without_retry(www, target, reason):
+    feed = www.put("/feed", b'{"type": "FeatureCollection", "features": []}')
+    www.redirects["/moved"] = target
+    with pytest.raises(agg.RedirectRefused, match=reason):
+        agg.fetch_bytes(www.url("/moved"), retries=2)
+    # Refused once, not retried, and the target never reached.
+    assert www.hits == ["/moved"]
+    # The same server's plain feed still loads.
+    assert agg.fetch_bytes(feed) == b'{"type": "FeatureCollection", "features": []}'
+
+
+def test_refused_redirect_is_reported_on_the_feed(www):
+    www.redirects["/meta"] = "http://169.254.169.254/latest/meta-data/iam/"
+    status, items = agg.process_feed({"name": "m", "state": "ohio", "source": "x", "url": www.url("/meta")}, NOW)
+    assert not status["ok"] and items == []
+    assert "refusing a redirect" in status["error"]
+
+
+def test_redirect_to_a_public_host_is_followed(monkeypatch):
+    seen = []
+
+    def resolve(host, *a, **k):
+        seen.append(host)
+        return [(agg.socket.AF_INET, agg.socket.SOCK_STREAM, 6, "", ("93.184.215.14", 0))]
+    monkeypatch.setattr(agg.socket, "getaddrinfo", resolve)
+    req = agg.urllib.request.Request("https://feeds.example.org/old")
+    new = agg.SafeRedirectHandler().redirect_request(req, None, 302, "Found", {}, "https://feeds.example.org/v4/feed.geojson")
+    assert new is not None and new.full_url == "https://feeds.example.org/v4/feed.geojson"
+    assert seen == ["feeds.example.org"]
+
+
+def test_a_redirect_host_resolving_anywhere_private_is_refused(monkeypatch):
+    # One private address among public ones is enough to refuse (DNS can hand out either).
+    monkeypatch.setattr(agg.socket, "getaddrinfo", lambda *a, **k: [
+        (agg.socket.AF_INET, agg.socket.SOCK_STREAM, 6, "", ("93.184.215.14", 0)),
+        (agg.socket.AF_INET, agg.socket.SOCK_STREAM, 6, "", ("192.168.1.10", 0)),
+    ])
+    with pytest.raises(agg.RedirectRefused):
+        agg.check_redirect_target("https://mixed.example.org/feed")
+
+    def fail(*a, **k):
+        raise agg.socket.gaierror("no such host")
+    monkeypatch.setattr(agg.socket, "getaddrinfo", fail)
+    with pytest.raises(agg.RedirectRefused, match="does not resolve"):
+        agg.check_redirect_target("https://nowhere.example.org/feed")
+
+
+@pytest.mark.parametrize("ip, blocked", [
+    ("169.254.169.254", True), ("127.0.0.1", True), ("10.1.2.3", True), ("172.16.0.1", True),
+    ("172.31.255.255", True), ("192.168.0.1", True), ("::1", True), ("fc00::1", True), ("fd12::1", True),
+    ("fe80::1%eth0", True), ("::ffff:127.0.0.1", True), ("::ffff:169.254.169.254", True),
+    ("172.32.0.1", False), ("8.8.8.8", False), ("2606:4700::1111", False),
+])
+def test_blocked_address(ip, blocked):
+    assert agg.blocked_address(ip) is blocked
 
 
 def test_parse_keys():
