@@ -190,6 +190,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
     var last by remember { mutableStateOf(TlsCanary.lastResult(context)) }
     var pinned by remember { mutableStateOf(TlsCanary.pinned(context)) }
     var checking by remember { mutableStateOf(false) }
+    var confirmPin by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         cas = withContext(Dispatchers.IO) { runCatching { CaAuditScanner.scan(context) }.getOrDefault(emptyList()) }
@@ -207,6 +208,38 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
         }
     }
 
+    val pinCandidate = tls?.takeIf { it.untrustedUnpinned }
+    if (confirmPin && pinCandidate?.relayHost != null && pinCandidate.observedSpki != null) {
+        AlertDialog(
+            onDismissRequest = { confirmPin = false },
+            containerColor = TPanelClr,
+            title = { Text("Pin this certificate?", color = TInkClr, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Only for your own relay, served with a certificate from your own private CA. " +
+                    "From now on, any other key from ${pinCandidate.relayHost} is reported as interception. " +
+                    "If you did not set up this relay yourself, do not pin it: someone may be answering in its place.",
+                    color = TInkDimClr, fontSize = 13.sp, lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmPin = false
+                    TlsCanary.pinManually(context, pinCandidate.relayHost, pinCandidate.observedSpki)
+                    pinned = TlsCanary.pinned(context)
+                    checkNow()
+                }) {
+                    Text("PIN", color = TCriticalClr, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPin = false }) {
+                    Text("CANCEL", color = TMutedClr, letterSpacing = 1.sp)
+                }
+            }
+        )
+    }
+
     ToolPageList(title = "CERTIFICATES & TLS", onBack = onBack) {
         item(key = "§tls-hdr") { TSectionLabel("TLS CANARY") }
         item(key = "§tls") {
@@ -216,14 +249,17 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("Relay connection", color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Opens TLS to the comms relay and compares the server's key with the one pinned " +
-                            "on first contact. An intercepting proxy cannot present the same key.",
+                            "Opens TLS to the comms relay — directly and, when a proxy is set, through the proxy — " +
+                            "and compares the server's key with the one pinned on first contact. An intercepting " +
+                            "proxy cannot present the same key.",
                             color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
                         )
                     }
                     when {
                         r == null -> Unit
                         r.intercepted -> TBadge("INTERCEPTED", TCriticalClr)
+                        r.untrustedUnpinned -> TBadge("NOT TRUSTED", TCriticalClr)
+                        r.proxyOnly -> TBadge("PROXY", TCautionClr)
                         r.error != null && r.observedSpki == null -> TBadge("NO RESULT", TCautionClr)
                         r.pinnedNow -> TBadge("PINNED", TBlueClr)
                         else -> TBadge("CLEAR", TClearClr)
@@ -231,7 +267,8 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                 }
                 val lastRun = last
                 if (lastRun != null) {
-                    TKv("Last result", lastRun.second, if (lastRun.second.startsWith("INTERCEPTED")) TCriticalClr else TInkDimClr)
+                    val alarming = lastRun.second.startsWith("INTERCEPTED") || lastRun.second.startsWith("NOT PUBLICLY TRUSTED")
+                    TKv("Last result", lastRun.second, if (alarming) TCriticalClr else TInkDimClr)
                     if (lastRun.first > 0) TKv("Checked", tFull(lastRun.first))
                 } else {
                     TKv("Last result", "never run")
@@ -243,13 +280,29 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     r.observedIssuer?.let { TKv("Issuer", it) }
                     r.chainTrusted?.let { TKv("Chain trusted", if (it) "yes" else "no", if (it) TClearClr else TCriticalClr) }
                     r.proxyHost?.let { TKv("Proxy", it, TCautionClr) }
-                    r.method?.let { Text(it, color = if (r.intercepted) TCriticalClr else TInkDimClr, fontSize = 12.sp, lineHeight = 16.sp) }
+                    r.viaProxySpki?.let { TKv("Key through proxy", it.take(24) + "…", if (r.proxyVerified == true) TClearClr else TCriticalClr) }
+                    r.method?.let {
+                        val tone = when {
+                            r.intercepted || r.untrustedUnpinned -> TCriticalClr
+                            r.proxyOnly -> TCautionClr
+                            else -> TInkDimClr
+                        }
+                        Text(it, color = tone, fontSize = 12.sp, lineHeight = 16.sp)
+                    }
+                    r.proxyNote?.let {
+                        Text(it, color = if (r.proxyVerified == true) TInkDimClr else TCautionClr, fontSize = 12.sp, lineHeight = 16.sp)
+                    }
                     r.error?.let { Text(it, color = TCautionClr, fontSize = 12.sp, lineHeight = 16.sp) }
                 }
                 if (checking) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TAccentClr, trackColor = TRuleClr)
                 } else {
                     TButton("CHECK NOW", onClick = { checkNow() })
+                    if (r != null && r.untrustedUnpinned && r.observedSpki != null) {
+                        TextButton(onClick = { confirmPin = true }, contentPadding = PaddingValues(0.dp)) {
+                            Text("PIN THIS CERTIFICATE (MY OWN RELAY)", color = TMutedClr, fontSize = 11.sp, letterSpacing = 1.sp)
+                        }
+                    }
                 }
                 if (pinned != null) {
                     TextButton(

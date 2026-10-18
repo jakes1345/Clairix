@@ -56,6 +56,9 @@ object AppSettings {
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
     const val DEFAULT_PERSISTENCE_THRESHOLD_MIN = 10f
+    const val MIN_PERSISTENCE_THRESHOLD_MIN = 5f
+    /** Kept below the fastest tracker rotation; see [app.clairix.analysis.MAX_PERSIST_THRESHOLD_MS]. */
+    const val MAX_PERSISTENCE_THRESHOLD_MIN = (app.clairix.analysis.MAX_PERSIST_THRESHOLD_MS / 60_000L).toFloat()
 
     @Volatile private var _aggressiveScan = false
     @Volatile private var _followThresholdM = DEFAULT_FOLLOW_THRESHOLD_M
@@ -91,7 +94,9 @@ object AppSettings {
         val p = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         _aggressiveScan = p.getBoolean(KEY_AGGRESSIVE_SCAN, false)
         _followThresholdM = p.getFloat(KEY_FOLLOW_THRESHOLD, DEFAULT_FOLLOW_THRESHOLD_M)
+        // A value saved when the slider went to 30 min is brought under the cap.
         _persistenceThresholdMin = p.getFloat(KEY_PERSISTENCE_THRESHOLD, DEFAULT_PERSISTENCE_THRESHOLD_MIN)
+            .coerceIn(MIN_PERSISTENCE_THRESHOLD_MIN, MAX_PERSISTENCE_THRESHOLD_MIN)
         _scanEnabled = p.getBoolean(KEY_SCAN_ENABLED, false)
         _resumeAfterReboot = p.getBoolean(KEY_RESUME_AFTER_REBOOT, false)
     }
@@ -121,9 +126,10 @@ object AppSettings {
     }
 
     fun setPersistenceThreshold(context: Context, value: Float) {
-        _persistenceThresholdMin = value
+        val capped = value.coerceIn(MIN_PERSISTENCE_THRESHOLD_MIN, MAX_PERSISTENCE_THRESHOLD_MIN)
+        _persistenceThresholdMin = capped
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putFloat(KEY_PERSISTENCE_THRESHOLD, value).apply()
+            .edit().putFloat(KEY_PERSISTENCE_THRESHOLD, capped).apply()
     }
 }
 
@@ -535,7 +541,10 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         )
                     }
                     Text(
-                        "Minutes of continuous presence before a device is flagged as persistent",
+                        "Minutes of continuous presence before a device is flagged as persistent. " +
+                            "Capped at ${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min: some trackers " +
+                            "(Samsung SmartTag) change their Bluetooth address about every 15 minutes, and a " +
+                            "longer threshold would let one rotate before it could ever be flagged.",
                         color = SMutedClr, fontSize = 12.sp, lineHeight = 17.sp
                     )
                     Slider(
@@ -544,8 +553,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         onValueChangeFinished = {
                             AppSettings.setPersistenceThreshold(context, persistenceThreshold)
                         },
-                        valueRange = 5f..30f,
-                        steps = 4,
+                        valueRange = AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN..AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN,
+                        // One stop per whole minute.
+                        steps = (AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN - AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN).toInt() - 1,
                         colors = SliderDefaults.colors(
                             thumbColor = SAccentClr,
                             activeTrackColor = SAccentClr,
@@ -553,9 +563,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         )
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("5 min", color = SMutedClr, fontSize = 11.sp)
-                        Text("Default: 10 min", color = SMutedClr, fontSize = 11.sp)
-                        Text("30 min", color = SMutedClr, fontSize = 11.sp)
+                        Text("${AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN.toInt()} min", color = SMutedClr, fontSize = 11.sp)
+                        Text("Default: ${AppSettings.DEFAULT_PERSISTENCE_THRESHOLD_MIN.toInt()} min", color = SMutedClr, fontSize = 11.sp)
+                        Text("${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min", color = SMutedClr, fontSize = 11.sp)
                     }
                 }
             }

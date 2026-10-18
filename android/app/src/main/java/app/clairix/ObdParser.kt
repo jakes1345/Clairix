@@ -13,6 +13,11 @@ internal object ObdParser {
     private val ERROR_MARKERS = listOf("NO DATA", "UNABLE TO CONNECT", "ERROR", "STOPPED")
     private val DTC_SYSTEMS = charArrayOf('P', 'C', 'B', 'U')
     private const val HEX_CHARS = "0123456789ABCDEF"
+    /**
+     * No single ELM327 line carries more than this: a 29-bit header and a CAN frame
+     * are twelve bytes, a legacy frame is shorter. Bounds the work on a garbage line.
+     */
+    private const val MAX_TOKENS = 64
 
     /** Data bytes after the "41 <pid>" echo of the first ECU that answered, or null. */
     fun pidData(raw: String, cmd: String, pid: Int, isCan: Boolean?): List<Int>? {
@@ -68,6 +73,13 @@ internal object ObdParser {
         return lines
     }
 
+    /**
+     * Splits a reply line into byte tokens: two hex digits each, except that an
+     * 11-bit CAN header may lead as three. Anything else — a run of digits a noisy
+     * link glued together, a clone's banner — rejects the line. A token longer than
+     * that used to reach toInt(16) and throw NumberFormatException, which escaped
+     * the poll loop's IOException handler and froze polling.
+     */
     private fun tokenize(line: String, isCan: Boolean?): List<String>? {
         val upper = line.uppercase(Locale.US)
         val tokens = if (upper.contains(' ')) {
@@ -83,7 +95,11 @@ internal object ObdParser {
                 }
             }
         }
-        if (tokens.isEmpty() || tokens.any { t -> t.any { it !in HEX_CHARS } }) return null
+        if (tokens.isEmpty() || tokens.size > MAX_TOKENS) return null
+        for ((i, t) in tokens.withIndex()) {
+            val lengthOk = t.length == 2 || (i == 0 && t.length == 3)
+            if (!lengthOk || t.any { it !in HEX_CHARS }) return null
+        }
         return tokens
     }
 
@@ -96,7 +112,7 @@ internal object ObdParser {
         }
         if (tokens.size <= headerLen) return null
         val header = tokens.take(headerLen).joinToString(" ")
-        var body = tokens.drop(headerLen).map { it.toInt(16) }
+        var body = tokens.drop(headerLen).map { it.toIntOrNull(16) ?: return null }
         // Legacy (J1850/ISO 9141/KWP) frames end with a checksum byte that is not part of the payload.
         if (isCan != true && headerLen == 3 && body.size > 1) body = body.dropLast(1)
         return Frame(header, body)

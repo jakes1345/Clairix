@@ -16,9 +16,6 @@ import app.clairix.analysis.EventLog
 object TimelineLog {
 
     @Volatile
-    private var store: Store? = null
-
-    @Volatile
     private var log: EventLog? = null
 
     /** The shared log, loading it from disk on first use. Does file I/O on first call. */
@@ -26,9 +23,7 @@ object TimelineLog {
         log?.let { return it }
         synchronized(this) {
             log?.let { return it }
-            val s = Store(context.applicationContext, "timeline.json")
-            val l = EventLog(s)
-            store = s
+            val l = EventLog(Store(context.applicationContext, "timeline.json"))
             log = l
             return l
         }
@@ -50,8 +45,11 @@ object TimelineLog {
         Registry.publishTimeline(get(context).snapshot())
     }
 
-    /** Writes any pending changes. A no-op if the log was never opened. */
+    /**
+     * Writes any pending changes. A no-op if the log was never opened. Goes through
+     * the log so the JSON is serialised under the lock it is mutated under.
+     */
     fun flush() {
-        store?.flush()
+        log?.flush()
     }
 }

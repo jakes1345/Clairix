@@ -55,6 +55,12 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
         return true
     }
 
+    /** Writes any pending changes, under the same lock [record] mutates the JSON under. */
+    @Synchronized
+    fun flush() {
+        store.flush()
+    }
+
     @Synchronized
     fun clear() {
         events.clear()

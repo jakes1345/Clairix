@@ -13,6 +13,16 @@ import kotlin.math.min
 const val PERSIST_THRESHOLD_MS = 10 * 60 * 1000L
 const val PERSIST_MIN_SIGHTINGS = 5
 
+/**
+ * Longest persistence threshold the user may set. An uncertain cadence stitch
+ * restarts a device's presence clock, so a tracker whose address rotates more
+ * often than the threshold would never be held long enough under one address to
+ * be confirmed. The shortest rotation among supported trackers is the Samsung
+ * SmartTag's, about 15 minutes; the threshold stays below it with room for the
+ * minutes a new address takes to be heard and stitched.
+ */
+const val MAX_PERSIST_THRESHOLD_MS = 12 * 60 * 1000L
+
 /** Ceiling on simultaneously tracked devices — see [Tracker.prune]. */
 private const val MAX_ENTRIES = 4000
 
@@ -61,6 +71,15 @@ class Tracker(
         var rotations = 0
         var addresses = 1
         var following = false
+        /**
+         * When this device was first confirmed as following, or 0. Once set it holds
+         * the verdict: a rotation stitched without certainty restarts the presence
+         * clock, and without this latch a confirmed tracker would drop back to
+         * nothing for a full threshold after every rotation — and be pruned on the
+         * short cutoff meanwhile. It only ever carries a verdict this entry already
+         * earned, so nothing new can reach "following" through it.
+         */
+        var confirmedAt = 0L
         var persistent = false
         var score = 0
         var confidence = FollowConfidence.NONE
@@ -74,8 +93,20 @@ class Tracker(
          * Folds [other] into this entry when two keys turn out to be one device. The
          * cadence fingerprinter can only prove a rotation after a few packets, by which
          * time the new address has a few sightings under a key of its own.
+         *
+         * [certain] is the fingerprinter's own confidence in the stitch.
+         *
+         * A certain merge joins the two histories: the earliest firstSeen, every
+         * sighting and every place. An uncertain one may be two different devices,
+         * so the evidence of presence — firstSeen, sightings, places, and the
+         * persistent/following verdicts drawn from them — restarts from the newer of
+         * the two, and the device has to earn "following" again on its own. Here
+         * `this` is usually the older entry (the stitch target) and [other] the new
+         * address; keeping this entry's early firstSeen, as the first version of
+         * this did, still handed the new address the old one's ten minutes. The
+         * identity bookkeeping (rotations, addresses, names, DULT) is kept either way.
          */
-        fun absorb(other: Entry) {
+        fun absorb(other: Entry, certain: Boolean) {
             if (address.isEmpty()) address = other.address
             if (advertisedName == null) advertisedName = other.advertisedName
             if (manufacturer == null) manufacturer = other.manufacturer
@@ -89,16 +120,37 @@ class Tracker(
                 approxMetres = other.approxMetres
                 lastHeardAt = other.lastHeardAt ?: lastHeardAt
             }
-            firstSeen = if (firstSeen == 0L) other.firstSeen else min(firstSeen, other.firstSeen)
-            lastSeen = max(lastSeen, other.lastSeen)
-            sightings += other.sightings
             // The merge itself is one more address the device has used.
             rotations = rotations + other.rotations + 1
             addresses = addresses + other.addresses
-            following = following || other.following
-            persistent = persistent || other.persistent
-            score = max(score, other.score)
-            other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+            if (certain) {
+                firstSeen = if (firstSeen == 0L) other.firstSeen else min(firstSeen, other.firstSeen)
+                sightings += other.sightings
+                following = following || other.following
+                persistent = persistent || other.persistent
+                score = max(score, other.score)
+                other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+            } else {
+                // Restart the presence clock at the later of the two starts.
+                val newer = if (other.firstSeen != 0L && (firstSeen == 0L || other.firstSeen >= firstSeen)) other else this
+                if (newer === other) {
+                    firstSeen = other.firstSeen
+                    sightings = other.sightings
+                    following = other.following
+                    persistent = other.persistent
+                    score = other.score
+                    area.clear()
+                    other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+                }
+            }
+            // A confirmation already earned survives any merge, certain or not.
+            confirmedAt = when {
+                confirmedAt == 0L -> other.confirmedAt
+                other.confirmedAt == 0L -> confirmedAt
+                else -> min(confirmedAt, other.confirmedAt)
+            }
+            if (confirmedAt != 0L) following = true
+            lastSeen = max(lastSeen, other.lastSeen)
             name = BleNames.displayName(advertisedName, tracker, manufacturer, address)
         }
     }
@@ -157,10 +209,11 @@ class Tracker(
 
         val duration = now - entry.firstSeen
         entry.persistent =
-            duration >= persistMs() && entry.sightings >= PERSIST_MIN_SIGHTINGS
+            duration >= persistMs().coerceAtMost(MAX_PERSIST_THRESHOLD_MS) && entry.sightings >= PERSIST_MIN_SIGHTINGS
 
         val movedWithUs = entry.area.movedWithUs(followM())
-        entry.following = entry.persistent && movedWithUs
+        entry.following = (entry.persistent && movedWithUs) || entry.confirmedAt != 0L
+        if (entry.following && entry.confirmedAt == 0L) entry.confirmedAt = now
 
         val confidence = when {
             entry.following -> FollowConfidence.CONFIRMED
@@ -248,13 +301,15 @@ class Tracker(
     /**
      * Moves everything recorded under [fromKey] into [intoKey], creating the target
      * when it does not exist yet. Returns false when there was nothing to move.
+     * [certain] says whether the two keys are proven to be one device; see
+     * [Entry.absorb] for what an uncertain merge holds back.
      */
     @Synchronized
-    fun merge(fromKey: String, intoKey: String): Boolean {
+    fun merge(fromKey: String, intoKey: String, certain: Boolean): Boolean {
         if (fromKey == intoKey) return false
         val from = entries.remove(fromKey) ?: return false
         val into = entries.getOrPut(intoKey) { Entry(intoKey) }
-        into.absorb(from)
+        into.absorb(from, certain)
         return true
     }
 
@@ -307,7 +362,7 @@ class Tracker(
         val cutoff = now - maxAgeMs
         val followingCutoff = now - FOLLOWING_RETENTION_MS
         entries.entries.removeAll { (_, entry) ->
-            if (entry.following) entry.lastSeen < followingCutoff
+            if (entry.following || entry.confirmedAt != 0L) entry.lastSeen < followingCutoff
             else entry.lastSeen < cutoff
         }
 
@@ -317,7 +372,7 @@ class Tracker(
         // the entire point of keeping any of this.
         if (entries.size > MAX_ENTRIES) {
             entries.values
-                .filterNot { it.following || it.persistent }
+                .filterNot { it.following || it.confirmedAt != 0L || it.persistent }
                 .sortedBy { it.lastSeen }
                 .take(entries.size - MAX_ENTRIES)
                 .forEach { entries.remove(it.key) }

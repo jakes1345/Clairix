@@ -485,7 +485,9 @@ class MainActivity : AppCompatActivity() {
         Registry.requestTab(ROUTE_NFC)
         // Parsing talks to the tag over the air and must not block the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
-            val parsed = try { NfcScanner.parse(tag) } catch (_: Exception) { return@launch }
+            val parsed = try {
+                NfcScanner.parse(tag, NfcScanner.readsMifareClassic(this@MainActivity))
+            } catch (_: Exception) { return@launch }
             Registry.addNfc(parsed)
             runCatching { recordNfc(parsed) }
         }
@@ -600,7 +602,9 @@ class MainActivity : AppCompatActivity() {
 
     /** Runs on an NFC binder thread, so the timeline's disk write is fine here. */
     private val readerCallback = NfcAdapter.ReaderCallback { tag ->
-        val parsed = try { NfcScanner.parse(tag) } catch (_: Exception) { return@ReaderCallback }
+        val parsed = try {
+            NfcScanner.parse(tag, NfcScanner.readsMifareClassic(this@MainActivity))
+        } catch (_: Exception) { return@ReaderCallback }
         Registry.addNfc(parsed)
         runCatching { recordNfc(parsed) }
     }
