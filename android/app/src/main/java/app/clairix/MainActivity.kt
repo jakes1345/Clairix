@@ -86,6 +86,8 @@ import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
 import app.clairix.comms.CommsNotifications
 import app.clairix.comms.CommsRepository
+import app.clairix.comms.CommsSecureWindow
+import app.clairix.comms.KeepOffScreen
 import android.nfc.cardemulation.CardEmulation
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -94,6 +96,7 @@ import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -221,9 +224,13 @@ class MainActivity : AppCompatActivity() {
         AppLock.init(this)
         // With a passcode set, what was on screen must not outlive the lock in the
         // Recents thumbnail (taken as the app leaves, before the relock delay is
-        // up) or in a screenshot taken by another app.
+        // up) or in a screenshot taken by another app. The comms screens are kept
+        // out of screenshots, recordings and Recents always, passcode or not (and
+        // in the comms-only build every screen is one).
         lifecycleScope.launch {
-            AppLock.enabled.collect { on ->
+            combine(AppLock.enabled, CommsSecureWindow.holds) { passcode, holds ->
+                CommsSecureWindow.secure(passcode, holds, commsOnlyBuild = !BuildConfig.FULL_ACCESS)
+            }.collect { on ->
                 if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
             }
@@ -1360,18 +1367,22 @@ private fun MainApp(
                     else -> CertificatesPage()
                 }
             }
-            HomeTab.COMMS -> when (commsAction) {
-                CommsAction.FAKE_CALL -> FakeCallPage()
-                CommsAction.DURESS -> DuressPage()
-                null -> CommsScreen(
-                    openPeer = threadRequest,
-                    onPeerConsumed = { Registry.takeThreadRequest() },
-                    openInvite = inviteRequest,
-                    onInviteConsumed = { Registry.takeInviteRequest() },
-                    openGroup = groupRequest,
-                    onGroupConsumed = { Registry.takeGroupRequest() },
-                    onAppSettings = { showSettings = true }
-                )
+            HomeTab.COMMS -> {
+                // Every comms screen keeps the window out of screenshots while it is up.
+                KeepOffScreen()
+                when (commsAction) {
+                    CommsAction.FAKE_CALL -> FakeCallPage()
+                    CommsAction.DURESS -> DuressPage()
+                    null -> CommsScreen(
+                        openPeer = threadRequest,
+                        onPeerConsumed = { Registry.takeThreadRequest() },
+                        openInvite = inviteRequest,
+                        onInviteConsumed = { Registry.takeInviteRequest() },
+                        openGroup = groupRequest,
+                        onGroupConsumed = { Registry.takeGroupRequest() },
+                        onAppSettings = { showSettings = true }
+                    )
+                }
             }
             HomeTab.DRIVE -> DriveScreen()
             HomeTab.ACTIVITY -> when (activitySub) {

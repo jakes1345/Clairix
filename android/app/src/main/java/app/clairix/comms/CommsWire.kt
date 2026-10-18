@@ -33,10 +33,10 @@ import org.json.JSONObject
  *            — announces a photo or video; its bytes follow in "n" mchunk payloads
  *   mchunk   "id" (the media's), "i" (0-based index), "data" (base64 of at most [MEDIA_CHUNK_BYTES] bytes)
  *
- * The relay takes envelopes of at most 64 KB. A payload's bytes are base64
- * inside the Olm ciphertext and the sealed envelope is base64 again for the
- * relay, so each envelope carries roughly half its size in payload; that is why
- * media travels in chunks and why [MEDIA_CHUNK_BYTES] is what it is.
+ * The relay takes envelopes of at most 72 KiB. Every payload is padded to a
+ * fixed bucket before encryption (160-byte steps up to 2.5 KiB, then 4, 8, 16,
+ * 32, 48 and 64 KiB; see comms-crypto), so a receipt and a short text look the
+ * same on the wire; media travels in chunks that all fill one bucket.
  *
  * Pure Kotlin and org.json, so the JVM tests use exactly this code.
  */
@@ -45,10 +45,9 @@ object CommsWire {
     const val VERSION = 1
 
     /**
-     * Raw bytes per media chunk. 30 KB becomes 40 KB of base64 in the payload,
-     * about 55 KB once Olm's ciphertext is base64 inside the sealed envelope, and
-     * about 74 KB as the relay sees it: under its 64 KB (87 KB base64) limit,
-     * with room for the sender's identity fields.
+     * Raw bytes per media chunk. 30 KiB becomes 40 KiB of base64 in the payload,
+     * which with the sender's identity fields pads to the 48 KiB bucket: about
+     * 48.5 KiB sealed, under the relay's 72 KiB limit.
      */
     const val MEDIA_CHUNK_BYTES = 30 * 1024
 

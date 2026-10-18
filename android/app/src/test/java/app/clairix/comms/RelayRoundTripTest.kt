@@ -1,5 +1,9 @@
 package app.clairix.comms
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -27,8 +31,10 @@ import java.util.concurrent.TimeUnit
  * RelayClient, the real Rust crypto library and the app's wire format.
  *
  * Each phone registers a fresh unlisted identity, keeps the live WebSocket
- * open the way LiveLink does, and acks what it receives. Both mailboxes are
- * wiped at the end. Runs only when CLAIRIX_RELAY_URL and CLAIRIX_ENROLL_SECRET
+ * open the way LiveLink does, and acks what it receives. Envelopes go out the
+ * way the app sends them: anonymously, each spending one delivery token, with
+ * the claim ticket of the one-time key a new session was built on. Both
+ * mailboxes are wiped at the end. Runs only when CLAIRIX_RELAY_URL and CLAIRIX_ENROLL_SECRET
  * are set in the environment; skipped otherwise (in CI, for example).
  */
 class RelayRoundTripTest {
@@ -48,6 +54,8 @@ class RelayRoundTripTest {
         /** Types of the other frames the relay sent (pong, heartbeat, acked), in order. */
         val control = LinkedBlockingQueue<String>()
         private var socket: WebSocket? = null
+        /** The claim ticket of the one-time key the newest session was built on, until its first envelope goes. */
+        private var pendingClaim: String? = null
 
         init {
             number = relay.register(relayUrl, identity, secret, listed = false).number
@@ -90,9 +98,11 @@ class RelayRoundTripTest {
                 val bundle = relay.bundle(peer.number!!, fingerprint(peerKeys.ed25519))
                 assertEquals(peerKeys.curve25519, bundle.curve25519)
                 identity.startSession(peerKeys, bundle.sessionKey)
+                pendingClaim = bundle.claim
             }
             val plaintext = CommsWire.withSender(payload, sender).toString().toByteArray(Charsets.UTF_8)
-            relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext))
+            relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext), pendingClaim)
+            pendingClaim = null
         }
 
         /** What CommsRepository.recoverSession does: a new outbound session, first in the list, old ones kept. */
@@ -100,6 +110,7 @@ class RelayRoundTripTest {
             val peerKeys = peer.keys
             val bundle = relay.bundle(peer.number!!, fingerprint(peerKeys.ed25519))
             identity.startSession(peerKeys, bundle.sessionKey)
+            pendingClaim = bundle.claim
         }
 
         /** Sends a raw frame on the live socket, as LiveLink's liveness probe does. */
@@ -124,14 +135,14 @@ class RelayRoundTripTest {
             return identity.encrypt(peerKeys, CommsWire.withSender(payload, sender).toString().toByteArray(Charsets.UTF_8))
         }
 
-        class Received(val senderCurve: String, val payload: JSONObject, val newSession: Boolean)
+        class Received(val senderCurve: String, val senderEd: String, val payload: JSONObject, val newSession: Boolean)
 
         /** The next envelope off the live socket, decrypted and parsed. */
         fun receive(): Received {
             val env = inbox.poll(20, TimeUnit.SECONDS) ?: throw AssertionError("$label: nothing arrived within 20 s")
             val d = identity.decrypt(env.data)
             val payload = CommsWire.parse(String(d.plaintext, Charsets.UTF_8)) ?: throw AssertionError("$label: payload did not parse")
-            return Received(d.senderCurve25519, payload, d.newSession)
+            return Received(d.senderCurve25519, d.senderEd25519, payload, d.newSession)
         }
 
         /** The next envelope, expected to fail decryption. */
@@ -174,6 +185,7 @@ class RelayRoundTripTest {
         for ((i, id) in ids.withIndex()) {
             val got = bob.receive()
             assertEquals(alice.keys.curve25519, got.senderCurve)
+            assertEquals(alice.keys.ed25519, got.senderEd)
             assertEquals(CommsWire.T_MSG, CommsWire.type(got.payload))
             assertEquals(id, got.payload.getString(CommsWire.F_ID))
             assertEquals("hello ${i + 1}", got.payload.getString(CommsWire.F_BODY))
@@ -243,6 +255,9 @@ class RelayRoundTripTest {
         val failure = bob.receiveUndecryptable()
         assertTrue("expected NoSessionFor, got $failure", failure is CryptoException.NoSessionFor)
         assertEquals(alice.keys.curve25519, (failure as CryptoException.NoSessionFor).senderCurve25519)
+        // The hint is signed, so it names Alice's identity key, which Bob checks
+        // against his contact before he asks her for anything.
+        assertEquals(alice.keys.ed25519, failure.senderEd25519)
 
         // Bob asks for a new session; the resync itself starts one.
         bob.send(alice, CommsWire.resync())
@@ -306,6 +321,44 @@ class RelayRoundTripTest {
         } catch (e: RelayException) {
             assertEquals(404, e.code)
         }
+    }
+
+    @Test
+    fun aSendNeedsADeliveryTokenAndCarriesNoIdentity() {
+        val http = OkHttpClient()
+        val json = "application/json".toMediaType()
+        val body = JSONObject().put("to", bob.number).put("envelope", "AAAA").toString()
+        fun post(vararg headers: Pair<String, String>): Int {
+            val request = Request.Builder().url("$relayUrl/v1/send").post(body.toRequestBody(json))
+            for ((k, v) in headers) request.header(k, v)
+            return http.newCall(request.build()).execute().use { it.code }
+        }
+        assertEquals(401, post())
+        assertEquals(403, post("X-Clairix-Token" to "A".repeat(43)))
+        assertEquals(400, post("X-Clairix-Token" to "A".repeat(43), "X-Clairix-Number" to alice.number!!))
+        // A real token works once, through the app's own client.
+        alice.send(bob, msg("with a token"))
+        assertEquals("with a token", bob.receive().payload.getString(CommsWire.F_BODY))
+        assertTrue("the client should hold tokens for later sends", alice.relay.tokenCount() > 0)
+    }
+
+    @Test
+    fun shortPayloadsMakeEnvelopesOfOneSize() {
+        alice.send(bob, msg("one")); bob.receive()
+        bob.send(alice, msg("two")); alice.receive()
+        val receipt = alice.encryptFor(bob, CommsWire.receipt(listOf(UUID.randomUUID().toString()), CommsWire.STATUS_READ))
+        val text = alice.encryptFor(bob, msg("ok"))
+        assertEquals(receipt.size, text.size)
+        for (e in listOf(receipt, text)) alice.sendRaw(bob, e)
+        assertEquals(CommsWire.T_RECEIPT, CommsWire.type(bob.receive().payload))
+        assertEquals("ok", bob.receive().payload.getString(CommsWire.F_BODY))
+    }
+
+    @Test
+    fun aLookupHandsOutAClaimTicketWithItsOneTimeKey() {
+        val bundle = alice.relay.bundle(bob.number!!, fingerprint(bob.keys.ed25519))
+        assertNotNull("a one-time key comes with its claim ticket", bundle.claim)
+        assertEquals(43, bundle.claim!!.length)
     }
 
     @Test

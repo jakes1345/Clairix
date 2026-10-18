@@ -34,6 +34,11 @@ class CommsPushReceiver : PushService() {
     }
 
     override fun onMessage(message: PushMessage, instance: String) {
+        // The relay's check of a new endpoint: echo its code, nothing to fetch.
+        PushChallenge.codeFrom(message.content)?.let { code ->
+            CommsRepository.onPushChallenge(code)
+            return
+        }
         // The library's own wake lock lasts ten seconds; the sync gets its own so
         // a slow network does not leave a half-fetched inbox behind.
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager

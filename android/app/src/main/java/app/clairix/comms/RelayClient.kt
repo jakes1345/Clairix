@@ -24,9 +24,12 @@ import java.util.concurrent.TimeUnit
 class RelayException(message: String, val code: Int = 0) : IOException(message)
 
 /**
- * HTTP and WebSocket client for the relay Worker. Every request is signed with
- * the identity's Ed25519 key (see comms-worker/src/auth.ts); nothing else
- * authenticates a device. Calls are blocking and belong on an IO dispatcher.
+ * HTTP and WebSocket client for the relay Worker. Every request about this
+ * phone's own mailbox is signed with the identity's Ed25519 key (see
+ * comms-worker/src/auth.ts). Sending an envelope is not: it spends one of the
+ * single-use delivery tokens in [tokens] and carries no identity at all, on a
+ * connection of its own, so the relay does not learn who sent it. Calls are
+ * blocking and belong on an IO dispatcher.
  *
  * It depends on nothing Android-specific, so the relay round-trip tests run it
  * on the JVM against a real relay; the app hands it its identity, relay URL and
@@ -36,6 +39,7 @@ class RelayClient(
     private val identity: () -> Identity?,
     private val relayUrl: () -> String?,
     private val number: () -> String?,
+    private val tokens: TokenPool = MemoryTokenPool(),
 ) {
 
     /** What a signed request signs. The signature headers themselves are added per attempt by [signer]. */
@@ -75,8 +79,22 @@ class RelayClient(
      */
     private val rest: OkHttpClient by lazy { http.newBuilder().pingInterval(0, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS).build() }
 
-    /** Sending an envelope: a call's signals must fail fast enough to be retried within the call. */
-    private val sender: OkHttpClient by lazy { rest.newBuilder().callTimeout(12, TimeUnit.SECONDS).build() }
+    /**
+     * Sending an envelope: a call's signals must fail fast enough to be retried
+     * within the call. Its own connection pool and no signing interceptor, so an
+     * anonymous send never rides a connection a signed request used.
+     */
+    private val sender: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectionPool(okhttp3.ConnectionPool())
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(12, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+    }
 
     data class Registered(val number: String)
 
@@ -87,7 +105,13 @@ class RelayClient(
         val sealing: String,
         val signature: String,
         /** A one-time key, or the fallback when none is left. */
-        val sessionKey: SignedKey
+        val sessionKey: SignedKey,
+        /**
+         * With a one-time key: the ticket the first envelope on the session built
+         * from it presents ([send]'s claim), which spends the key on the relay.
+         * Not presented within 15 minutes, the relay puts the key back in the pool.
+         */
+        val claim: String? = null
     )
 
     data class Envelope(val id: String, val ts: Long, val data: ByteArray)
@@ -145,7 +169,16 @@ class RelayClient(
 
     fun setListed(listed: Boolean) { signed("PUT", "/v1/listed", JSONObject().put("listed", listed)) }
 
-    fun setPush(endpoint: String?) { signed("PUT", "/v1/push", JSONObject().put("endpoint", endpoint ?: JSONObject.NULL)) }
+    /**
+     * Gives the relay the push endpoint to wake this phone through (null: none).
+     * True when it is in use at once; false when the relay first pushes a check
+     * code through it, which [verifyPush] must echo before it is used.
+     */
+    fun setPush(endpoint: String?): Boolean =
+        signed("PUT", "/v1/push", JSONObject().put("endpoint", endpoint ?: JSONObject.NULL)).optBoolean("verified", false)
+
+    /** Echoes the check code that arrived by push; the pending endpoint goes live. */
+    fun verifyPush(code: String) { signed("PUT", "/v1/push/verify", JSONObject().put("code", code)) }
 
     fun wipe() { signed("DELETE", "/v1/me") }
 
@@ -165,7 +198,8 @@ class RelayClient(
                 curve25519 = b.getString("curve25519"),
                 sealing = b.getString("sealing"),
                 signature = b.getString("signature"),
-                sessionKey = SignedKey(key.getString("id"), key.getString("key"), key.getString("signature"))
+                sessionKey = SignedKey(key.getString("id"), key.getString("key"), key.getString("signature")),
+                claim = if (b.optJSONObject("oneTimeKey") != null) b.optString("claim").takeIf { it.isNotEmpty() } else null
             )
         }
     }
@@ -183,11 +217,75 @@ class RelayClient(
         }
     }
 
-    fun send(to: String, envelope: ByteArray): String {
+    /**
+     * Queues [envelope] for [to], anonymously: the request carries one delivery
+     * token and no identity. [claim] is the ticket of the one-time key the
+     * envelope's session was built on, for the first envelope of a session.
+     * A token the relay refuses (expired, say) is replaced once.
+     */
+    fun send(to: String, envelope: ByteArray, claim: String? = null): String {
+        val relay = relayUrl() ?: throw RelayException("Not registered with a relay")
         val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
-        val json = execute(signedRequest("POST", "/v1/send", body), sender)
-        return parsed { json.getString("id") }
+        if (claim != null) body.put("claim", claim)
+        val text = body.toString()
+        var refused: RelayException? = null
+        repeat(2) {
+            val token = nextToken()
+            val request = Request.Builder()
+                .url("$relay/v1/send")
+                .header("X-Clairix-Token", token)
+                .header("Accept", "application/json")
+                .post(text.toRequestBody(JSON))
+            try {
+                val json = execute(request, sender)
+                return parsed { json.getString("id") }
+            } catch (e: RelayException) {
+                if (e.code != 401 && e.code != 403) throw e
+                refused = e
+            }
+        }
+        throw refused ?: RelayException("The relay refused the delivery token", 403)
     }
+
+    /** Delivery tokens this phone holds. */
+    fun tokenCount(): Int = tokens.size(System.currentTimeMillis())
+
+    /**
+     * Fetches a batch of delivery tokens when fewer than [low] are left. Called
+     * from sync and the hourly top-up, so tokens are normally fetched well
+     * before, and apart from, the sends that spend them.
+     */
+    fun topUpTokens(low: Int = TOKENS_LOW, batch: Int = TOKENS_BATCH): Int {
+        if (tokens.size(System.currentTimeMillis()) < low) fetchTokens(batch)
+        return tokens.size(System.currentTimeMillis())
+    }
+
+    /** One token, fetching a batch first when the pool is empty. */
+    private fun nextToken(): String {
+        tokens.take(System.currentTimeMillis())?.let { return it }
+        fetchTokens(TOKENS_BATCH)
+        return tokens.take(System.currentTimeMillis()) ?: throw RelayException("The relay gave no delivery tokens", 429)
+    }
+
+    @Synchronized
+    private fun fetchTokens(count: Int) {
+        val body = JSONObject().put("count", count.coerceIn(1, TOKENS_BATCH))
+        val json = try {
+            signed("POST", "/v1/tokens", body)
+        } catch (e: RelayException) {
+            // The first signed request from a phone whose clock is off is refused;
+            // its response taught this client the relay's time, so once more.
+            if (e.code != 401) throw e
+            signed("POST", "/v1/tokens", body)
+        }
+        parsed {
+            val arr = json.getJSONArray("tokens")
+            tokens.add((0 until arr.length()).map { arr.getString(it) }, json.getLong("expiresAt"))
+        }
+    }
+
+    /** Forgets every delivery token (the phone is unpairing). */
+    fun clearTokens() = tokens.clear()
 
     fun inbox(): List<Envelope> {
         val json = signed("GET", "/v1/inbox")
@@ -213,9 +311,9 @@ class RelayClient(
     private val quick: OkHttpClient by lazy { rest.newBuilder().callTimeout(4, TimeUnit.SECONDS).build() }
 
     /**
-     * ICE servers for a call: STUN always, TURN with short-lived credentials when
-     * the relay has a key. A list fetched in the last few hours is reused if the
-     * relay does not answer within four seconds.
+     * ICE servers for a call: STUN always, TURN with credentials the relay mints
+     * for this request when it has a key. A list fetched in the last few minutes
+     * is reused only if the relay does not answer within four seconds.
      */
     fun turn(): List<IceServer> {
         val cached = lastIceServers?.takeIf { System.currentTimeMillis() - it.first < ICE_CACHE_MS }?.second
@@ -490,8 +588,11 @@ class RelayClient(
         /** The relay refuses incident boxes larger than this in either direction. */
         const val TRAFFIC_INCIDENTS_MAX_SPAN_DEG = 1.0
         private const val CLOCK_WARN_MS = 30_000L
-        /** The relay mints TURN credentials for 24 h and hands them out for at most 6 h. */
-        private const val ICE_CACHE_MS = 5 * 60 * 60_000L
+        /** The relay mints TURN credentials per request, valid two hours; a fallback copy is kept far less. */
+        private const val ICE_CACHE_MS = 10 * 60_000L
+        /** Delivery tokens fetched at a time (the relay's maximum), and the level that triggers a fetch. */
+        const val TOKENS_BATCH = 100
+        const val TOKENS_LOW = 40
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }

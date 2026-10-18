@@ -413,6 +413,24 @@ object CommsNotifications {
         context.getSystemService(NotificationManager::class.java)?.notify(panicId(panicId), notification)
     }
 
+    /**
+     * Clears every comms notification still showing: messages, missed calls,
+     * SOS alerts, calls and the connection's own. Notifications of the rest of
+     * the app (the scanner's, say) are left alone.
+     */
+    fun cancelAll(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val comms = setOf(CHANNEL_MESSAGES, CHANNEL_LINK, CHANNEL_CALLS, CHANNEL_RINGING, CHANNEL_SOS)
+        runCatching {
+            for (n in manager.activeNotifications) {
+                if (n.notification.channelId in comms) manager.cancel(n.tag, n.id)
+            }
+        }
+        manager.cancel(INCOMING_CALL_NOTIFICATION_ID)
+        manager.cancel(CALL_NOTIFICATION_ID)
+        manager.cancel(LINK_NOTIFICATION_ID)
+    }
+
     /** Clears both the message and the missed-call notification for [peer]. */
     fun cancel(context: Context, peer: String) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return

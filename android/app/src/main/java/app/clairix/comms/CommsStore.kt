@@ -63,6 +63,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         createVersion3(db)
         createVersion4(db)
         createVersion5(db)
+        createVersion6(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -72,6 +73,28 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         if (oldVersion < 3) createVersion3(db)
         if (oldVersion < 4) createVersion4(db)
         if (oldVersion < 5) createVersion5(db)
+        if (oldVersion < 6) createVersion6(db)
+    }
+
+    /**
+     * Key changes: the Ed25519 key that signed each staged payload's envelope,
+     * and the payloads held back from a contact whose keys changed until the
+     * owner verifies or accepts the new ones (see [KeyChangeGuard]).
+     */
+    private fun createVersion6(db: SQLiteDatabase) {
+        if ("sender_ed" !in columnsOf(db, "pending_inbound")) {
+            db.execSQL("ALTER TABLE pending_inbound ADD COLUMN sender_ed TEXT NOT NULL DEFAULT ''")
+        }
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS quarantine (
+                id TEXT PRIMARY KEY,
+                peer TEXT NOT NULL,
+                curve TEXT NOT NULL,
+                ts INTEGER NOT NULL,
+                payload_enc BLOB NOT NULL
+            )"""
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS quarantine_peer_ts ON quarantine (peer, ts)")
     }
 
     /** Names of the columns [table] has, so a migration can add one only when it is missing. */
@@ -238,6 +261,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             for (id in media) db.delete("media_chunks", "id = ?", arrayOf(id))
             db.delete("messages", "peer = ?", arrayOf(number))
             db.delete("transactions", "peer = ?", arrayOf(number))
+            db.delete("quarantine", "peer = ?", arrayOf(number))
             db.delete("contacts", "number = ?", arrayOf(number))
             db.setTransactionSuccessful()
         } finally {
@@ -767,7 +791,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
      * transaction, so a crash or an error afterwards can never leave it seen
      * but unprocessed. False when it was already seen.
      */
-    fun markSeenAndStage(key: String, ts: Long, senderCurve25519: String, payload: String): Boolean {
+    fun markSeenAndStage(key: String, ts: Long, senderCurve25519: String, senderEd25519: String, payload: String): Boolean {
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -777,6 +801,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
                 put("id", key)
                 put("ts", ts)
                 put("sender", senderCurve25519)
+                put("sender_ed", senderEd25519)
                 put("payload_enc", KeystoreBox.encryptString(payload))
             }
             db.insertWithOnConflict("pending_inbound", null, staged, SQLiteDatabase.CONFLICT_REPLACE)
@@ -852,17 +877,8 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
 
     // ── Inbound payloads awaiting sender confirmation ────────────────────
 
-    data class PendingInbound(val id: String, val ts: Long, val senderCurve25519: String, val payload: String)
-
-    fun savePending(id: String, ts: Long, senderCurve25519: String, payload: String) {
-        val values = ContentValues().apply {
-            put("id", id)
-            put("ts", ts)
-            put("sender", senderCurve25519)
-            put("payload_enc", KeystoreBox.encryptString(payload))
-        }
-        writableDatabase.insertWithOnConflict("pending_inbound", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-    }
+    /** A decrypted payload waiting to be acted on; [senderEd25519] signed its envelope. */
+    data class PendingInbound(val id: String, val ts: Long, val senderCurve25519: String, val senderEd25519: String, val payload: String)
 
     fun pending(): List<PendingInbound> =
         readableDatabase.query("pending_inbound", null, null, null, null, null, "ts ASC").use { c ->
@@ -874,6 +890,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
                     c.getString(c.getColumnIndexOrThrow("id")),
                     c.getLong(c.getColumnIndexOrThrow("ts")),
                     c.getString(c.getColumnIndexOrThrow("sender")),
+                    c.getString(c.getColumnIndexOrThrow("sender_ed")),
                     payload
                 )
             }
@@ -887,10 +904,77 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         writableDatabase.delete("pending_inbound", "id = ?", arrayOf(id))
     }
 
+    // ── Payloads held from changed keys ──────────────────────────────────
+
+    /** A payload from [peer]'s new keys ([curve]), held until the owner looks. */
+    data class Held(val id: String, val peer: String, val curve: String, val ts: Long, val payload: String)
+
+    /**
+     * Holds [payload] from [peer]; a second copy of the same envelope is ignored.
+     * At most [limit] are held per contact: past that the oldest go.
+     */
+    fun quarantine(id: String, peer: String, curve: String, ts: Long, payload: String, limit: Int) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                put("id", id)
+                put("peer", peer)
+                put("curve", curve)
+                put("ts", ts)
+                put("payload_enc", KeystoreBox.encryptString(payload))
+            }
+            db.insertWithOnConflict("quarantine", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+            db.execSQL(
+                "DELETE FROM quarantine WHERE peer = ? AND id NOT IN (SELECT id FROM quarantine WHERE peer = ? ORDER BY ts DESC, id DESC LIMIT ?)",
+                arrayOf<Any>(peer, peer, limit)
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** What is held from [peer], oldest first. */
+    fun quarantined(peer: String): List<Held> =
+        readableDatabase.query("quarantine", null, "peer = ?", arrayOf(peer), null, null, "ts ASC, id ASC").use { c ->
+            val out = ArrayList<Held>()
+            while (c.moveToNext()) {
+                val payload = runCatching { KeystoreBox.decryptString(c.getBlob(c.getColumnIndexOrThrow("payload_enc"))) }.getOrNull() ?: continue
+                out += Held(
+                    c.getString(c.getColumnIndexOrThrow("id")),
+                    c.getString(c.getColumnIndexOrThrow("peer")),
+                    c.getString(c.getColumnIndexOrThrow("curve")),
+                    c.getLong(c.getColumnIndexOrThrow("ts")),
+                    payload
+                )
+            }
+            out
+        }
+
+    fun quarantineCount(peer: String): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM quarantine WHERE peer = ?", arrayOf(peer)).use { c ->
+            if (c.moveToFirst()) c.getInt(0) else 0
+        }
+
+    fun deleteQuarantined(id: String) {
+        writableDatabase.delete("quarantine", "id = ?", arrayOf(id))
+    }
+
+    fun clearQuarantine(peer: String) {
+        writableDatabase.delete("quarantine", "peer = ?", arrayOf(peer))
+    }
+
+    /** Records [ed25519] as [number]'s identity key in every group roster that lists them (the owner verified it). */
+    fun setMemberKey(number: String, ed25519: String) {
+        writableDatabase.update("group_members", ContentValues().apply { put("ed25519", ed25519) }, "number = ?", arrayOf(number))
+    }
+
     fun clearAll() {
         val db = writableDatabase
         db.beginTransaction()
         try {
+            db.delete("quarantine", null, null)
             db.delete("messages", null, null)
             db.delete("contacts", null, null)
             db.delete("seen_envelopes", null, null)
@@ -941,6 +1025,6 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
 
     private companion object {
         const val DB_NAME = "comms_e2ee.db"
-        const val DB_VERSION = 5
+        const val DB_VERSION = 6
     }
 }
