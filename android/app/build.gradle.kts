@@ -165,8 +165,34 @@ android {
         }
     }
 
+    // Release signing comes from the environment, never from the repository:
+    //
+    //   ANDROID_KEYSTORE_FILE      path to the keystore (.jks / .keystore)
+    //   ANDROID_KEYSTORE_PASSWORD  the keystore's password
+    //   ANDROID_KEY_ALIAS          the key's alias inside it
+    //   ANDROID_KEY_PASSWORD       the key's password (defaults to the keystore's)
+    //
+    // The release workflow decodes the ANDROID_KEYSTORE_BASE64 secret to a file
+    // under the runner's temp directory and sets these. Without them release
+    // builds come out unsigned, as before, and can be signed afterwards.
+    val releaseKeystore = System.getenv("ANDROID_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }?.let { file(it) }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            if (!releaseKeystore.isFile) throw GradleException("ANDROID_KEYSTORE_FILE points at $releaseKeystore, which is not a file")
+            fun required(name: String): String = System.getenv(name)?.takeIf { it.isNotEmpty() }
+                ?: throw GradleException("ANDROID_KEYSTORE_FILE is set but $name is not")
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = required("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = required("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotEmpty() } ?: storePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
