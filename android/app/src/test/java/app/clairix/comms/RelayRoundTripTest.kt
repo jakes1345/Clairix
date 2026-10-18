@@ -60,6 +60,8 @@ class RelayRoundTripTest {
         init {
             number = relay.register(relayUrl, identity, secret, listed = false).number
             identity.markKeysPublished()
+            // As the app does at registration: tokens before the first send.
+            relay.topUpTokens()
         }
 
         val keys: PeerKeys
@@ -101,6 +103,8 @@ class RelayRoundTripTest {
                 pendingClaim = bundle.claim
             }
             val plaintext = CommsWire.withSender(payload, sender).toString().toByteArray(Charsets.UTF_8)
+            // The app tops up on sync and never inside a send; here, whenever few are left.
+            relay.topUpTokens()
             relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext), pendingClaim)
             pendingClaim = null
         }
@@ -127,7 +131,10 @@ class RelayRoundTripTest {
         }
 
         /** Posts already-encrypted bytes, as a relay redelivery or a re-send would. */
-        fun sendRaw(peer: Phone, envelope: ByteArray) = relay.send(peer.number!!, envelope)
+        fun sendRaw(peer: Phone, envelope: ByteArray): String {
+            relay.topUpTokens()
+            return relay.send(peer.number!!, envelope)
+        }
 
         fun encryptFor(peer: Phone, payload: JSONObject): ByteArray {
             val peerKeys = peer.keys
@@ -343,6 +350,20 @@ class RelayRoundTripTest {
     }
 
     @Test
+    fun aSendWithAnEmptyTokenPoolFailsWithoutFetchingTokens() {
+        val empty = RelayClient({ alice.identity }, { relayUrl }, { alice.number })
+        try {
+            empty.send(bob.number!!, ByteArray(64))
+            fail("a send with no tokens went out")
+        } catch (e: RelayException) {
+            assertEquals(RelayClient.NO_TOKENS, e.code)
+        }
+        assertEquals(0, empty.tokenCount())
+        empty.topUpTokens()
+        assertTrue(empty.tokenCount() > 0)
+    }
+
+    @Test
     fun shortPayloadsMakeEnvelopesOfOneSize() {
         alice.send(bob, msg("one")); bob.receive()
         bob.send(alice, msg("two")); alice.receive()
@@ -397,7 +418,7 @@ class RelayRoundTripTest {
             val bundle = alice.relay.bundle(bob.number!!, fingerprint(bob.keys.ed25519))
             alice.identity.startSession(bob.keys, bundle.sessionKey)
         }
-        alice.relay.send(bob.number!!, alice.identity.encrypt(bob.keys, plaintext))
+        alice.sendRaw(bob, alice.identity.encrypt(bob.keys, plaintext))
         try {
             bob.receive()
             fail("a version-99 payload parsed")

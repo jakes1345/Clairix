@@ -57,11 +57,33 @@ object KeyChangeGuard {
      * identity key the group's roster recorded for them ([rosterEd25519], blank
      * when it recorded none). Control from changed keys never is; nor is control
      * signed by keys other than the ones the group knows for that member, which
-     * the owner re-establishes by verifying the contact.
+     * the owner re-establishes by verifying the contact. When the roster
+     * recorded no key, nothing vouches for this one but the owner: the contact
+     * must be verified.
      */
-    fun mayApplyGroupControl(contact: Contact, rosterEd25519: String?): Boolean =
-        !contact.keyChanged && (rosterEd25519.isNullOrBlank() || rosterEd25519 == contact.ed25519)
+    fun mayApplyGroupControl(contact: Contact, rosterEd25519: String?): Boolean = when {
+        contact.keyChanged -> false
+        rosterEd25519.isNullOrBlank() -> contact.verified
+        else -> rosterEd25519 == contact.ed25519
+    }
 
     /** The conversation line that marks the change. */
     fun systemLine(contactLabel: String): String = "Safety number with $contactLabel changed"
+
+    /**
+     * The conversation row that marks the change: unread, so the conversation
+     * list and the unread count show that something happened.
+     */
+    fun systemMessage(id: String, contact: Contact, contactLabel: String, nowMs: Long): ChatMessage =
+        ChatMessage(id, contact.number, Direction.IN, systemLine(contactLabel), nowMs, STATUS_SYSTEM, read = false)
+
+    /** The notification text for what is held from a contact's new keys. */
+    fun heldNotice(contactLabel: String, held: Int): String =
+        "$contactLabel's safety number changed — $held item${if (held == 1) "" else "s"} held, tap to review"
+
+    /**
+     * Whether holding one more item raises a notification that alerts: the first
+     * item held from a contact does; later ones only update it quietly.
+     */
+    fun alertsOnHold(heldBefore: Int): Boolean = heldBefore == 0
 }

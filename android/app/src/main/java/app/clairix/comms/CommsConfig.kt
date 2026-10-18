@@ -116,3 +116,32 @@ class StoredTokenPool(context: Context) : MemoryTokenPool() {
         const val KEY = "tokens"
     }
 }
+
+/**
+ * [PendingClaims] kept across restarts, encrypted under the Keystore key like
+ * the delivery tokens: a process that dies between starting a session and
+ * sending its first envelope still presents the claim ticket afterwards.
+ */
+class StoredPendingClaims(context: Context) : PendingClaims() {
+
+    private val prefs = context.applicationContext.getSharedPreferences("comms_claims", Context.MODE_PRIVATE)
+
+    init {
+        prefs.getString(KEY, null)?.let { stored ->
+            runCatching { KeystoreBox.decryptString(Base64.decode(stored, Base64.NO_WRAP)) }.getOrNull()?.let { load(it) }
+        }
+    }
+
+    override fun changed() {
+        if (entries.isEmpty()) {
+            prefs.edit().remove(KEY).apply()
+            return
+        }
+        val blob = runCatching { Base64.encodeToString(KeystoreBox.encryptString(encode()), Base64.NO_WRAP) }.getOrNull() ?: return
+        prefs.edit().putString(KEY, blob).apply()
+    }
+
+    private companion object {
+        const val KEY = "claims"
+    }
+}

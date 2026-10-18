@@ -60,7 +60,36 @@ class KeyChangeGuardTest {
         assertFalse(KeyChangeGuard.mayApplyGroupControl(accepted, "ED-OLD"))
         assertTrue(KeyChangeGuard.mayApplyGroupControl(accepted, "ED-NEW"))
         assertTrue(KeyChangeGuard.mayApplyGroupControl(trusted, "ED-OLD"))
+    }
+
+    @Test
+    fun withNoRosterKeyOnlyAVerifiedContactMayChangeTheGroup() {
+        // The roster recorded no key for them: only the owner's verification vouches.
         assertTrue(KeyChangeGuard.mayApplyGroupControl(trusted, ""))
+        assertTrue(KeyChangeGuard.mayApplyGroupControl(trusted, null))
+        val unverified = trusted.copy(verified = false)
+        assertFalse(KeyChangeGuard.mayApplyGroupControl(unverified, ""))
+        assertFalse(KeyChangeGuard.mayApplyGroupControl(unverified, null))
+        // With a recorded key, the key decides.
+        assertTrue(KeyChangeGuard.mayApplyGroupControl(unverified, "ED-OLD"))
+        assertFalse(KeyChangeGuard.mayApplyGroupControl(unverified, "ED-OTHER"))
+    }
+
+    @Test
+    fun aKeyChangeIsAnUnreadRowAndTheFirstHeldItemAlerts() {
+        val row = KeyChangeGuard.systemMessage("row-1", changed, "Ana", 42L)
+        assertEquals(STATUS_SYSTEM, row.status)
+        assertEquals(Direction.IN, row.direction)
+        assertEquals(changed.number, row.peer)
+        assertFalse("the key-change row must count as unread", row.read)
+        assertEquals("Safety number with Ana changed", row.body)
+        assertTrue(STATUS_SYSTEM in TYPE_STATUSES)
+        // The first held item notifies with an alert; later ones update it quietly.
+        assertTrue(KeyChangeGuard.alertsOnHold(0))
+        assertFalse(KeyChangeGuard.alertsOnHold(1))
+        assertFalse(KeyChangeGuard.alertsOnHold(7))
+        assertEquals("Ana's safety number changed — 1 item held, tap to review", KeyChangeGuard.heldNotice("Ana", 1))
+        assertEquals("Ana's safety number changed — 3 items held, tap to review", KeyChangeGuard.heldNotice("Ana", 3))
     }
 
     @Test

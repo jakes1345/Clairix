@@ -221,7 +221,12 @@ class RelayClient(
      * Queues [envelope] for [to], anonymously: the request carries one delivery
      * token and no identity. [claim] is the ticket of the one-time key the
      * envelope's session was built on, for the first envelope of a session.
-     * A token the relay refuses (expired, say) is replaced once.
+     * A token the relay refuses (expired, say) is replaced once from the pool.
+     *
+     * Tokens are never fetched here: a fetch right before a send would let the
+     * relay pair the two. With the pool empty this throws a [RelayException]
+     * with [NO_TOKENS]; the caller keeps the envelope queued and calls
+     * [topUpTokens] before trying again.
      */
     fun send(to: String, envelope: ByteArray, claim: String? = null): String {
         val relay = relayUrl() ?: throw RelayException("Not registered with a relay")
@@ -247,25 +252,23 @@ class RelayClient(
         throw refused ?: RelayException("The relay refused the delivery token", 403)
     }
 
-    /** Delivery tokens this phone holds. */
+    /** Delivery tokens this phone holds, unexpired. */
     fun tokenCount(): Int = tokens.size(System.currentTimeMillis())
 
     /**
      * Fetches a batch of delivery tokens when fewer than [low] are left. Called
-     * from sync and the hourly top-up, so tokens are normally fetched well
-     * before, and apart from, the sends that spend them.
+     * at registration, on every sync and by the hourly key top-up, and after a
+     * send found the pool empty; never by [send] itself, so tokens are fetched
+     * apart from the sends that spend them.
      */
     fun topUpTokens(low: Int = TOKENS_LOW, batch: Int = TOKENS_BATCH): Int {
         if (tokens.size(System.currentTimeMillis()) < low) fetchTokens(batch)
         return tokens.size(System.currentTimeMillis())
     }
 
-    /** One token, fetching a batch first when the pool is empty. */
-    private fun nextToken(): String {
-        tokens.take(System.currentTimeMillis())?.let { return it }
-        fetchTokens(TOKENS_BATCH)
-        return tokens.take(System.currentTimeMillis()) ?: throw RelayException("The relay gave no delivery tokens", 429)
-    }
+    /** One token from the pool; none left is a [NO_TOKENS] failure for the caller to retry after a top-up. */
+    private fun nextToken(): String =
+        tokens.take(System.currentTimeMillis()) ?: throw RelayException("No delivery tokens on this phone yet", NO_TOKENS)
 
     @Synchronized
     private fun fetchTokens(count: Int) {
@@ -581,6 +584,8 @@ class RelayClient(
     companion object {
         /** [RelayException.code] for a response the client could not parse; not a network failure. */
         const val MALFORMED = -1
+        /** [RelayException.code] for a send with no delivery token left: retry after [topUpTokens]. */
+        const val NO_TOKENS = -2
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
         /** Segments per /v1/traffic/typical request (the relay's limit). */

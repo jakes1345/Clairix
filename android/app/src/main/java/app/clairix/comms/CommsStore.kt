@@ -467,15 +467,15 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         try {
             // A photo still arriving is neither shown nor receipted yet; it is read once it is whole.
             val ids = db.rawQuery(
-                "SELECT id FROM messages WHERE peer = ? AND direction = 'IN' AND read = 0 AND status != ? AND status != ?",
-                arrayOf(peer, STATUS_CALL, STATUS_RECEIVING)
+                "SELECT id FROM messages WHERE peer = ? AND direction = 'IN' AND read = 0 AND status != ? AND status != ? AND status != ?",
+                arrayOf(peer, STATUS_CALL, STATUS_RECEIVING, STATUS_SYSTEM)
             ).use { c ->
                 val out = ArrayList<String>()
                 while (c.moveToNext()) out += c.getString(0)
                 out
             }
             for (id in ids) db.execSQL("UPDATE messages SET read = 1 WHERE id = ?", arrayOf(id))
-            // Missed-call entries are read too, but are not messages to receipt.
+            // Missed-call entries and this phone's own notes are read too, but are not messages to receipt.
             db.execSQL("UPDATE messages SET read = 1 WHERE peer = ? AND direction = 'IN' AND read = 0 AND status != ?", arrayOf(peer, STATUS_RECEIVING))
             db.setTransactionSuccessful()
             return ids

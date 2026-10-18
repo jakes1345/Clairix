@@ -339,6 +339,52 @@ object CommsNotifications {
         context.getSystemService(NotificationManager::class.java)?.notify(notificationId(contact.number), notification)
     }
 
+    /**
+     * Something from [contact]'s new keys is held for review: a notification
+     * that opens the conversation, where the review card is. [alert] is true
+     * for the first item held; later items only update a notification still
+     * showing, quietly.
+     */
+    fun notifyHeld(context: Context, contact: Contact, held: Int, alert: Boolean) {
+        if (!canPost(context)) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val id = notificationId(contact.number)
+        if (!alert && runCatching { manager.activeNotifications.none { it.id == id } }.getOrDefault(true)) return
+        ensureChannels(context)
+        val open = Intent(context, MainActivity::class.java)
+            .setAction("app.clairix.OPEN_THREAD")
+            .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
+            .putExtra(EXTRA_PEER, contact.number)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val contentIntent = PendingIntent.getActivity(
+            context, contact.number.hashCode(), open,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
+        val text = KeyChangeGuard.heldNotice(label, held)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Safety number changed")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setSilent(!alert)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle("Safety number changed")
+                    .setContentText("Unlock to review")
+                    .build()
+            )
+            .build()
+        manager.notify(id, notification)
+    }
+
     /** The group conversation [gid] in MainActivity; see [CommsRepository.EXTRA_GROUP]. */
     private fun openGroup(context: Context, gid: String, requestCode: Int): PendingIntent {
         val open = Intent(context, MainActivity::class.java)
