@@ -13,6 +13,16 @@ import kotlin.math.min
 const val PERSIST_THRESHOLD_MS = 10 * 60 * 1000L
 const val PERSIST_MIN_SIGHTINGS = 5
 
+/**
+ * Longest persistence threshold the user may set. An uncertain cadence stitch
+ * restarts a device's presence clock, so a tracker whose address rotates more
+ * often than the threshold would never be held long enough under one address to
+ * be confirmed. The shortest rotation among supported trackers is the Samsung
+ * SmartTag's, about 15 minutes; the threshold stays below it with room for the
+ * minutes a new address takes to be heard and stitched.
+ */
+const val MAX_PERSIST_THRESHOLD_MS = 12 * 60 * 1000L
+
 /** Ceiling on simultaneously tracked devices — see [Tracker.prune]. */
 private const val MAX_ENTRIES = 4000
 
@@ -61,6 +71,15 @@ class Tracker(
         var rotations = 0
         var addresses = 1
         var following = false
+        /**
+         * When this device was first confirmed as following, or 0. Once set it holds
+         * the verdict: a rotation stitched without certainty restarts the presence
+         * clock, and without this latch a confirmed tracker would drop back to
+         * nothing for a full threshold after every rotation — and be pruned on the
+         * short cutoff meanwhile. It only ever carries a verdict this entry already
+         * earned, so nothing new can reach "following" through it.
+         */
+        var confirmedAt = 0L
         var persistent = false
         var score = 0
         var confidence = FollowConfidence.NONE
@@ -124,6 +143,13 @@ class Tracker(
                     other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
                 }
             }
+            // A confirmation already earned survives any merge, certain or not.
+            confirmedAt = when {
+                confirmedAt == 0L -> other.confirmedAt
+                other.confirmedAt == 0L -> confirmedAt
+                else -> min(confirmedAt, other.confirmedAt)
+            }
+            if (confirmedAt != 0L) following = true
             lastSeen = max(lastSeen, other.lastSeen)
             name = BleNames.displayName(advertisedName, tracker, manufacturer, address)
         }
@@ -183,10 +209,11 @@ class Tracker(
 
         val duration = now - entry.firstSeen
         entry.persistent =
-            duration >= persistMs() && entry.sightings >= PERSIST_MIN_SIGHTINGS
+            duration >= persistMs().coerceAtMost(MAX_PERSIST_THRESHOLD_MS) && entry.sightings >= PERSIST_MIN_SIGHTINGS
 
         val movedWithUs = entry.area.movedWithUs(followM())
-        entry.following = entry.persistent && movedWithUs
+        entry.following = (entry.persistent && movedWithUs) || entry.confirmedAt != 0L
+        if (entry.following && entry.confirmedAt == 0L) entry.confirmedAt = now
 
         val confidence = when {
             entry.following -> FollowConfidence.CONFIRMED
@@ -335,7 +362,7 @@ class Tracker(
         val cutoff = now - maxAgeMs
         val followingCutoff = now - FOLLOWING_RETENTION_MS
         entries.entries.removeAll { (_, entry) ->
-            if (entry.following) entry.lastSeen < followingCutoff
+            if (entry.following || entry.confirmedAt != 0L) entry.lastSeen < followingCutoff
             else entry.lastSeen < cutoff
         }
 
@@ -345,7 +372,7 @@ class Tracker(
         // the entire point of keeping any of this.
         if (entries.size > MAX_ENTRIES) {
             entries.values
-                .filterNot { it.following || it.persistent }
+                .filterNot { it.following || it.confirmedAt != 0L || it.persistent }
                 .sortedBy { it.lastSeen }
                 .take(entries.size - MAX_ENTRIES)
                 .forEach { entries.remove(it.key) }
