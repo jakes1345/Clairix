@@ -37,6 +37,7 @@ class StoreTest {
             store.load { JSONObject() }.put("v", 1)
             store.touch(minIntervalMs = 0)          // snapshot of v=1, write held back
             store.json.put("v", 2)
+            store.touch(minIntervalMs = 60_000)     // marks dirty; too soon for another write
             store.flush()                           // v=2 written now
         }
         assertEquals(2, onDisk().getInt("v"))
