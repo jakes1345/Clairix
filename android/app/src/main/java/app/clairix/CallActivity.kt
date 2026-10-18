@@ -126,6 +126,9 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
+        // A call can start this Activity in a cold process, before MainActivity
+        // has run; load the settings so the screen wears the chosen theme.
+        AppSettings.load(this)
         CommsRepository.init(applicationContext)
 
         val live = CallManager.call.value?.takeIf { it.phase != CallPhase.ENDED }

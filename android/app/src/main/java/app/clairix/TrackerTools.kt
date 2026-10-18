@@ -120,13 +120,7 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
                     }
                     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (d.following) StatusPill("Following", Tone.Danger)
-                        else StatusPill(
-                            d.threat.name,
-                            when (d.threat) {
-                                Threat.CRITICAL -> Tone.Danger; Threat.HIGH -> Tone.Accent
-                                Threat.MEDIUM -> Tone.Caution; Threat.LOW -> Tone.Neutral; Threat.NONE -> Tone.Safe
-                            }
-                        )
+                        else StatusPill(levelLabel(d.threat.name), d.threat.tone())
                         Text(
                             if (d.rssi == 0) "— dBm" else "${d.rssi} dBm",
                             style = MaterialTheme.typography.monoSmall,

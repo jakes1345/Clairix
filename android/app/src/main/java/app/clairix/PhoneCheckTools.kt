@@ -1,5 +1,6 @@
 package app.clairix
 
+import app.clairix.ui.components.ClairixProgressBar
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.border
@@ -273,7 +274,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             },
             confirmButton = {
                 GhostButton(
-                    "PIN",
+                    "Pin certificate",
                     onClick = {
                         confirmPin = false
                         TlsCanary.pinManually(context, pinCandidate.relayHost, pinCandidate.observedSpki)
@@ -345,12 +346,12 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     r.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution) }
                 }
                 if (checking) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ClairixTheme.colors.accent, trackColor = ClairixTheme.colors.border)
+                    ClairixProgressBar(null)
                 } else {
                     SecondaryButton("Check now", onClick = { checkNow() }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                     if (r != null && r.untrustedUnpinned && r.observedSpki != null) {
                         GhostButton(
-                            "PIN this certificate (my own relay)",
+                            "Pin this certificate (my own relay)",
                             onClick = { confirmPin = true },
                             tone = Tone.Neutral
                         )
@@ -358,7 +359,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                 }
                 if (pinned != null) {
                     GhostButton(
-                        "Forget PIN (relay rotated its key)",
+                        "Forget the pinned key (relay rotated its key)",
                         onClick = { TlsCanary.resetPin(context); pinned = null },
                         tone = Tone.Neutral
                     )
