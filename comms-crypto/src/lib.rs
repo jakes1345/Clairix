@@ -82,6 +82,12 @@ pub enum CryptoError {
     /// redelivery or a replay. Nothing is wrong with the session; drop it.
     #[error("message already received")]
     Duplicate,
+    /// This device already holds the most sessions it keeps with
+    /// `peer_curve25519`, every one of them used in the last 14 days, so no
+    /// new outbound session is started (none of those is given up for one
+    /// this device was asked to start). The app tells the owner.
+    #[error("too many sessions in recent use with {peer_curve25519}")]
+    SessionLimit { peer_curve25519: String },
     #[error("could not decrypt: {reason}")]
     Decrypt { reason: String },
     #[error("could not encrypt: {reason}")]
@@ -145,6 +151,11 @@ pub struct Decrypted {
     pub plaintext: Vec<u8>,
     /// True when this message created a new Olm session (a pre-key message).
     pub new_session: bool,
+    /// True when, to keep that new session, the least recently used of the
+    /// sender's sessions had to go even though it was used in the last 14
+    /// days. Only the sender can cause this, by starting that many sessions;
+    /// the app tells the owner.
+    pub evicted_recent_session: bool,
 }
 
 // ── Padding ────────────────────────────────────────────────────────────────
@@ -388,8 +399,9 @@ const MAX_SESSIONS_PER_PEER: usize = 5;
 /// A session that decrypted something this recently is never evicted: the peer
 /// may still be sending on it, whatever anyone asks this device to start.
 const SESSION_PROTECT_MS: u64 = 14 * 24 * 60 * 60 * 1000;
-/// Above this many sessions with one peer (all of them in recent use), no new
-/// one is added; the existing ones are kept instead.
+/// The most sessions kept with one peer. With this many, all in recent use, a
+/// new outbound one is refused ([`CryptoError::SessionLimit`]); a new inbound
+/// one, which only the peer can start, replaces the least recently used.
 const SESSION_HARD_LIMIT: usize = 16;
 
 fn now_ms() -> u64 {
@@ -585,7 +597,8 @@ impl Identity {
     /// signature binding their Curve25519 and sealing keys to their Ed25519 key.
     ///
     /// Sessions the peer used in the last 14 days are never evicted to make room;
-    /// with [`SESSION_HARD_LIMIT`] of them already in use this fails instead.
+    /// with [`SESSION_HARD_LIMIT`] of them already in use this fails with
+    /// [`CryptoError::SessionLimit`] naming the peer.
     pub fn start_session(&self, peer: PeerKeys, signed_key: SignedKey) -> Result<()> {
         verify_peer(&peer)?;
         let ed = ed25519_from(&peer.ed25519)?;
@@ -595,7 +608,7 @@ impl Identity {
         let mut inner = self.inner.lock().expect("identity mutex poisoned");
         let now = now_ms();
         if inner.sessions.get(&peer.curve25519).is_some_and(|list| at_hard_limit(list, now)) {
-            return Err(CryptoError::Encrypt { reason: "too many sessions in recent use with this peer".into() });
+            return Err(CryptoError::SessionLimit { peer_curve25519: peer.curve25519 });
         }
         let session = inner
             .account
@@ -727,6 +740,7 @@ impl Identity {
                             sent_at_ms,
                             plaintext,
                             new_session: false,
+                            evicted_recent_session: false,
                         });
                     }
                     Err(DecryptionError::MissingMessageKey(_)) => spent = true,
@@ -759,9 +773,10 @@ impl Identity {
                 if replayed {
                     return Err(CryptoError::Duplicate);
                 }
-                if inner.sessions.get(&curve_b64).is_some_and(|list| at_hard_limit(list, now)) {
-                    return Err(CryptoError::Decrypt { reason: "too many sessions in recent use with this peer".into() });
-                }
+                // The peer itself (Olm authenticates it below) started a new
+                // session while every one this device keeps with it is in recent
+                // use: its newest session wins, and the least recently used goes.
+                let make_room = inner.sessions.get(&curve_b64).is_some_and(|list| at_hard_limit(list, now));
                 // Only an unknown one-time key means the sender holds a session this
                 // phone lost (a restored backup, a used-up key) and a new one should
                 // be asked for. Any other failure is a message that was never valid
@@ -783,6 +798,8 @@ impl Identity {
                 // Olm has now authenticated the Curve25519 key, and the claim's
                 // signature the Ed25519 key: from here on they belong together.
                 inner.peers.insert(curve_b64.clone(), ed_b64.clone());
+                let evicted_recent_session = make_room
+                    && inner.sessions.get_mut(&curve_b64).is_some_and(evict_least_recently_used);
                 push_session(
                     &mut inner.sessions,
                     curve_b64.clone(),
@@ -793,7 +810,14 @@ impl Identity {
                 while inner.used_prekeys.len() > MAX_USED_PREKEYS {
                     inner.used_prekeys.pop_front();
                 }
-                Ok(Decrypted { sender_curve25519: curve_b64, sender_ed25519: ed_b64, sent_at_ms, plaintext, new_session: true })
+                Ok(Decrypted {
+                    sender_curve25519: curve_b64,
+                    sender_ed25519: ed_b64,
+                    sent_at_ms,
+                    plaintext,
+                    new_session: true,
+                    evicted_recent_session,
+                })
             }
             OlmMessage::Normal(_) => {
                 Err(CryptoError::NoSessionFor { sender_curve25519: curve_b64, sender_ed25519: ed_b64, sent_at_ms })
@@ -817,11 +841,24 @@ fn at_hard_limit(list: &[SessionEntry], now: u64) -> bool {
     list.iter().filter(|e| is_protected(e, now)).count() >= SESSION_HARD_LIMIT
 }
 
+/// Removes the session that decrypted something longest ago (one that never
+/// did counts as oldest). True when one was removed.
+fn evict_least_recently_used(list: &mut Vec<SessionEntry>) -> bool {
+    let oldest = list.iter().enumerate().min_by_key(|(_, e)| e.last_decrypt_ms.unwrap_or(0)).map(|(i, _)| i);
+    match oldest {
+        Some(i) => {
+            list.remove(i);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Puts `entry` first in the peer's list, then evicts the oldest sessions that
 /// are not protected until at most [`MAX_SESSIONS_PER_PEER`] remain. Sessions
 /// that decrypted something in the last [`SESSION_PROTECT_MS`] stay even past
-/// that number (callers check [`at_hard_limit`] first, so the list never
-/// grows past [`SESSION_HARD_LIMIT`]).
+/// that number (callers check [`at_hard_limit`] first and refuse or make room,
+/// so the list never grows past [`SESSION_HARD_LIMIT`]).
 fn push_session(sessions: &mut HashMap<String, Vec<SessionEntry>>, peer: String, entry: SessionEntry, now: u64) {
     let list = sessions.entry(peer).or_default();
     list.insert(0, entry);
@@ -994,6 +1031,7 @@ mod tests {
         assert_eq!(d1.sender_curve25519, alice.curve25519());
         assert_eq!(d1.sender_ed25519, alice.ed25519());
         assert!((d1.sent_at_ms - now_ms() as i64).abs() < 60_000);
+        assert!(!d1.evicted_recent_session);
 
         // Bob replies over the same session; Alice reads it with hers.
         let env2 = bob.encrypt(peer_keys(&alice), b"hi alice".to_vec()).unwrap();
@@ -1148,6 +1186,36 @@ mod tests {
     }
 
     #[test]
+    fn at_the_hard_limit_a_new_inbound_session_evicts_the_least_recently_used() {
+        let alice = Identity::create();
+        let bob = Identity::create();
+        for _ in 0..SESSION_HARD_LIMIT {
+            alice.start_session(peer_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
+            bob.decrypt(alice.encrypt(peer_keys(&bob), b"x".to_vec()).unwrap()).unwrap();
+        }
+        // Give every session a distinct age; the one used longest ago is known.
+        let now = now_ms();
+        let oldest_id = {
+            let mut inner = bob.inner.lock().unwrap();
+            let list = inner.sessions.get_mut(&alice.curve25519()).unwrap();
+            for (i, e) in list.iter_mut().enumerate() {
+                e.last_decrypt_ms = Some(now - 1000 - i as u64);
+            }
+            list.last().unwrap().session.session_id()
+        };
+        // Alice starts yet another session: it is kept, and the stalest goes.
+        alice.start_session(peer_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
+        let d = bob.decrypt(alice.encrypt(peer_keys(&bob), b"newest".to_vec()).unwrap()).unwrap();
+        assert_eq!(d.plaintext, b"newest");
+        assert!(d.new_session);
+        assert!(d.evicted_recent_session);
+        let inner = bob.inner.lock().unwrap();
+        let list = &inner.sessions[&alice.curve25519()];
+        assert_eq!(list.len(), SESSION_HARD_LIMIT);
+        assert!(list.iter().all(|e| e.session.session_id() != oldest_id), "the least recently used session survived");
+    }
+
+    #[test]
     fn protected_sessions_are_kept_past_the_limit_and_the_hard_limit_refuses_new_ones() {
         let alice = Identity::create();
         let bob = Identity::create();
@@ -1163,9 +1231,12 @@ mod tests {
             assert_eq!(list.len(), SESSION_HARD_LIMIT);
             assert!(list.iter().all(|e| is_protected(e, now)));
         }
-        // Another one is refused rather than evicting any of them.
+        // Another outbound one is refused, naming the peer, rather than evicting any of them.
         let refused = bob.start_session(peer_keys(&alice), alice.public_bundle().fallback.unwrap());
-        assert!(matches!(refused, Err(CryptoError::Encrypt { .. })), "got {refused:?}");
+        match refused {
+            Err(CryptoError::SessionLimit { peer_curve25519 }) => assert_eq!(peer_curve25519, alice.curve25519()),
+            other => panic!("expected SessionLimit, got {other:?}"),
+        }
         assert_eq!(bob.inner.lock().unwrap().sessions[&alice.curve25519()].len(), SESSION_HARD_LIMIT);
     }
 
