@@ -173,27 +173,64 @@ class WorkZoneFeedTest {
         assertEquals(Incident.LANE_CLOSURE, merged.first { it.id == "ohgo:WZ-2" }.type)
     }
 
+    private fun relayWzdx(id: String, lat: Double, lon: Double, description: String?, source: String = RELAY_WZDX_SOURCE) =
+        Incident(id, Incident.HAZARD, lat, lon, null, source, 0, now - 600, now + 3600, description)
+
+    /** IDs that survive merging [relay] with the Ohio file (WZ-1: I-71 northbound, 39.95..39.97 N along -82.99). */
+    private fun mergedIds(vararg relay: Incident): List<String> =
+        mergeIncidents(relay.toList(), emptyList(), WorkZoneFeed.parse(file, now), now).map { it.id }
+
     @Test
-    fun relayWzdxCopyOfAnActiveZoneIsShownOnceAsTheZone() {
-        val zones = WorkZoneFeed.parse(file, now)
-        fun relay(id: String, source: String, lat: Double, lon: Double) =
-            Incident(id, Incident.HAZARD, lat, lon, null, source, 0, now - 600, now + 3600, "Work zone on I-71")
-        val relay = listOf(
-            // The relay's cron puts a feed's zone at its midpoint: ~40 m off WZ-1's stretch.
-            relay("uuid-near", RELAY_WZDX_SOURCE, 39.96, -82.9895),
-            // 1.7 km east of every zone: a zone the aggregator does not have, so it stays.
-            relay("uuid-far", RELAY_WZDX_SOURCE, 39.96, -82.97),
-            // On WZ-3, which has ended: nothing replaces the relay's copy, so it stays.
-            relay("uuid-ended-zone", RELAY_WZDX_SOURCE, 39.995, -83.03),
-            // A driver's report at the same spot is not a feed copy.
-            relay("user-near", "user", 39.96, -82.99),
-        )
-        val ids = mergeIncidents(relay, emptyList(), zones, now).map { it.id }
-        assertFalse("uuid-near" in ids)
-        assertTrue("uuid-far" in ids)
-        assertTrue("uuid-ended-zone" in ids)
-        assertTrue("user-near" in ids)
+    fun sameZoneFromTheRelayIsDedupedIntoTheWorkZone() {
+        // ~9 m off WZ-1's stretch, same road and direction: the relay's copy of WZ-1.
+        val ids = mergedIds(relayWzdx("copy", 39.955, -82.9899, "Work zone on I-71 (northbound): Bridge deck replacement"))
+        assertFalse("copy" in ids)
         assertTrue("ohgo:WZ-1" in ids)
+        // Older relays write no direction; the road still matches, however it is spelled.
+        assertFalse("old" in mergedIds(relayWzdx("old", 39.955, -82.9898, "Work zone on Interstate 71: Bridge deck replacement")))
+        // A description in no known form: the distance alone decides.
+        assertFalse("bare" in mergedIds(relayWzdx("bare", 39.955, -82.9899, null)))
+    }
+
+    @Test
+    fun oppositeCarriagewayFortyMetresAwayIsKept() {
+        // The southbound zone 40 m east of WZ-1: beyond the radius, and the other direction anyway.
+        assertTrue("sb" in mergedIds(relayWzdx("sb", 39.955, -82.98953, "Work zone on I-71 (southbound): Resurfacing")))
+        // Even with nothing to compare but the distance, 40 m apart is two zones.
+        assertTrue("sb-bare" in mergedIds(relayWzdx("sb-bare", 39.955, -82.98953, null)))
+    }
+
+    @Test
+    fun aDifferentDirectionOrRoadWithinTheRadiusIsKept() {
+        // 17 m away, but the other carriageway.
+        assertTrue("sb" in mergedIds(relayWzdx("sb", 39.955, -82.9898, "Work zone on I-71 (southbound)")))
+        // 17 m away, but a ramp onto another road.
+        assertTrue("ramp" in mergedIds(relayWzdx("ramp", 39.955, -82.9898, "Work zone on US-33: Ramp closed")))
+    }
+
+    @Test
+    fun relayWzdxCopiesOfFarOrEndedZonesAndDriverReportsAreKept() {
+        val ids = mergedIds(
+            relayWzdx("far", 39.96, -82.97, "Work zone on I-71 (northbound)"),
+            // On WZ-3, which has ended: nothing replaces the relay's copy.
+            relayWzdx("ended-zone", 39.995, -83.03, "Work zone on SR-315"),
+            // A driver's report on the stretch is not a feed copy.
+            relayWzdx("user", 39.955, -82.99, null, source = "user"),
+        )
+        assertTrue("far" in ids && "ended-zone" in ids && "user" in ids)
+    }
+
+    @Test
+    fun relayDescriptionsAndRoadNamesParse() {
+        assertEquals(RelayWzdxHint(setOf("I71", "US33"), "northbound"), relayWzdxHint("Work zone on I-71, US-33 (northbound): Bridge"))
+        assertEquals(RelayWzdxHint(setOf("SR315"), null), relayWzdxHint("Work zone on SR-315"))
+        assertEquals(RelayWzdxHint(emptySet(), null), relayWzdxHint("Lane closed for paving"))
+        assertEquals(RelayWzdxHint(emptySet(), null), relayWzdxHint(null))
+        assertEquals(setOf("I71"), roadKeys("Interstate 71"))
+        assertEquals(setOf("US33", "SR315"), roadKeys("U.S. 33 / State Route 315"))
+        assertEquals(setOf("I71"), roadKeys("i-71"))
+        assertNull(normalizeDirection("both"))
+        assertEquals("northbound", normalizeDirection(" Northbound "))
     }
 
     @Test

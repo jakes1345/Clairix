@@ -355,12 +355,21 @@ export function parseWzdx(feedUrl: string, doc: unknown, now: number): WzdxEvent
   return out;
 }
 
-function wzdxDescription(core: Record<string, unknown>): string | null {
+/** WZDx `direction` values that name one way of travel; "both", "unknown" and "undefined" do not. */
+const WZDX_DIRECTIONS = new Set(["northbound", "southbound", "eastbound", "westbound", "inner-loop", "outer-loop"]);
+
+/**
+ * "Work zone on <roads>[ (<direction>)]: <description>". Phones read the roads and direction
+ * back out of this form to tell this zone from the same zone in the work-zone files, and from a
+ * zone on the other carriageway, so keep it stable.
+ */
+export function wzdxDescription(core: Record<string, unknown>): string | null {
   const desc = typeof core.description === "string" ? core.description.trim() : "";
   const roads = Array.isArray(core.road_names) ? core.road_names.filter((r): r is string => typeof r === "string" && r.trim().length > 0).map((r) => r.trim()) : [];
+  const direction = typeof core.direction === "string" ? core.direction.trim().toLowerCase() : "";
   let text = desc;
   if (roads.length > 0) {
-    const roadText = `Work zone on ${roads.join(", ")}`;
+    const roadText = `Work zone on ${roads.join(", ")}${WZDX_DIRECTIONS.has(direction) ? ` (${direction})` : ""}`;
     text = desc ? `${roadText}: ${desc}` : roadText;
   }
   if (!text) return null;

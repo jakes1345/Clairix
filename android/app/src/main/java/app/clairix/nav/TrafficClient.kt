@@ -21,7 +21,9 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
 
 /**
  * A traffic incident: reported by drivers through the relay, proxied from HERE / TomTom, or a
@@ -160,10 +162,85 @@ internal const val RELAY_WZDX_SOURCE = "wzdx"
 
 /**
  * How close a relay WZDx incident (a point at its zone's midpoint) must lie to an active work
- * zone's stretch to be the same zone. The aggregator simplifies stretches to 10 m, so 100 m
- * leaves room for feeds that place the midpoint loosely without merging zones on parallel roads.
+ * zone's stretch to be the same zone. The aggregator simplifies stretches to 10 m; 30 m stays
+ * inside one carriageway, so the other direction of a divided road or a parallel ramp is kept.
  */
-internal const val WZDX_SAME_ZONE_M = 100.0
+internal const val WZDX_SAME_ZONE_M = 30.0
+
+/**
+ * What the relay's WZDx description says about its zone: the road names and travel direction,
+ * from its "Work zone on <roads>[ (<direction>)]: <text>" form. Empty when the text is in
+ * another form; then only the distance decides.
+ */
+internal data class RelayWzdxHint(val roads: Set<String>, val direction: String?)
+
+private val RELAY_WZDX_DESCRIPTION = Regex("""^Work zone on (.+?)(?: \(([a-z-]+)\))?(?:: .*)?$""", RegexOption.DOT_MATCHES_ALL)
+
+internal fun relayWzdxHint(description: String?): RelayWzdxHint {
+    val m = description?.let { RELAY_WZDX_DESCRIPTION.matchEntire(it.trim()) } ?: return RelayWzdxHint(emptySet(), null)
+    return RelayWzdxHint(roadKeys(m.groupValues[1]), normalizeDirection(m.groupValues[2]))
+}
+
+/**
+ * Road names as comparable keys: "I-71", "Interstate 71" and "i 71" are all "I71"; "US-33" and
+ * "U.S. 33" are "US33"; "SR-315" and "State Route 315" are "SR315". Several names may be joined
+ * with "/" (the work-zone files) or "," (the relay).
+ */
+internal fun roadKeys(text: String?): Set<String> {
+    if (text.isNullOrBlank()) return emptySet()
+    return text.split('/', ',', ';').mapNotNull { raw ->
+        var r = " " + raw.uppercase(Locale.ROOT).replace('.', ' ') + " "
+        for ((from, to) in ROAD_WORDS) r = r.replace(from, to)
+        r.filter { it.isLetterOrDigit() }.takeIf { it.isNotEmpty() }
+    }.toSet()
+}
+
+private val ROAD_WORDS = listOf(
+    " INTERSTATE " to " I ",
+    " U S " to " US ",
+    " STATE ROUTE " to " SR ",
+    " STATE HIGHWAY " to " SR ",
+    " STATE ROAD " to " SR ",
+    " HIGHWAY " to " HWY ",
+)
+
+/** A travel direction to compare, or null when it says none ("both", "unknown", blank). */
+internal fun normalizeDirection(text: String?): String? {
+    val d = text?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: return null
+    return d.takeUnless { it in setOf("both", "unknown", "undefined", "none", "n/a", "all") }
+}
+
+/** An active work zone with its bounding box padded by [WZDX_SAME_ZONE_M], for a cheap first test. */
+private class ZoneBox(val zone: WorkZone) {
+    val minLat: Double; val maxLat: Double; val minLon: Double; val maxLon: Double
+    val roads = roadKeys(zone.road)
+    val direction = normalizeDirection(zone.direction)
+
+    init {
+        var a = Double.POSITIVE_INFINITY; var b = Double.NEGATIVE_INFINITY
+        var c = Double.POSITIVE_INFINITY; var d = Double.NEGATIVE_INFINITY
+        for (p in zone.geom) {
+            a = minOf(a, p.lat); b = maxOf(b, p.lat); c = minOf(c, p.lon); d = maxOf(d, p.lon)
+        }
+        val padLat = WZDX_SAME_ZONE_M / RoadGeo.M_PER_DEG_LAT
+        val padLon = WZDX_SAME_ZONE_M / (RoadGeo.M_PER_DEG_LAT * kotlin.math.cos(Math.toRadians(maxOf(abs(a), abs(b)))).coerceAtLeast(1e-6))
+        minLat = a - padLat; maxLat = b + padLat; minLon = c - padLon; maxLon = d + padLon
+    }
+
+    fun contains(lat: Double, lon: Double) = lat in minLat..maxLat && lon in minLon..maxLon
+}
+
+/**
+ * Whether the relay's WZDx incident [inc] is its copy of [box]'s zone: on the zone's stretch, and,
+ * where both name them, on the same road and in the same direction. Two zones 30 m apart on
+ * different roads (a ramp) or carriageways stay apart.
+ */
+private fun isSameZone(inc: Incident, hint: RelayWzdxHint, box: ZoneBox): Boolean {
+    if (!box.contains(inc.lat, inc.lon)) return false
+    if (hint.roads.isNotEmpty() && box.roads.isNotEmpty() && hint.roads.none { it in box.roads }) return false
+    if (hint.direction != null && box.direction != null && hint.direction != box.direction) return false
+    return nearStretch(inc.lat, inc.lon, box.zone.geom, WZDX_SAME_ZONE_M)
+}
 
 /**
  * Driver reports, provider incidents and active work zones as one list, deduplicated by id
@@ -176,9 +253,13 @@ internal fun mergeIncidents(
 ): List<Incident> {
     val out = LinkedHashMap<String, Incident>()
     val activeZones = zones.filter { it.isActive(nowSec) && it.geom.isNotEmpty() }
+    val boxes by lazy(LazyThreadSafetyMode.NONE) { activeZones.map(::ZoneBox) }
     for (inc in relay) {
         if (inc.expiresAt != 0L && inc.expiresAt <= nowSec) continue
-        if (inc.source == RELAY_WZDX_SOURCE && activeZones.any { nearStretch(inc.lat, inc.lon, it.geom, WZDX_SAME_ZONE_M) }) continue
+        if (inc.source == RELAY_WZDX_SOURCE && activeZones.isNotEmpty()) {
+            val hint = relayWzdxHint(inc.description)
+            if (boxes.any { isSameZone(inc, hint, it) }) continue
+        }
         out.putIfAbsent(inc.id, inc)
     }
     for (inc in provider) if (inc.expiresAt == 0L || inc.expiresAt > nowSec) out.putIfAbsent(inc.id, inc)
@@ -294,7 +375,10 @@ class TrafficClient(context: Context, val region: String) : SpeedSource {
     private val typicalLock = Mutex()
     @Volatile private var typicalLoaded = false
 
+    /** Guards the incident sources below; held only to read or replace them, never for a merge. */
     private val incidentLock = Any()
+    /** Serialises [publishIncidents], so merges finish in the order their snapshots were taken. */
+    private val publishLock = Any()
     private var relayIncidents: List<Incident> = emptyList()
     private var workZones: List<WorkZone> = emptyList()
     @Volatile private var providerFetchedAtMs = 0L
@@ -425,20 +509,34 @@ class TrafficClient(context: Context, val region: String) : SpeedSource {
         publishIncidents()
     }
 
-    /** Rebuilds [incidents] from its three sources; also called on a timer so work zones start and end on time. */
+    /**
+     * Rebuilds [incidents] from its three sources; also called on a timer so work zones start and
+     * end on time. The merge runs on the caller's thread outside [incidentLock], so a large work-zone
+     * list never holds up the threads that update the sources; call it off the main thread.
+     * Merges run one at a time and each takes the sources as they are when it starts, so the last
+     * one to finish always reflects the latest sources.
+     */
     fun publishIncidents() {
-        val now = System.currentTimeMillis() / 1000
-        synchronized(incidentLock) {
-            if (providerFetchedAtMs > 0 && System.currentTimeMillis() - providerFetchedAtMs > PROVIDER_STALE_MS) {
-                _providerIncidents.value = emptyList()
-                providerFetchedAtMs = 0L
+        synchronized(publishLock) {
+            val now = System.currentTimeMillis() / 1000
+            val relay: List<Incident>
+            val provider: List<Incident>
+            val zones: List<WorkZone>
+            synchronized(incidentLock) {
+                if (providerFetchedAtMs > 0 && System.currentTimeMillis() - providerFetchedAtMs > PROVIDER_STALE_MS) {
+                    _providerIncidents.value = emptyList()
+                    providerFetchedAtMs = 0L
+                }
+                relay = relayIncidents
+                provider = _providerIncidents.value
+                zones = workZones
             }
-            val merged = mergeIncidents(relayIncidents, _providerIncidents.value, workZones, now)
+            val merged = mergeIncidents(relay, provider, zones, now)
             if (merged != _incidents.value) _incidents.value = merged
         }
     }
 
-    /** Replaces the work zones shown with the incidents. */
+    /** Replaces the work zones shown with the incidents. Merges them in; call it off the main thread. */
     fun setWorkZones(zones: List<WorkZone>) {
         synchronized(incidentLock) { workZones = zones }
         publishIncidents()

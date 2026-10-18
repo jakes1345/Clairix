@@ -225,8 +225,11 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                 val minutes = flow { while (true) { emit(Unit); delay(CLOSURE_TICK_MS) } }
                 combine(s.workZones.zones, s.traffic.providerIncidents, minutes) { z, p, _ -> z to p }
                     .collect { (zones, provider) ->
-                        s.traffic.setWorkZones(zones)
-                        withContext(Dispatchers.Default) { s.closures.update(zones, provider, System.currentTimeMillis() / 1000) }
+                        // Both walk every zone's geometry; neither belongs on the main thread.
+                        withContext(Dispatchers.Default) {
+                            s.traffic.setWorkZones(zones)
+                            s.closures.update(zones, provider, System.currentTimeMillis() / 1000)
+                        }
                     }
             }
         }
