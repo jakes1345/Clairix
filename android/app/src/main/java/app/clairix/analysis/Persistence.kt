@@ -74,8 +74,13 @@ class Tracker(
          * Folds [other] into this entry when two keys turn out to be one device. The
          * cadence fingerprinter can only prove a rotation after a few packets, by which
          * time the new address has a few sightings under a key of its own.
+         *
+         * [certain] is the fingerprinter's own confidence in the stitch. Only then may
+         * the merge move this entry's start earlier: an uncertain stitch that pulled
+         * firstSeen back to the other key's could hand a device a ten-minute presence
+         * it never had, and with it a "following" verdict.
          */
-        fun absorb(other: Entry) {
+        fun absorb(other: Entry, certain: Boolean) {
             if (address.isEmpty()) address = other.address
             if (advertisedName == null) advertisedName = other.advertisedName
             if (manufacturer == null) manufacturer = other.manufacturer
@@ -89,7 +94,11 @@ class Tracker(
                 approxMetres = other.approxMetres
                 lastHeardAt = other.lastHeardAt ?: lastHeardAt
             }
-            firstSeen = if (firstSeen == 0L) other.firstSeen else min(firstSeen, other.firstSeen)
+            firstSeen = when {
+                firstSeen == 0L -> other.firstSeen
+                certain -> min(firstSeen, other.firstSeen)
+                else -> firstSeen
+            }
             lastSeen = max(lastSeen, other.lastSeen)
             sightings += other.sightings
             // The merge itself is one more address the device has used.
@@ -248,13 +257,15 @@ class Tracker(
     /**
      * Moves everything recorded under [fromKey] into [intoKey], creating the target
      * when it does not exist yet. Returns false when there was nothing to move.
+     * [certain] says whether the two keys are proven to be one device; see
+     * [Entry.absorb] for what an uncertain merge holds back.
      */
     @Synchronized
-    fun merge(fromKey: String, intoKey: String): Boolean {
+    fun merge(fromKey: String, intoKey: String, certain: Boolean): Boolean {
         if (fromKey == intoKey) return false
         val from = entries.remove(fromKey) ?: return false
         val into = entries.getOrPut(intoKey) { Entry(intoKey) }
-        into.absorb(from)
+        into.absorb(from, certain)
         return true
     }
 

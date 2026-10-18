@@ -601,14 +601,15 @@ class ScanService : LifecycleService() {
         // still prove the new address is the same device; its sightings then move under
         // the id the device already had.
         val stitched = cadence.stitch(result)
-        val key = if (stitched != null && stitched != resolution.identity.id) {
-            tracker.merge(resolution.identity.id, stitched)
-            stitched
+        val certain = stitched?.certain == true
+        val key = if (stitched != null && stitched.logicalId != resolution.identity.id) {
+            tracker.merge(resolution.identity.id, stitched.logicalId, certain)
+            stitched.logicalId
         } else {
             cadence.assign(address, resolution.identity.id)
             resolution.identity.id
         }
-        cadence.supersededKey(address)?.let { tracker.merge(it, key) }
+        cadence.supersededKey(address)?.let { tracker.merge(it, key, certain) }
         val tracked = Signatures.match(record)
         val txPower = record?.txPowerLevel?.takeIf { it != Int.MIN_VALUE }
 
