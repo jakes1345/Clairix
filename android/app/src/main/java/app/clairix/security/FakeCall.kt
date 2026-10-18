@@ -52,11 +52,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import app.clairix.ui.theme.DecoyCallPalette
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.content.ContextCompat
@@ -246,12 +244,15 @@ class FakeCallReceiver : BroadcastReceiver() {
     }
 }
 
-private val FcGround = Color(0xFF0B0F14)
-private val FcInk = Color(0xFFF2F4F7)
-private val FcDim = Color(0xFF9AA4B2)
-private val FcAnswer = Color(0xFF2EBD59)
-private val FcDecline = Color(0xFFE5484D)
-private val FcAvatar = Color(0xFF3A4A5E)
+// The decoy deliberately does not wear the Clairix look: it copies a stock call
+// screen, in Material's default type and the fixed DecoyCallPalette, so that a
+// glance over the shoulder sees an ordinary incoming call whatever theme is set.
+private val FcGround = DecoyCallPalette.Ground
+private val FcInk = DecoyCallPalette.Ink
+private val FcDim = DecoyCallPalette.Dim
+private val FcAnswer = DecoyCallPalette.Answer
+private val FcDecline = DecoyCallPalette.Decline
+private val FcAvatar = DecoyCallPalette.Avatar
 
 /**
  * The incoming-call screen of a [FakeCall]. Shows over the lock screen and turns
@@ -383,7 +384,7 @@ private fun Avatar(name: String) {
         Modifier.size(112.dp).background(FcAvatar, CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        Text(initials, color = FcInk, fontSize = 40.sp, fontWeight = FontWeight.Medium)
+        Text(initials, style = MaterialTheme.typography.headlineLarge, color = FcInk)
     }
 }
 
@@ -394,20 +395,20 @@ private fun Ringing(who: FakeCall.Caller, onDecline: () -> Unit, onAnswer: () ->
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
-        Text("Incoming call", color = FcDim, fontSize = 15.sp)
+        Text("Incoming call", style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.height(28.dp))
         Avatar(who.name)
         Spacer(Modifier.height(20.dp))
-        Text(who.name, color = FcInk, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(who.name, style = MaterialTheme.typography.headlineLarge, color = FcInk, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
-        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", color = FcDim, fontSize = 15.sp)
+        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Button(onClick = onDecline, colors = ButtonDefaults.buttonColors(containerColor = FcDecline), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-                Text("End", color = FcInk, fontSize = 14.sp)
+                Text("End", style = MaterialTheme.typography.labelLarge, color = FcInk)
             }
             Button(onClick = onAnswer, colors = ButtonDefaults.buttonColors(containerColor = FcAnswer), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-                Text("Answer", color = FcInk, fontSize = 14.sp)
+                Text("Answer", style = MaterialTheme.typography.labelLarge, color = FcInk)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -429,16 +430,16 @@ private fun InCall(who: FakeCall.Caller, onEnd: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
-        Text(clock, color = FcDim, fontSize = 15.sp)
+        Text(clock, style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.height(28.dp))
         Avatar(who.name)
         Spacer(Modifier.height(20.dp))
-        Text(who.name, color = FcInk, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(who.name, style = MaterialTheme.typography.headlineLarge, color = FcInk, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
-        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", color = FcDim, fontSize = 15.sp)
+        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.weight(1f))
         Button(onClick = onEnd, colors = ButtonDefaults.buttonColors(containerColor = FcDecline), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-            Text("End", color = FcInk, fontSize = 14.sp)
+            Text("End", style = MaterialTheme.typography.labelLarge, color = FcInk)
         }
         Spacer(Modifier.height(24.dp))
     }

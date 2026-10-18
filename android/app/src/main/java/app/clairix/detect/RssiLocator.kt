@@ -22,19 +22,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.clairix.Registry
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -46,6 +41,10 @@ import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
+import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.material3.MaterialTheme
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.mono
 
 /** Whether the signal is getting stronger as the user moves — the "warmer / colder" game. */
 enum class SignalTrend { SEARCHING, WARMER, COLDER, STEADY }
@@ -277,28 +276,19 @@ object RssiLocator {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-private val LocGround = Color(0xFF0E1116)
-private val LocRule = Color(0xFF262E3A)
-private val LocInk = Color(0xFFE6EAF1)
-private val LocInkDim = Color(0xFFA8B2C1)
-private val LocMuted = Color(0xFF6F7A8B)
-private val LocCold = Color(0xFF2E5C8A)
-private val LocHot = Color(0xFFFF7A3D)
-private val LocCritical = Color(0xFFF2545B)
-
 /**
  * A compass rose with the signal painted around it. The dial turns with the phone so
  * north stays north; the fixed pointer at the top is where the phone faces. Each 15°
- * segment is coloured by how strong the tracker was from that direction — cold blue
- * to hot orange — and the strongest one is marked. Turn until the mark sits under the
+ * segment is coloured by how strong the tracker was from that direction — cold (info) to
+ * hot (accent) — and the strongest one is marked. Turn until the mark sits under the
  * pointer, then walk, watching the distance and the warmer/colder line.
  */
 @Composable
 fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
-    val labelStyle = TextStyle(color = LocInkDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-    val distanceStyle = TextStyle(color = LocInk, fontSize = 28.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-    val unitStyle = TextStyle(color = LocMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+    val labelStyle = MaterialTheme.typography.labelLarge.copy(color = ClairixTheme.colors.textMuted)
+    val distanceStyle = MaterialTheme.typography.headlineLarge.copy(color = ClairixTheme.colors.text)
+    val unitStyle = MaterialTheme.typography.monoSmall.copy(color = ClairixTheme.colors.textSubtle)
 
     val values = state.rssiByBucket.filter { !it.isNaN() }
     val minRssi = values.minOrNull() ?: -100f
@@ -306,6 +296,7 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
     val range = (maxRssi - minRssi).coerceAtLeast(6f)
 
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        val palette = ClairixTheme.colors
         Canvas(
             Modifier
                 .fillMaxWidth()
@@ -317,9 +308,9 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
             val ringR = r * 0.82f
             val arcStroke = r * 0.16f
 
-            drawCircle(LocGround, r, c)
-            drawCircle(LocRule, r, c, style = Stroke(2f))
-            drawCircle(LocRule, ringR - arcStroke * 0.7f, c, style = Stroke(1f))
+            drawCircle(palette.base, r, c)
+            drawCircle(palette.border, r, c, style = Stroke(2f))
+            drawCircle(palette.border, ringR - arcStroke * 0.7f, c, style = Stroke(1f))
 
             // The world frame: rotated so that compass north is at the top of the dial
             // only when the phone itself points north.
@@ -332,10 +323,10 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                     val start = i * RssiLocator.BUCKET_DEG - 90f - RssiLocator.BUCKET_DEG / 2f + 1f
                     val sweep = RssiLocator.BUCKET_DEG - 2f
                     if (v.isNaN()) {
-                        drawArc(LocRule.copy(alpha = 0.6f), start, sweep, false, arcRect, arcSize, style = Stroke(arcStroke * 0.35f))
+                        drawArc(palette.border.copy(alpha = 0.6f), start, sweep, false, arcRect, arcSize, style = Stroke(arcStroke * 0.35f))
                     } else {
                         val t = ((v - minRssi) / range).coerceIn(0f, 1f)
-                        val colour = lerp(LocCold, LocHot, t)
+                        val colour = lerp(palette.info, palette.accent, t)
                         drawArc(colour, start, sweep, false, arcRect, arcSize, style = Stroke(arcStroke, cap = StrokeCap.Butt))
                     }
                 }
@@ -346,7 +337,7 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                     val inner = ringR - arcStroke * 0.9f
                     val outer = inner - (if (deg % 90 == 0) r * 0.07f else r * 0.035f)
                     drawLine(
-                        if (deg % 90 == 0) LocInkDim else LocMuted,
+                        if (deg % 90 == 0) palette.textMuted else palette.textSubtle,
                         Offset(c.x + inner * cos(a).toFloat(), c.y + inner * sin(a).toFloat()),
                         Offset(c.x + outer * cos(a).toFloat(), c.y + outer * sin(a).toFloat()),
                         strokeWidth = if (deg % 90 == 0) 2.5f else 1.2f
@@ -355,7 +346,7 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                 val labelR = ringR - arcStroke * 0.9f - r * 0.17f
                 for ((deg, letter) in listOf(0 to "N", 90 to "E", 180 to "S", 270 to "W")) {
                     val a = Math.toRadians(deg - 90.0)
-                    val layout = measurer.measure(letter, if (deg == 0) labelStyle.copy(color = LocHot) else labelStyle)
+                    val layout = measurer.measure(letter, if (deg == 0) labelStyle.copy(color = palette.accent) else labelStyle)
                     val pos = Offset(
                         c.x + labelR * cos(a).toFloat() - layout.size.width / 2f,
                         c.y + labelR * sin(a).toFloat() - layout.size.height / 2f
@@ -376,7 +367,7 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                     val left = Offset(c.x + baseR * cos(a - spread).toFloat(), c.y + baseR * sin(a - spread).toFloat())
                     val right = Offset(c.x + baseR * cos(a + spread).toFloat(), c.y + baseR * sin(a + spread).toFloat())
                     val marker = Path().apply { moveTo(tip.x, tip.y); lineTo(left.x, left.y); lineTo(right.x, right.y); close() }
-                    drawPath(marker, LocHot.copy(alpha = 0.35f + 0.65f * state.confidence))
+                    drawPath(marker, palette.accent.copy(alpha = 0.35f + 0.65f * state.confidence))
                 }
             }
 
@@ -387,7 +378,7 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                 lineTo(c.x + r * 0.05f, c.y - r + r * 0.11f)
                 close()
             }
-            drawPath(pointer, LocInk)
+            drawPath(pointer, palette.text)
 
             // Distance in the middle.
             val distanceText = if (state.estimatedDistanceM.isNaN()) "—" else formatDistance(state.estimatedDistanceM)
@@ -403,15 +394,15 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
         }
 
         val (trendText, trendColour) = when (state.trend) {
-            SignalTrend.WARMER -> "Warmer — keep going" to LocHot
-            SignalTrend.COLDER -> "Colder — turn back" to LocCold
-            SignalTrend.STEADY -> "Steady — hold the phone out and turn slowly" to LocInkDim
+            SignalTrend.WARMER -> "Warmer — keep going" to ClairixTheme.colors.accent
+            SignalTrend.COLDER -> "Colder — turn back" to ClairixTheme.colors.info
+            SignalTrend.STEADY -> "Steady — hold the phone out and turn slowly" to ClairixTheme.colors.textMuted
             SignalTrend.SEARCHING -> when {
                 state.lastSeenAgoMs == null -> "Listening for ${BleNames.macSuffix(state.address)}…"
                 else -> "Signal lost — last heard ${state.lastSeenAgoMs / 1000} s ago"
-            } to LocCritical
+            } to ClairixTheme.colors.danger
         }
-        Text(trendText, color = trendColour, fontFamily = FontFamily.Monospace, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Text(trendText, style = MaterialTheme.typography.mono, color = trendColour)
         Spacer(Modifier.height(6.dp))
         val bearingText = when {
             state.bestAzimuthDeg.isNaN() -> "Turn a full circle to find the strongest direction"
@@ -425,15 +416,15 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                 }
             }
         }
-        Text(bearingText, color = LocInkDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        Text(bearingText, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
         Spacer(Modifier.height(10.dp))
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("CONFIDENCE ${(state.confidence * 100).toInt()}%", color = LocMuted, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+            Text("Confidence ${(state.confidence * 100).toInt()}%", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             LinearProgressIndicator(
                 progress = { state.confidence },
                 modifier = Modifier.fillMaxWidth().height(4.dp),
-                color = lerp(LocCold, LocHot, state.confidence),
-                trackColor = LocRule
+                color = lerp(ClairixTheme.colors.info, ClairixTheme.colors.accent, state.confidence),
+                trackColor = ClairixTheme.colors.border
             )
         }
     }

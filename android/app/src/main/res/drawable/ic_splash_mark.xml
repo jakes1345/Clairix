@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Splash screen icon (Android 12+): the launcher foreground, the bone C and
+    acid X, unchanged. The system draws it at 288 dp inside a 192 dp circle; the
+    mark's corners sit inside the launcher's 66 dp safe circle of the 108 dp
+    canvas, so they stay clear of that mask too. The brand book's rule for the
+    app icon applies: the mark on Ink, in every theme.
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_fg"
+    android:inset="0dp" />

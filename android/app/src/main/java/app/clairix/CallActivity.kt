@@ -25,22 +25,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,11 +56,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -83,6 +75,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.Role
+import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.PrimaryButton
+import app.clairix.ui.theme.monoSmall
+import app.clairix.ui.theme.monoLarge
+import app.clairix.ui.theme.mono
+import app.clairix.ui.components.GhostButton
+import app.clairix.ui.components.Tone
 
 /**
  * The call screen that incoming-call and ongoing-call notifications open.
@@ -125,6 +126,9 @@ class CallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
+        // A call can start this Activity in a cold process, before MainActivity
+        // has run; load the settings so the screen wears the chosen theme.
+        AppSettings.load(this)
         CommsRepository.init(applicationContext)
 
         val live = CallManager.call.value?.takeIf { it.phase != CallPhase.ENDED }
@@ -139,8 +143,9 @@ class CallActivity : ComponentActivity() {
         handle(intent)
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(background = CallGround, surface = CallPanel)) {
-                Surface(color = CallGround, modifier = Modifier.fillMaxSize()) {
+            val theme by AppSettings.theme.collectAsStateWithLifecycle()
+            ClairixTheme(theme = theme) {
+                Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                     val call by CallManager.call.collectAsStateWithLifecycle()
                     val c = call
                     // The call the voicemail is for, kept once the call itself is gone
@@ -189,8 +194,6 @@ class CallActivity : ComponentActivity() {
     }
 
     private companion object {
-        val CallGround = Color(0xFF0E1116)
-        val CallPanel = Color(0xFF161B23)
     }
 }
 
@@ -266,13 +269,14 @@ internal fun VoicemailScreen(contact: Contact, call: ActiveCall?, modifier: Modi
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("CALL ENDED", color = VmMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Call ended", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
         Spacer(Modifier.height(12.dp))
-        Text(contact.name.ifBlank { formatClairixNumber(contact.number) }, color = VmInk, fontSize = 26.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Text(contact.name.ifBlank { formatClairixNumber(contact.number) }, style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
         Spacer(Modifier.height(4.dp))
         Text(
             call?.endReason?.replaceFirstChar { it.uppercase() } ?: "Not answered",
-            color = VmCaution, fontSize = 14.sp, fontFamily = FontFamily.Monospace
+            style = MaterialTheme.typography.mono,
+            color = ClairixTheme.colors.caution
         )
         Spacer(Modifier.height(40.dp))
         VoicemailSection(contact, onDone = onDone)
@@ -349,31 +353,32 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         when (val s = step) {
             VoicemailStep.Idle -> {
-                Text("Leave a voicemail for $label?", color = VmInk, fontSize = 16.sp, textAlign = TextAlign.Center)
+                Text("Leave a voicemail for $label?", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
                 RecordButton(recording = false) {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) beginRecording()
                     else askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
                 }
-                Text("Tap to record · up to ${durationLabel(VoicemailRecorder.MAX_DURATION_MS)}", color = VmMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                TextButton(onClick = onDone) { Text("NOT NOW", color = VmMuted, fontSize = 12.sp, letterSpacing = 1.sp) }
+                Text("Tap to record · up to ${durationLabel(VoicemailRecorder.MAX_DURATION_MS)}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                GhostButton("Not now", onClick = onDone, tone = Tone.Neutral)
             }
             VoicemailStep.Recording -> {
-                Text("Recording…", color = VmCritical, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text("Recording…", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.danger)
                 RecordButton(recording = true) { finishRecording() }
                 Text(
                     "${durationLabel(elapsed)} / ${durationLabel(VoicemailRecorder.MAX_DURATION_MS)}",
-                    color = VmInk, fontSize = 20.sp, fontFamily = FontFamily.Monospace
+                    style = MaterialTheme.typography.monoLarge,
+                    color = ClairixTheme.colors.text
                 )
-                Text("Tap to stop", color = VmMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                Text("Tap to stop", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
             is VoicemailStep.Recorded -> {
-                Text("Voicemail recorded · ${durationLabel(s.durationMs)}", color = VmInk, fontSize = 16.sp)
+                Text("Voicemail recorded · ${durationLabel(s.durationMs)}", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    VoicemailButton("DISCARD", VmCritical) {
+                    VoicemailButton("Discard", Tone.Danger) {
                         step = VoicemailStep.Idle
                         error = null
                     }
-                    VoicemailButton("SEND VOICEMAIL", VmClear) {
+                    VoicemailButton("Send voicemail", Tone.Safe) {
                         step = VoicemailStep.Sending(s.audioB64, s.durationMs)
                         scope.launch {
                             CommsRepository.sendVoicemail(contact, s.audioB64, s.durationMs)
@@ -390,14 +395,17 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
                 }
             }
             is VoicemailStep.Sending -> {
-                CircularProgressIndicator(color = VmClear, modifier = Modifier.size(36.dp))
-                Text("Sending encrypted voicemail…", color = VmMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                CircularProgressIndicator(color = ClairixTheme.colors.safe, modifier = Modifier.size(36.dp))
+                Text("Sending encrypted voicemail…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
         }
-        error?.let { Text(it, color = VmCritical, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 300.dp)) }
+        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 300.dp)) }
         Text(
             "The recording is encrypted to $label's keys like a message; the relay only carries it.",
-            color = VmMuted, fontSize = 11.sp, lineHeight = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 320.dp)
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 320.dp)
         )
     }
 }
@@ -418,20 +426,20 @@ private fun RecordButton(recording: Boolean, onClick: () -> Unit) {
     )
     Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
         if (recording) {
-            Box(Modifier.fillMaxSize().scale(1f + (1f - halo) * 0.25f).background(VmCritical.copy(alpha = halo), CircleShape))
+            Box(Modifier.fillMaxSize().scale(1f + (1f - halo) * 0.25f).background(ClairixTheme.colors.danger.copy(alpha = halo), CircleShape))
         }
         Box(
             Modifier
                 .size(96.dp)
                 .scale(if (recording) scale else 1f)
-                .background(if (recording) VmCritical else VmPanelHi, CircleShape)
-                .clickable(onClick = onClick),
+                .background(if (recording) ClairixTheme.colors.danger else ClairixTheme.colors.surfaceRaised, CircleShape)
+                .clickable(onClickLabel = if (recording) "Stop recording" else "Record a voicemail", role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             if (recording) {
-                Box(Modifier.size(30.dp).background(Color(0xFF12161D), RoundedCornerShape(6.dp)))
+                Box(Modifier.size(30.dp).background(ClairixTheme.colors.onDanger, ClairixShapes.Tag))
             } else {
-                MicrophoneGlyph(VmInk, Modifier.size(40.dp))
+                MicrophoneGlyph(ClairixTheme.colors.text, Modifier.size(40.dp))
             }
         }
     }
@@ -456,19 +464,7 @@ private fun MicrophoneGlyph(colour: Color, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun VoicemailButton(label: String, colour: Color, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = colour, contentColor = Color(0xFF12161D)),
-        shape = RoundedCornerShape(28.dp),
-        modifier = Modifier.height(56.dp).widthIn(min = 130.dp)
-    ) { Text(label, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 13.sp) }
+private fun VoicemailButton(label: String, tone: Tone, onClick: () -> Unit) {
+    PrimaryButton(label, onClick = onClick, tone = tone, modifier = Modifier.height(56.dp).widthIn(min = 136.dp))
 }
 
-// Colour tokens, the same as the COMMS tab's.
-private val VmInk = Color(0xFFE6EAF1)
-private val VmMuted = Color(0xFF6F7A8B)
-private val VmPanelHi = Color(0xFF1D2430)
-private val VmCritical = Color(0xFFF2545B)
-private val VmCaution = Color(0xFFE8B33D)
-private val VmClear = Color(0xFF3DB88A)

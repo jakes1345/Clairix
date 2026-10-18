@@ -3,21 +3,18 @@ package app.clairix.security
 import android.os.SystemClock
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.alpha
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import app.clairix.ClairixIcons
 import androidx.compose.material3.Text
@@ -25,13 +22,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -40,15 +33,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
-
-private val LkGround  = Color(0xFF0E1116)
-private val LkPanel   = Color(0xFF161B23)
-private val LkInk     = Color(0xFFE6EAF1)
-private val LkInkDim  = Color(0xFFA8B2C1)
-private val LkMuted   = Color(0xFF6F7A8B)
-private val LkRule    = Color(0xFF262E3A)
-private val LkAccent  = Color(0xFFFF7A3D)
-private val LkCrit    = Color(0xFFF2545B)
+import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import app.clairix.ui.components.*
+import androidx.compose.material3.MaterialTheme
 
 /**
  * Full-screen PIN entry that gates the rest of the app.
@@ -167,76 +158,81 @@ fun LockScreen() {
         label = "shakeX"
     )
 
+    val c = ClairixTheme.colors
+    val showLockout = countdown > 0L
+    val active = !checking && countdown == 0L
+
     Box(
         Modifier
             .fillMaxSize()
-            .background(LkGround)
+            .background(c.base)
             .windowInsetsPadding(WindowInsets.systemBars),
         contentAlignment = Alignment.Center
     ) {
         Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(28.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // ── Wordmark ───────────────────────────────────────────────
-            Text(
-                "CLAIRIX",
-                color = LkInk,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 3.sp
-            )
-            Text(
-                "Enter passcode to continue",
-                color = LkMuted,
-                fontSize = 13.sp,
-                letterSpacing = 0.5.sp
-            )
+            // ── The mark and what this screen is ───────────────────────────
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LogoMark(size = 56.dp)
+                StencilText(
+                    "LOCKED",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = c.text,
+                    ground = c.base,
+                    modifier = Modifier.semantics { heading(); contentDescription = "Clairix is locked" }
+                )
+                Text(
+                    "Enter your passcode to continue",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = c.textSubtle
+                )
+            }
 
-            // ── Dots ───────────────────────────────────────────────────
-            val dotSpacing = if (maxLen > 6) 10.dp else 14.dp
-            val dotSize = if (maxLen > 6) 11.dp else 13.dp
+            // ── Entered digits ───────────────────────────────────────────────
+            val dotSpacing = if (maxLen > 6) 8.dp else 12.dp
+            val dotSize = if (maxLen > 6) 12.dp else 14.dp
             Row(
                 horizontalArrangement = Arrangement.spacedBy(dotSpacing),
-                modifier = Modifier.offset(x = if (shake) shakeX.dp else 0.dp)
+                modifier = Modifier
+                    .offset(x = if (shake) shakeX.dp else 0.dp)
+                    .semantics { contentDescription = "${code.length} digits entered" }
             ) {
                 repeat(maxLen) { i ->
                     val filled = i < code.length
                     Box(
                         Modifier
                             .size(dotSize)
-                            .clip(CircleShape)
-                            .background(if (filled) LkAccent else LkRule)
-                            .then(
-                                if (!filled) Modifier.border(1.dp, LkMuted, CircleShape)
-                                else Modifier
-                            )
+                            .background(if (filled) c.accent else c.surfaceRaised, ClairixShapes.Tag)
+                            .then(if (!filled) Modifier.border(1.dp, c.borderStrong, ClairixShapes.Tag) else Modifier)
                     )
                 }
             }
 
-            // ── Error / lockout text ───────────────────────────────────
-            val showLockout = countdown > 0L
-            AnimatedVisibility(visible = showLockout || errorText.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
-                val msg = when {
-                    showLockout -> {
-                        val s = (countdown / 1000L).coerceAtLeast(1L)
-                        if (s >= 3600L) "Try again in ${s / 3600}h ${(s % 3600) / 60}m"
-                        else if (s >= 60L) "Try again in ${s / 60}m ${s % 60}s"
-                        else "Try again in ${s}s"
-                    }
-                    else -> errorText
+            // ── Error / lockout text ───────────────────────────────────────
+            // A fixed-height slot, so the keypad doesn't jump when a message appears.
+            val msg = when {
+                showLockout -> {
+                    val s = (countdown / 1000L).coerceAtLeast(1L)
+                    if (s >= 3600L) "Try again in ${s / 3600}h ${(s % 3600) / 60}m"
+                    else if (s >= 60L) "Try again in ${s / 60}m ${s % 60}s"
+                    else "Try again in ${s}s"
                 }
-                Text(msg, color = LkCrit, fontSize = 12.sp, textAlign = TextAlign.Center)
+                else -> errorText
+            }
+            val msgAlpha by animateFloatAsState(if (msg.isNotEmpty()) 1f else 0f, label = "message")
+            Box(Modifier.height(20.dp).alpha(msgAlpha), contentAlignment = Alignment.Center) {
+                Text(msg, style = MaterialTheme.typography.bodyMedium, color = c.danger, textAlign = TextAlign.Center)
             }
 
-            // ── Numpad ─────────────────────────────────────────────────
+            // ── Keypad ─────────────────────────────────────────────────────
             val rows = listOf(
                 listOf('1', '2', '3'),
                 listOf('4', '5', '6'),
                 listOf('7', '8', '9'),
             )
-            val active = !checking && countdown == 0L
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 for (row in rows) {
                     Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -245,43 +241,21 @@ fun LockScreen() {
                         }
                     }
                 }
-                // Bottom row: empty · 0 · backspace
+                // Bottom row: biometrics (when on) · 0 · backspace
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    Box(Modifier.size(68.dp))
+                    Box(Modifier.size(KEY_SIZE))
                     NumKey(label = "0", active = active) { tap('0') }
                     NumKey(label = KEY_BACKSPACE, active = active && code.isNotEmpty(), accent = false) { backspace() }
                 }
             }
 
-            // ── Submit (for codes shorter than MAX_LENGTH) ─────────────
-            if (code.length in AppLock.MIN_LENGTH until maxLen) {
-                Text(
-                    "UNLOCK",
-                    color = if (active) LkAccent else LkMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(LkAccent.copy(alpha = 0.12f))
-                        .clickable(enabled = active) { submit() }
-                        .padding(horizontal = 24.dp, vertical = 10.dp)
-                )
-            }
-
-            // ── Biometric unlock button ────────────────────────────────
-            if (biometricEnabled && activity != null && code.isEmpty()) {
-                Text(
-                    "USE BIOMETRICS",
-                    color = if (active) LkInkDim else LkMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 1.5.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable(enabled = active) { promptBiometric() }
-                        .padding(horizontal = 20.dp, vertical = 9.dp)
-                )
+            // ── Submit (for codes shorter than MAX_LENGTH), or biometrics ──
+            Box(Modifier.height(48.dp), contentAlignment = Alignment.Center) {
+                if (code.length in AppLock.MIN_LENGTH until maxLen) {
+                    PrimaryButton("Unlock", onClick = { submit() }, enabled = active)
+                } else if (biometricEnabled && activity != null && code.isEmpty()) {
+                    GhostButton("Use biometrics", onClick = { promptBiometric() }, tone = Tone.Neutral, enabled = active)
+                }
             }
         }
     }
@@ -322,29 +296,32 @@ private fun showBiometricPrompt(activity: FragmentActivity, cipher: Cipher, onEr
 /** The keypad's delete key, drawn as the Material backspace icon. */
 private const val KEY_BACKSPACE = "backspace"
 
+private val KEY_SIZE = 72.dp
+
+/** A keypad key: an octagon, the mark's own shape, with the digit in the display face. */
 @Composable
 private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
-    val bg    = if (active) LkPanel else LkGround
-    val color = if (active) (if (accent) LkInk else LkInkDim) else LkMuted
+    val c = ClairixTheme.colors
+    val color = if (active) (if (accent) c.text else c.textMuted) else c.textSubtle
     Box(
         Modifier
-            .size(68.dp)
-            .clip(CircleShape)
-            .background(bg)
-            .border(1.dp, LkRule, CircleShape)
-            .then(if (active) Modifier.clickable(onClick = onClick) else Modifier),
+            .size(KEY_SIZE)
+            .clip(ClairixShapes.Octagon)
+            .background(if (active) c.surface else c.base)
+            .border(1.dp, if (active) c.border else c.surface, ClairixShapes.Octagon)
+            .then(
+                if (active) Modifier.clickable(
+                    onClickLabel = if (label == KEY_BACKSPACE) "Delete last digit" else "Enter $label",
+                    role = Role.Button,
+                    onClick = onClick
+                ) else Modifier
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (label == KEY_BACKSPACE) {
             Icon(ClairixIcons.Backspace, contentDescription = "Delete", tint = color, modifier = Modifier.size(24.dp))
         } else {
-            Text(
-                label,
-                color = color,
-                fontSize = if (label.length == 1) 22.sp else 18.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium
-            )
+            Text(label, style = MaterialTheme.typography.headlineMedium, color = color)
         }
     }
 }

@@ -1,5 +1,8 @@
 package app.clairix.nav
 
+import app.clairix.ui.theme.MapPalette
+import app.clairix.ui.components.*
+import app.clairix.ui.theme.ClairixTheme
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -39,8 +42,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,13 +51,11 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -79,13 +79,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -127,16 +125,16 @@ private const val INCIDENT_PROMPT_M = 300.0
 /** The SOS button floats over the Drive tab's bottom-right corner; panels keep clear of it. */
 private val SOS_CLEARANCE = 72.dp
 
-private val TRAFFIC_FREE = Color(0xFF2E9E4F)
-private val TRAFFIC_SLOW = Color(0xFFF2A30F)
-private val TRAFFIC_HEAVY = Color(0xFFE5392F)
-private val TRAFFIC_STOPPED = Color(0xFF8E1010)
-private val TRAFFIC_UNKNOWN = Color(0xFF2F6FEB)
-private val ROUTE_ALT = Color(0xFF8A94A6)
-private val ROUTE_CASING = Color(0xFF0D1B33)
-private val DANGER = Color(0xFFE5392F)
-private val WORK_ZONE_LINE = Color(0xFFF57C00)
-private val CLOSURE_LINE = Color(0xFFD32F2F)
+// Map rendering follows road conventions, not the app theme: see MapPalette.
+private val TRAFFIC_FREE = MapPalette.TrafficFree
+private val TRAFFIC_SLOW = MapPalette.TrafficSlow
+private val TRAFFIC_HEAVY = MapPalette.TrafficHeavy
+private val TRAFFIC_STOPPED = MapPalette.TrafficStopped
+private val TRAFFIC_UNKNOWN = MapPalette.TrafficUnknown
+private val ROUTE_ALT = MapPalette.RouteAlternative
+private val ROUTE_CASING = MapPalette.RouteCasing
+private val WORK_ZONE_LINE = MapPalette.WorkZone
+private val CLOSURE_LINE = MapPalette.Closure
 /** Incident types that cover a stretch of road and are drawn along it. */
 private val LINE_TYPES = setOf(
     Incident.CLOSURE, Incident.LANE_CLOSURE, Incident.WORK_ZONE, Incident.DETOUR, Incident.RESTRICTION,
@@ -519,7 +517,7 @@ private fun NavMap(
         fun addLine(points: List<LatLon>, color: Color, width: Float, onClick: (() -> Unit)?) {
             if (points.size < 2) return
             val line = Polyline().apply {
-                outlinePaint.color = color.toArgbInt()
+                outlinePaint.color = color.toArgb()
                 outlinePaint.strokeWidth = width
                 outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
                 outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
@@ -569,7 +567,7 @@ private fun NavMap(
             val geom = inc.geom!!
             val closed = inc.type == Incident.CLOSURE
             val line = Polyline(mapView).apply {
-                outlinePaint.color = (if (closed) CLOSURE_LINE else WORK_ZONE_LINE).toArgbInt()
+                outlinePaint.color = (if (closed) CLOSURE_LINE else WORK_ZONE_LINE).toArgb()
                 outlinePaint.strokeWidth = dp(5f)
                 outlinePaint.strokeCap = android.graphics.Paint.Cap.BUTT
                 outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
@@ -667,9 +665,6 @@ private fun NavMap(
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 }
 
-private fun Color.toArgbInt(): Int =
-    android.graphics.Color.argb((alpha * 255).roundToInt(), (red * 255).roundToInt(), (green * 255).roundToInt(), (blue * 255).roundToInt())
-
 // ── Search ─────────────────────────────────────────────────────────────
 
 @Composable
@@ -682,7 +677,7 @@ private fun SearchBar(
     onShowRegions: () -> Unit,
 ) {
     val focus = LocalFocusManager.current
-    Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
             OutlinedTextField(
                 value = state.query,
@@ -695,9 +690,9 @@ private fun SearchBar(
                 trailingIcon = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (state.query.isNotEmpty()) {
-                            TextButton(onClick = { focus.clearFocus(); onClear() }) { Text("Clear") }
+                            GhostButton("Clear", onClick = { focus.clearFocus(); onClear() })
                         }
-                        TextButton(onClick = { focus.clearFocus(); onSubmit() }, enabled = state.query.isNotBlank()) { Text("Go") }
+                        GhostButton("Go", onClick = { focus.clearFocus(); onSubmit() }, enabled = state.query.isNotBlank())
                     }
                 },
             )
@@ -711,7 +706,7 @@ private fun SearchBar(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = onShowRegions) { Text("$regionName map") }
+                GhostButton("$regionName map", onClick = onShowRegions)
             }
         }
     }
@@ -719,7 +714,7 @@ private fun SearchBar(
 
 @Composable
 private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -> Unit) {
-    Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Column(Modifier.fillMaxWidth()) {
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             state.error?.let {
@@ -732,7 +727,7 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(place.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(place.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 place.displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -755,30 +750,23 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
 
 @Composable
 private fun PermissionCard(onRequest: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Navigation needs your precise location to plan routes and follow your drive.",
-                Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = onRequest) { Text("Allow") }
-        }
-    }
+    Notice(
+        Tone.Caution,
+        "Navigation needs your precise location to plan routes and follow your drive.",
+        action = { PrimaryButton("Allow location", onClick = onRequest) }
+    )
 }
 
 @Composable
 private fun StatusCard(text: String, busy: Boolean, onCancel: (() -> Unit)?) {
-    Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             if (busy) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp))
             }
             Text(text, Modifier.weight(1f))
-            if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel") }
+            if (onCancel != null) GhostButton("Cancel", onClick = onCancel)
         }
     }
 }
@@ -802,7 +790,7 @@ private fun RouteOptionsSheet(
 ) {
     Surface(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = ClairixShapes.Sheet,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp,
     ) {
@@ -818,7 +806,7 @@ private fun RouteOptionsSheet(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                TextButton(onClick = onClose) { Text("Close") }
+                GhostButton("Close", onClick = onClose)
             }
             if (options.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 4.dp))
             options.error?.let {
@@ -862,7 +850,7 @@ private fun RouteOptionsSheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = onEditFuel) { Text("Change") }
+                GhostButton("Change", onClick = onEditFuel)
             }
         }
     }
@@ -883,6 +871,7 @@ private fun RouteCard(
     val border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     Card(
         onClick = onSelect,
+        shape = ClairixShapes.Card,
         border = border,
         colors = CardDefaults.cardColors(
             containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -891,7 +880,7 @@ private fun RouteCard(
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(fmtDuration(route.durationSec), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text(fmtDuration(route.durationSec), style = MaterialTheme.typography.headlineMedium)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         "arrive ${fmtClock(context, System.currentTimeMillis() + (route.durationSec * 1000).toLong())}",
@@ -914,8 +903,7 @@ private fun RouteCard(
                         delayMin >= 10 -> TRAFFIC_HEAVY
                         delayMin >= 3 -> TRAFFIC_SLOW
                         else -> TRAFFIC_FREE
-                    },
-                    fontWeight = FontWeight.SemiBold,
+                    }
                 )
                 Text(
                     buildString {
@@ -928,13 +916,7 @@ private fun RouteCard(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onGo,
-                shape = CircleShape,
-                modifier = Modifier.size(64.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = TRAFFIC_FREE, contentColor = Color.White),
-            ) { Text("GO", fontWeight = FontWeight.Black, fontSize = 18.sp) }
+            PrimaryButton("Go", onClick = onGo, tone = Tone.Safe, modifier = Modifier.heightIn(min = 56.dp))
         }
     }
 }
@@ -946,6 +928,8 @@ private fun FuelPriceDialog(current: Double, onSave: (Double) -> Unit, onDismiss
     val valid = value != null && value > 0 && value <= 50
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = ClairixShapes.Sheet,
+        containerColor = ClairixTheme.colors.surfaceRaised,
         title = { Text("Fuel price") },
         text = {
             OutlinedTextField(
@@ -957,8 +941,8 @@ private fun FuelPriceDialog(current: Double, onSave: (Double) -> Unit, onDismiss
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
         },
-        confirmButton = { TextButton(onClick = { if (valid) onSave(value!!) }, enabled = valid) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { GhostButton("Save", onClick = { if (valid) onSave(value!!) }, enabled = valid) },
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss) },
     )
 }
 
@@ -969,26 +953,25 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
     val m = nav.nextManeuver
     Surface(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF14532D),
-        contentColor = Color.White,
+        shape = ClairixShapes.Hero,
+        color = MapPalette.GuidanceSign,
+        contentColor = MapPalette.GuidanceSignInk,
         shadowElevation = 8.dp,
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ManeuverIcon(m?.type ?: ManeuverType.STRAIGHT, Modifier.size(64.dp), Color.White)
+                ManeuverIcon(m?.type ?: ManeuverType.STRAIGHT, Modifier.size(64.dp), MapPalette.GuidanceSignInk)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         if (m != null) fmtDistance(nav.distanceToManeuverM) else fmtDistance(nav.remainingDistanceM),
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.headlineLarge
                     )
                     Text(
                         m?.instruction ?: "Continue to your destination",
-                        fontSize = 18.sp,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1003,7 +986,7 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
 
 @Composable
 private fun BannerNote(text: String) {
-    Text(text, Modifier.padding(top = 6.dp), fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MapPalette.GuidanceSignInk.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
@@ -1017,14 +1000,14 @@ private fun NavBottomBar(
     val context = LocalContext.current
     Surface(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = ClairixShapes.Sheet,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp,
     ) {
         Column(Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(fmtClock(context, nav.etaEpochMs), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = TRAFFIC_FREE)
+                    Text(fmtClock(context, nav.etaEpochMs), style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.safe)
                     Text(
                         "${fmtDuration(nav.remainingSec)} · ${fmtDistance(nav.remainingDistanceM)}",
                         style = MaterialTheme.typography.bodyLarge,
@@ -1037,12 +1020,9 @@ private fun NavBottomBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(
-                    onClick = onEnd,
-                    colors = ButtonDefaults.buttonColors(containerColor = DANGER, contentColor = Color.White),
-                ) { Text("End") }
-                OutlinedButton(onClick = onMute) { Text(if (muted) "Unmute" else "Mute") }
-                FilledTonalButton(onClick = onReport) { Text("Report") }
+                PrimaryButton("End", onClick = onEnd, tone = Tone.Danger)
+                SecondaryButton(if (muted) "Unmute" else "Mute", onClick = onMute)
+                SecondaryButton("Report", onClick = onReport, tone = Tone.Accent)
             }
         }
     }
@@ -1058,17 +1038,16 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
             Modifier
                 .size(60.dp)
                 .clip(CircleShape)
-                .background(if (speeding) DANGER else MaterialTheme.colorScheme.surfaceVariant),
+                .background(if (speeding) ClairixTheme.colors.danger else MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     mph?.toString() ?: "–",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = if (speeding) ClairixTheme.colors.onDanger else MaterialTheme.colorScheme.onSurface
                 )
-                Text("mph", fontSize = 10.sp, color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("mph", style = MaterialTheme.typography.bodySmall, color = if (speeding) ClairixTheme.colors.onDanger else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (limit != null) {
@@ -1077,13 +1056,13 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
                 Modifier
                     .width(48.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(Color.White)
-                    .border(2.dp, Color.Black, RoundedCornerShape(6.dp))
+                    .background(MapPalette.SpeedSignFace)
+                    .border(2.dp, MapPalette.SpeedSignInk, RoundedCornerShape(6.dp))
                     .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("SPEED\nLIMIT", fontSize = 7.sp, lineHeight = 8.sp, color = Color.Black, textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
-                Text("$limit", fontSize = 20.sp, color = Color.Black, fontWeight = FontWeight.Black)
+                Text("SPEED\nLIMIT", style = MaterialTheme.typography.labelSmall, color = MapPalette.SpeedSignInk, textAlign = TextAlign.Center)
+                Text("$limit", style = MaterialTheme.typography.headlineMedium, color = MapPalette.SpeedSignInk)
             }
         }
     }
@@ -1093,7 +1072,7 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
 private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDismiss: () -> Unit) {
     Surface(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = ClairixShapes.Card,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp,
     ) {
@@ -1103,13 +1082,13 @@ private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDi
             Column(Modifier.weight(1f)) {
                 Text(
                     "${incidentLabel(ahead.incident.type)} in ${fmtDistance(ahead.distanceM)}",
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 Text("Still there?", style = MaterialTheme.typography.bodyMedium)
             }
-            TextButton(onClick = { onVote(true) }) { Text("Yes") }
-            TextButton(onClick = { onVote(false) }) { Text("No") }
-            TextButton(onClick = onDismiss) { Text("Skip") }
+            GhostButton("Yes", onClick = { onVote(true) })
+            GhostButton("No", onClick = { onVote(false) })
+            GhostButton("Skip", onClick = onDismiss)
         }
     }
 }
@@ -1118,6 +1097,8 @@ private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDi
 private fun ReportDialog(onReport: (String) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = ClairixShapes.Sheet,
+        containerColor = ClairixTheme.colors.surfaceRaised,
         title = { Text("Report") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1149,7 +1130,7 @@ private fun ReportDialog(onReport: (String) -> Unit, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss) },
     )
 }
 
@@ -1262,7 +1243,7 @@ private fun ManeuverIcon(type: ManeuverType, modifier: Modifier, color: Color) {
             ManeuverType.ARRIVE -> {
                 drawLine(color, bottom, Offset(cx, h * 0.55f), strokeWidth = sw, cap = StrokeCap.Round)
                 drawCircle(color, radius = w * 0.2f, center = Offset(cx, h * 0.33f))
-                drawCircle(Color(0xFF14532D), radius = w * 0.08f, center = Offset(cx, h * 0.33f))
+                drawCircle(MapPalette.GuidanceSign, radius = w * 0.08f, center = Offset(cx, h * 0.33f))
             }
         }
     }
@@ -1294,7 +1275,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         item {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Offline road map", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                if (onClose != null) TextButton(onClick = onClose) { Text("Done") }
+                if (onClose != null) GhostButton("Done", onClick = onClose)
             }
             Text(
                 "Routes are planned on your phone from a road map of one state. Download your state once; " +
@@ -1310,7 +1291,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
             is GraphState.Failed -> item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("The ${g.name} map could not be opened", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Text("The ${g.name} map could not be opened", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(g.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(
                             "Delete it and download it again.",
@@ -1331,7 +1312,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                 Card {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(r.name, fontWeight = FontWeight.SemiBold)
+                            Text(r.name, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 String.format(Locale.US, "%.0f MB · built %s", r.sizeBytes / 1_048_576.0,
                                     DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(r.builtAtEpochSec * 1000))),
@@ -1342,9 +1323,9 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                         if (r.slug == currentSlug && graphState is GraphState.Ready) {
                             Text("In use", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                         } else {
-                            TextButton(onClick = { vm.selectRegion(r.slug); onClose?.invoke() }) { Text("Use") }
+                            GhostButton("Use", onClick = { vm.selectRegion(r.slug); onClose?.invoke() })
                         }
-                        TextButton(onClick = { confirmDelete = r }, enabled = !busy) { Text("Delete") }
+                        GhostButton("Delete", onClick = { confirmDelete = r }, enabled = !busy)
                     }
                 }
             }
@@ -1384,6 +1365,8 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
     confirmDelete?.let { r ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
+            shape = ClairixShapes.Sheet,
+            containerColor = ClairixTheme.colors.surfaceRaised,
             title = { Text("Delete ${r.name}?") },
             text = {
                 Text(
@@ -1391,9 +1374,9 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                 )
             },
             confirmButton = {
-                TextButton(onClick = { vm.deleteRegion(r.slug); confirmDelete = null }) { Text("Delete", color = DANGER) }
+                GhostButton("Delete", onClick = { vm.deleteRegion(r.slug); confirmDelete = null }, tone = Tone.Danger)
             },
-            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+            dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = null }) },
         )
     }
 }
@@ -1405,8 +1388,8 @@ private fun DownloadStatus(download: GraphDownload, regions: List<MapRegion>, on
         is GraphDownload.Downloading -> Card {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Downloading ${name(download.slug)}", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                    TextButton(onClick = onCancel) { Text("Cancel") }
+                    Text("Downloading ${name(download.slug)}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    GhostButton("Cancel", onClick = onCancel)
                 }
                 val f = download.fraction
                 if (f != null) LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth())
