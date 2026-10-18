@@ -84,6 +84,15 @@ def truthy(v) -> bool:
     return bool(v)
 
 
+HTTP_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def is_http_url(url: str) -> bool:
+    """Only http(s) feeds are fetched: urlopen would also open file://, ftp:// and data: URLs,
+    and a registry row must never make the job read the runner's files or other services."""
+    return bool(HTTP_URL_RE.match(url))
+
+
 def registry_url_of(entry: dict) -> str | None:
     u = entry.get("url")
     if isinstance(u, dict):
@@ -138,6 +147,8 @@ def gunzip_capped(data: bytes, cap: int) -> bytes:
 
 def fetch_bytes(url: str, timeout: float = FETCH_TIMEOUT_S, cap: int = MAX_BYTES,
                 retries: int | None = None) -> bytes:
+    if not is_http_url(url):
+        raise ValueError("refusing a non-http(s) URL")
     retries = RETRIES if retries is None else retries
     last: Exception | None = None
     for attempt in range(retries + 1):
@@ -166,7 +177,7 @@ def fetch_bytes(url: str, timeout: float = FETCH_TIMEOUT_S, cap: int = MAX_BYTES
 
 
 def load_json_source(src: str):
-    if re.match(r"^https?://", src):
+    if is_http_url(src):
         return json.loads(fetch_bytes(src).decode("utf-8-sig"))
     with open(src, "rb") as f:
         return json.loads(f.read().decode("utf-8-sig"))
@@ -606,6 +617,12 @@ def plan_feeds(registry: list, keys: dict[str, str]) -> tuple[list[dict], list[d
         if not name or not url or name in seen:
             continue
         seen.add(name)
+        if not is_http_url(url):
+            scheme = urllib.parse.urlsplit(url).scheme or "none"
+            log.warning("feed %s skipped: URL scheme %r is not http(s)", name, scheme)
+            skipped.append({"name": name, "state": entry.get("state"), "items": 0,
+                            "ok": False, "error": f"unsupported URL scheme: {scheme}"})
+            continue
         row = {"name": name, "state": entry.get("state"),
                "source": entry.get("issuingorganization") or name, "url": url}
         if truthy(entry.get("needapikey")):
@@ -671,7 +688,7 @@ def load_previous_feeds(src: str | None) -> dict[str, dict]:
     if not src:
         return {}
     try:
-        if re.match(r"^https?://", src):
+        if is_http_url(src):
             raw = fetch_bytes(src, retries=1)  # gunzips by magic bytes, both steps size-capped
         else:
             with open(src, "rb") as f:

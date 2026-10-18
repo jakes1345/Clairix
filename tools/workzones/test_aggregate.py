@@ -1,8 +1,10 @@
 import gzip
+import http.server
 import json
 import math
 import os
 import pathlib
+import threading
 
 import pytest
 
@@ -18,6 +20,51 @@ NOW = agg.parse_time("2026-10-18T03:00:00Z")
 @pytest.fixture(autouse=True)
 def no_retry_delay(monkeypatch):
     monkeypatch.setattr(agg, "RETRY_DELAY_S", 0)
+
+
+class _Www:
+    """Files served over HTTP on 127.0.0.1, keyed by the request path including its query, so a
+    keyed feed only loads when its key was substituted exactly where expected."""
+
+    def __init__(self):
+        self.files: dict[str, bytes] = {}
+        www = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - http.server's naming
+                body = www.files.get(self.path)
+                self.send_response(200 if body is not None else 404)
+                self.send_header("Content-Length", str(len(body or b"")))
+                self.end_headers()
+                self.wfile.write(body or b"")
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}{path}"
+
+    def put(self, path: str, body: bytes) -> str:
+        self.files[path] = body
+        return self.url(path)
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def www(monkeypatch):
+    # The runner may set an HTTP proxy, which must not see requests to this local server.
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    server = _Www()
+    yield server
+    server.close()
 
 
 def load(name):
@@ -216,6 +263,35 @@ def test_plan_feeds_respects_active_and_keys():
     assert [(s["name"], s["ok"]) for s in skipped] == [("nokey", False)]
 
 
+def test_plan_feeds_skips_non_http_urls(caplog):
+    registry = [
+        {"feedname": "local", "state": "utah", "active": True, "needapikey": False,
+         "url": {"url": "file:///etc/passwd"}},
+        {"feedname": "ftp", "state": "ohio", "active": True, "needapikey": False,
+         "url": "ftp://ex.org/feed.geojson"},
+        {"feedname": "web", "state": "iowa", "active": True, "needapikey": False,
+         "url": {"url": "HTTPS://ex.org/feed"}},
+    ]
+    with caplog.at_level("WARNING", logger="workzones"):
+        fetch, skipped = agg.plan_feeds(registry, {})
+    assert [f["name"] for f in fetch] == ["web"]
+    assert [(s["name"], s["ok"], s["error"]) for s in skipped] == [
+        ("local", False, "unsupported URL scheme: file"),
+        ("ftp", False, "unsupported URL scheme: ftp"),
+    ]
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "feed local skipped" in logged and "feed ftp skipped" in logged
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://ex.org/feed.geojson", "data:,{}"])
+def test_fetch_bytes_refuses_non_http_urls(url, monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("urlopen must not be reached")
+    monkeypatch.setattr(agg.urllib.request, "urlopen", never)
+    with pytest.raises(ValueError, match="non-http"):
+        agg.fetch_bytes(url, retries=0)
+
+
 def test_parse_keys():
     assert agg.parse_keys(None) == {}
     assert agg.parse_keys("") == {}
@@ -304,19 +380,19 @@ def test_split_by_state_bbox_intersection():
 # --- end to end --------------------------------------------------------------------------------
 
 
-def test_run_end_to_end(tmp_path):
+def test_run_end_to_end(tmp_path, www):
     registry = [
         {"feedname": "sc", "state": "minnesota", "issuingorganization": "Sample City DOT",
          "active": True, "needapikey": False, "version": "3.1",
-         "url": {"url": (FIX / "wzdx_v3_1.geojson").as_uri()}},
+         "url": {"url": www.put("/v3.geojson", (FIX / "wzdx_v3_1.geojson").read_bytes())}},
         {"feedname": "ss", "state": "north carolina", "issuingorganization": "Sample State DOT",
          "active": True, "needapikey": False, "version": "4.2",
-         "url": {"url": (FIX / "wzdx_v4_2.geojson").as_uri()}},
+         "url": {"url": www.put("/v4.geojson", (FIX / "wzdx_v4_2.geojson").read_bytes())}},
         {"feedname": "cwz", "state": "texas", "issuingorganization": "Sample Contractor",
          "active": True, "needapikey": True, "version": "CWZ 1.0",
-         "url": {"url": (tmp_path / "cwz.geojson").as_uri() + "?k="}},
+         "url": {"url": www.url("/cwz.geojson?k=")}},
         {"feedname": "broken", "state": "ohio", "issuingorganization": "Nobody",
-         "active": True, "needapikey": False, "url": {"url": (tmp_path / "missing.json").as_uri()}},
+         "active": True, "needapikey": False, "url": {"url": www.url("/missing.json")}},
         {"feedname": "locked", "state": "ohio", "active": True, "needapikey": True,
          "url": {"url": "https://ex.org/locked?api_key="}},
     ]
@@ -324,9 +400,8 @@ def test_run_end_to_end(tmp_path):
     reg_path.write_text(json.dumps(registry))
     out = tmp_path / "dist"
 
-    # urllib opens a file:// URL's query as part of the path, so the keyed feed only loads if
-    # the key was substituted exactly where expected.
-    (tmp_path / "cwz.geojson?k=secret").write_bytes((FIX / "cwz_1_0.geojson").read_bytes())
+    # Served only under the substituted key, so the keyed feed loads only if it went where expected.
+    www.put("/cwz.geojson?k=secret", (FIX / "cwz_1_0.geojson").read_bytes())
     res = agg.run(str(reg_path), str(out), str(REGIONS), str(BBOXES), {"cwz": "secret"}, now=NOW)
 
     files = sorted(os.listdir(out))
@@ -361,10 +436,10 @@ def test_run_end_to_end(tmp_path):
     assert res["per_state"]["north-america-us-texas"] == 1
 
 
-def test_main_fails_when_no_feed_works(tmp_path, monkeypatch):
+def test_main_fails_when_no_feed_works(tmp_path, monkeypatch, www):
     reg = tmp_path / "registry.json"
     reg.write_text(json.dumps([{"feedname": "x", "active": True, "needapikey": False,
-                                "url": {"url": (tmp_path / "nope.json").as_uri()}}]))
+                                "url": {"url": www.url("/nope.json")}}]))
     monkeypatch.delenv("WZDX_KEYS", raising=False)
     monkeypatch.setattr(agg, "RETRIES", 0)
     rc = agg.main(["--registry", str(reg), "--out", str(tmp_path / "dist"), "--previous", ""])
@@ -390,11 +465,14 @@ def test_douglas_peucker_handles_long_lines_without_recursion():
 def test_feed_errors_never_contain_the_api_key(monkeypatch):
     key = "s3cr/et key"
     fetch, _ = agg.plan_feeds([{"feedname": "k", "state": "ohio", "active": True, "needapikey": True,
-                                "url": {"url": "ex.org/feed?api_key="}}], {"k": key})
+                                "url": {"url": "https://ex.org/feed?api_key="}}], {"k": key})
     assert fetch[0]["key"] == key
-    monkeypatch.setattr(agg, "RETRIES", 0)
-    # A registry URL without a scheme makes urllib quote the whole URL, key included, in its
-    # ValueError ("unknown url type: 'ex.org/feed?api_key=s3cr%2Fet%20key'").
+
+    # urllib quotes the whole URL, key included, in some of its errors
+    # ("unknown url type: 'ex.org/feed?api_key=s3cr%2Fet%20key'").
+    def quoting(url, *a, **k):
+        raise ValueError(f"unknown url type: {url!r}")
+    monkeypatch.setattr(agg, "fetch_bytes", quoting)
     status, items = agg.process_feed(fetch[0], NOW)
     assert not status["ok"] and items == []
     assert "unknown url type" in status["error"]
@@ -412,12 +490,12 @@ def test_feed_errors_never_contain_the_api_key(monkeypatch):
 # --- carry-forward -----------------------------------------------------------------------------
 
 
-def _carry_registry(tmp_path):
+def _carry_registry(tmp_path, www):
     registry = [
         {"feedname": "sc", "state": "minnesota", "issuingorganization": "Sample City DOT",
-         "active": True, "needapikey": False, "url": {"url": (FIX / "wzdx_v3_1.geojson").as_uri()}},
+         "active": True, "needapikey": False, "url": {"url": www.put("/v3.geojson", (FIX / "wzdx_v3_1.geojson").read_bytes())}},
         {"feedname": "down", "state": "north carolina", "issuingorganization": "Down DOT",
-         "active": True, "needapikey": False, "url": {"url": (tmp_path / "missing.json").as_uri()}},
+         "active": True, "needapikey": False, "url": {"url": www.url("/missing.json")}},
     ]
     reg = tmp_path / "registry.json"
     reg.write_text(json.dumps(registry))
@@ -442,13 +520,13 @@ def _state(out, slug):
         return json.load(f)
 
 
-def test_failed_feed_carries_recent_previous_items(tmp_path, monkeypatch):
+def test_failed_feed_carries_recent_previous_items(tmp_path, monkeypatch, www):
     monkeypatch.setattr(agg, "RETRIES", 0)
     prev = tmp_path / "prev.json.gz"
     generated = NOW - 5 * 3600
     _write_prev(prev, generated)
     out = tmp_path / "dist"
-    agg.run(str(_carry_registry(tmp_path)), str(out), str(REGIONS), str(BBOXES), {}, now=NOW,
+    agg.run(str(_carry_registry(tmp_path, www)), str(out), str(REGIONS), str(BBOXES), {}, now=NOW,
             previous_src=str(prev))
 
     nc = _state(out, "north-america-us-north-carolina")
@@ -468,12 +546,12 @@ def test_failed_feed_carries_recent_previous_items(tmp_path, monkeypatch):
     assert written["feeds"]["sc"]["generated"] == NOW and len(written["feeds"]["sc"]["items"]) == 2
 
 
-def test_stale_previous_items_are_not_carried(tmp_path, monkeypatch):
+def test_stale_previous_items_are_not_carried(tmp_path, monkeypatch, www):
     monkeypatch.setattr(agg, "RETRIES", 0)
     prev = tmp_path / "prev.json.gz"
     _write_prev(prev, NOW - 6 * 3600 - 1)
     out = tmp_path / "dist"
-    agg.run(str(_carry_registry(tmp_path)), str(out), str(REGIONS), str(BBOXES), {}, now=NOW,
+    agg.run(str(_carry_registry(tmp_path, www)), str(out), str(REGIONS), str(BBOXES), {}, now=NOW,
             previous_src=str(prev))
     assert _state(out, "north-america-us-north-carolina")["items"] == []
     feeds = {f["name"]: f for f in json.loads((out / "workzones-index.json").read_text())["feeds"]}
@@ -483,14 +561,14 @@ def test_stale_previous_items_are_not_carried(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("prev_content", [None, b"not gzip or json", b"\x1f\x8bcorrupt"])
-def test_previous_feeds_unavailable_does_not_fail_the_run(tmp_path, monkeypatch, prev_content):
+def test_previous_feeds_unavailable_does_not_fail_the_run(tmp_path, monkeypatch, prev_content, www):
     monkeypatch.setattr(agg, "RETRIES", 0)
     monkeypatch.delenv("WZDX_KEYS", raising=False)
     prev = tmp_path / "prev.json.gz"
     if prev_content is not None:
         prev.write_bytes(prev_content)
     out = tmp_path / "dist"
-    rc = agg.main(["--registry", str(_carry_registry(tmp_path)), "--out", str(out),
+    rc = agg.main(["--registry", str(_carry_registry(tmp_path, www)), "--out", str(out),
                    "--previous", str(prev)])
     assert rc == 0
     assert _state(out, "north-america-us-north-carolina")["items"] == []
