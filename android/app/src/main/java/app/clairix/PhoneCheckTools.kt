@@ -224,6 +224,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     when {
                         r == null -> Unit
                         r.intercepted -> TBadge("INTERCEPTED", TCriticalClr)
+                        r.proxyOnly -> TBadge("PROXY", TCautionClr)
                         r.error != null && r.observedSpki == null -> TBadge("NO RESULT", TCautionClr)
                         r.pinnedNow -> TBadge("PINNED", TBlueClr)
                         else -> TBadge("CLEAR", TClearClr)
@@ -243,7 +244,14 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     r.observedIssuer?.let { TKv("Issuer", it) }
                     r.chainTrusted?.let { TKv("Chain trusted", if (it) "yes" else "no", if (it) TClearClr else TCriticalClr) }
                     r.proxyHost?.let { TKv("Proxy", it, TCautionClr) }
-                    r.method?.let { Text(it, color = if (r.intercepted) TCriticalClr else TInkDimClr, fontSize = 12.sp, lineHeight = 16.sp) }
+                    r.method?.let {
+                        val tone = when {
+                            r.intercepted -> TCriticalClr
+                            r.proxyOnly -> TCautionClr
+                            else -> TInkDimClr
+                        }
+                        Text(it, color = tone, fontSize = 12.sp, lineHeight = 16.sp)
+                    }
                     r.error?.let { Text(it, color = TCautionClr, fontSize = 12.sp, lineHeight = 16.sp) }
                 }
                 if (checking) {

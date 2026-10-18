@@ -36,14 +36,18 @@ import javax.security.auth.x500.X500Principal
 
 /**
  * What one canary run saw. [intercepted] is true when the relay presented a
- * different key than the one pinned on first contact, or when any proxy is
- * configured on the phone; [method] says which, and [proxyHost] names the proxy
- * when there is one.
+ * different key than the one pinned on first contact, or a chain no trust store on
+ * the phone accepts; [method] says which. A configured proxy on its own is not
+ * interception — it cannot read TLS without a substitute certificate, which the
+ * pin would catch — and is reported through [proxyHost] and [proxyMethod] at
+ * [Severity.MEDIUM].
  */
 data class TlsCanaryResult(
     val intercepted: Boolean,
     val method: String?,
     val proxyHost: String?,
+    /** How the proxy is configured, when one is. */
+    val proxyMethod: String? = null,
     val relayHost: String? = null,
     /** "sha256/<base64>" of the leaf certificate's SubjectPublicKeyInfo, as pinned. */
     val pinnedSpki: String? = null,
@@ -57,7 +61,18 @@ data class TlsCanaryResult(
     val pinnedNow: Boolean = false,
     val error: String? = null,
     val ts: Long = System.currentTimeMillis()
-)
+) {
+    /** A proxy is configured but the relay's key held: worth knowing, not interception. */
+    val proxyOnly: Boolean get() = !intercepted && proxyHost != null
+
+    /** CRITICAL for interception, MEDIUM for a proxy alone, null when clear. */
+    val severity: Severity?
+        get() = when {
+            intercepted -> Severity.CRITICAL
+            proxyHost != null -> Severity.MEDIUM
+            else -> null
+        }
+}
 
 /**
  * A TLS interception canary.
@@ -70,11 +85,17 @@ data class TlsCanaryResult(
  * without a word. The SubjectPublicKeyInfo hash of the first leaf ever seen is
  * stored as the pin; any later connection whose leaf key differs is reported
  * as CRITICAL. (A relay that legitimately rotates its key trips it once; the
- * owner re-pins from the Device tab.)
+ * owner re-pins from the Device tab.) The relay is served with a publicly trusted
+ * certificate, so a first contact whose chain no trust store on the phone accepts
+ * is also CRITICAL, and that key is not pinned.
  *
  * The same run also checks for proxies, which are how interception is wired in
  * on a phone without root: the default proxy, every network's own HTTP proxy,
- * and the global `http_proxy` setting.
+ * and the global `http_proxy` setting. A proxy alone is reported at MEDIUM: it
+ * routes traffic but cannot read TLS unless a substitute certificate is accepted,
+ * and that is exactly what the pin and chain checks look for. Corporate and
+ * carrier networks set proxies routinely; calling each one interception taught
+ * the owner to ignore the CRITICAL that matters.
  */
 object TlsCanary {
 
@@ -170,6 +191,10 @@ object TlsCanary {
 
     private suspend fun runAndAlert(app: Context) {
         check(app).collect { r ->
+            if (r.proxyOnly) {
+                publishProxyNotice(r)
+                return@collect
+            }
             if (!r.intercepted) return@collect
             val detail = buildString {
                 append(r.method)
@@ -196,6 +221,32 @@ object TlsCanary {
         }
     }
 
+    /** A proxy with the relay's key intact: MEDIUM, at most once a day. */
+    private fun publishProxyNotice(r: TlsCanaryResult) {
+        val detail = buildString {
+            append(r.proxyMethod ?: "A proxy is configured")
+            r.proxyHost?.let { append(": ").append(it) }
+            append(". Web traffic is routed through it. ")
+            if (r.observedSpki != null) {
+                append("The relay's certificate key still matches its pin, so encrypted connections are not being read through it. ")
+            }
+            append("A proxy can only read HTTPS with a root certificate installed on this phone; check the trust store audit. ")
+            append("If you did not set this up, or a work profile did not, remove it in the network's settings.")
+        }
+        Registry.publishAlert(
+            Alert(
+                id = "tls_canary_proxy@${r.ts}",
+                ts = r.ts,
+                severity = Severity.MEDIUM,
+                title = "Proxy configured",
+                detail = detail,
+                kind = EventKind.PLATFORM,
+                dedupeKey = "tls_canary_proxy@${r.proxyHost}"
+            ),
+            dedupeWindowMs = 24 * 3600_000L
+        )
+    }
+
     // ── One run ────────────────────────────────────────────────────────────
 
     private fun runOnce(app: Context): TlsCanaryResult {
@@ -209,9 +260,10 @@ object TlsCanary {
         if (host.isNullOrBlank()) {
             // No relay to probe: the proxy checks are still worth reporting.
             return remember(app, TlsCanaryResult(
-                intercepted = proxyMethod != null,
+                intercepted = false,
                 method = proxyMethod,
                 proxyHost = proxyHost,
+                proxyMethod = proxyMethod,
                 error = "No relay configured; certificate pin not checked"
             ))
         }
@@ -221,9 +273,10 @@ object TlsCanary {
             probe(host, port)
         } catch (e: Exception) {
             return remember(app, TlsCanaryResult(
-                intercepted = proxyMethod != null,
+                intercepted = false,
                 method = proxyMethod,
                 proxyHost = proxyHost,
+                proxyMethod = proxyMethod,
                 relayHost = host,
                 pinnedSpki = pinned(app)?.takeIf { it.first == host }?.second,
                 error = "Connection failed: ${e.javaClass.simpleName}: ${e.message}"
@@ -236,12 +289,29 @@ object TlsCanary {
         val issuer = observed.leaf.issuerX500Principal.getName(X500Principal.RFC2253).let { CaAuditScanner.cn(it) ?: it }
 
         if (pinnedSpki == null || pinnedHost != host) {
-            // First contact with this relay: pin it. A relay URL change moves the pin.
+            // First contact with this relay. The relay's certificate is publicly
+            // trusted, so a chain nothing on the phone accepts is someone else's —
+            // and pinning it would make the impostor the reference. Report it and
+            // pin nothing; the next run tries again.
+            if (!observed.trusted) {
+                return remember(app, TlsCanaryResult(
+                    intercepted = true,
+                    method = "Relay presented a certificate chain no trust store on this phone accepts; not pinned",
+                    proxyHost = proxyHost,
+                    proxyMethod = proxyMethod,
+                    relayHost = host,
+                    observedSpki = observed.spki,
+                    observedIssuer = issuer,
+                    chainTrusted = false
+                ))
+            }
+            // Pin it. A relay URL change moves the pin.
             p.edit().putString(KEY_HOST, host).putString(KEY_PIN, observed.spki).putLong(KEY_PINNED_AT, System.currentTimeMillis()).apply()
             return remember(app, TlsCanaryResult(
-                intercepted = proxyMethod != null,
+                intercepted = false,
                 method = proxyMethod,
                 proxyHost = proxyHost,
+                proxyMethod = proxyMethod,
                 relayHost = host,
                 pinnedSpki = observed.spki,
                 observedSpki = observed.spki,
@@ -259,9 +329,10 @@ object TlsCanary {
             else -> proxyMethod
         }
         return remember(app, TlsCanaryResult(
-            intercepted = mismatch || proxyMethod != null,
+            intercepted = mismatch,
             method = method,
             proxyHost = proxyHost,
+            proxyMethod = proxyMethod,
             relayHost = host,
             pinnedSpki = pinnedSpki,
             observedSpki = observed.spki,
@@ -274,6 +345,8 @@ object TlsCanary {
         val text = when {
             r.error != null && r.observedSpki == null -> r.error
             r.intercepted -> "INTERCEPTED: ${r.method}"
+            r.proxyOnly && r.observedSpki == null -> "Proxy configured (${r.proxyHost}); ${r.error ?: "relay not checked"}"
+            r.proxyOnly -> "Proxy configured (${r.proxyHost}); relay key unchanged"
             r.pinnedNow -> "Pinned ${r.relayHost}"
             else -> "Clear (${r.relayHost})"
         }
@@ -312,7 +385,15 @@ object TlsCanary {
             val trusted = runCatching {
                 val tmf = TrustManagerFactory.getInstance("X509").apply { init(null as KeyStore?) }
                 val tm = tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
-                tm.checkServerTrusted(chain.toTypedArray(), "RSA")
+                // The auth type must fit the leaf's key: validators that check key
+                // usage reject an ECDSA certificate presented as "RSA", and an
+                // untrusted chain on first contact is reported as interception.
+                val authType = when (leaf.publicKey.algorithm) {
+                    "EC" -> "ECDHE_ECDSA"
+                    "RSA" -> "ECDHE_RSA"
+                    else -> "GENERIC"
+                }
+                tm.checkServerTrusted(chain.toTypedArray(), authType)
                 true
             }.getOrDefault(false)
             return Observed(leaf, chain, spkiHash(leaf), trusted)
