@@ -1,71 +1,63 @@
 # Clairix
 
-Clairix is a personal security app for Android. It helps you find hidden cameras, detect spyware, and talk privately — all from your phone.
+**Your personal security app for Android.**
+Clairix helps you find hidden cameras, catch spyware, and talk to people privately — all from your phone, no special skills needed.
 
 ---
 
-## What does it do?
+## What can it do?
 
-### Find hidden cameras
-Point your phone around a room. Clairix uses your camera to look for the tiny reflective lens that all cameras have, even tiny hidden ones. If it finds one, it draws a circle around it on screen.
-
-### Find trackers following you
-AirTags, Tile trackers, and other Bluetooth tracking devices broadcast a signal every few seconds. Clairix watches for those signals and tells you if the same device keeps showing up wherever you go.
-
-### Detect fake cell towers
-Some surveillance equipment pretends to be a cell tower to intercept calls. Clairix learns your normal towers and alerts you when a suspicious one appears.
-
-### Scan for spyware
-Clairix checks every app on your phone for signs of spyware — apps that can read your keystrokes, apps that quietly use your microphone, and apps that have special "device admin" powers that make them hard to delete.
-
-### Check your network
-Clairix can detect fake Wi-Fi hotspots (used by attackers to steal your passwords) and check whether anyone is intercepting your encrypted connections.
-
-### Talk privately
-Clairix has built-in encrypted calls and messages. Nothing goes through regular phone lines. Everything is end-to-end encrypted, meaning only you and the person you're talking to can read or hear it.
-
-### Navigate offline
-Full turn-by-turn navigation that works without the internet, using open map data.
-
-### Read your car's data
-Connect a Bluetooth OBD-II adapter and Clairix shows live engine data, trip history, and alerts you if your car moves without you.
-
-### Listen to aircraft and radio
-Plug in an RTL-SDR USB stick and Clairix can decode aircraft transponder signals (ADS-B) and receive FM radio.
+| What you want to do | How Clairix helps |
+|---|---|
+| 🎥 Find a hidden camera | Point your phone around the room — Clairix spots the tiny lens glint every camera has |
+| 📍 Know if someone is tracking you | It watches for AirTags and Tile trackers following you and alerts you |
+| 📡 Catch a fake cell tower | It learns your normal towers and warns you when a suspicious one shows up |
+| 🦠 Check for spyware | It scans every app on your phone and flags anything that can read your passwords or listen to you |
+| 📶 Spot a fake Wi-Fi | Detects hotspots set up by attackers trying to steal your passwords |
+| 💬 Talk without being listened to | Calls and messages are fully encrypted — only you and the other person can read them |
+| 🗺️ Navigate without internet | Full turn-by-turn directions using offline map data |
+| 🚗 See your car's health | Connects to your car via Bluetooth and shows live engine data and trip history |
+| ✈️ Track aircraft nearby | Plug in an SDR stick and see real aircraft on screen using ADS-B signals |
 
 ---
 
 ## Emergency features
 
-- **Panic wipe** — one tap deletes everything in the app, unregisters from the relay server, and closes itself
-- **Duress phrase** — type a secret sentence into any Clairix chat and it silently sends your GPS location as an SOS
-- **Fake call** — pretend your phone is ringing to safely exit a situation
-- **App lock** — requires a passcode to open Clairix; wrong passcode too many times wipes it
+These are there for when things get serious.
+
+- 🔴 **Panic wipe** — one tap and everything in the app is gone, permanently
+- 🤫 **Duress phrase** — type a secret word in any chat and Clairix quietly sends your location as an SOS
+- 📞 **Fake call** — makes your phone ring so you can safely walk away from a bad situation
+- 🔒 **App lock** — needs a passcode to open; too many wrong tries and it wipes itself
 
 ---
 
-## How do I build it?
+## How to build it
 
-You need:
-- Android Studio
-- Rust + cargo-ndk (for the encrypted comms library)
-- An Android NDK
+**You need:**
+- [Android Studio](https://developer.android.com/studio)
+- [Rust](https://rustup.rs) + `cargo-ndk` (for the encrypted calls library)
+- Android NDK (Android Studio can install this for you)
 
+**Then run:**
 ```bash
 git clone https://github.com/jakes1345/Clairix
 cd Clairix/android
 ./gradlew assembleDebug
 ```
 
-The APK will be at `android/app/build/outputs/apk/full/debug/app-full-debug.apk`.
+Your APK will be here when it's done:
+```
+android/app/build/outputs/apk/full/debug/app-full-debug.apk
+```
 
 ---
 
 ## Requirements
 
 - Android 12 or newer
-- The camera, location, microphone, and Bluetooth permissions (asked when you need them)
+- Permissions for camera, location, microphone, and Bluetooth — Clairix asks for each one only when it actually needs it
 
 ---
 
-Map data © OpenStreetMap contributors, ODbL.
+*Map data © OpenStreetMap contributors, ODbL.*
