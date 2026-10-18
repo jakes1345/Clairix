@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     What every flavour declares: COMMS and the app shell. This on its own is the
-    comms-only APK. The scanner, the tools and the card vault — their permissions,
-    hardware features, package queries and components — are added by
-    src/full/AndroidManifest.xml, which the manifest merger folds in for the full
-    flavour only.
+    comms-only APK. The scanner and the tools — their permissions, hardware
+    features, package queries and components — are added by
+    src/suite/AndroidManifest.xml, which the manifest merger folds in for the
+    suite tier only. The card vault's emulation service is added by
+    src/fullSuite/AndroidManifest.xml, for the full edition's suite only.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">

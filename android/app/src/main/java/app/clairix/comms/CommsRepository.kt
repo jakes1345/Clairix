@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import app.clairix.BuildConfig
 import app.clairix.EventKind
 import app.clairix.MainActivity
 import app.clairix.Registry
@@ -954,10 +955,14 @@ object CommsRepository {
     }
 
     // ── ClairixCoin ─────────────────────────────────────────────────────────
+    //
+    // Full edition only. The Play edition is built with CLAIRIX_COIN off: it
+    // never asks the relay for a balance, never pays, and does not record
+    // payment notices sent to it.
 
-    /** This identity's coins on the relay, or -1 when the relay could not say. */
+    /** This identity's coins on the relay, or -1 when the relay could not say (or the edition has no coin). */
     suspend fun getBalance(): Long = withContext(Dispatchers.IO) {
-        if (!config.isRegistered) return@withContext -1L
+        if (!BuildConfig.CLAIRIX_COIN || !config.isRegistered) return@withContext -1L
         runCatching { relay.balance().balance }
             .onFailure { CommsLog.add("Could not read the coin balance: ${it.message}") }
             .getOrDefault(-1L)
@@ -977,6 +982,7 @@ object CommsRepository {
      */
     suspend fun sendPayment(contact: Contact, amount: Long, note: String?): Result<Long> = withContext(Dispatchers.IO) {
         runCatching {
+            if (!BuildConfig.CLAIRIX_COIN) throw UnsupportedOperationException("ClairixCoin is not part of this edition")
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
             if (amount <= 0L) throw IllegalArgumentException("The amount must be at least 1 $COIN_SYMBOL")
             if (contact.number == config.number) throw IllegalArgumentException("That is your own Clairix number")
@@ -1746,6 +1752,13 @@ object CommsRepository {
                 val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
                 val txid = json.optString(CommsWire.F_TXID).takeIf { it.isNotBlank() } ?: return
                 val amount = json.optLong(CommsWire.F_AMOUNT, 0L).takeIf { it > 0 } ?: return
+                if (!BuildConfig.CLAIRIX_COIN) {
+                    // This edition has no ClairixCoin. Receipt the notice so the
+                    // payer's phone stops re-sending it, and record nothing.
+                    store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
+                    CommsLog.add("A ClairixCoin payment notice from ${formatClairixNumber(contact.number)} was not shown: this edition has no ClairixCoin")
+                    return
+                }
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null || store.hasTransaction(id)) {
                     // A re-sent notice: receipt it again, count nothing twice.

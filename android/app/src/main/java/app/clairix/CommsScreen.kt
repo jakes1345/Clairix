@@ -605,7 +605,10 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
     if (addContact) AddContactDialog(onDismiss = { addContact = false }, onAdded = { addContact = false; onOpen(it) })
     if (createGroup) CreateGroupDialog(onDismiss = { createGroup = false }, onCreated = { createGroup = false; onOpenGroup(it) })
     // The coin balance is the relay's figure; it is asked for when the list comes up.
-    LaunchedEffect(state.registered) { if (state.registered) CommsRepository.refreshBalance() }
+    // Editions built without ClairixCoin (the Play edition) never ask.
+    LaunchedEffect(state.registered) {
+        if (BuildConfig.CLAIRIX_COIN && state.registered) CommsRepository.refreshBalance()
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(8.dp))
@@ -640,7 +643,7 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                         }
                     )
                     if (!state.listed) append(" · unlisted")
-                    if (state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
+                    if (BuildConfig.CLAIRIX_COIN && state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
                     if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -1107,7 +1110,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
 
     val c = contact
     val placeCall = rememberMicrophoneGate { c?.let { CallManager.place(it) } }
-    if (paying && c != null) PayDialog(c, onDismiss = { paying = false })
+    if (BuildConfig.CLAIRIX_COIN && paying && c != null) PayDialog(c, onDismiss = { paying = false })
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
         Header(c?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
@@ -1118,7 +1121,9 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 else -> "Verify" to Tone.Caution
             }
             if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = tone)
-            GhostButton("Pay", onClick = { paying = true }, enabled = c != null && !c.keyChanged)
+            if (BuildConfig.CLAIRIX_COIN) {
+                GhostButton("Pay", onClick = { paying = true }, enabled = c != null && !c.keyChanged)
+            }
             GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c != null && !c.keyChanged)
         }
         Text(
