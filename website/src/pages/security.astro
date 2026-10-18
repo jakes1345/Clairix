@@ -1,0 +1,14 @@
+---
+import DocLayout from '../layouts/DocLayout.astro';
+import { Content, getHeadings } from '../content/docs/security.md';
+import { pages, SECURITY_EMAIL } from '../config/site';
+---
+
+<DocLayout meta={pages.security} label="Security and privacy" title="Security, in plain words<em>.</em>" headings={getHeadings()}>
+  <p class="lede" slot="lede">
+    A security app should be the easiest app on your phone to audit. This page lists every network connection Clairix makes,
+    explains the encryption in plain terms, states what our servers keep and for how long, and says where the limits are. If
+    anything here is unclear or wrong, write to <a class="text-link" href={`mailto:${SECURITY_EMAIL}`}>{SECURITY_EMAIL}</a>.
+  </p>
+  <article class="prose"><Content /></article>
+</DocLayout>

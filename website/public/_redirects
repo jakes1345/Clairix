@@ -1,0 +1,7 @@
+# Cloudflare Pages redirects. Short links from site-copy/meta.md.
+/pricing      /                                                             302
+/play         https://play.google.com/store/apps/details?id=app.clairix    302
+/full         /download#clairix-full                                        301
+/delete       /delete-account                                               301
+/disclosure   /security#disclosure                                          301
+/egress       /security#egress                                              301

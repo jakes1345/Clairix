@@ -1,0 +1,589 @@
+---
+/**
+ * Feature artwork drawn from the brand system: chamfered frames, the stencil
+ * slit, scan lines and the brand icon geometry. No fake app UI.
+ *
+ * Screenshot slot: pass `screenshot` (an imported image) and `screenshotAlt`
+ * and the real screen is framed on top of the artwork. Leave them out and
+ * only the artwork shows. See src/components/Screenshot.astro.
+ */
+import type { ImageMetadata } from 'astro';
+import Screenshot from './Screenshot.astro';
+
+export type VisualVariant = 'lens' | 'radar' | 'scan' | 'tower' | 'cipher' | 'sos';
+
+interface Props {
+  variant: VisualVariant;
+  /** Short caption for the top-left corner, taken from the copy. */
+  label: string;
+  /** Second caption for the bottom edge, taken from the copy. */
+  caption?: string;
+  screenshot?: ImageMetadata;
+  screenshotAlt?: string;
+  class?: string;
+}
+
+const { variant, label, caption, screenshot, screenshotAlt, class: className } = Astro.props;
+
+// Chamfered rectangle path, same geometry as the icon set.
+const oct = (x: number, y: number, w: number, h: number, c: number) =>
+  `M${x + c} ${y}H${x + w - c}L${x + w} ${y + c}V${y + h - c}L${x + w - c} ${y + h}H${x + c}L${x} ${y + h - c}V${y + c}Z`;
+
+// Fixed, hand-picked "noise" positions so every build renders the same art.
+const glints = [
+  [92, 268, 0], [148, 300, 1.1], [216, 214, 2.3], [262, 318, 0.6], [452, 300, 1.7],
+  [486, 242, 2.9], [118, 132, 3.4], [302, 152, 0.9], [196, 120, 2.0], [470, 168, 3.1],
+];
+const nearby = [
+  [96, 92], [180, 60], [470, 210], [520, 300], [130, 220], [390, 330], [300, 384], [60, 250],
+];
+const bars = [52, 64, 48, 70, 58, 66, 50, 62, 74, 56, 60, 68, 54, 63, 59, 196, 66, 52, 61, 57, 69, 55];
+const tiles = Array.from({ length: 12 }, (_, i) => ({ col: i % 4, row: Math.floor(i / 4) }));
+const flagged = 6;
+const route = 'M40 372 L132 318 L188 262 L262 236 L336 176 L404 150 L470 92 L528 60';
+const routeNodes = [[132, 318], [262, 236], [404, 150], [528, 60]];
+---
+
+<figure class:list={['fv', 'cham', `fv--${variant}`, className]} data-variant={variant}>
+  <figcaption class="fv-chrome">
+    <span class="fv-label">{label}</span>
+    {caption && <span class="fv-caption">{caption}</span>}
+  </figcaption>
+
+  <svg class="fv-art" viewBox="0 0 560 420" aria-hidden="true" focusable="false" preserveAspectRatio="xMidYMid meet">
+    {
+      variant === 'lens' && (
+        <g>
+          <g class="ln">
+            <path d="M40 336H520" />
+            <path d={oct(84, 252, 120, 84, 10)} />
+            <path d="M104 272H184M104 288H164" />
+            <path d={oct(328, 84, 104, 30, 10)} />
+            <path d={oct(424, 196, 72, 72, 20)} />
+            <path d="M460 214V232L474 242" />
+            <path d="M232 336V300H300V336" />
+          </g>
+          <g class="brackets">
+            <path d="M24 64V24H64" />
+            <path d="M496 24H536V64" />
+            <path d="M536 356V396H496" />
+            <path d="M64 396H24V356" />
+          </g>
+          {glints.map(([x, y, d]) => (
+            <rect class="glint" x={x - 3} y={y - 3} width="6" height="6" data-delay={String(d)} />
+          ))}
+          <g class="target">
+            <path class="ring" d={oct(352, 71, 56, 56, 16)} />
+            <path class="ring ring--pulse" d={oct(352, 71, 56, 56, 16)} />
+            <path class="tick" d="M380 55V65M380 133V143M336 99H346M414 99H424" />
+            <rect class="dot" x="375" y="94" width="10" height="10" />
+          </g>
+          <rect class="scanline" x="24" y="24" width="512" height="2" />
+        </g>
+      )
+    }
+
+    {
+      variant === 'radar' && (
+        <g>
+          <g class="ln">
+            <path d={oct(210, 140, 140, 140, 40)} />
+            <path d={oct(140, 70, 280, 280, 80)} />
+            <path d={oct(70, 0, 420, 420, 120)} />
+            <path d="M280 0V420M0 210H560" class="axis" />
+          </g>
+          <g class="sweep">
+            <path d="M280 210L490 210A210 210 0 0 0 428 61Z" />
+            <path class="sweep-edge" d="M280 210L490 210" />
+          </g>
+          {nearby.map(([x, y]) => (
+            <rect class="nearby" x={x - 4} y={y - 4} width="8" height="8" />
+          ))}
+          <path class="route" d={route} />
+          {routeNodes.map(([x, y]) => (
+            <path class="node" d={oct(x - 9, y - 9, 18, 18, 5)} />
+          ))}
+          <g class="movers">
+            <rect class="you" x="-6" y="-6" width="12" height="12">
+              <animateMotion dur="9s" repeatCount="indefinite" path={route} />
+            </rect>
+            <path class="follower" d={oct(-8, -8, 16, 16, 5)}>
+              <animateMotion dur="9s" begin="0.7s" repeatCount="indefinite" path={route} />
+            </path>
+          </g>
+          <g class="still">
+            <rect class="you" x="398" y="144" width="12" height="12" />
+            <path class="follower" d={oct(326, 168, 16, 16, 5)} />
+          </g>
+        </g>
+      )
+    }
+
+    {
+      variant === 'scan' && (
+        <g>
+          {tiles.map((t, i) => {
+            const x = 82 + t.col * 104;
+            const y = 44 + t.row * 104;
+            const isFlag = i === flagged;
+            return (
+              <g class:list={['tile', { 'tile--flag': isFlag }]}>
+                <path d={oct(x, y, 84, 84, 14)} />
+                {isFlag ? (
+                  <>
+                    <path class="eye" d={`M${x + 20} ${y + 42}l9 -11h26l9 11 -9 11h-26z`} />
+                    <rect class="eye-dot" x={x + 37} y={y + 37} width="10" height="10" />
+                  </>
+                ) : (
+                  <path class="glyph" d={oct(x + 30, y + 30, 24, 24, 7)} />
+                )}
+              </g>
+            );
+          })}
+          <g class="score">
+            {Array.from({ length: 10 }, (_, i) => (
+              <rect class:list={['seg', { 'seg--on': i < 7 }]} x={82 + i * 40} y="370" width="34" height="10" />
+            ))}
+          </g>
+          <rect class="scanline" x="60" y="34" width="440" height="2" />
+        </g>
+      )
+    }
+
+    {
+      variant === 'tower' && (
+        <g>
+          <g class="ln tower">
+            <path d="M120 136V340" />
+            <path d="M86 340L120 136L154 340" />
+            <path d="M98 270H142M106 220H134M111 180H129" />
+            <path d="M70 340H170" />
+          </g>
+          <g class="waves">
+            <path class="w1" d="M96 92L82 112L96 132" />
+            <path class="w1" d="M144 92L158 112L144 132" />
+            <path class="w2" d="M74 74L52 112L74 150" />
+            <path class="w2" d="M166 74L188 112L166 150" />
+            <path class="w3" d="M52 56L22 112L52 168" />
+            <path class="w3" d="M188 56L218 112L188 168" />
+            <rect class="beacon" x="114" y="106" width="12" height="12" />
+          </g>
+          <g class="chart">
+            <path class="ln" d="M240 340H536" />
+            <path class="baseline" d="M240 262H536" />
+            {bars.map((h, i) => (
+              <rect class:list={['bar', { 'bar--spike': h > 150 }]} x={246 + i * 13.2} y={340 - h} width="8" height={h} />
+            ))}
+          </g>
+        </g>
+      )
+    }
+
+    {
+      variant === 'cipher' && (
+        <g>
+          <path class="wire" d="M150 214H410" />
+          <g class="ln">
+            <path d={oct(48, 150, 102, 128, 22)} />
+            <path d={oct(410, 150, 102, 128, 22)} />
+          </g>
+          <g class="relay">
+            <path d={oct(222, 168, 116, 40, 10)} />
+            <path d={oct(222, 220, 116, 40, 10)} />
+            <path d="M240 188H262M240 240H262M300 188H320M300 240H320" />
+          </g>
+          <g class="locks">
+            <path d={oct(84, 196, 30, 26, 6)} />
+            <path d="M90 196V186L99 178L108 186V196" />
+            <path d={oct(446, 196, 30, 26, 6)} />
+            <path d="M452 196V186L461 178L470 186V196" />
+          </g>
+          <g class="packets">
+            {[0, 2.4, 4.8].map((b) => (
+              <g class="packet">
+                <path d={oct(-18, -12, 36, 24, 6)} />
+                <path class="slit" d="M-12 0H12" />
+                <animateMotion dur="7.2s" begin={`${b}s`} repeatCount="indefinite" path="M150 214H410" keyPoints="0;1" keyTimes="0;1" calcMode="linear" />
+              </g>
+            ))}
+          </g>
+          <g class="still">
+            <g class="packet" transform="translate(186 214)">
+              <path d={oct(-18, -12, 36, 24, 6)} />
+              <path class="slit" d="M-12 0H12" />
+            </g>
+            <g class="packet" transform="translate(374 214)">
+              <path d={oct(-18, -12, 36, 24, 6)} />
+              <path class="slit" d="M-12 0H12" />
+            </g>
+          </g>
+        </g>
+      )
+    }
+
+    {
+      variant === 'sos' && (
+        <g>
+          <g class="pulses">
+            <path class="pulse" d={oct(220, 150, 120, 120, 34)} />
+            <path class="pulse p2" d={oct(220, 150, 120, 120, 34)} />
+            <path class="pulse p3" d={oct(220, 150, 120, 120, 34)} />
+          </g>
+          <path class="links" d="M280 210L96 92M280 210L470 104M280 210L430 344M280 210L110 330" />
+          <g class="contacts">
+            <path d={oct(80, 76, 32, 32, 9)} />
+            <path d={oct(454, 88, 32, 32, 9)} />
+            <path d={oct(414, 328, 32, 32, 9)} />
+            <path d={oct(94, 314, 32, 32, 9)} />
+          </g>
+          <path class="core" d={oct(236, 166, 88, 88, 24)} />
+          <path class="core-x" d="M262 192H276L280 198L284 192H298V206L292 210L298 214V228H284L280 222L276 228H262V214L268 210L262 206Z" />
+        </g>
+      )
+    }
+  </svg>
+
+  <Screenshot src={screenshot} alt={screenshotAlt} class="fv-shot" />
+</figure>
+
+<style>
+  .fv {
+    --c: 22px;
+    --cham-border: var(--clx-border);
+    --cham-fill: var(--clx-surface);
+    display: grid;
+    margin: 0;
+    aspect-ratio: 560 / 470;
+    width: 100%;
+    overflow: hidden;
+  }
+  .fv::after {
+    background-color: var(--clx-surface);
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+      radial-gradient(120% 90% at 70% 20%, color-mix(in oklab, var(--clx-accent) 7%, transparent), transparent 60%);
+    background-size: 28px 28px, 28px 28px, 100% 100%;
+  }
+  .fv > * {
+    grid-area: 1 / 1;
+  }
+  .fv-chrome {
+    z-index: 2;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: clamp(14px, 2.4vw, 22px);
+    pointer-events: none;
+  }
+  .fv-label,
+  .fv-caption {
+    align-self: flex-start;
+    font-family: var(--clx-font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--clx-text-muted);
+    background: color-mix(in oklab, var(--clx-base) 70%, transparent);
+    padding: 4px 8px;
+    border: 1px solid var(--clx-border);
+  }
+  .fv-caption {
+    align-self: flex-end;
+    color: var(--clx-text);
+  }
+  .fv-art {
+    width: 100%;
+    height: 100%;
+    padding: 34px 14px 30px;
+  }
+  .fv-shot {
+    z-index: 3;
+    align-self: center;
+  }
+  /* With a real screenshot, the artwork steps back. */
+  .fv:has(.fv-shot) .fv-art {
+    opacity: 0.35;
+  }
+
+  /* Shared strokes */
+  .ln path,
+  path.ln {
+    fill: none;
+    stroke: var(--clx-border-strong);
+    stroke-width: 2;
+  }
+  .brackets path {
+    fill: none;
+    stroke: var(--clx-accent);
+    stroke-width: 3;
+  }
+  .scanline {
+    fill: var(--clx-accent);
+    opacity: 0.85;
+    filter: drop-shadow(0 0 6px var(--clx-accent));
+  }
+
+  /* Lens */
+  .glint {
+    fill: var(--clx-text-subtle);
+    opacity: 0.5;
+  }
+  .target .ring {
+    fill: none;
+    stroke: var(--clx-danger);
+    stroke-width: 2.5;
+  }
+  .target .tick {
+    stroke: var(--clx-danger);
+    stroke-width: 2.5;
+  }
+  .target .dot {
+    fill: var(--clx-danger);
+  }
+  .ring--pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    opacity: 0;
+  }
+
+  /* Radar */
+  .axis {
+    stroke-dasharray: 2 8;
+  }
+  .sweep path {
+    fill: color-mix(in oklab, var(--clx-accent) 10%, transparent);
+  }
+  .sweep .sweep-edge {
+    fill: none;
+    stroke: var(--clx-accent);
+    stroke-width: 2;
+  }
+  .sweep {
+    transform-box: view-box;
+    transform-origin: 280px 210px;
+  }
+  .nearby {
+    fill: var(--clx-text-subtle);
+    opacity: 0.6;
+  }
+  .route {
+    fill: none;
+    stroke: var(--clx-text-muted);
+    stroke-width: 2;
+    stroke-dasharray: 6 8;
+  }
+  .node {
+    fill: var(--clx-surface);
+    stroke: var(--clx-accent);
+    stroke-width: 2;
+  }
+  .you {
+    fill: var(--clx-accent);
+  }
+  .follower {
+    fill: var(--clx-danger);
+  }
+  .still {
+    display: none;
+  }
+
+  /* Scan */
+  .tile path {
+    fill: var(--clx-surface-raised);
+    stroke: var(--clx-border-strong);
+    stroke-width: 2;
+  }
+  .tile .glyph {
+    fill: none;
+    stroke: var(--clx-border-strong);
+  }
+  .tile--flag > path:first-child {
+    fill: var(--clx-caution-container);
+    stroke: var(--clx-caution);
+    stroke-width: 2.5;
+  }
+  .tile--flag .eye {
+    fill: none;
+    stroke: var(--clx-caution);
+    stroke-width: 2.5;
+  }
+  .tile--flag .eye-dot {
+    fill: var(--clx-caution);
+  }
+  .seg {
+    fill: var(--clx-border);
+  }
+  .seg--on {
+    fill: var(--clx-caution);
+  }
+
+  /* Tower */
+  .waves path {
+    fill: none;
+    stroke: var(--clx-accent);
+    stroke-width: 2.5;
+  }
+  .beacon {
+    fill: var(--clx-accent);
+  }
+  .baseline {
+    fill: none;
+    stroke: var(--clx-accent);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 6;
+  }
+  .bar {
+    fill: var(--clx-border-strong);
+  }
+  .bar--spike {
+    fill: var(--clx-danger);
+  }
+
+  /* Cipher */
+  .wire {
+    fill: none;
+    stroke: var(--clx-border-strong);
+    stroke-width: 2;
+    stroke-dasharray: 3 7;
+  }
+  .relay path {
+    fill: var(--clx-surface-raised);
+    stroke: var(--clx-border-strong);
+    stroke-width: 2;
+  }
+  .locks path {
+    fill: none;
+    stroke: var(--clx-accent);
+    stroke-width: 2.5;
+  }
+  .packet path {
+    fill: var(--clx-accent);
+  }
+  .packet .slit {
+    fill: none;
+    stroke: var(--clx-base);
+    stroke-width: 3;
+  }
+
+  /* SOS */
+  .pulse {
+    fill: none;
+    stroke: var(--clx-danger);
+    stroke-width: 2;
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .links {
+    fill: none;
+    stroke: var(--clx-border-strong);
+    stroke-width: 2;
+    stroke-dasharray: 5 7;
+  }
+  .contacts path {
+    fill: var(--clx-surface-raised);
+    stroke: var(--clx-accent);
+    stroke-width: 2;
+  }
+  .core {
+    fill: var(--clx-danger-container);
+    stroke: var(--clx-danger);
+    stroke-width: 3;
+  }
+  .core-x {
+    fill: var(--clx-danger);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .fv--lens .scanline,
+    .fv--scan .scanline {
+      animation: fv-scan 5.5s var(--clx-ease-standard) infinite;
+    }
+    .fv--scan .scanline {
+      animation-duration: 4.2s;
+    }
+    .glint {
+      animation: fv-flicker 3.6s ease-in-out infinite;
+    }
+    .glint[data-delay='0'] { animation-delay: 0s; }
+    .glint[data-delay='0.6'] { animation-delay: -0.6s; }
+    .glint[data-delay='0.9'] { animation-delay: -0.9s; }
+    .glint[data-delay='1.1'] { animation-delay: -1.1s; }
+    .glint[data-delay='1.7'] { animation-delay: -1.7s; }
+    .glint[data-delay='2'] { animation-delay: -2s; }
+    .glint[data-delay='2.3'] { animation-delay: -2.3s; }
+    .glint[data-delay='2.9'] { animation-delay: -2.9s; }
+    .glint[data-delay='3.1'] { animation-delay: -3.1s; }
+    .glint[data-delay='3.4'] { animation-delay: -3.4s; }
+    .ring--pulse {
+      animation: fv-pulse 2.2s var(--clx-ease-standard) infinite;
+    }
+    .sweep {
+      animation: fv-spin 6s linear infinite;
+    }
+    .waves .w1 { animation: fv-wave 2.4s ease-in-out infinite; }
+    .waves .w2 { animation: fv-wave 2.4s ease-in-out 0.25s infinite; }
+    .waves .w3 { animation: fv-wave 2.4s ease-in-out 0.5s infinite; }
+    .bar--spike {
+      animation: fv-blink 1.8s steps(2, jump-none) infinite;
+    }
+    .pulse {
+      animation: fv-pulse-lg 3s var(--clx-ease-standard) infinite;
+    }
+    .pulse.p2 { animation-delay: 1s; }
+    .pulse.p3 { animation-delay: 2s; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .movers,
+    .packets {
+      display: none;
+    }
+    .still {
+      display: inline;
+    }
+    .scanline {
+      transform: translateY(150px);
+    }
+    .ring--pulse,
+    .pulse {
+      opacity: 0;
+    }
+    .pulse.p2 {
+      opacity: 0.5;
+      transform: scale(1.5);
+    }
+  }
+
+  @keyframes fv-scan {
+    0% { transform: translateY(0); opacity: 0; }
+    10% { opacity: 0.85; }
+    90% { opacity: 0.85; }
+    100% { transform: translateY(350px); opacity: 0; }
+  }
+  @keyframes fv-flicker {
+    0%, 100% { opacity: 0.15; transform: translateX(0); }
+    40% { opacity: 0.9; transform: translateX(6px); }
+    60% { opacity: 0.2; transform: translateX(10px); }
+  }
+  @keyframes fv-pulse {
+    0% { transform: scale(1); opacity: 0.8; }
+    100% { transform: scale(1.9); opacity: 0; }
+  }
+  @keyframes fv-pulse-lg {
+    0% { transform: scale(1); opacity: 0.8; }
+    100% { transform: scale(2.6); opacity: 0; }
+  }
+  @keyframes fv-spin {
+    to { transform: rotate(-360deg); }
+  }
+  @keyframes fv-wave {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 1; }
+  }
+  @keyframes fv-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+</style>

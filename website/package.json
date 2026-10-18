@@ -1,0 +1,28 @@
+{
+  "name": "clairix-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync-brand": "node scripts/sync-brand.mjs",
+    "predev": "npm run sync-brand",
+    "dev": "astro dev",
+    "prebuild": "npm run sync-brand",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "npm run sync-brand && astro check"
+  },
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "dependencies": {
+    "@astrojs/markdown-satteri": "^0.4.4",
+    "@astrojs/sitemap": "^3.7.4",
+    "astro": "^7.4.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "subset-font": "^2.9.0",
+    "typescript": "^6.0.3"
+  }
+}

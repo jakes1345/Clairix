@@ -1,0 +1,401 @@
+/* Clairix design tokens. Generated from tokens.json by build.mjs. Do not edit by hand.
+   Dark-only. Themes: acid, infrared, hazard, volt (default acid). Set data-theme on <html>. */
+
+:root {
+  color-scheme: dark;
+
+  /* Type */
+  --clx-font-display: "Archivo", "Arial Black", sans-serif;
+  --clx-stretch-display: 125%;
+  --clx-font-ui: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --clx-stretch-ui: 100%;
+  --clx-font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --clx-stretch-mono: 100%;
+  --clx-text-display-xl: 900 4.5rem/4.5rem var(--clx-font-display);
+  --clx-text-display-xl-stretch: var(--clx-stretch-display);
+  --clx-text-display-xl-tracking: -0.01em;
+  --clx-text-display-xl-case: uppercase;
+  --clx-text-display-lg: 900 2.75rem/2.875rem var(--clx-font-display);
+  --clx-text-display-lg-stretch: var(--clx-stretch-display);
+  --clx-text-display-lg-tracking: -0.005em;
+  --clx-text-display-lg-case: uppercase;
+  --clx-text-display-md: 900 2.125rem/2.375rem var(--clx-font-display);
+  --clx-text-display-md-stretch: var(--clx-stretch-display);
+  --clx-text-display-md-tracking: 0em;
+  --clx-text-display-md-case: uppercase;
+  --clx-text-headline-lg: 800 1.625rem/1.875rem var(--clx-font-display);
+  --clx-text-headline-lg-stretch: var(--clx-stretch-display);
+  --clx-text-headline-lg-tracking: 0em;
+  --clx-text-headline-lg-case: uppercase;
+  --clx-text-headline-md: 800 1.3125rem/1.625rem var(--clx-font-display);
+  --clx-text-headline-md-stretch: var(--clx-stretch-display);
+  --clx-text-headline-md-tracking: 0.005em;
+  --clx-text-headline-md-case: uppercase;
+  --clx-text-headline-sm: 800 1.0625rem/1.375rem var(--clx-font-display);
+  --clx-text-headline-sm-stretch: var(--clx-stretch-display);
+  --clx-text-headline-sm-tracking: 0.01em;
+  --clx-text-headline-sm-case: uppercase;
+  --clx-text-title-lg: 700 1.1875rem/1.625rem var(--clx-font-ui);
+  --clx-text-title-lg-stretch: var(--clx-stretch-ui);
+  --clx-text-title-lg-tracking: -0.005em;
+  --clx-text-title-md: 600 1rem/1.375rem var(--clx-font-ui);
+  --clx-text-title-md-stretch: var(--clx-stretch-ui);
+  --clx-text-title-md-tracking: 0em;
+  --clx-text-title-sm: 600 0.875rem/1.25rem var(--clx-font-ui);
+  --clx-text-title-sm-stretch: var(--clx-stretch-ui);
+  --clx-text-title-sm-tracking: 0.005em;
+  --clx-text-body-lg: 400 1rem/1.5rem var(--clx-font-ui);
+  --clx-text-body-lg-stretch: var(--clx-stretch-ui);
+  --clx-text-body-lg-tracking: 0em;
+  --clx-text-body-md: 400 0.875rem/1.3125rem var(--clx-font-ui);
+  --clx-text-body-md-stretch: var(--clx-stretch-ui);
+  --clx-text-body-md-tracking: 0.005em;
+  --clx-text-body-sm: 400 0.75rem/1.0625rem var(--clx-font-ui);
+  --clx-text-body-sm-stretch: var(--clx-stretch-ui);
+  --clx-text-body-sm-tracking: 0.012em;
+  --clx-text-label-lg: 600 0.875rem/1.125rem var(--clx-font-ui);
+  --clx-text-label-lg-stretch: var(--clx-stretch-ui);
+  --clx-text-label-lg-tracking: 0.01em;
+  --clx-text-label-md: 600 0.75rem/1rem var(--clx-font-ui);
+  --clx-text-label-md-stretch: var(--clx-stretch-ui);
+  --clx-text-label-md-tracking: 0.02em;
+  --clx-text-label-sm: 700 0.6875rem/0.875rem var(--clx-font-ui);
+  --clx-text-label-sm-stretch: var(--clx-stretch-ui);
+  --clx-text-label-sm-tracking: 0.08em;
+  --clx-text-label-sm-case: uppercase;
+  --clx-text-mono: 400 0.8125rem/1.125rem var(--clx-font-mono);
+  --clx-text-mono-stretch: var(--clx-stretch-mono);
+  --clx-text-mono-tracking: 0em;
+
+  /* Space, radius */
+  --clx-space-0: 0rem;
+  --clx-space-1: 0.25rem;
+  --clx-space-2: 0.5rem;
+  --clx-space-3: 0.75rem;
+  --clx-space-4: 1rem;
+  --clx-space-5: 1.25rem;
+  --clx-space-6: 1.5rem;
+  --clx-space-8: 2rem;
+  --clx-space-10: 2.5rem;
+  --clx-space-12: 3rem;
+  --clx-space-16: 4rem;
+  --clx-space-20: 5rem;
+  --clx-space-24: 6rem;
+  --clx-radius-none: 0px;
+  --clx-radius-xs: 2px;
+  --clx-radius-sm: 4px;
+  --clx-radius-md: 6px;
+  --clx-radius-lg: 10px;
+  --clx-radius-xl: 14px;
+  --clx-radius-full: 9999px;
+  --clx-radius-chamfer: 8px;
+
+  /* Elevation */
+  --clx-shadow-0: none;
+  --clx-shadow-1: 0 1px 0 rgb(255 255 255 / 0.04) inset;
+  --clx-shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 6px 16px rgb(0 0 0 / 0.45);
+  --clx-shadow-3: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 16px 40px rgb(0 0 0 / 0.6);
+
+  /* Motion */
+  --clx-duration-instant: 0ms;
+  --clx-duration-fast: 90ms;
+  --clx-duration-base: 160ms;
+  --clx-duration-slow: 260ms;
+  --clx-duration-reveal: 420ms;
+  --clx-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --clx-ease-snap: cubic-bezier(0.5, 0, 0.1, 1);
+  --clx-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --clx-ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+}
+
+/* Acid: The default. Black, bone white and acid green. Loud on merch, clear in the app. */
+:root,
+[data-theme="acid"] {
+  --clx-base: #0A0B08;
+  --clx-surface: #131510;
+  --clx-surface-raised: #1B1D18;
+  --clx-surface-overlay: #23251F;
+  --clx-border: #2C2F29;
+  --clx-border-strong: #4C4E48;
+  --clx-text-subtle: #91958B;
+  --clx-text-muted: #B0B4AB;
+  --clx-text: #EFF3EB;
+  --clx-accent: #C8FF24;
+  --clx-accent-hover: #E9FFC2;
+  --clx-on-accent: var(--clx-base);
+  --clx-accent-container: #1F2C00;
+  --clx-on-accent-container: var(--clx-accent);
+  --clx-safe: #3DE6B0;
+  --clx-on-safe: var(--clx-base);
+  --clx-safe-container: #002B1D;
+  --clx-on-safe-container: var(--clx-safe);
+  --clx-caution: #FFB52F;
+  --clx-on-caution: var(--clx-base);
+  --clx-caution-container: #311F00;
+  --clx-on-caution-container: var(--clx-caution);
+  --clx-danger: #FF5A4E;
+  --clx-on-danger: var(--clx-base);
+  --clx-danger-container: #391713;
+  --clx-on-danger-container: var(--clx-danger);
+  --clx-info: #5FCBFF;
+  --clx-on-info: var(--clx-base);
+  --clx-info-container: #002738;
+  --clx-on-info-container: var(--clx-info);
+  --clx-focus-ring: var(--clx-accent);
+}
+@supports (color: oklch(0 0 0)) {
+  :root,
+  [data-theme="acid"] {
+    --clx-base: oklch(0.148 0.007 125);
+    --clx-surface: oklch(0.19 0.0091 125);
+    --clx-surface-raised: oklch(0.225 0.0098 125);
+    --clx-surface-overlay: oklch(0.26 0.0105 125);
+    --clx-border: oklch(0.3 0.0105 125);
+    --clx-border-strong: oklch(0.42 0.0112 125);
+    --clx-text-subtle: oklch(0.665 0.0154 125);
+    --clx-text-muted: oklch(0.765 0.014 125);
+    --clx-text: oklch(0.958 0.011 125);
+    --clx-accent: oklch(0.929 0.226 124.2);
+    --clx-accent-hover: oklch(0.969 0.226 124.2);
+    --clx-on-accent: var(--clx-base);
+    --clx-accent-container: oklch(0.27 0.075 124.2);
+    --clx-on-accent-container: var(--clx-accent);
+    --clx-safe: oklch(0.828 0.156 166.4);
+    --clx-on-safe: var(--clx-base);
+    --clx-safe-container: oklch(0.255 0.055 166.4);
+    --clx-on-safe-container: var(--clx-safe);
+    --clx-caution: oklch(0.823 0.161 76.6);
+    --clx-on-caution: var(--clx-base);
+    --clx-caution-container: oklch(0.255 0.055 76.6);
+    --clx-on-caution-container: var(--clx-caution);
+    --clx-danger: oklch(0.687 0.203 27.8);
+    --clx-on-danger: var(--clx-base);
+    --clx-danger-container: oklch(0.255 0.055 27.8);
+    --clx-on-danger-container: var(--clx-danger);
+    --clx-info: oklch(0.8 0.13 232);
+    --clx-on-info: var(--clx-base);
+    --clx-info-container: oklch(0.255 0.055 232);
+    --clx-on-info-container: var(--clx-info);
+    --clx-focus-ring: var(--clx-accent);
+  }
+}
+
+/* Infrared: Carbon black and steel with an infrared red that means one thing: threat found. */
+[data-theme="infrared"] {
+  --clx-base: #090B0F;
+  --clx-surface: #12141A;
+  --clx-surface-raised: #191B22;
+  --clx-surface-overlay: #21242B;
+  --clx-border: #2B2D36;
+  --clx-border-strong: #4A4D56;
+  --clx-text-subtle: #8F93A2;
+  --clx-text-muted: #AEB2C0;
+  --clx-text: #F0F1F4;
+  --clx-accent: #FF2F4A;
+  --clx-accent-hover: #FF5962;
+  --clx-on-accent: var(--clx-base);
+  --clx-accent-container: #441416;
+  --clx-on-accent-container: #FF9593;
+  --clx-safe: #35E39A;
+  --clx-on-safe: var(--clx-base);
+  --clx-safe-container: #032B19;
+  --clx-on-safe-container: var(--clx-safe);
+  --clx-caution: #FFC23E;
+  --clx-on-caution: var(--clx-base);
+  --clx-caution-container: #2F2000;
+  --clx-on-caution-container: var(--clx-caution);
+  --clx-danger: #FD617F;
+  --clx-on-danger: var(--clx-base);
+  --clx-danger-container: #39161C;
+  --clx-on-danger-container: var(--clx-danger);
+  --clx-info: #54CFF5;
+  --clx-on-info: var(--clx-base);
+  --clx-info-container: #002833;
+  --clx-on-info-container: var(--clx-info);
+  --clx-focus-ring: var(--clx-accent);
+}
+@supports (color: oklch(0 0 0)) {
+  [data-theme="infrared"] {
+    --clx-base: oklch(0.148 0.01 272);
+    --clx-surface: oklch(0.19 0.013 272);
+    --clx-surface-raised: oklch(0.225 0.014 272);
+    --clx-surface-overlay: oklch(0.26 0.015 272);
+    --clx-border: oklch(0.3 0.015 272);
+    --clx-border-strong: oklch(0.42 0.016 272);
+    --clx-text-subtle: oklch(0.665 0.022 272);
+    --clx-text-muted: oklch(0.765 0.02 272);
+    --clx-text: oklch(0.958 0.004 272);
+    --clx-accent: oklch(0.649 0.238 21.1);
+    --clx-accent-hover: oklch(0.689 0.238 21.1);
+    --clx-on-accent: var(--clx-base);
+    --clx-accent-container: oklch(0.27 0.075 21.1);
+    --clx-on-accent-container: oklch(0.78 0.14 21);
+    --clx-safe: oklch(0.814 0.172 159.7);
+    --clx-on-safe: var(--clx-base);
+    --clx-safe-container: oklch(0.255 0.055 159.7);
+    --clx-on-safe-container: var(--clx-safe);
+    --clx-caution: oklch(0.848 0.156 82.4);
+    --clx-on-caution: var(--clx-base);
+    --clx-caution-container: oklch(0.255 0.055 82.4);
+    --clx-on-caution-container: var(--clx-caution);
+    --clx-danger: oklch(0.7 0.19 12);
+    --clx-on-danger: var(--clx-base);
+    --clx-danger-container: oklch(0.255 0.055 12);
+    --clx-on-danger-container: var(--clx-danger);
+    --clx-info: oklch(0.8 0.12 222);
+    --clx-on-info: var(--clx-base);
+    --clx-info-container: oklch(0.255 0.055 222);
+    --clx-on-info-container: var(--clx-info);
+    --clx-focus-ring: var(--clx-accent);
+  }
+}
+
+/* Hazard: Workwear black, bone and hazard orange. Built like a warning label. */
+[data-theme="hazard"] {
+  --clx-base: #0B0B09;
+  --clx-surface: #151411;
+  --clx-surface-raised: #1D1C19;
+  --clx-surface-overlay: #252421;
+  --clx-border: #2F2E2A;
+  --clx-border-strong: #4E4D49;
+  --clx-text-subtle: #96948E;
+  --clx-text-muted: #B4B2AD;
+  --clx-text: #F5F1E5;
+  --clx-accent: #FF6A12;
+  --clx-accent-hover: #FF834B;
+  --clx-on-accent: var(--clx-base);
+  --clx-accent-container: #431702;
+  --clx-on-accent-container: var(--clx-accent);
+  --clx-safe: #4BE08A;
+  --clx-on-safe: var(--clx-base);
+  --clx-safe-container: #082A16;
+  --clx-on-safe-container: var(--clx-safe);
+  --clx-caution: #FFD43D;
+  --clx-on-caution: var(--clx-base);
+  --clx-caution-container: #2C2200;
+  --clx-on-caution-container: var(--clx-caution);
+  --clx-danger: #FF5247;
+  --clx-on-danger: var(--clx-base);
+  --clx-danger-container: #391713;
+  --clx-on-danger-container: var(--clx-danger);
+  --clx-info: #63CBFE;
+  --clx-on-info: var(--clx-base);
+  --clx-info-container: #002738;
+  --clx-on-info-container: var(--clx-info);
+  --clx-focus-ring: var(--clx-accent);
+}
+@supports (color: oklch(0 0 0)) {
+  [data-theme="hazard"] {
+    --clx-base: oklch(0.148 0.004 90);
+    --clx-surface: oklch(0.19 0.0052 90);
+    --clx-surface-raised: oklch(0.225 0.0056 90);
+    --clx-surface-overlay: oklch(0.26 0.006 90);
+    --clx-border: oklch(0.3 0.006 90);
+    --clx-border-strong: oklch(0.42 0.0064 90);
+    --clx-text-subtle: oklch(0.665 0.0088 90);
+    --clx-text-muted: oklch(0.765 0.008 90);
+    --clx-text: oklch(0.958 0.016 90);
+    --clx-accent: oklch(0.701 0.2 43.7);
+    --clx-accent-hover: oklch(0.741 0.2 43.7);
+    --clx-on-accent: var(--clx-base);
+    --clx-accent-container: oklch(0.27 0.075 43.7);
+    --clx-on-accent-container: var(--clx-accent);
+    --clx-safe: oklch(0.807 0.175 153.9);
+    --clx-on-safe: var(--clx-base);
+    --clx-safe-container: oklch(0.255 0.055 153.9);
+    --clx-on-safe-container: var(--clx-safe);
+    --clx-caution: oklch(0.883 0.165 92.2);
+    --clx-on-caution: var(--clx-base);
+    --clx-caution-container: oklch(0.255 0.055 92.2);
+    --clx-on-caution-container: var(--clx-caution);
+    --clx-danger: oklch(0.677 0.211 27.8);
+    --clx-on-danger: var(--clx-base);
+    --clx-danger-container: oklch(0.255 0.055 27.8);
+    --clx-on-danger-container: var(--clx-danger);
+    --clx-info: oklch(0.8 0.12 232);
+    --clx-on-info: var(--clx-base);
+    --clx-info-container: oklch(0.255 0.055 232);
+    --clx-on-info-container: var(--clx-info);
+    --clx-focus-ring: var(--clx-accent);
+  }
+}
+
+/* Volt: Deep night violet with an electric violet signal. Gaming energy, kept precise. */
+[data-theme="volt"] {
+  --clx-base: #0B0911;
+  --clx-surface: #15121C;
+  --clx-surface-raised: #1D1A25;
+  --clx-surface-overlay: #25222E;
+  --clx-border: #2F2B38;
+  --clx-border-strong: #4F4A5A;
+  --clx-text-subtle: #968FA7;
+  --clx-text-muted: #B5AFC5;
+  --clx-text: #F2EFFA;
+  --clx-accent: #A47BFF;
+  --clx-accent-hover: #AE8DFF;
+  --clx-on-accent: var(--clx-base);
+  --clx-accent-container: #2A1D47;
+  --clx-on-accent-container: var(--clx-accent);
+  --clx-safe: #45E3A5;
+  --clx-on-safe: var(--clx-base);
+  --clx-safe-container: #002B1B;
+  --clx-on-safe-container: var(--clx-safe);
+  --clx-caution: #FFC84A;
+  --clx-on-caution: var(--clx-base);
+  --clx-caution-container: #2F2000;
+  --clx-on-caution-container: var(--clx-caution);
+  --clx-danger: #FF5C7A;
+  --clx-on-danger: var(--clx-base);
+  --clx-danger-container: #39161B;
+  --clx-on-danger-container: var(--clx-danger);
+  --clx-info: #59E4F3;
+  --clx-on-info: var(--clx-base);
+  --clx-info-container: #00292D;
+  --clx-on-info-container: var(--clx-info);
+  --clx-focus-ring: var(--clx-accent);
+}
+@supports (color: oklch(0 0 0)) {
+  [data-theme="volt"] {
+    --clx-base: oklch(0.148 0.016 298);
+    --clx-surface: oklch(0.19 0.0208 298);
+    --clx-surface-raised: oklch(0.225 0.0224 298);
+    --clx-surface-overlay: oklch(0.26 0.024 298);
+    --clx-border: oklch(0.3 0.024 298);
+    --clx-border-strong: oklch(0.42 0.0256 298);
+    --clx-text-subtle: oklch(0.665 0.0352 298);
+    --clx-text-muted: oklch(0.765 0.032 298);
+    --clx-text: oklch(0.958 0.015 298);
+    --clx-accent: oklch(0.682 0.189 295.3);
+    --clx-accent-hover: oklch(0.722 0.189 295.3);
+    --clx-on-accent: var(--clx-base);
+    --clx-accent-container: oklch(0.27 0.075 295.3);
+    --clx-on-accent-container: var(--clx-accent);
+    --clx-safe: oklch(0.819 0.158 162.5);
+    --clx-on-safe: var(--clx-base);
+    --clx-safe-container: oklch(0.255 0.055 162.5);
+    --clx-on-safe-container: var(--clx-safe);
+    --clx-caution: oklch(0.86 0.151 84.4);
+    --clx-on-caution: var(--clx-base);
+    --clx-caution-container: oklch(0.255 0.055 84.4);
+    --clx-on-caution-container: var(--clx-caution);
+    --clx-danger: oklch(0.697 0.198 12.9);
+    --clx-on-danger: var(--clx-base);
+    --clx-danger-container: oklch(0.255 0.055 12.9);
+    --clx-on-danger-container: var(--clx-danger);
+    --clx-info: oklch(0.85 0.12 205);
+    --clx-on-info: var(--clx-base);
+    --clx-info-container: oklch(0.255 0.055 205);
+    --clx-on-info-container: var(--clx-info);
+    --clx-focus-ring: var(--clx-accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --clx-duration-instant: 0ms;
+    --clx-duration-fast: 0ms;
+    --clx-duration-base: 0ms;
+    --clx-duration-slow: 0ms;
+    --clx-duration-reveal: 0ms;
+  }
+}

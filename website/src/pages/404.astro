@@ -1,0 +1,122 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Icon from '../components/Icon.astro';
+import symbol from '../assets/brand/symbol-reversed.svg';
+import { pages, primaryNav } from '../config/site';
+---
+
+<BaseLayout meta={pages.notFound} index={false}>
+  <section class="nf">
+    <div class="nf-bg" aria-hidden="true"></div>
+    <div class="wrap nf-grid">
+      <div class="nf-copy">
+        <p class="label">Error 404</p>
+        <h1 class="display nf-title slit"><span>Nothing</span><span>here<em>.</em></span></h1>
+        <p class="lede">We checked the room. This page does not exist, or it moved. Try one of these instead.</p>
+        <div class="btn-row">
+          <a class="btn btn--lg cham cham--oct" href="/">
+            Back to home
+            <Icon name="arrowRight" size={18} class="icon--move" />
+          </a>
+        </div>
+        <ul class="nf-links">
+          {
+            primaryNav.map((l) => (
+              <li>
+                <a href={l.href}>
+                  {l.label}
+                  <Icon name="arrowRight" size={16} />
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+      <div class="nf-art" aria-hidden="true">
+        <span class="nf-code display">404</span>
+        <img src={symbol.src} width="180" height="180" alt="" />
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .nf {
+    position: relative;
+    isolation: isolate;
+    padding-block: clamp(64px, 10vw, 140px);
+    overflow: hidden;
+  }
+  .nf-bg {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(70% 70% at 70% 40%, #000, transparent);
+    mask-image: radial-gradient(70% 70% at 70% 40%, #000, transparent);
+  }
+  .nf-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: 48px;
+    align-items: center;
+  }
+  .nf-copy {
+    display: grid;
+    gap: 26px;
+    justify-items: start;
+  }
+  .nf-title {
+    font-size: clamp(3rem, 9vw, 8rem);
+    line-height: 0.88;
+  }
+  .nf-links {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+  }
+  .nf-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--clx-text-muted);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .nf-links a:hover {
+    color: var(--clx-accent);
+  }
+  .nf-art {
+    position: relative;
+    display: grid;
+    place-items: center;
+  }
+  .nf-art > * {
+    grid-area: 1 / 1;
+  }
+  .nf-code {
+    font-size: clamp(5rem, 13vw, 11rem);
+    line-height: 1;
+    color: transparent;
+    -webkit-text-stroke: 2px var(--clx-border-strong);
+  }
+  .nf-art img {
+    width: 34%;
+    height: auto;
+  }
+  @media (max-width: 860px) {
+    .nf-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .nf-art {
+      order: -1;
+      justify-self: start;
+      width: 100%;
+    }
+  }
+</style>

@@ -1,0 +1,62 @@
+---
+/**
+ * Slot for a real app screenshot.
+ *
+ * Renders nothing at all until `src` is given, so it can sit in every feature
+ * section today and light up when screenshots exist. To add one:
+ *
+ *   1. Put the PNG/WebP in src/assets/screenshots/ (portrait, 1080x2400 or
+ *      similar, real app UI only).
+ *   2. Import it in the page and pass it to <FeatureVisual screenshot={...}
+ *      screenshotAlt="..."> (or use <Screenshot> directly).
+ *
+ * Astro generates responsive WebP sizes at build time.
+ */
+import { Image } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+
+interface Props {
+  /** Imported image. When undefined the component renders nothing. */
+  src?: ImageMetadata;
+  /** Describe what the screen shows. Required whenever src is set. */
+  alt?: string;
+  /** Load eagerly (only for a screenshot in the first viewport). */
+  eager?: boolean;
+  class?: string;
+}
+
+const { src, alt = '', eager = false, class: className } = Astro.props;
+---
+
+{
+  src && (
+    <figure class:list={['screenshot', className]}>
+      <Image
+        src={src}
+        alt={alt}
+        widths={[280, 420, 560]}
+        sizes="(max-width: 700px) 60vw, 280px"
+        loading={eager ? 'eager' : 'lazy'}
+        decoding="async"
+      />
+    </figure>
+  )
+}
+
+<style>
+  .screenshot {
+    position: relative;
+    width: min(280px, 62%);
+    margin-inline: auto;
+    padding: 10px;
+    background: var(--clx-surface-raised);
+    border: 1px solid var(--clx-border-strong);
+    border-radius: 28px;
+    box-shadow: var(--clx-shadow-3);
+  }
+  .screenshot :global(img) {
+    width: 100%;
+    height: auto;
+    border-radius: 20px;
+  }
+</style>

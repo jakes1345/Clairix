@@ -1,0 +1,14 @@
+---
+import DocLayout from '../layouts/DocLayout.astro';
+import { Content, getHeadings } from '../content/docs/delete-account.md';
+import { pages } from '../config/site';
+---
+
+<DocLayout meta={pages.deleteAccount} label="Your data" title="Delete your account<em>.</em>" headings={getHeadings()}>
+  <p class="lede" slot="lede">
+    Clairix keeps almost everything on your phone. The one thing it keeps on our servers is your Comms account on the relay: a
+    Clairix number, your public keys, any encrypted envelopes waiting for you, and a push endpoint if you set one. This page
+    explains how to delete that account, and everything else, in two ways.
+  </p>
+  <article class="prose"><Content /></article>
+</DocLayout>

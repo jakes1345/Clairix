@@ -1,0 +1,13 @@
+{
+  "name": "Clairix",
+  "short_name": "Clairix",
+  "description": "Personal security for Android. Nothing hides.",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#0A0B08",
+  "theme_color": "#0A0B08",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
