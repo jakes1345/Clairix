@@ -78,6 +78,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.comms.ActiveCall
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
@@ -413,21 +414,35 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/** The name the QR scanner's camera claim is held under; see [PhoneHealthMonitor.ownCameraStarted]. */
+private const val QR_CAMERA_CLAIM = "qr"
+
 /** Launches the QR scanner and hands back the decoded pairing code. */
 @Composable
 private fun rememberCodeScanner(onCode: (PairingCode?) -> Unit): () -> Unit {
+    // The scanner activity opens the camera in this app's process; the claim keeps
+    // that from being reported as another app using the camera. The result arrives
+    // on cancel and on failure too, and that is where the claim is released.
     val launcher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        PhoneHealthMonitor.ownCameraStopped(QR_CAMERA_CLAIM)
         val text = result.contents
         if (text != null) onCode(PairingCode.decode(text))
     }
     return {
-        launcher.launch(
-            ScanOptions()
-                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("Point at the other person's Clairix code")
-                .setBeepEnabled(false)
-                .setOrientationLocked(true)
-        )
+        PhoneHealthMonitor.ownCameraStarted(QR_CAMERA_CLAIM)
+        try {
+            launcher.launch(
+                ScanOptions()
+                    .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    .setPrompt("Point at the other person's Clairix code")
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(true)
+            )
+        } catch (e: RuntimeException) {
+            // No result will come for a launch that never happened.
+            PhoneHealthMonitor.ownCameraStopped(QR_CAMERA_CLAIM)
+            throw e
+        }
     }
 }
 

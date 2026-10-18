@@ -2,6 +2,7 @@ package app.clairix.analysis
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.ActivityManager
 import android.app.KeyguardManager
 import android.app.admin.DeviceAdminInfo
 import android.app.admin.DevicePolicyManager
@@ -22,6 +23,9 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.core.content.ContextCompat
@@ -51,10 +55,14 @@ import kotlin.math.abs
  *   there is to show — no package name is guessed. Recordings the system has
  *   silenced are not counted: they receive no audio.
  * - Camera: CameraManager's availability callback. A camera becomes unavailable
- *   when some client opens it; Clairix never opens a camera, so any unavailable
- *   camera is held by another app. Opening one physical camera also takes its
- *   logical and multi-camera siblings out of service, so this is reported as a
- *   single "camera in use", not a count of ids.
+ *   when some client opens it. Clairix opens one itself for the hidden-camera
+ *   sweep and the pairing QR scanner; those flows claim the camera through
+ *   [ownCameraStarted] / [ownCameraStopped], and while a claim is held (and the
+ *   app is in the foreground, where the claimed flow runs) unavailability is not
+ *   reported. Anything else that makes a camera unavailable is another app.
+ *   Opening one physical camera also takes its logical and multi-camera siblings
+ *   out of service, so this is reported as a single "camera in use", not a count
+ *   of ids.
  *
  * Changes are pushed straight into [Registry] as they happen rather than waiting
  * for the service's periodic scan.
@@ -100,6 +108,7 @@ class PhoneHealthMonitor(private val context: Context) {
 
     fun stop() {
         if (active === this) active = null
+        mainHandler.removeCallbacks(recheckCameras)
         runCatching { audioManager?.unregisterAudioRecordingCallback(recordingCallback) }
         runCatching { cameraManager?.unregisterAvailabilityCallback(cameraCallback) }
         unavailableCameras.clear()
@@ -125,9 +134,38 @@ class PhoneHealthMonitor(private val context: Context) {
         runCatching { publishRecordings(audioManager?.activeRecordingConfigurations) }
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val recheckCameras = Runnable { publishCameras() }
+
     private fun publishCameras() {
-        val inUse = unavailableCameras.isNotEmpty()
+        val inUse = unavailableCameras.isNotEmpty() && !ownCameraExplains()
         Registry.updatePhoneHealth { it.copy(cameraInUse = inUse) }
+    }
+
+    /**
+     * Whether Clairix's own camera use accounts for the cameras being unavailable:
+     * a claim is held and the app is in the foreground, or a claim was released so
+     * recently that the camera may still be closing. A claim left behind while the
+     * app is in the background explains nothing — the claimed flows only hold the
+     * camera on screen, and Android only lets a foreground app open one.
+     */
+    private fun ownCameraExplains(): Boolean {
+        if (ownCameraOwners.isNotEmpty() && inForeground()) return true
+        val released = ownCameraReleasedAt ?: return false
+        return SystemClock.elapsedRealtime() - released < OWN_CAMERA_RELEASE_GRACE_MS
+    }
+
+    private fun inForeground(): Boolean = runCatching {
+        val state = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(state)
+        state.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }.getOrDefault(true)
+
+    /** Re-reads camera state now, and again once a just-released camera has had time to close. */
+    private fun ownCameraChanged() {
+        mainHandler.removeCallbacks(recheckCameras)
+        mainHandler.post(recheckCameras)
+        mainHandler.postDelayed(recheckCameras, OWN_CAMERA_RELEASE_GRACE_MS + 100L)
     }
 
     /**
@@ -784,6 +822,39 @@ class PhoneHealthMonitor(private val context: Context) {
             ownSessions.remove(sessionId)
             active?.republishRecordings()
         }
+
+        /**
+         * Flows in this app that are holding a camera open right now, by name ("sweep",
+         * "qr"). Each calls [ownCameraStarted] before it opens the camera and
+         * [ownCameraStopped] when it is done with it — on success, cancel, error or
+         * disposal alike — so its own use is not reported as another app's.
+         */
+        private val ownCameraOwners: MutableSet<String> = Collections.synchronizedSet(HashSet())
+
+        /** [SystemClock.elapsedRealtime] of the last release, for [OWN_CAMERA_RELEASE_GRACE_MS]. */
+        @Volatile
+        private var ownCameraReleasedAt: Long? = null
+
+        /** True while some flow in this app has claimed a camera. */
+        val ownCameraOpen: Boolean get() = ownCameraOwners.isNotEmpty()
+
+        fun ownCameraStarted(owner: String) {
+            ownCameraOwners.add(owner)
+            active?.ownCameraChanged()
+        }
+
+        fun ownCameraStopped(owner: String) {
+            if (!ownCameraOwners.remove(owner)) return
+            ownCameraReleasedAt = SystemClock.elapsedRealtime()
+            active?.ownCameraChanged()
+        }
+
+        /**
+         * Closing a camera is asynchronous: CameraX and the QR scanner release it a
+         * few hundred milliseconds after they are told to. Unavailability this soon
+         * after a release is still ours.
+         */
+        private const val OWN_CAMERA_RELEASE_GRACE_MS = 3_000L
 
         /** What WifiInfo.getMacAddress() returns to an app without the privilege to see the real one. */
         private const val DEFAULT_MAC = "02:00:00:00:00:00"
