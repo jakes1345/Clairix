@@ -182,16 +182,16 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                         ) {
                             Text(connectTo?.name ?: "Nobody", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
+                        DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }, containerColor = ClairixTheme.colors.surfaceRaised, shape = ClairixShapes.Card) {
                             DropdownMenuItem(
-                                text = { Text("Nobody", fontWeight = if (connectTo == null) FontWeight.Bold else FontWeight.Normal) },
+                                text = { Text("Nobody", style = if (connectTo == null) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyLarge) },
                                 onClick = { pickerOpen = false; connectTo = null }
                             )
                             for (c in contacts) {
                                 DropdownMenuItem(
                                     text = {
                                         Column {
-                                            Text(c.name, fontWeight = if (connectTo?.number == c.number) FontWeight.Bold else FontWeight.Normal)
+                                            Text(c.name, style = if (connectTo?.number == c.number) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyLarge)
                                             Text(formatClairixNumber(c.number), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                         }
                                     },
@@ -211,9 +211,9 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         item(key = "§when") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PrimaryButton("30 S", onClick = { schedule(FakeCall.DELAY_30S) }, modifier = Modifier.weight(1f))
-                    PrimaryButton("2 Min", onClick = { schedule(FakeCall.DELAY_2MIN) }, modifier = Modifier.weight(1f))
-                    PrimaryButton("5 Min", onClick = { schedule(FakeCall.DELAY_5MIN) }, modifier = Modifier.weight(1f))
+                    PrimaryButton("30 s", onClick = { schedule(FakeCall.DELAY_30S) }, modifier = Modifier.weight(1f))
+                    PrimaryButton("2 min", onClick = { schedule(FakeCall.DELAY_2MIN) }, modifier = Modifier.weight(1f))
+                    PrimaryButton("5 min", onClick = { schedule(FakeCall.DELAY_5MIN) }, modifier = Modifier.weight(1f))
                 }
                 if (!canExact) {
                     Text(
@@ -253,7 +253,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
     if (showClear) {
         AlertDialog(
             onDismissRequest = { showClear = false },
-            containerColor = ClairixTheme.colors.surface,
+            shape = ClairixShapes.Sheet,
+            containerColor = ClairixTheme.colors.surfaceRaised,
             title = { Text("Remove the duress phrase?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(

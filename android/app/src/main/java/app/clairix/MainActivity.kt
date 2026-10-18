@@ -1481,18 +1481,19 @@ internal fun ScanScreen(
             item(key = "§figures") { ScanFigures(status, detections, live, cell) }
         }
 
-        item(key = "§details") { ScanDetailsCard(status, detections, trusted) }
+        if (status.scanning || status.error != null) {
+            item(key = "§details") { ScanDetailsCard(status, detections, trusted) }
+        }
 
         // ── Findings ──
+        // With the scanner off the hero already says so; an empty list adds nothing.
         if (detections.isEmpty()) {
-            item(key = "§empty") {
+            if (status.scanning) item(key = "§empty") {
                 EmptyState(
-                    title = if (status.scanning) "Nothing flagged yet" else "Not scanning",
-                    body = if (status.scanning)
-                        "Proving something follows you takes 10 minutes of presence and a 300 m move. Leave it running."
-                    else "Start scanning to check for Bluetooth trackers travelling with you.",
+                    title = "Nothing flagged yet",
+                    body = "Proving something follows you takes 10 minutes of presence and a 300 m move. Leave it running.",
                     icon = ClairixIcons.BluetoothSearching,
-                    tone = if (status.scanning) Tone.Safe else Tone.Neutral
+                    tone = Tone.Safe
                 )
             }
         } else {
@@ -2204,7 +2205,7 @@ private fun MapChip(text: String, tone: Tone) {
 // ── Timeline screen ──────────────────────────────────────────────────────
 
 @Composable
-private fun TimelineScreen() {
+internal fun TimelineScreen() {
     val events by Registry.timeline.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(60_000L)
@@ -2374,7 +2375,7 @@ private fun EventLocationSnapshot(lat: Double, lon: Double, status: ScanStatus) 
 // ── Cell / IMSI screen ───────────────────────────────────────────────────
 
 @Composable
-private fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onShown: () -> Unit = {}) {
+internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onShown: () -> Unit = {}) {
     val cell by Registry.cell.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(5_000L)
@@ -2455,16 +2456,13 @@ private fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onSh
             }
         }
 
-        if (!cell.available) {
+        if (!cell.available && radio != null && (radio.operatorName != null || radio.simOperatorName != null)) {
             item(key = "§unavailable") {
-                EmptyState(
-                    title = cell.reason ?: "Reading the modem…",
-                    body = if (radio != null && (radio.operatorName != null || radio.simOperatorName != null))
-                        "Registered on ${radio.operatorName ?: "unknown"} · SIM ${radio.simOperatorName ?: "unknown"}" +
-                            (radio.simState?.let { " · $it" } ?: "")
-                    else "Tower details appear here once the modem reports a serving cell.",
-                    icon = ClairixIcons.CellTower
-                )
+                ClairixCard(spacing = 4.dp) {
+                    KeyValueRow("Registered on", radio.operatorName ?: "Unknown", mono = false)
+                    KeyValueRow("SIM", radio.simOperatorName ?: "Unknown", mono = false)
+                    radio.simState?.let { KeyValueRow("SIM state", it, mono = false) }
+                }
             }
         }
 
@@ -2601,7 +2599,11 @@ private fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onSh
 @Composable
 private fun CellVerdict(cell: CellStatus) {
     val (eyebrow, headline, body, tone) = when {
-        !cell.available -> CellCopy("Cell towers", "No reading", "The modem hasn't reported a tower yet.", Tone.Neutral)
+        !cell.available -> CellCopy(
+            "Cell towers", "No reading",
+            (cell.reason ?: "Reading the modem…").trimEnd('.') + ". Tower details appear here once the modem reports a serving cell.",
+            Tone.Neutral
+        )
         !cell.analysing -> CellCopy("Cell towers", "Not checked", "Tower details are live below. Start scanning to check them for fakes.", Tone.Neutral)
         cell.level == Threat.CRITICAL -> CellCopy(
             "Cell towers · analysing", "Fake tower likely",
@@ -2782,7 +2784,7 @@ private val CardProfile.hceLimited: Boolean
 private const val HCE_LIMITED_CAVEAT = "Static replay only — readers that challenge the card will reject it"
 
 @Composable
-private fun NfcScreen(
+internal fun NfcScreen(
     onAddToVault: (NfcTag, String, Boolean) -> Unit,
     onRemoveVault: (String) -> Unit,
     onEmulate: (VaultCard?) -> Unit,
@@ -3351,7 +3353,7 @@ private fun wifiReason(reason: String): String = when (reason) {
 }
 
 @Composable
-private fun WifiScreen(onShown: () -> Unit = {}) {
+internal fun WifiScreen(onShown: () -> Unit = {}) {
     val anomalies by Registry.wifi.collectAsStateWithLifecycle()
     val wifi by Registry.wifiStatus.collectAsStateWithLifecycle()
     val now = rememberNow(5_000L)

@@ -121,7 +121,8 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
     if (showClear) {
         AlertDialog(
             onDismissRequest = { showClear = false },
-            containerColor = ClairixTheme.colors.surface,
+            shape = ClairixShapes.Sheet,
+            containerColor = ClairixTheme.colors.surfaceRaised,
             title = { Text("Clear location history?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(

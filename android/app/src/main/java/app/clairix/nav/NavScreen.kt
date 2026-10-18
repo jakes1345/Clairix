@@ -1,5 +1,8 @@
 package app.clairix.nav
 
+import app.clairix.ui.theme.MapPalette
+import app.clairix.ui.components.*
+import app.clairix.ui.theme.ClairixTheme
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -71,6 +74,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -114,9 +118,6 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import app.clairix.ui.components.GhostButton
-import app.clairix.ui.components.PrimaryButton
-import app.clairix.ui.components.SecondaryButton
 
 private const val M_PER_MILE = 1609.344
 private const val FT_PER_M = 3.28084
@@ -130,16 +131,16 @@ private const val INCIDENT_PROMPT_M = 300.0
 /** The SOS button floats over the Drive tab's bottom-right corner; panels keep clear of it. */
 private val SOS_CLEARANCE = 72.dp
 
-private val TRAFFIC_FREE = Color(0xFF2E9E4F)
-private val TRAFFIC_SLOW = Color(0xFFF2A30F)
-private val TRAFFIC_HEAVY = Color(0xFFE5392F)
-private val TRAFFIC_STOPPED = Color(0xFF8E1010)
-private val TRAFFIC_UNKNOWN = Color(0xFF2F6FEB)
-private val ROUTE_ALT = Color(0xFF8A94A6)
-private val ROUTE_CASING = Color(0xFF0D1B33)
-private val DANGER = Color(0xFFE5392F)
-private val WORK_ZONE_LINE = Color(0xFFF57C00)
-private val CLOSURE_LINE = Color(0xFFD32F2F)
+// Map rendering follows road conventions, not the app theme: see MapPalette.
+private val TRAFFIC_FREE = MapPalette.TrafficFree
+private val TRAFFIC_SLOW = MapPalette.TrafficSlow
+private val TRAFFIC_HEAVY = MapPalette.TrafficHeavy
+private val TRAFFIC_STOPPED = MapPalette.TrafficStopped
+private val TRAFFIC_UNKNOWN = MapPalette.TrafficUnknown
+private val ROUTE_ALT = MapPalette.RouteAlternative
+private val ROUTE_CASING = MapPalette.RouteCasing
+private val WORK_ZONE_LINE = MapPalette.WorkZone
+private val CLOSURE_LINE = MapPalette.Closure
 /** Incident types that cover a stretch of road and are drawn along it. */
 private val LINE_TYPES = setOf(
     Incident.CLOSURE, Incident.LANE_CLOSURE, Incident.WORK_ZONE, Incident.DETOUR, Incident.RESTRICTION,
@@ -522,7 +523,7 @@ private fun NavMap(
         fun addLine(points: List<LatLon>, color: Color, width: Float, onClick: (() -> Unit)?) {
             if (points.size < 2) return
             val line = Polyline().apply {
-                outlinePaint.color = color.toArgbInt()
+                outlinePaint.color = color.toArgb()
                 outlinePaint.strokeWidth = width
                 outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
                 outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
@@ -572,7 +573,7 @@ private fun NavMap(
             val geom = inc.geom!!
             val closed = inc.type == Incident.CLOSURE
             val line = Polyline(mapView).apply {
-                outlinePaint.color = (if (closed) CLOSURE_LINE else WORK_ZONE_LINE).toArgbInt()
+                outlinePaint.color = (if (closed) CLOSURE_LINE else WORK_ZONE_LINE).toArgb()
                 outlinePaint.strokeWidth = dp(5f)
                 outlinePaint.strokeCap = android.graphics.Paint.Cap.BUTT
                 outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
@@ -670,9 +671,6 @@ private fun NavMap(
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 }
 
-private fun Color.toArgbInt(): Int =
-    android.graphics.Color.argb((alpha * 255).roundToInt(), (red * 255).roundToInt(), (green * 255).roundToInt(), (blue * 255).roundToInt())
-
 // ── Search ─────────────────────────────────────────────────────────────
 
 @Composable
@@ -685,7 +683,7 @@ private fun SearchBar(
     onShowRegions: () -> Unit,
 ) {
     val focus = LocalFocusManager.current
-    Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
             OutlinedTextField(
                 value = state.query,
@@ -722,7 +720,7 @@ private fun SearchBar(
 
 @Composable
 private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -> Unit) {
-    Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Column(Modifier.fillMaxWidth()) {
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             state.error?.let {
@@ -774,7 +772,7 @@ private fun PermissionCard(onRequest: () -> Unit) {
 
 @Composable
 private fun StatusCard(text: String, busy: Boolean, onCancel: (() -> Unit)?) {
-    Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             if (busy) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -805,7 +803,7 @@ private fun RouteOptionsSheet(
 ) {
     Surface(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = ClairixShapes.Sheet,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp,
     ) {
@@ -930,13 +928,7 @@ private fun RouteCard(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onGo,
-                shape = CircleShape,
-                modifier = Modifier.size(64.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = TRAFFIC_FREE, contentColor = Color.White),
-            ) { Text("Go", style = MaterialTheme.typography.labelLarge) }
+            PrimaryButton("Go", onClick = onGo, tone = Tone.Safe, modifier = Modifier.heightIn(min = 56.dp))
         }
     }
 }
@@ -948,6 +940,8 @@ private fun FuelPriceDialog(current: Double, onSave: (Double) -> Unit, onDismiss
     val valid = value != null && value > 0 && value <= 50
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = ClairixShapes.Sheet,
+        containerColor = ClairixTheme.colors.surfaceRaised,
         title = { Text("Fuel price") },
         text = {
             OutlinedTextField(
@@ -971,14 +965,14 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
     val m = nav.nextManeuver
     Surface(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF14532D),
-        contentColor = Color.White,
+        shape = ClairixShapes.Hero,
+        color = MapPalette.GuidanceSign,
+        contentColor = MapPalette.GuidanceSignInk,
         shadowElevation = 8.dp,
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ManeuverIcon(m?.type ?: ManeuverType.STRAIGHT, Modifier.size(64.dp), Color.White)
+                ManeuverIcon(m?.type ?: ManeuverType.STRAIGHT, Modifier.size(64.dp), MapPalette.GuidanceSignInk)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -1004,7 +998,7 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
 
 @Composable
 private fun BannerNote(text: String) {
-    Text(text, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MapPalette.GuidanceSignInk.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
@@ -1018,14 +1012,14 @@ private fun NavBottomBar(
     val context = LocalContext.current
     Surface(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = ClairixShapes.Sheet,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp,
     ) {
         Column(Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(fmtClock(context, nav.etaEpochMs), style = MaterialTheme.typography.headlineLarge, color = TRAFFIC_FREE)
+                    Text(fmtClock(context, nav.etaEpochMs), style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.safe)
                     Text(
                         "${fmtDuration(nav.remainingSec)} · ${fmtDistance(nav.remainingDistanceM)}",
                         style = MaterialTheme.typography.bodyLarge,
@@ -1038,12 +1032,9 @@ private fun NavBottomBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(
-                    onClick = onEnd,
-                    colors = ButtonDefaults.buttonColors(containerColor = DANGER, contentColor = Color.White),
-                ) { Text("End") }
+                PrimaryButton("End", onClick = onEnd, tone = Tone.Danger)
                 SecondaryButton(if (muted) "Unmute" else "Mute", onClick = onMute)
-                FilledTonalButton(onClick = onReport) { Text("Report") }
+                SecondaryButton("Report", onClick = onReport, tone = Tone.Accent)
             }
         }
     }
@@ -1059,16 +1050,16 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
             Modifier
                 .size(60.dp)
                 .clip(CircleShape)
-                .background(if (speeding) DANGER else MaterialTheme.colorScheme.surfaceVariant),
+                .background(if (speeding) ClairixTheme.colors.danger else MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     mph?.toString() ?: "–",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurface
+                    color = if (speeding) ClairixTheme.colors.onDanger else MaterialTheme.colorScheme.onSurface
                 )
-                Text("mph", style = MaterialTheme.typography.bodySmall, color = if (speeding) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("mph", style = MaterialTheme.typography.bodySmall, color = if (speeding) ClairixTheme.colors.onDanger else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (limit != null) {
@@ -1077,13 +1068,13 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
                 Modifier
                     .width(48.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(Color.White)
-                    .border(2.dp, Color.Black, RoundedCornerShape(6.dp))
+                    .background(MapPalette.SpeedSignFace)
+                    .border(2.dp, MapPalette.SpeedSignInk, RoundedCornerShape(6.dp))
                     .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("SPEED\nLIMIT", style = MaterialTheme.typography.labelSmall, color = Color.Black, textAlign = TextAlign.Center)
-                Text("$limit", style = MaterialTheme.typography.headlineMedium, color = Color.Black)
+                Text("SPEED\nLIMIT", style = MaterialTheme.typography.labelSmall, color = MapPalette.SpeedSignInk, textAlign = TextAlign.Center)
+                Text("$limit", style = MaterialTheme.typography.headlineMedium, color = MapPalette.SpeedSignInk)
             }
         }
     }
@@ -1093,7 +1084,7 @@ private fun SpeedReadout(speedMps: Float?, limitKph: Int?) {
 private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDismiss: () -> Unit) {
     Surface(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = ClairixShapes.Card,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp,
     ) {
@@ -1118,6 +1109,8 @@ private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDi
 private fun ReportDialog(onReport: (String) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = ClairixShapes.Sheet,
+        containerColor = ClairixTheme.colors.surfaceRaised,
         title = { Text("Report") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1262,7 +1255,7 @@ private fun ManeuverIcon(type: ManeuverType, modifier: Modifier, color: Color) {
             ManeuverType.ARRIVE -> {
                 drawLine(color, bottom, Offset(cx, h * 0.55f), strokeWidth = sw, cap = StrokeCap.Round)
                 drawCircle(color, radius = w * 0.2f, center = Offset(cx, h * 0.33f))
-                drawCircle(Color(0xFF14532D), radius = w * 0.08f, center = Offset(cx, h * 0.33f))
+                drawCircle(MapPalette.GuidanceSign, radius = w * 0.08f, center = Offset(cx, h * 0.33f))
             }
         }
     }
@@ -1384,6 +1377,8 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
     confirmDelete?.let { r ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
+            shape = ClairixShapes.Sheet,
+            containerColor = ClairixTheme.colors.surfaceRaised,
             title = { Text("Delete ${r.name}?") },
             text = {
                 Text(
@@ -1391,7 +1386,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                 )
             },
             confirmButton = {
-                TextButton(onClick = { vm.deleteRegion(r.slug); confirmDelete = null }) { Text("Delete", color = DANGER) }
+                GhostButton("Delete", onClick = { vm.deleteRegion(r.slug); confirmDelete = null }, tone = Tone.Danger)
             },
             dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = null }) },
         )

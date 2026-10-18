@@ -84,6 +84,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.Role
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.theme.monoSmall
@@ -437,7 +438,7 @@ private fun RecordButton(recording: Boolean, onClick: () -> Unit) {
                 .size(96.dp)
                 .scale(if (recording) scale else 1f)
                 .background(if (recording) ClairixTheme.colors.danger else ClairixTheme.colors.surfaceRaised, CircleShape)
-                .clickable(onClick = onClick),
+                .clickable(onClickLabel = if (recording) "Stop recording" else "Record a voicemail", role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             if (recording) {

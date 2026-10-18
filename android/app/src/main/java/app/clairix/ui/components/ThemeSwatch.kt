@@ -67,7 +67,8 @@ fun ThemeSwatch(
         ClairixTheme(theme = theme) {
             ThemeMiniature()
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // A fixed height, so the title lines up whether or not the check is showing.
+        Row(Modifier.fillMaxWidth().height(24.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 theme.label,
                 style = MaterialTheme.typography.titleMedium,

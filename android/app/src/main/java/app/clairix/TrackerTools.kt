@@ -67,6 +67,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.Role
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.ClairixCard
@@ -136,8 +137,10 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
                         .fillMaxWidth()
                         .clip(ClairixShapes.Card)
                         .background(ClairixTheme.colors.surface, ClairixShapes.Card)
-                        .clickable { selectedKey = d.key }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .border(1.dp, ClairixTheme.colors.border, ClairixShapes.Card)
+                        .clickable(onClickLabel = "Find this tracker", role = Role.Button) { selectedKey = d.key }
+                        .heightIn(min = 56.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {

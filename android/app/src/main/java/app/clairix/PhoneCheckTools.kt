@@ -65,6 +65,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.GhostButton
@@ -298,7 +299,8 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
     if (confirmPin && pinCandidate?.relayHost != null && pinCandidate.observedSpki != null) {
         AlertDialog(
             onDismissRequest = { confirmPin = false },
-            containerColor = ClairixTheme.colors.surface,
+            shape = ClairixShapes.Sheet,
+            containerColor = ClairixTheme.colors.surfaceRaised,
             title = { Text("Pin this certificate?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(

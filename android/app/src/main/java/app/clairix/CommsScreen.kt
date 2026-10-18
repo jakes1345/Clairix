@@ -2591,15 +2591,7 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         SectionHeader("Actions")
         Spacer(Modifier.height(6.dp))
-        ClairixCard {
-            Row(
-                Modifier.fillMaxWidth().clickable { leaveConfirm = true }.padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Leave group", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.weight(1f))
-                Text("›", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.danger)
-            }
-        }
+        SecondaryButton("Leave group", onClick = { leaveConfirm = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(24.dp))
     }
 }

@@ -36,6 +36,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import app.clairix.ui.theme.ClairixTheme
+import app.clairix.ui.components.ClairixShapes
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -143,7 +145,7 @@ private fun DriveSensors(viewModel: DriveViewModel, showRadio: Boolean, showVehi
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun DriveContent(
+internal fun DriveContent(
     showRadio: Boolean,
     showVehicle: Boolean,
     obd: ObdData,
@@ -218,7 +220,7 @@ private fun DriveContent(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 12.dp)
                     .heightIn(min = 64.dp),
-                shape = RoundedCornerShape(12.dp),
+                shape = ClairixShapes.Card,
                 colors = if (driveModeActive) {
                     ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -305,9 +307,9 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState) {
 
 @Composable
 private fun SdrIndicator(state: SdrState) {
-    val ok = MaterialTheme.colorScheme.primary
-    val caution = MaterialTheme.colorScheme.tertiary
-    val bad = MaterialTheme.colorScheme.error
+    val ok = ClairixTheme.colors.safe
+    val caution = ClairixTheme.colors.caution
+    val bad = ClairixTheme.colors.danger
     val pulse = rememberInfiniteTransition(label = "sdrPulse").animateFloat(
         initialValue = 0.3f,
         targetValue = 1f,
@@ -937,6 +939,8 @@ private fun AddChannelDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = ClairixShapes.Sheet,
+        containerColor = ClairixTheme.colors.surfaceRaised,
         title = { Text("Add channel") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -976,10 +980,10 @@ private fun AddChannelDialog(
 private fun formatMhz(freqHz: Long): String =
     String.format(Locale.US, "%.3f MHz", freqHz / 1_000_000.0)
 
-@Preview(showBackground = true, backgroundColor = 0xFF000000)
+@Preview(showBackground = true)
 @Composable
 fun DriveScreenPreview() {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    ClairixTheme {
         DriveContent(
             showRadio = true,
             showVehicle = true,
