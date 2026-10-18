@@ -113,8 +113,8 @@ android {
         applicationId = "app.clairix"
         minSdk = 31
         targetSdk = 35
-        versionCode = 20
-        versionName = "2.7.0"
+        versionCode = 21
+        versionName = "3.0.0-beta.1"
     }
 
     // Two flavour dimensions, edition first, so variants read <edition><Tier>:
