@@ -2,6 +2,7 @@ package app.clairix
 
 import android.content.Context
 import app.clairix.security.Wiper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,10 +26,16 @@ import java.io.File
  *
  * Threading contract: the owner of a store mutates [json] in place under a lock
  * of its own, and calls [touch], [flush] and [replace] while holding that same
- * lock. Those calls serialise the JSON on the calling thread; the background
- * writer only ever sees the finished string.
+ * lock. Those calls serialise the JSON on the calling thread, unless [touch] is
+ * given that lock as its guard: then the serialisation runs on the IO dispatcher
+ * inside the guard, which keeps a large document off the main thread. Either way
+ * the file writer only ever sees a finished string.
  */
-class Store(private val file: File) {
+class Store(
+    private val file: File,
+    /** Where background writes run. A parameter so tests can hold them back. */
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) {
 
     constructor(context: Context, filename: String) : this(File(context.filesDir, filename))
 
@@ -41,7 +48,7 @@ class Store(private val file: File) {
     private val lock = Any()
     /** Serialises the file writes themselves, so two snapshots never interleave on disk. */
     private val writeLock = Any()
-    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val ioScope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     @Volatile
     private var data: JSONObject? = null
@@ -51,6 +58,11 @@ class Store(private val file: File) {
     private var snapshotSeq = 0L
     /** Sequence number of the newest snapshot on disk. Guarded by [writeLock]. */
     private var writtenSeq = 0L
+    /**
+     * The newest snapshot taken and not yet known to be on disk. [flush] writes it
+     * itself rather than trusting a background write that may never run.
+     */
+    private var pending: Pair<Long, String>? = null
 
     fun load(fallback: () -> JSONObject): JSONObject {
         synchronized(lock) {
@@ -88,28 +100,48 @@ class Store(private val file: File) {
      * HashMaps while the owner was changing them; the resulting
      * ConcurrentModificationException was swallowed by the write's catch and the
      * write silently lost.
+     *
+     * With a [guard] — the lock the owner mutates [json] under — the serialisation
+     * moves to the IO dispatcher and runs inside that lock instead. For an owner on
+     * the main thread with a large document, so the main thread only marks the store
+     * dirty.
      */
-    fun touch(minIntervalMs: Long = 5_000L) {
+    fun touch(minIntervalMs: Long = 5_000L, guard: Any? = null) {
         val snapshot = synchronized(lock) {
             dirty = true
             val now = System.currentTimeMillis()
             if (now - lastFlush < minIntervalMs) return
-            val taken = snapshotLocked() ?: return
             // Counted from the snapshot, not the write, so a burst of touches does not
             // launch a write each while the first is still on its way to disk.
-            lastFlush = now
-            taken
+            if (guard != null) {
+                lastFlush = now
+                null
+            } else {
+                val taken = snapshotLocked() ?: return
+                lastFlush = now
+                taken
+            }
         }
-        ioScope.launch { write(snapshot.first, snapshot.second) }
+        if (snapshot != null) {
+            ioScope.launch { write(snapshot.first, snapshot.second) }
+        } else {
+            ioScope.launch {
+                // Lock order guard → lock, as when the owner calls in holding its guard.
+                val taken = synchronized(guard!!) { synchronized(lock) { snapshotLocked() } } ?: return@launch
+                write(taken.first, taken.second)
+            }
+        }
     }
 
     /**
-     * Writes any pending changes now, on the calling thread. Like [touch], this
-     * serialises the JSON on the caller's thread: call it while holding the lock the
-     * owner mutates [json] under.
+     * Writes the newest state now, on the calling thread, and returns once it is on
+     * disk. Changes made since the last snapshot are serialised here — call this
+     * while holding the lock the owner mutates [json] under. With none, a snapshot
+     * that [touch] took but whose background write has not landed yet is written
+     * here instead of being left to a write that may never run.
      */
     fun flush() {
-        val snapshot = synchronized(lock) { snapshotLocked() } ?: return
+        val snapshot = synchronized(lock) { snapshotLocked() ?: pending } ?: return
         write(snapshot.first, snapshot.second)
     }
 
@@ -145,7 +177,9 @@ class Store(private val file: File) {
         }
         dirty = false
         snapshotSeq++
-        return snapshotSeq to text
+        val taken = snapshotSeq to text
+        pending = taken
+        return taken
     }
 
     private fun write(seq: Long, text: String) {
@@ -164,6 +198,9 @@ class Store(private val file: File) {
                     tmp.delete()
                 }
                 writtenSeq = seq
+                synchronized(lock) {
+                    if ((pending?.first ?: Long.MAX_VALUE) <= seq) pending = null
+                }
             } catch (_: Exception) {
                 // A failed write is not worth crashing the scanner over. Mark the store
                 // dirty again so the next touch() or flush() takes a fresh snapshot.
