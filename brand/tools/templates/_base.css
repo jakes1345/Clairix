@@ -1,0 +1,17 @@
+/* Shared styles for the marketing image templates. */
+@font-face { font-family: "Archivo"; src: url("../../fonts/archivo/web/Archivo%5Bwdth,wght%5D.woff2") format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; font-display: block; }
+html, body { margin: 0; }
+body {
+  position: relative; overflow: hidden;
+  background: var(--clx-base); color: var(--clx-text);
+  font-family: var(--clx-font-ui); -webkit-font-smoothing: antialiased;
+}
+.grid { position: absolute; inset: 0; background-image:
+  linear-gradient(rgb(241 242 234 / 0.045) 1px, transparent 1px),
+  linear-gradient(90deg, rgb(241 242 234 / 0.045) 1px, transparent 1px); }
+.display { font-family: var(--clx-font-display); font-stretch: 125%; font-weight: 900; text-transform: uppercase; line-height: .92; letter-spacing: -0.01em; margin: 0; }
+.display em { font-style: normal; color: var(--clx-accent); }
+.label { font-family: var(--clx-font-display); font-stretch: 125%; font-weight: 800; text-transform: uppercase; letter-spacing: .14em; font-size: 13px; color: var(--clx-text-muted); }
+.label b { color: var(--clx-accent); font-weight: 800; }
+.rule { position: absolute; height: 6px; background: var(--clx-accent); }
+img { display: block; }
