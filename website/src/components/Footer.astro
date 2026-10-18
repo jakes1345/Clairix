@@ -1,0 +1,74 @@
+---
+import lockup from '../assets/brand/lockup-horizontal-reversed.svg';
+import wordmark from '../assets/brand/wordmark-reversed.svg';
+import Icon from './Icon.astro';
+import { footerColumns, footerLine, legalLine } from '../config/site';
+import { openCollectiveUrl } from '../config/release';
+
+const themes = [
+  { id: 'acid', name: 'Acid' },
+  { id: 'infrared', name: 'Infrared' },
+  { id: 'hazard', name: 'Hazard' },
+  { id: 'volt', name: 'Volt' },
+];
+---
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <a href="/" aria-label="Clairix home" class="brand-link">
+          <img src={lockup.src} width={lockup.width} height={lockup.height} alt="Clairix" loading="lazy" />
+        </a>
+        <p class="tagline display">Nothing hides<em>.</em></p>
+        <p>{footerLine}</p>
+      </div>
+      {
+        footerColumns.map((col) => (
+          <nav class="footer-col" aria-label={col.title}>
+            <h2>{col.title}</h2>
+            <ul>
+              {col.links.map((l) => (
+                <li>
+                  <a href={l.href}>{l.label}</a>
+                </li>
+              ))}
+              {col.title === 'Company' && openCollectiveUrl && (
+                <li>
+                  <a href={openCollectiveUrl} rel="noopener">
+                    Support Clairix
+                    <Icon name="external" size={14} />
+                  </a>
+                </li>
+              )}
+            </ul>
+          </nav>
+        ))
+      }
+    </div>
+
+    <div class="footer-meta">
+      <div>
+        <p>{legalLine}</p>
+      </div>
+      <div class="signal" role="group" aria-labelledby="signal-label">
+        <span class="signal-label" id="signal-label">Signal</span>
+        <div class="signal-options">
+          {
+            themes.map((t) => (
+              <button type="button" data-set-theme={t.id} aria-pressed={t.id === 'acid' ? 'true' : 'false'} title={`${t.name} theme`}>
+                <span class="swatch" data-theme={t.id} />
+                <span class="visually-hidden">{t.name} theme</span>
+              </button>
+            ))
+          }
+        </div>
+        <span id="theme-status" class="visually-hidden" role="status" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <div class="footer-wordmark" aria-hidden="true">
+      <img src={wordmark.src} width={wordmark.width} height={wordmark.height} alt="" loading="lazy" />
+    </div>
+  </div>
+</footer>

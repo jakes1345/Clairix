@@ -1,0 +1,206 @@
+---
+/**
+ * The home hero artwork: the Clairix mark inside a scanning reticle. The mark
+ * itself is the untouched brand file. Clicking it cycles the colour theme
+ * (an easter egg; the footer "Signal" switcher is the visible control).
+ */
+import symbol from '../assets/brand/symbol-reversed.svg';
+
+const oct = (x: number, y: number, w: number, h: number, c: number) =>
+  `M${x + c} ${y}H${x + w - c}L${x + w} ${y + c}V${y + h - c}L${x + w - c} ${y + h}H${x + c}L${x} ${y + h - c}V${y + c}Z`;
+
+const readouts = [
+  { text: 'Hidden cameras', pos: 'tl' },
+  { text: 'Trackers', pos: 'tr' },
+  { text: 'Spyware', pos: 'bl' },
+  { text: 'Fake networks', pos: 'br' },
+];
+---
+
+<div class="scanner">
+  <svg class="scanner-rings" viewBox="0 0 520 520" aria-hidden="true" focusable="false">
+    <path class="r r1" d={oct(20, 20, 480, 480, 140)} />
+    <path class="r r2" d={oct(70, 70, 380, 380, 111)} />
+    <path class="r r3" d={oct(118, 118, 284, 284, 83)} />
+    <g class="ticks">
+      <path d="M260 0V30M260 490V520M0 260H30M490 260H520" />
+    </g>
+    <g class="orbit">
+      <rect x="254" y="64" width="12" height="12" />
+    </g>
+    <g class="corners">
+      <path d="M150 196V150H196" />
+      <path d="M324 150H370V196" />
+      <path d="M370 324V370H324" />
+      <path d="M196 370H150V324" />
+    </g>
+  </svg>
+
+  <button class="mark" type="button" data-cycle-theme aria-label="Clairix mark. Press to change the site colour theme.">
+    <img src={symbol.src} width="220" height="220" alt="" fetchpriority="high" />
+  </button>
+
+  <div class="beam" aria-hidden="true"></div>
+
+  {
+    readouts.map((r) => (
+      <span class:list={['readout', `readout--${r.pos}`]} aria-hidden="true">
+        <i />
+        {r.text}
+      </span>
+    ))
+  }
+</div>
+
+<style>
+  .scanner {
+    position: relative;
+    width: min(100%, 520px);
+    aspect-ratio: 1;
+    margin-inline: auto;
+    display: grid;
+    place-items: center;
+    container-type: inline-size;
+  }
+  .scanner > * {
+    grid-area: 1 / 1;
+  }
+  .scanner-rings {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .r {
+    fill: none;
+    stroke: var(--clx-border);
+    stroke-width: 1.5;
+  }
+  .r2 {
+    stroke: var(--clx-border-strong);
+    stroke-dasharray: 3 9;
+  }
+  .r3 {
+    fill: color-mix(in oklab, var(--clx-surface) 70%, transparent);
+    stroke: var(--clx-border-strong);
+  }
+  .ticks path {
+    stroke: var(--clx-text-subtle);
+    stroke-width: 1.5;
+  }
+  .corners path {
+    fill: none;
+    stroke: var(--clx-accent);
+    stroke-width: 3;
+  }
+  .orbit {
+    transform-box: view-box;
+    transform-origin: 260px 260px;
+  }
+  .orbit rect {
+    fill: var(--clx-accent);
+  }
+  .mark {
+    position: relative;
+    z-index: 2;
+    width: 42%;
+    aspect-ratio: 1;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    transition: transform var(--clx-duration-slow) var(--clx-ease-snap);
+  }
+  .mark img {
+    width: 100%;
+    height: 100%;
+  }
+  .mark:hover {
+    transform: scale(1.03);
+  }
+  .mark:active {
+    transform: scale(0.97);
+  }
+  .beam {
+    /* Passes behind the mark: the logo itself never carries a glow. */
+    z-index: 1;
+    width: 58%;
+    height: 2px;
+    align-self: start;
+    margin-top: 21%;
+    background: var(--clx-accent);
+    box-shadow: 0 0 18px 2px color-mix(in oklab, var(--clx-accent) 60%, transparent);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .readout {
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--clx-font-mono);
+    font-size: clamp(0.625rem, 1.1vw, 0.75rem);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--clx-text-muted);
+    white-space: nowrap;
+  }
+  .readout i {
+    width: 7px;
+    height: 7px;
+    background: var(--clx-accent);
+  }
+  .readout--tl {
+    align-self: start;
+    justify-self: start;
+    margin: 14% 0 0 2%;
+  }
+  .readout--tr {
+    align-self: start;
+    justify-self: end;
+    margin: 14% 2% 0 0;
+  }
+  .readout--bl {
+    align-self: end;
+    justify-self: start;
+    margin: 0 0 14% 2%;
+  }
+  .readout--br {
+    align-self: end;
+    justify-self: end;
+    margin: 0 2% 14% 0;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .orbit {
+      animation: spin 14s linear infinite;
+    }
+    .r2 {
+      animation: dash 30s linear infinite;
+    }
+    .beam {
+      animation: beam 4.8s var(--clx-ease-standard) infinite;
+    }
+    .readout i {
+      animation: blink 2.4s steps(2, jump-none) infinite;
+    }
+    .readout--tr i { animation-delay: 0.6s; }
+    .readout--bl i { animation-delay: 1.2s; }
+    .readout--br i { animation-delay: 1.8s; }
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes dash {
+    to { stroke-dashoffset: -240; }
+  }
+  @keyframes beam {
+    0% { transform: translateY(0); opacity: 0; }
+    12% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { transform: translateY(58cqw); opacity: 0; }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+  }
+</style>

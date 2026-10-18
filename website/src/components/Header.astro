@@ -1,0 +1,55 @@
+---
+import lockup from '../assets/brand/lockup-horizontal-reversed.svg';
+import Icon from './Icon.astro';
+import { primaryNav, PLAY_URL } from '../config/site';
+
+const path = Astro.url.pathname.replace(/\.html$/, '').replace(/\/$/, '') || '/';
+const isCurrent = (href: string) => path === href;
+---
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand-link" href="/" aria-label="Clairix home">
+      <img src={lockup.src} width={lockup.width} height={lockup.height} alt="Clairix" />
+    </a>
+
+    <nav class="nav nav-desktop" aria-label="Primary">
+      {
+        primaryNav.map((l) => (
+          <a href={l.href} aria-current={isCurrent(l.href) ? 'page' : undefined}>
+            {l.label}
+          </a>
+        ))
+      }
+    </nav>
+
+    <div class="header-actions">
+      <a class="btn btn--sm cham cham--oct" href={PLAY_URL} rel="noopener">
+        <span><span class="cta-pre">Get it on </span>Google Play</span>
+      </a>
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="mobile-nav"
+        aria-label="Open menu"
+        data-menu-toggle
+      >
+        <Icon name="menu" class="icon-open" />
+        <Icon name="close" class="icon-close" />
+      </button>
+    </div>
+  </div>
+</header>
+
+<nav id="mobile-nav" class="mobile-nav" aria-label="Primary" hidden>
+  {
+    primaryNav.map((l) => (
+      <a href={l.href} aria-current={isCurrent(l.href) ? 'page' : undefined}>
+        {l.label}
+        <Icon name="arrowRight" />
+      </a>
+    ))
+  }
+</nav>
+

@@ -1,0 +1,749 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Icon from '../components/Icon.astro';
+import HeroScanner from '../components/HeroScanner.astro';
+import FeatureVisual, { type VisualVariant } from '../components/FeatureVisual.astro';
+import Ticker from '../components/Ticker.astro';
+import PlayButton from '../components/PlayButton.astro';
+import type { IconName } from '../lib/icons';
+import { pages } from '../config/site';
+import { softwareApplication, faqPage, toPlainText } from '../lib/schema';
+
+const reasons: { icon: IconName; title: string; body: string }[] = [
+  {
+    icon: 'reticle',
+    title: 'It finds things, not just fears.',
+    body: 'Clairix does not sound an alarm because an AirTag is somewhere nearby. It tells you a tracker is following you only when the same device keeps showing up as you move from place to place. The hidden-camera sweep marks the exact spot in your viewfinder. The spyware check names the app and says why it was flagged.',
+  },
+  {
+    icon: 'device',
+    title: 'Your data never leaves your phone.',
+    body: 'Scan results, where you have been, your app list, your timeline: all of it is stored on your device and nowhere else. There are no ads, no analytics and no tracking. The only things that ever go out are the encrypted messages you choose to send and the map tiles you choose to view. <a class="text-link" href="/security">Read exactly what leaves the phone.</a>',
+  },
+  {
+    icon: 'gauge',
+    title: 'It tells you what it cannot do.',
+    body: 'A phone has a camera, a torch, Bluetooth, Wi-Fi and a cellular radio. Clairix uses all of them, and it is honest about their limits. Every feature page says what it can find, how, and what it will miss. You should never have to guess how much to trust a result.',
+  },
+];
+
+interface FeatureBlock {
+  id: string;
+  kicker: string;
+  title: string;
+  lede: string;
+  body: string[];
+  note?: { label: string; html: string };
+  link: { href: string; text: string };
+  visual: { variant: VisualVariant; label: string; caption: string };
+}
+
+const features: FeatureBlock[] = [
+  {
+    id: 'hidden-cameras',
+    kicker: 'Hidden cameras',
+    title: 'Find hidden cameras',
+    lede: 'Sweep a room with the phone you already have.',
+    body: [
+      'Every camera lens has one thing it cannot hide: it reflects light straight back at you. Point your phone, turn on the torch, and pan slowly. Clairix watches the viewfinder for small, round, steady pinpoints of reflected light. Shiny screws and glass edges flash and slide as you move; a lens holds still. The spots that hold still turn red.',
+      'In a dark room, switch to infrared mode. Night-vision cameras light the room with infrared LEDs your eyes cannot see. Your phone’s front camera can.',
+      'Then go beyond the lens. On the venue’s Wi-Fi, Clairix looks for devices that speak the protocols cameras use to stream video. It listens for cameras that were never finished being set up and are still broadcasting their own hotspot or Bluetooth name. And a magnetic gauge helps you check behind furniture for the magnets most covert cameras are mounted with.',
+      'A guided ten-step sweep walks you through all of it, from where to stand to how to test a mirror.',
+    ],
+    note: {
+      label: 'What it cannot do',
+      html: 'It cannot see a camera that has no line of sight to you, and it cannot detect analogue wireless cameras or cameras that only record to a memory card.',
+    },
+    link: { href: '/features#hidden-cameras', text: 'Read the full limits' },
+    visual: { variant: 'lens', label: 'Lens glint', caption: 'Holds still. Turns red.' },
+  },
+  {
+    id: 'trackers',
+    kicker: 'Trackers',
+    title: 'Know if you’re being followed',
+    lede: 'Alerts when a tracker moves with you, not when one is merely nearby.',
+    body: [
+      'Clairix recognises AirTags, Find My accessories, Tile, Samsung SmartTag, Chipolo, Pebblebee and a range of other Bluetooth trackers, as well as unbranded GPS boxes that advertise nothing anyone has catalogued. Trackers rotate their Bluetooth address every few minutes to avoid being followed themselves. Clairix follows them through those rotations by the parts of the signal that do not change, including the rhythm of the radio itself.',
+      'Then it waits for proof. A tracker is confirmed as following you only after it has been heard with you across real distance over real time. In the default settings that is about ten minutes and three hundred metres of shared movement. When it is confirmed, you get a notification that says so, where it was heard, and where to look.',
+      'When you want to find it, the locator turns your phone into a compass for the signal, with a warmer-and-colder guide and an estimated distance. For trackers that support the industry standard for unwanted tracking, Clairix can ask the tracker to identify its maker and model and make it play a sound.',
+    ],
+    note: {
+      label: 'Also',
+      html: 'A trip memory for your car, so a device that rides along on three separate drives is caught even if it only wakes up now and then. A built-in self-test so you can confirm detection works on your phone. And a pattern-of-life report that shows you how predictable your own routine looks to someone watching.',
+    },
+    link: { href: '/features#trackers', text: 'How tracker detection works' },
+    visual: { variant: 'radar', label: 'Follower check', caption: 'About 10 min · 300 m' },
+  },
+  {
+    id: 'spyware',
+    kicker: 'Spyware',
+    title: 'Check your phone for spyware',
+    lede: 'Find the apps that can read your screen, your keystrokes and your messages.',
+    body: [
+      'Stalkerware tries not to be seen. Clairix inspects every app on your phone for the signs: installed from outside a store, hidden without an icon, enabled as a keyboard, running as an accessibility service or notification listener, holding device-admin powers, acting as a VPN, or running in the background without ever showing a screen. Each signal adds to a score. The score, not any single signal, decides what you see, so a legitimate app does not get accused for one permission.',
+      'Clairix also checks the things that make spying possible without an app: a certificate someone installed to read your encrypted traffic, a proxy that intercepts your connections, USB debugging left on, a security patch that is a year old, a fingerprint that was added without you knowing. It can tell you when your screen is being recorded, when a microphone or camera is in use, and when a wireless microphone attaches itself to your phone.',
+      'An unlock ledger records every successful and failed attempt to unlock your phone, so you can see whether someone was in it while you slept.',
+    ],
+    link: { href: '/features#spyware', text: 'Every spyware check, and its limits' },
+    visual: { variant: 'scan', label: 'Stalkerware scan', caption: 'Signals add up to a score' },
+  },
+  {
+    id: 'networks',
+    kicker: 'Networks',
+    title: 'Spot fake networks and towers',
+    lede: 'Know when a Wi-Fi hotspot or a cell tower is not what it claims to be.',
+    body: [
+      'Some interception tools answer “yes” to every phone that asks for a network by name. Clairix asks for a network that does not exist anywhere, a random name only your phone knows. Anything that answers is lying. That test has no innocent explanation, so it never cries wolf.',
+      'Clairix also flags open networks that borrow a carrier’s name, open twins of a secured network you can see, and the default names of known interception equipment.',
+      'For cell towers, Clairix learns what normal looks like where you live and work: which cells serve you, on what technology, how loud, with how many neighbours. It then watches for the things a fake tower does: a sudden downgrade to an older network, a cell that appears in the wrong area, a tower that exists for thirty seconds and vanishes, a signal far stronger than anything you have seen there before. No internet, no account and no tower database are needed. It is your own history of normal.',
+    ],
+    note: {
+      label: 'What it cannot do',
+      html: 'No phone can prove a tower is fake. Clairix shows you indicators and a score, and it tells you when the baseline is still too young to judge.',
+    },
+    link: { href: '/features#networks', text: 'How the network checks work' },
+    visual: { variant: 'tower', label: 'Cell baseline', caption: 'Your own history of normal' },
+  },
+  {
+    id: 'comms',
+    kicker: 'Private comms',
+    title: 'Talk privately',
+    lede: 'Messages and calls that only the two of you can read or hear.',
+    body: [
+      'Clairix gives you a Clairix number: nine random digits that are not your phone number and not tied to your identity. Share it with the people you trust, or pair in person by scanning each other’s QR code.',
+      'Every message, voice note, photo and call is end-to-end encrypted on your phone with the Olm double ratchet, the same construction used by Matrix, before it goes anywhere. Each message is then sealed in an anonymous envelope addressed only to the recipient. Our relay stores and forwards envelopes it cannot open and does not know who sent them. Calls travel directly between the two phones, or through a relay that forwards encrypted packets it cannot decrypt.',
+      'Your keys, contacts and message history live on your phone, encrypted with a key held in its secure hardware. There is no password to leak, no phone number to look up, and no Google service in the path.',
+    ],
+    link: { href: '/security#encryption', text: 'Read the encryption details' },
+    visual: { variant: 'cipher', label: 'Sealed envelope', caption: 'The relay cannot open it' },
+  },
+];
+
+const emergency: { icon: IconName; title: string; body: string }[] = [
+  { icon: 'sos', title: 'SOS', body: 'One tap sends your location, end-to-end encrypted, to the people in your group. Location is read at that moment and at no other time.' },
+  { icon: 'phrase', title: 'Duress phrase', body: 'An ordinary-looking sentence you can type into any chat. The message goes out as written. Underneath, the SOS fires. Anyone watching the screen sees a normal conversation.' },
+  { icon: 'phone', title: 'Fake call', body: 'Schedule an incoming call for 30 seconds, 2 minutes or 5 minutes from now. Your phone rings with its real ringtone and shows a real-looking call screen. Answer it and walk away, or have it place a real encrypted call to a contact.' },
+  { icon: 'lock', title: 'App lock', body: 'A passcode protects Clairix itself, with optional biometric unlock. Too many wrong attempts can wipe the app’s data. A separate duress passcode wipes it immediately and shows nothing unusual.' },
+  { icon: 'wipe', title: 'Panic wipe', body: 'One action deletes everything Clairix holds on your phone, asks the relay to delete your account, and destroys the keys so nothing left behind can be read.' },
+];
+
+const steps: { icon: IconName; title: string; body: string }[] = [
+  { icon: 'arrowDown', title: 'Install and choose what to check.', body: 'Clairix asks for each permission only when you use the feature that needs it. Sweep a room, scan your phone or start the tracker scanner. Nothing runs that you did not start.' },
+  { icon: 'reticle', title: 'Clairix watches, measures and waits for proof.', body: 'Detection happens on your phone. A tracker has to move with you before it is called a follower. A lens has to hold still before it turns red. A cell tower has to break several rules at once before you are told.' },
+  { icon: 'timeline', title: 'You get a clear answer, and a record.', body: 'Plain-language findings tell you what was found, how confident Clairix is and where to look. Every event is kept in a timeline on your phone. When you need to show someone, export an evidence report with timestamps and positions.' },
+];
+
+const trust: { icon: IconName; title: string; body: string }[] = [
+  { icon: 'ban', title: 'No ads. No analytics. No trackers.', body: 'There is no advertising SDK, analytics SDK or crash reporter in the app. We cannot see how you use it.' },
+  { icon: 'device', title: 'Detection data stays on your phone.', body: 'Bluetooth, Wi-Fi, cellular and NFC scan results, your timeline, your location history, your app list and your unlock ledger are never uploaded. Android backups are turned off for Clairix.' },
+  { icon: 'eye', title: 'The exceptions are named.', body: 'Encrypted messages pass through our relay as sealed envelopes. Map tiles and address searches go to OpenStreetMap. SOS alerts carry your location, end-to-end encrypted, to your chosen contacts. That is the complete list, and it is spelled out on the <a class="text-link" href="/security">security page</a>.' },
+  { icon: 'key', title: 'Standard, audited cryptography.', body: 'vodozemac for the double ratchet. X25519, HKDF-SHA256 and ChaCha20-Poly1305 for sealed envelopes. Ed25519 signatures instead of passwords. Keys held in Android’s hardware-backed keystore.' },
+  { icon: 'gauge', title: 'Open about limits.', body: 'Every feature says what it cannot do. Detection is a strong aid, not a guarantee.' },
+];
+
+const faqs: { q: string; a: string }[] = [
+  { q: 'Can Clairix find every hidden camera?', a: 'No. The optical sweep finds a camera when its lens has line of sight to you and you can point the phone at it. It cannot see a camera behind a solid surface, a camera pointing away from you, or one hidden where you did not look. The network checks find cameras that stream over the venue’s Wi-Fi or are still in setup mode. Cameras that only record to a memory card, and analogue wireless cameras, transmit nothing a phone’s radios can hear. Clairix tells you this inside the app, and the guided sweep is built so that your eyes, your hands and the phone work together.' },
+  { q: 'Will it alert me every time an AirTag is nearby?', a: 'No. A tracker in the next apartment or a stranger’s bag on the train is not a threat and would train you to ignore alerts. Clairix only confirms a tracker as following you after it has been heard with you across real distance over real time. Devices that are merely around are listed quietly, without an alarm.' },
+  { q: 'Does Clairix see my messages?', a: 'No. Messages are encrypted on your phone for one recipient before they leave it. The relay stores sealed envelopes it cannot open, and it does not learn who sent them. We could not read your messages if we wanted to.' },
+  { q: 'What does the relay store about me?', a: 'Your Clairix number, your public keys, any encrypted envelopes waiting for your phone (deleted on delivery or after 30 days), and a push endpoint if you set one up. That is all. There is no name, phone number or email on the relay. <a href="/security#relay">Full details.</a>' },
+  { q: 'Does Clairix track my location?', a: 'The tracker scanner uses your location to tell whether a device is moving with you, and your location history is stored on your phone only. Nothing in that history is uploaded. Location is sent off the phone in exactly one case: when you press SOS or type your duress phrase, your position is sent end-to-end encrypted to your chosen contacts.' },
+  { q: 'Is the cell tower check reliable?', a: 'It is honest. No phone can prove a cell tower is fake; what it can do is notice when your modem’s view of the network stops matching what is normal for the place you are in. Clairix learns normal over days, scores several indicators together and tells you when the baseline is too young to judge. Treat it as a reason to be careful, not as a verdict.' },
+  { q: 'Can spyware hide from the spyware check?', a: 'Partly. Clairix reads everything stock Android lets an app read, and it asks for the two extra grants that widen the view. Spyware installed with root access, or built into a modified system image, can hide from any app, including this one. Clairix checks for signs of root, an unlocked bootloader and failed verified boot for that reason.' },
+  { q: 'Why does it need so many permissions?', a: 'Because the threats live in different radios. Bluetooth for trackers, location to confirm movement, camera for the lens sweep, Wi-Fi for fake hotspots, phone state for cell towers, microphone for calls. Each permission is asked for only when you open the feature that needs it, and you can use the rest of the app without granting any of them.' },
+  { q: 'Is Clairix free?', a: 'Yes, every feature is free right now.' },
+  { q: 'Does Clairix work on iPhone?', a: 'No. Clairix is built for Android 12 and newer. Much of what it does, such as scanning for unknown Bluetooth devices with the screen off or inspecting installed apps, is not possible for third-party apps on iOS.' },
+  { q: 'Is Clairix a replacement for calling for help?', a: 'No. If you believe you are in danger, contact local emergency services. Clairix is a detection aid and a private channel to the people you trust.' },
+];
+
+const jsonLd = [softwareApplication, faqPage(faqs.map((f) => ({ q: f.q, a: toPlainText(f.a) })))];
+---
+
+<BaseLayout meta={pages.home} jsonLd={jsonLd}>
+  <!-- Hero -->
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-bg" aria-hidden="true"></div>
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="label">Personal security for Android</p>
+        <h1 id="hero-title" class="display h1 hero-title slit">
+          <span>Nothing</span>
+          <span>hides<em>.</em></span>
+        </h1>
+        <p class="lede hero-lede">
+          Clairix finds hidden cameras, Bluetooth trackers and spyware, and gives you a private way to talk. Everything it
+          learns stays on your phone.
+        </p>
+        <div class="btn-row">
+          <PlayButton size="lg" />
+          <a class="btn btn--lg btn--ghost cham cham--oct" href="/download#clairix-full">
+            Download Clairix Full
+            <Icon name="arrowDown" size={18} />
+          </a>
+        </div>
+        <p class="hero-fine">Free. No ads, no account needed to start. Android 12 or newer.</p>
+      </div>
+      <div class="hero-art">
+        <HeroScanner />
+      </div>
+    </div>
+  </section>
+
+  <Ticker />
+
+  <!-- Three reasons -->
+  <section class="section" aria-labelledby="reasons-title">
+    <div class="wrap">
+      <div class="section-head section-head--split">
+        <div class="stack-md">
+          <p class="label">Why Clairix</p>
+          <h2 id="reasons-title" class="display h2">Three reasons people choose Clairix<em>.</em></h2>
+        </div>
+        <p class="lede">
+          Hidden-camera sweeps, tracker alerts, spyware checks and end-to-end encrypted calls, in one calm app that keeps
+          your data on your phone.
+        </p>
+      </div>
+      <div class="reasons">
+        {
+          reasons.map((r, i) => (
+            <article class="reason panel cham" data-reveal>
+              <div class="reason-top">
+                <span class="reason-num">{String(i + 1).padStart(2, '0')}</span>
+                <span class="icon-tile cham cham--oct">
+                  <Icon name={r.icon} size={26} />
+                </span>
+              </div>
+              <h3 class="h3">{r.title}</h3>
+              <p class="muted" set:html={r.body} />
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  {
+    features.map((f, i) => (
+      <section class:list={['section', 'feature', { 'feature--flip': i % 2 === 1 }]} id={f.id} aria-labelledby={`${f.id}-title`}>
+        <div class="wrap feature-grid">
+          <div class="feature-copy">
+            <p class="label">
+              <span class="num">{String(i + 1).padStart(2, '0')}</span> {f.kicker}
+            </p>
+            <h2 id={`${f.id}-title`} class="display h2">
+              {f.title}
+            </h2>
+            <p class="feature-lede">{f.lede}</p>
+            <div class="feature-body">
+              {f.body.map((p) => (
+                <p set:html={p} />
+              ))}
+            </div>
+            {f.note && (
+              <div class:list={['limits', 'cham', { 'limits--also': f.note.label === 'Also' }]}>
+                <p class="label">{f.note.label}</p>
+                <p set:html={f.note.html} />
+              </div>
+            )}
+            <a class="text-link feature-link" href={f.link.href}>
+              {f.link.text}
+              <Icon name="arrowRight" size={16} />
+            </a>
+          </div>
+          <div class="feature-art" data-reveal>
+            <FeatureVisual variant={f.visual.variant} label={f.visual.label} caption={f.visual.caption} />
+          </div>
+        </div>
+      </section>
+    ))
+  }
+
+  <!-- Emergency -->
+  <section class="section" id="emergency" aria-labelledby="emergency-title">
+    <div class="wrap">
+      <div class="section-head section-head--split">
+        <div class="stack-md">
+          <p class="label"><span class="num">06</span> Emergency</p>
+          <h2 id="emergency-title" class="display h2">Be ready for an emergency</h2>
+        </div>
+        <p class="lede"><strong>A few quiet tools for when a situation turns.</strong></p>
+      </div>
+      <div class="tools">
+        {
+          emergency.map((t) => (
+            <article class="tool panel cham" data-reveal>
+              <span class="icon-tile cham cham--oct">
+                <Icon name={t.icon} size={24} />
+              </span>
+              <h3 class="h3">{t.title}</h3>
+              <p class="muted">{t.body}</p>
+            </article>
+          ))
+        }
+        <a class="tool tool--link panel cham" href="/features#emergency" data-reveal>
+          <span class="display tool-link-title">Every emergency tool, and what it cannot do</span>
+          <span class="tool-link-cta">
+            Read more <Icon name="arrowRight" size={18} />
+          </span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="section how" aria-labelledby="how-title">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="label">How it works</p>
+        <h2 id="how-title" class="display h2">Check. Prove. Know<em>.</em></h2>
+      </div>
+      <ol class="steps">
+        {
+          steps.map((s, i) => (
+            <li class="step" data-reveal>
+              <div class="step-head">
+                <span class="step-num display">{i + 1}</span>
+                <span class="step-line" aria-hidden="true" />
+                <Icon name={s.icon} size={26} class="step-icon" />
+              </div>
+              <h3 class="h3">{s.title}</h3>
+              <p class="muted">{s.body}</p>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <!-- Trust -->
+  <section class="section trust" aria-labelledby="trust-title">
+    <div class="wrap trust-grid">
+      <div class="trust-head">
+        <p class="label">Trust</p>
+        <h2 id="trust-title" class="display h2">Built to be trusted</h2>
+        <p class="lede">A security app should be the easiest app on your phone to audit.</p>
+        <a class="btn btn--ghost cham cham--oct" href="/security#egress">
+          What leaves your phone
+          <Icon name="arrowRight" size={18} class="icon--move" />
+        </a>
+      </div>
+      <ul class="trust-list">
+        {
+          trust.map((t) => (
+            <li class="trust-item" data-reveal>
+              <Icon name={t.icon} size={28} class="trust-icon" />
+              <div>
+                <h3 class="h3">{t.title}</h3>
+                <p class="muted" set:html={t.body} />
+              </div>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq" aria-labelledby="faq-title">
+    <div class="wrap faq-grid">
+      <div class="faq-head">
+        <p class="label">FAQ</p>
+        <h2 id="faq-title" class="display h2">Questions people ask</h2>
+        <p class="muted">
+          Something else? Write to <a class="text-link" href="mailto:support@clairix.app">support@clairix.app</a>. We answer
+          our own email.
+        </p>
+      </div>
+      <div class="faq">
+        {
+          faqs.map((f) => (
+            <details>
+              <summary>
+                <span>{f.q}</span>
+                <span class="faq-icon cham cham--oct" aria-hidden="true">
+                  <Icon name="plus" size={16} />
+                </span>
+              </summary>
+              <div class="faq-body">
+                <p set:html={f.a} />
+              </div>
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- Final call to action -->
+  <section class="final" aria-labelledby="final-title">
+    <div class="wrap">
+      <div class="final-panel cham">
+        <div class="final-copy">
+          <h2 id="final-title" class="display final-title slit">
+            <span>Know what’s</span>
+            <span>watching<em>.</em></span>
+          </h2>
+          <p class="lede">Every feature, free. No ads, no analytics, nothing to sign up for.</p>
+          <div class="btn-row">
+            <PlayButton size="lg" />
+          </div>
+          <p class="muted final-alt">
+            Prefer to install it yourself? <a class="text-link" href="/download#clairix-full">Download Clairix Full.</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  /* Hero */
+  .hero {
+    position: relative;
+    isolation: isolate;
+    padding-block: clamp(56px, 8vw, 112px) clamp(64px, 8vw, 120px);
+    overflow: hidden;
+  }
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      radial-gradient(60% 70% at 78% 40%, color-mix(in oklab, var(--clx-accent) 9%, transparent), transparent 65%),
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 100% 100%, 56px 56px, 56px 56px;
+    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: clamp(32px, 5vw, 72px);
+    align-items: center;
+  }
+  .hero-copy {
+    display: grid;
+    gap: 28px;
+    justify-items: start;
+  }
+  .hero-title {
+    font-size: clamp(3.25rem, 7.6vw, 7rem);
+    line-height: 0.88;
+    margin-top: 4px;
+    --slit-at: 50%;
+    --slit-w: 0.03em;
+  }
+  .hero-lede {
+    font-size: clamp(1.125rem, 1.7vw, 1.375rem);
+    color: var(--clx-text-muted);
+    max-width: 34em;
+  }
+  .hero-fine {
+    font-size: 0.875rem;
+    color: var(--clx-text-subtle);
+  }
+  @media (max-width: 960px) {
+    .hero-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .hero-art {
+      max-width: 440px;
+      width: 100%;
+      justify-self: center;
+    }
+  }
+  @media (max-width: 480px) {
+    .hero .btn-row {
+      width: 100%;
+    }
+    .hero .btn-row > :global(*) {
+      width: 100%;
+    }
+  }
+
+  /* Reasons */
+  .reasons {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .reason {
+    display: grid;
+    align-content: start;
+    gap: 18px;
+  }
+  .reason-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+  .reason-num {
+    font-family: var(--clx-font-display);
+    font-stretch: 125%;
+    font-weight: 900;
+    font-size: 3.25rem;
+    line-height: 1;
+    color: var(--clx-accent);
+  }
+  .reason :global(.text-link) {
+    white-space: normal;
+  }
+  @media (max-width: 960px) {
+    .reasons {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* Features */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(40px, 6vw, 96px);
+    align-items: center;
+  }
+  .feature--flip .feature-copy {
+    order: 2;
+  }
+  .feature-copy {
+    display: grid;
+    gap: 22px;
+    justify-items: start;
+  }
+  .feature-copy .h2 {
+    font-size: clamp(1.75rem, 4.4vw, 3.5rem);
+  }
+  .feature-lede {
+    font-family: var(--clx-font-ui);
+    font-weight: 700;
+    font-size: clamp(1.1875rem, 1.8vw, 1.4375rem);
+    line-height: 1.35;
+    color: var(--clx-text);
+    max-width: 30em;
+  }
+  .feature-body {
+    display: grid;
+    gap: 14px;
+    color: var(--clx-text-muted);
+    max-width: 62ch;
+  }
+  .feature-copy .limits {
+    max-width: 62ch;
+    display: grid;
+    gap: 8px;
+  }
+  .limits--also .label::before {
+    background: var(--clx-accent);
+  }
+  .feature-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .feature-art {
+    position: sticky;
+    top: calc(var(--header-h) + 40px);
+    align-self: start;
+  }
+  @media (max-width: 960px) {
+    .feature-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .feature--flip .feature-copy {
+      order: 0;
+    }
+    .feature-art {
+      position: static;
+      order: -1;
+    }
+  }
+
+  /* Emergency */
+  .tools {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .tool {
+    display: grid;
+    gap: 16px;
+    align-content: start;
+  }
+  .tool--link {
+    --cham-fill: var(--clx-accent);
+    --cham-border: var(--clx-accent);
+    color: var(--clx-on-accent);
+    text-decoration: none;
+    align-content: space-between;
+    min-height: 220px;
+  }
+  .tool--link:hover {
+    --cham-fill: var(--clx-accent-hover);
+  }
+  .tool-link-title {
+    font-size: clamp(1.25rem, 2vw, 1.625rem);
+    line-height: 1.05;
+  }
+  .tool-link-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+  }
+  @media (max-width: 960px) {
+    .tools {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 620px) {
+    .tools {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* How it works */
+  .steps {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(24px, 3vw, 40px);
+  }
+  .step {
+    display: grid;
+    gap: 16px;
+    align-content: start;
+  }
+  .step-head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 10px;
+  }
+  .step-num {
+    font-size: clamp(4rem, 7vw, 6rem);
+    line-height: 0.8;
+    color: var(--clx-text);
+    -webkit-text-stroke: 0;
+  }
+  .step-line {
+    flex: 1;
+    height: 2px;
+    background: linear-gradient(90deg, var(--clx-accent), var(--clx-border) 70%);
+  }
+  .step :global(.step-icon) {
+    color: var(--clx-accent);
+  }
+  @media (max-width: 860px) {
+    .steps {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* Trust */
+  .trust {
+    background: var(--clx-surface);
+  }
+  .trust-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: clamp(40px, 6vw, 96px);
+    align-items: start;
+  }
+  .trust-head {
+    position: sticky;
+    top: calc(var(--header-h) + 40px);
+    display: grid;
+    gap: 22px;
+    justify-items: start;
+  }
+  .trust-list {
+    list-style: none;
+    padding: 0;
+    border-top: 1px solid var(--clx-border-strong);
+  }
+  .trust-item {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 20px;
+    padding: 28px 0;
+    border-bottom: 1px solid var(--clx-border);
+  }
+  .trust-item .h3 {
+    margin-bottom: 8px;
+  }
+  .trust-item :global(.trust-icon) {
+    color: var(--clx-accent);
+    margin-top: 2px;
+  }
+  @media (max-width: 960px) {
+    .trust-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .trust-head {
+      position: static;
+    }
+  }
+
+  /* FAQ */
+  .faq-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: clamp(40px, 6vw, 96px);
+    align-items: start;
+  }
+  .faq-head {
+    position: sticky;
+    top: calc(var(--header-h) + 40px);
+    display: grid;
+    gap: 22px;
+  }
+  @media (max-width: 960px) {
+    .faq-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .faq-head {
+      position: static;
+    }
+  }
+
+  /* Final CTA */
+  .final {
+    padding-block: 0 var(--section-pad);
+  }
+  .section + .final {
+    border-top: 1px solid var(--clx-border);
+    padding-top: var(--section-pad);
+  }
+  .final-panel {
+    --c: 32px;
+    --cham-border: var(--clx-border-strong);
+    --cham-fill: var(--clx-surface);
+    padding: clamp(32px, 7vw, 96px);
+    overflow: hidden;
+  }
+  .final-panel::after {
+    background-image:
+      radial-gradient(70% 90% at 100% 100%, color-mix(in oklab, var(--clx-accent) 14%, transparent), transparent 60%),
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+    background-color: var(--clx-surface);
+  }
+  .final-copy {
+    display: grid;
+    gap: 28px;
+    justify-items: start;
+  }
+  .final-title {
+    font-size: clamp(2.5rem, 8vw, 7rem);
+    line-height: 0.9;
+    --slit-at: 50%;
+    --slit-w: 0.03em;
+  }
+  .final-alt {
+    font-size: 0.9375rem;
+  }
+</style>
