@@ -87,15 +87,20 @@ class VehicleTrips(private val store: Store) {
     }
 
     /**
-     * Earlier trips matching [has], counted so that trips setting off within
-     * [DISTINCT_START_M] of each other — or of the current trip — count once. A trip
-     * with no recorded start cannot be told apart from any other and counts on its own.
+     * Earlier trips matching [has], counted so that earlier trips setting off within
+     * [DISTINCT_START_M] of each other count once. A trip with no recorded start
+     * cannot be told apart from any other and counts on its own.
+     *
+     * The point of the dedupe is a device that sits *at* a start point — in the
+     * garage at home — and qualifies on every drive from there: such a device can only
+     * ever show one distinct start among the earlier trips, so with the current trip
+     * it reaches two, never [TRIPS_TO_ALERT]. The current trip is not part of the
+     * dedupe. It used to seed it, and then a commuter's tracker — home to work, work
+     * to home, home to work — lost the earlier home start to the current one and
+     * stalled at two forever, however many days it rode along.
      */
     private fun earlierTrips(has: (Trip) -> Boolean): Int {
         val starts = ArrayList<Pair<Double, Double>>()
-        val lat0 = tripStartLat
-        val lon0 = tripStartLon
-        if (lat0 != null && lon0 != null) starts.add(lat0 to lon0)
         var n = 0
         for (t in history) {
             if (!has(t)) continue
