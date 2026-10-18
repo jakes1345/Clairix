@@ -147,6 +147,16 @@ object CommsRepository {
     /** Claim tickets waiting to be presented, one per peer; see [PendingClaims]. */
     private lateinit var claims: PendingClaims
 
+    /**
+     * The one immediate retry after a send found no delivery token; anything
+     * beyond it is left to [scheduleRetry]'s backoff. See [TokenRefill].
+     */
+    private val tokenRefill = TokenRefill(
+        topUp = { topUpTokens() },
+        retry = { scope.launch { flushOutbox(); flushReceipts() } },
+        launch = { block -> scope.launch { block() } },
+    )
+
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
     private val receiptsLock = Mutex()
@@ -980,8 +990,9 @@ object CommsRepository {
      * presents it, every envelope to [contact] carries the claim ticket of the
      * one-time key their newest session was built on ([claims]): a failed
      * first envelope, or a resync that could not go, does not lose it. With no
-     * delivery token left this is Offline: the envelope stays queued and
-     * tokens are fetched first. No lock is held.
+     * delivery token left this is Offline: the envelope stays queued, the
+     * outbox's backoff retries it (fetching tokens first), and [tokenRefill]
+     * retries once at once if a fetch does bring tokens. No lock is held.
      */
     private fun transmit(contact: Contact, envelope: ByteArray): Deliver {
         val claim = claims.get(contact.number, System.currentTimeMillis())
@@ -990,15 +1001,21 @@ object CommsRepository {
             if (claim != null) claims.accepted(contact.number, claim)
             Deliver.Sent
         } catch (e: RelayException) {
-            if (e.code == RelayClient.NO_TOKENS) scope.launch { topUpTokens(); flushOutbox(); flushReceipts() }
+            if (e.code == RelayClient.NO_TOKENS) tokenRefill.onNoTokens()
             relayOutcome(e)
         }
     }
 
-    /** Fetches delivery tokens when few are left; failures are logged and retried at the next sync. */
-    private fun topUpTokens() {
-        if (!config.isRegistered) return
-        runCatching { relay.topUpTokens() }.onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
+    /**
+     * Fetches delivery tokens when few are left and returns how many the pool
+     * then holds (0 when the fetch failed; failures are logged and retried by
+     * the next sync or outbox retry).
+     */
+    private fun topUpTokens(): Int {
+        if (!config.isRegistered) return 0
+        return runCatching { relay.topUpTokens() }
+            .onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
+            .getOrDefault(0)
     }
 
     /** Which relay errors are worth retrying later (Offline) and which are final (Failed). */
