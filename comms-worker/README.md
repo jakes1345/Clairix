@@ -13,19 +13,39 @@ giving them your real number or your identity key.
 ## What the relay sees
 
 - The public keys of each registered identity (they are public by design).
-- For each envelope: the recipient's Clairix number, a size and a timestamp, and,
-  at the moment it is sent, the sender's Clairix number, because the send request
-  is signed by the sender. The relay does not store the sender with the
-  envelope, and a queued envelope names only its recipient, but a relay
-  operator who logs requests can see who sent to whom and when. Never the
-  content: envelopes are sealed to the recipient's sealing key with an
-  anonymous box, and inside that sits an Olm double-ratchet message the relay
-  could not read even if it opened the box.
+- For each envelope: the recipient's Clairix number, a size (envelopes are
+  padded to a few fixed sizes, so a receipt, a call signal and a short text look
+  alike) and a timestamp. Not the sender: a send is not signed. It spends a
+  single-use delivery token that the sender's phone fetched earlier, in a
+  batch, over its signed channel. The relay keeps only each token's hash, in a
+  shard object that never learns which account it went to, so nothing stored
+  links an envelope to its sender. Never the content: envelopes are sealed to
+  the recipient's sealing key with an anonymous box, and inside that sits an
+  Olm double-ratchet message the relay could not read even if it opened the box.
+- What it can still learn while running, if its operator logs requests: the
+  address a request comes from (the same phone fetches tokens and sends, so use
+  Tor or a VPN if that matters), and which account fetched a batch of tokens,
+  since the tokens are random values the relay itself hands out rather than
+  blind-signed ones. The first envelope of a new session also carries the claim
+  ticket of the one-time key it was built on, which the relay handed to the
+  sender's account with the key; that envelope is linkable to that lookup, as the
+  lookup itself already showed who wanted to reach whom.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
-  "wake" to when a live socket is not connected.
+  "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
+  up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
+  host first gets a one-time code the phone must echo back, so the relay cannot
+  be pointed at arbitrary URLs.
 
 Authentication is by Ed25519 signature with the same identity key contacts
-verify. There are no passwords or tokens to leak.
+verify. There are no passwords or session tokens to leak; a delivery token
+authorises one envelope and nothing else.
+
+Each lookup of a contact's bundle hands out one of their one-time keys with a
+claim ticket. The send that starts the session presents the ticket and spends
+the key; a key whose ticket does not come back within 15 minutes returns to the
+pool. A caller may claim at most three keys an hour from any one number, and a
+number hands out at most sixty an hour in all; past either limit the lookup
+offers the fallback key (rotated daily), so nobody can drain anyone's keys.
 
 ## One-time setup
 
@@ -69,8 +89,9 @@ npx wrangler secret put TURN_KEY_ID
 npx wrangler secret put TURN_KEY_API_TOKEN
 ```
 
-The Worker then mints short-lived TURN credentials for `GET /v1/turn`. A TURN
-server forwards encrypted packets it cannot decrypt.
+The Worker then mints TURN credentials for every `GET /v1/turn` request: they
+are valid for two hours, go to that caller alone and are never cached or
+shared. A TURN server forwards encrypted packets it cannot decrypt.
 
 ### ClairixCoin (optional)
 

@@ -12,6 +12,9 @@
 #
 # Plain variables (may go in [vars] below):
 #   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with, e.g. "100"; unset: none
+#   PUSH_HOSTS           Optional: comma-separated push hosts (a self-hosted ntfy, say) trusted like
+#                        ntfy.sh and up.conversations.im; an endpoint on any other host is used only
+#                        after the phone echoes a one-time code pushed through it
 #   WZDX_FEEDS           Optional, for navigation: comma-separated URLs of WZDx v4 GeoJSON
 #                        feeds (state DOT work-zone feeds). The cron below fetches them every
 #                        10 minutes and adds work zones as traffic incidents to every region

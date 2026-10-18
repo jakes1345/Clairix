@@ -29,6 +29,12 @@ export interface Env {
   TOMTOM_DAILY_CAP?: string;
   /** Optional: share of each provider's daily cap one caller may use, from 0 to 1 (default 0.25). */
   INCIDENTS_PER_CALLER_DAILY_SHARE?: string;
+  /**
+   * Optional: comma-separated push hosts trusted without a check (a self-hosted
+   * ntfy, say), added to ntfy.sh and up.conversations.im. An endpoint on any
+   * other host is used only once the phone has echoed a code sent through it.
+   */
+  PUSH_HOSTS?: string;
 }
 
 /** A JSON response with the headers every API reply carries. */
@@ -45,8 +51,12 @@ export function jsonText(text: string, status = 200): Response {
 }
 
 export class HttpError extends Error {
-  constructor(public readonly status: number, message: string, public readonly retryAfter?: number) {
+  readonly status: number;
+  readonly retryAfter?: number;
+  constructor(status: number, message: string, retryAfter?: number) {
     super(message);
+    this.status = status;
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
 }
 
