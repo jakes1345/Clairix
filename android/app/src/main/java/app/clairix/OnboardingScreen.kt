@@ -7,6 +7,8 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -449,7 +451,7 @@ private fun OCommsPage3(onStart: () -> Unit) {
                 .background(OPanelClr, RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text("✓", color = OClearClr, fontSize = 54.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Filled.Check, contentDescription = null, tint = OClearClr, modifier = Modifier.size(64.dp))
         }
         Spacer(Modifier.height(36.dp))
         Text(
@@ -510,7 +512,7 @@ private fun OPage4(onStart: () -> Unit) {
                 .background(OPanelClr, RoundedCornerShape(60.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text("✓", color = OClearClr, fontSize = 54.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Filled.Check, contentDescription = null, tint = OClearClr, modifier = Modifier.size(64.dp))
         }
         Spacer(Modifier.height(36.dp))
         Text(

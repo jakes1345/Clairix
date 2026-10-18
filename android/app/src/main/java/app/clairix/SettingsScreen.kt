@@ -142,7 +142,7 @@ private val SCardShape   = RoundedCornerShape(4.dp)
 // ── SettingsScreen composable ──────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onOpenTools: () -> Unit = {}) {
+fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
     val context = LocalContext.current
     val trusted by Registry.trusted.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
@@ -345,37 +345,6 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onOpenTools
                     fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp
                 )
                 Spacer(Modifier.width(60.dp))
-            }
-        }
-
-        // ── Tools ────────────────────────────────────────────────────────────
-        //
-        // The tab bar is full, so the on-demand checks and defences live behind
-        // this row (and the TOOLS button on the Scan header). The comms-only build
-        // has neither the tools nor the scanner, so from here to the passcode
-        // section is the full app's alone.
-
-        if (BuildConfig.FULL_ACCESS) item(key = "§tools") {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(SCardShape)
-                    .background(SPanelClr, SCardShape)
-                    .border(1.dp, SAccentClr.copy(alpha = 0.5f), SCardShape)
-                    .clickable(onClick = onOpenTools)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("TOOLS", color = SAccentClr, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    Text(
-                        "Hidden camera sweep, stalkerware scan, certificate audit, pattern of life, " +
-                        "unlock ledger, fake call, duress phrase, tracker locator and the self-test beacon",
-                        color = SMutedClr, fontSize = 12.sp, lineHeight = 16.sp
-                    )
-                }
-                Text("›", color = SAccentClr, fontSize = 20.sp)
             }
         }
 

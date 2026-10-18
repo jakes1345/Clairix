@@ -32,6 +32,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -1251,15 +1256,7 @@ private fun MessageBubble(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(timeFmt.format(Date(m.ts)), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 if (mine) {
-                    val (glyph, colour) = when (m.status) {
-                        "queued" -> "…" to CMuted
-                        "sent" -> "✓" to CMuted
-                        "delivered" -> "✓✓" to CMuted
-                        "read" -> "✓✓" to CClear
-                        "failed" -> "!" to CCritical
-                        else -> "" to CMuted
-                    }
-                    Text(glyph, color = colour, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    DeliveryMark(m.status)
                 }
             }
         }
@@ -1279,14 +1276,22 @@ private fun sizeLabel(bytes: Long): String = when {
     else -> "${(bytes + 1023) / 1024} KB"
 }
 
-/** The glyph a message's delivery status shows after its time, for the sender. */
-private fun statusGlyph(status: String): Pair<String, Color> = when (status) {
-    "queued" -> "…" to CMuted
-    "sent" -> "✓" to CMuted
-    "delivered" -> "✓✓" to CMuted
-    "read" -> "✓✓" to CClear
-    "failed" -> "!" to CCritical
-    else -> "" to CMuted
+/**
+ * The mark a message's delivery status shows after its time, for the sender:
+ * a clock-face ellipsis while queued, one tick when sent, two when delivered,
+ * two in green when read, and a warning when it failed.
+ */
+@Composable
+private fun DeliveryMark(status: String) {
+    val size = Modifier.size(12.dp)
+    when (status) {
+        "queued" -> Text("…", color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        "sent" -> Icon(Icons.Filled.Done, contentDescription = "Sent", tint = CMuted, modifier = size)
+        "delivered" -> Icon(ClairixIcons.DoneAll, contentDescription = "Delivered", tint = CMuted, modifier = size)
+        "read" -> Icon(ClairixIcons.DoneAll, contentDescription = "Read", tint = CClear, modifier = size)
+        "failed" -> Icon(Icons.Filled.Warning, contentDescription = "Not sent", tint = CCritical, modifier = size)
+        else -> Unit
+    }
 }
 
 /**
@@ -1367,8 +1372,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                     color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                 )
                 if (mine) {
-                    val (glyph, colour) = statusGlyph(m.status)
-                    Text(glyph, color = colour, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    DeliveryMark(m.status)
                 }
             }
         }
@@ -2303,7 +2307,7 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 )
                                 if (isOut && msg.status == "failed") {
                                     Spacer(Modifier.width(4.dp))
-                                    Text("✕", color = CCritical, fontSize = 10.sp)
+                                    Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = CCritical, modifier = Modifier.size(12.dp))
                                 }
                             }
                         }
@@ -2538,7 +2542,7 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
                                     Text(formatClairixNumber(c.number), color = CMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                                 }
                                 if (selected?.number == c.number) {
-                                    Text("✓", color = CAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                    Icon(Icons.Filled.Check, contentDescription = "Selected", tint = CAccent, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
