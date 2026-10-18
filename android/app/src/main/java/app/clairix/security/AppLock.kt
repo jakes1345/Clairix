@@ -73,9 +73,9 @@ object AppLock {
     const val DEFAULT_RELOCK_MS = 30_000L
     val RELOCK_CHOICES = listOf(0L, 30_000L, 60_000L, 5 * 60_000L)
 
-    internal const val KEY_ALIAS = "aegis_applock_v1"
+    internal const val KEY_ALIAS = "clairix_applock_v1"
     /** AES key that only a strong biometric can use, and that a new enrolment destroys. */
-    internal const val BIOMETRIC_KEY_ALIAS = "aegis_applock_bio_v1"
+    internal const val BIOMETRIC_KEY_ALIAS = "clairix_applock_bio_v1"
     internal const val PREFS_NAME = "app_lock"
 
     private const val K_SALT = "salt"
@@ -90,7 +90,7 @@ object AppLock {
     private const val K_BIOMETRIC = "biometric_enabled"
 
     private const val SALT_LEN = 16
-    private val DOMAIN = "aegis-applock-v1".toByteArray(Charsets.UTF_8)
+    private val DOMAIN = "clairix-applock-v1".toByteArray(Charsets.UTF_8)
     /** Compared against when no duress verifier exists, so that check costs the same either way. */
     private val NO_VERIFIER = ByteArray(32)
 
@@ -296,7 +296,7 @@ object AppLock {
         }
     }
 
-    /** An Clairix screen has come to the foreground. */
+    /** A Clairix screen has come to the foreground. */
     fun onForeground(context: Context) {
         val since = backgroundedAt
         backgroundedAt = 0L

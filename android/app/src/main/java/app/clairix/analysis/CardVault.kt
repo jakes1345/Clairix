@@ -77,8 +77,8 @@ class CardVault(private val context: Context) {
     }
 
     private companion object {
-        const val KEY_ALIAS_V1 = "aegis_vault_v1"
-        const val KEY_ALIAS_V2 = "aegis_vault_v2"
+        const val KEY_ALIAS_V1 = "clairix_vault_v1"
+        const val KEY_ALIAS_V2 = "clairix_vault_v2"
         const val PREFS_NAME = "card_vault"
         /** Blob encrypted under the v1 (no-auth) key. Present only before migration. */
         const val PREFS_KEY_V1 = "cards_enc"

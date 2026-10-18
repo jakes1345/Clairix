@@ -178,7 +178,7 @@ fun LockScreen() {
         ) {
             // ── Wordmark ───────────────────────────────────────────────
             Text(
-                "AEGIS",
+                "CLAIRIX",
                 color = LkInk,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,

@@ -78,9 +78,9 @@ object LiveLink {
             ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag)
             ?.apply { setReferenceCounted(counted) }
 
-    private val envelopeWake by lazy { wakeLock("aegis:relay-envelope", counted = true) }
-    private val reconnectWake by lazy { wakeLock("aegis:relay-reconnect", counted = false) }
-    private val probeWake by lazy { wakeLock("aegis:relay-probe", counted = false) }
+    private val envelopeWake by lazy { wakeLock("clairix:relay-envelope", counted = true) }
+    private val reconnectWake by lazy { wakeLock("clairix:relay-reconnect", counted = false) }
+    private val probeWake by lazy { wakeLock("clairix:relay-probe", counted = false) }
 
     private fun PowerManager.WakeLock?.releaseQuietly() {
         this ?: return

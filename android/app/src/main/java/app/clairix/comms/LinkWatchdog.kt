@@ -36,7 +36,7 @@ class LinkWatchdog : BroadcastReceiver() {
             return
         }
         val lock = app.getSystemService(PowerManager::class.java)
-            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aegis:relay-watchdog")
+            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:relay-watchdog")
             ?.apply { acquire(CHECK_BUDGET_MS + 2_000L) }
         val pending = goAsync()
         scope.launch {

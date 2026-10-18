@@ -20,7 +20,7 @@ import javax.crypto.spec.GCMParameterSpec
  */
 object KeystoreBox {
 
-    private const val KEY_ALIAS = "aegis_comms_v1"
+    private const val KEY_ALIAS = "clairix_comms_v1"
     private const val IV_LEN = 12
     private const val TAG_BITS = 128
 

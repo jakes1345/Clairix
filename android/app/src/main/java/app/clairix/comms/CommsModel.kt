@@ -1,7 +1,7 @@
 package app.clairix.comms
 
 /**
- * Formats an Clairix number for display: "482 913 605". Clairix numbers are not
+ * Formats a Clairix number for display: "482 913 605". Clairix numbers are not
  * phone numbers; they only reach other Clairix apps on the same relay.
  */
 fun formatClairixNumber(number: String): String =
@@ -120,7 +120,7 @@ const val STATUS_RECEIVING = "receiving"
 
 /** Status value of a [ChatMessage] that records a call in the conversation. */
 const val STATUS_CALL = "call"
-/** Status value of a [ChatMessage] that records an ClairixCoin payment; its body is the line to show. */
+/** Status value of a [ChatMessage] that records a ClairixCoin payment; its body is the line to show. */
 const val STATUS_PAYMENT = "payment"
 /** Status value of a [ChatMessage] that carries a voicemail; its body is [VoicemailBody] JSON. */
 const val STATUS_VOICEMAIL = "voicemail"
@@ -134,7 +134,7 @@ val TYPE_STATUSES = setOf(STATUS_CALL, STATUS_PAYMENT, STATUS_VOICEMAIL)
 /** The ticker every relay's coin community uses. */
 const val COIN_SYMBOL = "AC"
 
-/** An ClairixCoin transfer with a contact, as this phone recorded it. */
+/** A ClairixCoin transfer with a contact, as this phone recorded it. */
 data class CoinTx(
     /** UUID chosen by the payer's phone; also the id of the message that shows it in the conversation. */
     val id: String,
@@ -272,7 +272,7 @@ data class CommsState(
  * The pairing payload carried by a QR code: the relay, the Clairix number and the
  * full public key set, so a scan pins the identity with no trust in the relay.
  *
- * With [invite] set it is also an invitation: someone without an Clairix number
+ * With [invite] set it is also an invitation: someone without a Clairix number
  * registers on [relayUrl] with that one-time code instead of the relay's
  * enrollment secret, and starts out with the inviter as a contact.
  */
@@ -295,7 +295,7 @@ data class PairingCode(
             "s" to sealing, "g" to signature, "d" to name
         ) + listOfNotNull(invite?.let { "i" to it }, orgId?.let { "og" to it }, orgName?.let { "on" to it }))
             .joinToString("&") { (k, v) -> "$k=${java.net.URLEncoder.encode(v, "UTF-8")}" }
-        return "aegis:v1?$q"
+        return "clairix:v1?$q"
     }
 
     /**
@@ -307,11 +307,11 @@ data class PairingCode(
     companion object {
         fun decode(text: String): PairingCode? {
             val t = text.trim()
-            if (!t.startsWith("aegis:v1?")) return null
+            if (!t.startsWith("clairix:v1?")) return null
             // Any scanned QR code lands here; a malformed percent escape is
-            // "not an Clairix code", not a crash.
+            // "not a Clairix code", not a crash.
             val params = runCatching {
-                t.removePrefix("aegis:v1?").split("&").mapNotNull { part ->
+                t.removePrefix("clairix:v1?").split("&").mapNotNull { part ->
                     val i = part.indexOf('=')
                     if (i <= 0) null else part.substring(0, i) to java.net.URLDecoder.decode(part.substring(i + 1), "UTF-8")
                 }.toMap()
@@ -336,7 +336,7 @@ data class PairingCode(
         /**
          * An invite or pairing code from whatever the owner pasted: the code
          * text itself, the invite link (payload in the fragment), or the
-         * aegis://invite link the invite page opens the app with.
+         * clairix://invite link the invite page opens the app with.
          */
         fun fromText(text: String): PairingCode? {
             val t = text.trim()

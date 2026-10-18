@@ -467,7 +467,7 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
     var inviteError by remember(linkError) { mutableStateOf(linkError) }
     val takeInvite: (PairingCode?) -> Unit = { code ->
         when {
-            code == null -> inviteError = "That is not an Clairix invite."
+            code == null -> inviteError = "That is not a Clairix invite."
             code.invite == null -> inviteError = "That is someone's contact code, not an invite. Ask them for an invite: COMMS → INVITE on their phone."
             else -> { inviteError = null; onInvite(code) }
         }
@@ -547,7 +547,7 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             OutlinedTextField(
                 value = url, onValueChange = { url = it },
                 label = { Text("Relay URL", fontSize = 12.sp) },
-                placeholder = { Text("https://aegis-comms.you.workers.dev", fontSize = 12.sp, color = CMuted) },
+                placeholder = { Text("https://relay.clairix.app", fontSize = 12.sp, color = CMuted) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors()
             )
@@ -869,7 +869,7 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val scan = rememberCodeScanner { code ->
-        if (code == null) { error = "That is not an Clairix code"; return@rememberCodeScanner }
+        if (code == null) { error = "That is not a Clairix code"; return@rememberCodeScanner }
         scope.launch {
             CommsRepository.addContactFromCode(code, name.takeIf { it.isNotBlank() })
                 .onSuccess { onAdded(it.number) }
@@ -1701,7 +1701,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
     var confirmDelete by remember { mutableStateOf(false) }
     val scan = rememberCodeScanner { code ->
         when {
-            code == null -> error = "That is not an Clairix code"
+            code == null -> error = "That is not a Clairix code"
             code.number != c.number -> error = "That code belongs to ${formatClairixNumber(code.number)}, not this contact"
             else -> scope.launch {
                 CommsRepository.addContactFromCode(code, name).onFailure { error = it.message }
@@ -1792,7 +1792,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
 /**
  * Makes a one-time invite and shows it three ways: a QR code for someone
  * standing next to you (they scan it in Clairix setup), a link to send them
- * (it opens a page with the download and an OPEN IN AEGIS button), and the
+ * (it opens a page with the download and an OPEN IN CLAIRIX button), and the
  * share sheet.
  */
 @Composable
@@ -1823,7 +1823,7 @@ private fun InviteScreen(onBack: () -> Unit) {
         Card {
             Text("Invite someone to Clairix", color = CInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(
-                "An invite lets one person get an Clairix number on your relay without the relay URL or its enrollment secret. " +
+                "An invite lets one person get a Clairix number on your relay without the relay URL or its enrollment secret. " +
                     "It works once and expires after seven days. They start with you as a verified contact, and you get a message when they join.",
                 color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
             )
@@ -1846,7 +1846,7 @@ private fun InviteScreen(onBack: () -> Unit) {
             Card {
                 Text("Far away: send them the link", color = CInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "The link opens a page with the Clairix download and an OPEN IN AEGIS button. Anyone who gets the link can use it, " +
+                    "The link opens a page with the Clairix download and an OPEN IN CLAIRIX button. Anyone who gets the link can use it, " +
                         "so send it only to the person you mean. Works once, until $until.",
                     color = CMuted, fontSize = 12.sp, lineHeight = 17.sp
                 )
@@ -1886,7 +1886,7 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     if (mine) "This invite is for someone who does not have Clairix yet. Send them the link."
-                    else "This phone already has an Clairix number, so the invite is not needed. You can add " +
+                    else "This phone already has a Clairix number, so the invite is not needed. You can add " +
                         "${formatClairixNumber(code.number)} as a verified contact from it; the invite stays unused.",
                     color = CInkDim, fontSize = 13.sp, lineHeight = 18.sp
                 )

@@ -37,7 +37,7 @@ class CommsPushReceiver : PushService() {
         // The library's own wake lock lasts ten seconds; the sync gets its own so
         // a slow network does not leave a half-fetched inbox behind.
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aegis:comms-sync").apply { acquire(SYNC_BUDGET_MS) }
+        val lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:comms-sync").apply { acquire(SYNC_BUDGET_MS) }
         // A wake means the background connection is not there. Android allows the
         // restart from here when Clairix is exempt from battery optimisation or the
         // distributor raised it to the foreground; otherwise the app does it on open.

@@ -9,7 +9,7 @@ import java.net.URLEncoder
 class PairingCodeTest {
 
     private val code = PairingCode(
-        relayUrl = "https://aegis-comms.example.workers.dev",
+        relayUrl = "https://relay.example.com",
         number = "482913605",
         ed25519 = "a+b/c=",
         curve25519 = "d+e/f=",
@@ -28,7 +28,7 @@ class PairingCodeTest {
     @Test
     fun theInviteLinkRoundTrips() {
         val link = code.inviteLink()
-        assertEquals(true, link.startsWith("https://aegis-comms.example.workers.dev/i#"))
+        assertEquals(true, link.startsWith("https://relay.example.com/i#"))
         assertEquals(code, PairingCode.fromText(link))
         // Pasted as part of the shared message.
         assertEquals(code, PairingCode.fromText("Join me on Clairix: $link"))
@@ -37,7 +37,7 @@ class PairingCodeTest {
     @Test
     fun theAppLinkRoundTrips() {
         // What the invite page hands the app: encodeURIComponent(payload).
-        val appLink = "aegis://invite?c=" + URLEncoder.encode(code.encode(), "UTF-8").replace("+", "%20")
+        val appLink = "clairix://invite?c=" + URLEncoder.encode(code.encode(), "UTF-8").replace("+", "%20")
         assertEquals(code, PairingCode.fromText(appLink))
     }
 
