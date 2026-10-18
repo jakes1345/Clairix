@@ -59,28 +59,54 @@ object AudioRouteMonitor {
     private var audioManager: AudioManager? = null
     private var callback: AudioDeviceCallback? = null
 
-    /** Registers for device changes and sweeps what is already connected. Idempotent. */
+    /**
+     * Ids of the devices that were connected when [start] ran. They belong to the
+     * startup sweep, which reports them with startup = true. Registering the callback
+     * also delivers every device already present through onAudioDevicesAdded, so
+     * without this each one was reported twice — once by each path. A device leaves
+     * the set when it is removed, so the same device coming back is news.
+     */
+    private val presentAtStart = HashSet<Int>()
+
+    /**
+     * Sweeps what is already connected, then registers for changes. Each device is
+     * reported by exactly one of the two. Idempotent.
+     */
     fun start(context: Context) {
         synchronized(lock) {
             if (callback != null) return
             val am = context.applicationContext.getSystemService(AudioManager::class.java) ?: return
+            // Taken before registering: anything that appears between the two is
+            // missing here and is reported by the callback as newly connected.
+            val present = runCatching { am.getDevices(AudioManager.GET_DEVICES_ALL) }.getOrNull() ?: emptyArray()
             val cb = object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) {
                     added ?: return
+                    val fresh = synchronized(lock) {
+                        if (callback !== this) return
+                        // remove() is true for a device the sweep already covered.
+                        added.filterNot { presentAtStart.remove(it.id) }
+                    }
+                    if (fresh.isEmpty()) return
                     val quiet = isQuiet(am)
-                    for (d in added) {
+                    for (d in fresh) {
                         if (d.isSource && d.type in SUSPECT_INPUT_TYPES && quiet) report(d, startup = false)
                     }
                 }
 
-                override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = Unit
+                override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) {
+                    removed ?: return
+                    synchronized(lock) { removed.forEach { presentAtStart.remove(it.id) } }
+                }
             }
-            runCatching { am.registerAudioDeviceCallback(cb, null) }.onFailure { return }
+            presentAtStart.clear()
+            present.forEach { presentAtStart.add(it.id) }
+            runCatching { am.registerAudioDeviceCallback(cb, null) }.onFailure { presentAtStart.clear(); return }
             audioManager = am
             callback = cb
-            // The callback reports only changes; a microphone attached before the
-            // service started is still a microphone.
-            sweep(am)
+            // The microphones attached before the service started are reported here,
+            // as present at startup; the callback skips them.
+            sweep(am, present)
         }
     }
 
@@ -90,15 +116,15 @@ object AudioRouteMonitor {
             val cb = callback
             audioManager = null
             callback = null
+            presentAtStart.clear()
             if (am != null && cb != null) runCatching { am.unregisterAudioDeviceCallback(cb) }
         }
     }
 
     /** Any input device beyond the phone's own, with nothing playing and no call up. */
-    private fun sweep(am: AudioManager) {
+    private fun sweep(am: AudioManager, present: Array<out AudioDeviceInfo>) {
         if (!isQuiet(am)) return
-        val inputs = runCatching { am.getDevices(AudioManager.GET_DEVICES_INPUTS) }.getOrNull() ?: return
-        for (d in inputs) {
+        for (d in present) {
             if (d.isSource && d.type !in BENIGN_INPUT_TYPES) report(d, startup = true)
         }
     }
