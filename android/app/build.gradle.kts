@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     // JVM screenshot tests of the Compose screens (no device): layoutlib renders
-    // them; recordPaparazziFullDebug writes the PNGs to src/test/snapshots.
+    // them; recordPaparazziFullSuiteDebug writes the PNGs to src/test/snapshots.
     id("app.cash.paparazzi")
 }
 
@@ -113,24 +113,48 @@ android {
         applicationId = "app.clairix"
         minSdk = 31
         targetSdk = 35
-        versionCode = 20
-        versionName = "2.7.0"
+        versionCode = 21
+        versionName = "3.0.0-beta.1"
     }
 
-    // Two APKs from one codebase, for handing to two circles of people:
+    // Two flavour dimensions, edition first, so variants read <edition><Tier>:
     //
-    //   full   the whole app: scanner, map, cell/NFC/Wi-Fi/device tabs, tools, COMMS
+    // edition — where the build is distributed:
+    //   play   Google Play. No NFC card emulation and no card vault (the
+    //          HostApduService, its manifest entry and AID resource are not in
+    //          this build at all) and no ClairixCoin. Everything else is the same.
+    //   full   Sideloaded from clairix.app and GitHub Releases: everything,
+    //          including the card vault with card emulation and ClairixCoin.
+    //
+    // tier — how much of the app a build carries:
+    //   suite  the whole app: scanner, map, cell/NFC/Wi-Fi/device tabs, tools, COMMS
     //   comms  COMMS only: encrypted messages, calls, groups and SOS, nothing else
     //
-    // Both carry the same applicationId and are signed with the same key, so a
-    // comms install upgrades to full in place (install the full APK over it) and
-    // keeps its Clairix number, contacts and message history. The comms manifest
-    // (src/main) declares only what COMMS needs; the scanner's permissions and
-    // components are added by src/full/AndroidManifest.xml. FULL_ACCESS is what
-    // the code reads to decide which screens exist.
-    flavorDimensions += "tier"
+    // Variants built: playSuite (the Play upload), fullSuite and fullComms. The
+    // comms-only build is handed out directly, never through Play, so playComms
+    // is switched off below.
+    //
+    // A comms install upgrades to the full edition's suite in place (the same
+    // applicationId and signing key) and keeps its Clairix number, contacts and
+    // message history. The comms manifest (src/main) declares only what COMMS
+    // needs; the scanner's permissions and components are added by
+    // src/suite/AndroidManifest.xml, and the card-emulation service only by
+    // src/fullSuite/AndroidManifest.xml. The code reads FULL_ACCESS to decide
+    // which screens exist, CARD_VAULT for the vault and card emulation, and
+    // CLAIRIX_COIN for the coin balance, payments and their relay requests.
+    flavorDimensions += listOf("edition", "tier")
     productFlavors {
+        create("play") {
+            dimension = "edition"
+            buildConfigField("boolean", "CARD_VAULT", "false")
+            buildConfigField("boolean", "CLAIRIX_COIN", "false")
+        }
         create("full") {
+            dimension = "edition"
+            buildConfigField("boolean", "CARD_VAULT", "true")
+            buildConfigField("boolean", "CLAIRIX_COIN", "true")
+        }
+        create("suite") {
             dimension = "tier"
             buildConfigField("boolean", "FULL_ACCESS", "true")
         }
@@ -141,8 +165,34 @@ android {
         }
     }
 
+    // Release signing comes from the environment, never from the repository:
+    //
+    //   ANDROID_KEYSTORE_FILE      path to the keystore (.jks / .keystore)
+    //   ANDROID_KEYSTORE_PASSWORD  the keystore's password
+    //   ANDROID_KEY_ALIAS          the key's alias inside it
+    //   ANDROID_KEY_PASSWORD       the key's password (defaults to the keystore's)
+    //
+    // The release workflow decodes the ANDROID_KEYSTORE_BASE64 secret to a file
+    // under the runner's temp directory and sets these. Without them release
+    // builds come out unsigned, as before, and can be signed afterwards.
+    val releaseKeystore = System.getenv("ANDROID_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }?.let { file(it) }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            if (!releaseKeystore.isFile) throw GradleException("ANDROID_KEYSTORE_FILE points at $releaseKeystore, which is not a file")
+            fun required(name: String): String = System.getenv(name)?.takeIf { it.isNotEmpty() }
+                ?: throw GradleException("ANDROID_KEYSTORE_FILE is set but $name is not")
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = required("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = required("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotEmpty() } ?: storePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -239,4 +289,12 @@ dependencies {
     testImplementation("org.json:json:20240303")
     // The desktop JNA jar carries the native dispatch library for the build machine.
     testImplementation("net.java.dev.jna:jna:5.19.1")
+}
+
+// The comms-only build is never published on Google Play, so the Play edition
+// has no comms variant: playSuite, fullSuite and fullComms are the three built.
+androidComponents {
+    beforeVariants(selector().withFlavor("edition" to "play").withFlavor("tier" to "comms")) { variant ->
+        variant.enable = false
+    }
 }

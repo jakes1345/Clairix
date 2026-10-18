@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Clairix</string>
-    <string name="hce_service">Card Vault Emulation</string>
 </resources>

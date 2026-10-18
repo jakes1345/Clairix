@@ -1,11 +1,20 @@
 name: Release
 
-# Three ways to cut a release, all producing the same two signed APKs (the full
-# app and the comms-only build) and GitHub Release:
-#   - push a tag            v2.2.0
-#   - push a branch         release/v2.2.0   (the tag is created at its head)
+# Three ways to cut a release, all producing the same signed artifacts and
+# GitHub Release:
+#   - push a tag            v3.0.0-beta.1
+#   - push a branch         release/v3.0.0-beta.1   (the tag is created at its head)
 #   - Actions → Run workflow with the tag as input
 # The branch form exists for environments that can push branches but not tags.
+#
+# What a release carries:
+#   clairix-<tag>.apk          full edition, whole app   (fullSuiteRelease)
+#   clairix-comms-<tag>.apk    full edition, comms only  (fullCommsRelease)
+#   clairix-play-<tag>.aab     Play edition bundle for the Play Console (playSuiteRelease)
+#   SHA256SUMS.txt             SHA-256 of each of the three
+#
+# A tag with a pre-release suffix (v3.0.0-beta.1, -alpha.N, -rc.N) is published
+# as a GitHub pre-release; a plain vX.Y.Z is a normal release.
 on:
   push:
     tags:
@@ -15,9 +24,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v1.3.0)'
+        description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v2.2.0'
+        default: 'v3.0.0-beta.1'
 
 permissions:
   contents: write
@@ -46,10 +55,22 @@ jobs:
           fi
           case "$NAME" in
             v[0-9]*) ;;
-            *) echo "::error::'$NAME' is not a release tag (expected vX.Y.Z)"; exit 1 ;;
+            *) echo "::error::'$NAME' is not a release tag (expected vX.Y.Z or vX.Y.Z-beta.N)"; exit 1 ;;
           esac
+          case "$NAME" in
+            *-alpha*|*-beta*|*-rc*) PRERELEASE=true ;;
+            *) PRERELEASE=false ;;
+          esac
+          # The tag has to name the version the app is built as, or the APK and
+          # the release page disagree about what was shipped.
+          VERSION_NAME=$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' android/app/build.gradle.kts | head -1)
+          if [ "v$VERSION_NAME" != "$NAME" ]; then
+            echo "::error::Tag $NAME does not match versionName $VERSION_NAME in android/app/build.gradle.kts"
+            exit 1
+          fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Releasing $NAME from $GITHUB_SHA"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Releasing $NAME from $GITHUB_SHA (pre-release: $PRERELEASE)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -82,16 +103,6 @@ jobs:
         working-directory: comms-crypto
         run: cargo test --release
 
-      # ANDROID_NDK_LATEST_HOME is a runner environment variable, not a workflow
-      # `env.` value, so it is read in the shell rather than in an expression.
-      # assembleRelease builds both flavours: full and comms-only.
-      - name: Build release APKs
-        working-directory: android
-        run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
-          echo "NDK: $ANDROID_NDK_HOME"
-          gradle assembleRelease --no-daemon --stacktrace
-
       # Android refuses to install an update whose signing certificate differs from
       # the one already on the device. This step used to run `keytool -genkey` on
       # every release, which mints a brand new keypair each time — so every release
@@ -102,7 +113,9 @@ jobs:
       # With the ANDROID_KEYSTORE_BASE64 secret set, every release is signed by the
       # same key and installs straight over the last one. Without it we fall back to
       # the old throwaway key so the build still produces something installable, and
-      # the release notes say plainly that it needs a clean install.
+      # the release notes say plainly that it needs a clean install. The keystore
+      # is written under the runner's temp directory, outside the checkout, and is
+      # gone when the job ends.
       - name: Prepare signing key
         id: signing
         env:
@@ -125,81 +138,130 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
             echo "stable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so this APK is signed with a throwaway key and cannot be installed over an earlier release."
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so these builds are signed with a throwaway key: the APKs cannot be installed over an earlier release, and the AAB must not be uploaded to Google Play."
           fi
 
-      # Both APKs are signed with the same key and share one applicationId, so a
-      # comms-only install upgrades to the full app in place and keeps its number,
-      # contacts and messages.
-      - name: Sign APKs
+      # Gradle signs the release builds itself from these four variables (see
+      # signingConfigs in android/app/build.gradle.kts). The passwords come from
+      # secrets and are never written to disk or to $GITHUB_ENV. The fallbacks
+      # are the throwaway key's.
+      #
+      # ANDROID_NDK_LATEST_HOME is a runner environment variable, not a workflow
+      # `env.` value, so it is read in the shell rather than in an expression.
+      - name: Build signed release APKs and the Play bundle
+        working-directory: android
         env:
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || 'android' }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD || 'android' }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'androiddebugkey' }}
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/signing/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || 'android' }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'androiddebugkey' }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || 'android' }}
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
+          echo "NDK: $ANDROID_NDK_HOME"
+          gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease \
+            --no-daemon --stacktrace
+
+      # The Play edition must not declare card emulation. This reads every
+      # manifest Gradle merged for the Play bundle and stops the release if a
+      # HostApduService or the card-emulation service ever finds its way back in.
+      # The full edition's manifest is checked the other way round, so a change
+      # in where Gradle writes manifests cannot make this pass by finding nothing.
+      - name: Check the Play edition has no card emulation
+        run: |
+          HCE='HOST_APDU_SERVICE|host_apdu_service|CardEmulationService|BIND_NFC_SERVICE'
+          PLAY=$(find android/app/build/intermediates -path '*playSuiteRelease*' -name AndroidManifest.xml | grep -E 'merged_manifest|bundle_manifest' || true)
+          FULL=$(find android/app/build/intermediates -path '*fullSuiteRelease*' -name AndroidManifest.xml | grep -E 'merged_manifest' | head -1)
+          if [ -z "$PLAY" ] || [ -z "$FULL" ]; then
+            echo "::error::Merged manifests for playSuiteRelease / fullSuiteRelease not found"; exit 1
+          fi
+          if ! grep -Eq "$HCE" "$FULL"; then
+            echo "::error::The full edition's manifest has no card-emulation service; the check below would prove nothing"; exit 1
+          fi
+          for m in $PLAY; do
+            echo "Checking $m"
+            if grep -Eq "$HCE" "$m"; then
+              echo "::error file=$m::The Play edition declares card emulation"; exit 1
+            fi
+          done
+          echo "No card emulation in the Play edition."
+
+      - name: Collect and verify artifacts
+        env:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          mkdir -p android/app/build/outputs/apk/signed
-          sign() { # flavour, output name
-            OUT="android/app/build/outputs/apk/signed/$2"
-            "$APKSIGNER" sign \
-              --ks "$RUNNER_TEMP/signing/release.keystore" \
-              --ks-pass env:KS_PASS \
-              --key-pass env:KEY_PASS \
-              --ks-key-alias "$KEY_ALIAS" \
-              --out "$OUT" \
-              "android/app/build/outputs/apk/$1/release/app-$1-release-unsigned.apk"
-            # The certificate digest is what decides whether a phone will accept this
-            # as an update to the installed build, so print it: two releases that
-            # share this value will install over each other, and two that do not
-            # never will, whatever their version numbers say.
-            "$APKSIGNER" verify --print-certs "$OUT"
-          }
-          sign full  "clairix-${TAG}.apk"
-          sign comms "clairix-comms-${TAG}.apk"
+          OUT=android/app/build/outputs/release-files
+          mkdir -p "$OUT"
+          cp android/app/build/outputs/apk/fullSuite/release/app-full-suite-release.apk "$OUT/clairix-${TAG}.apk"
+          cp android/app/build/outputs/apk/fullComms/release/app-full-comms-release.apk "$OUT/clairix-comms-${TAG}.apk"
+          cp android/app/build/outputs/bundle/playSuiteRelease/app-play-suite-release.aab "$OUT/clairix-play-${TAG}.aab"
+          # The certificate digest is what decides whether a phone will accept an
+          # APK as an update to the installed build, so print it: two releases that
+          # share this value will install over each other, and two that do not
+          # never will, whatever their version numbers say.
+          for apk in "$OUT"/*.apk; do
+            "$APKSIGNER" verify --print-certs "$apk"
+          done
+          # The bundle is jar-signed; Play checks it against the registered upload key.
+          keytool -printcert -jarfile "$OUT/clairix-play-${TAG}.aab"
+          (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-play-${TAG}.aab" > SHA256SUMS.txt)
+          cat "$OUT/SHA256SUMS.txt"
 
       - name: Compose release notes
         env:
           TAG: ${{ steps.tag.outputs.name }}
           STABLE: ${{ steps.signing.outputs.stable }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
+          VERSION="${TAG#v}"
+          # "3.0.0-beta.1" reads as "3.0.0 Beta 1" on the release page.
+          PRETTY=$(printf '%s' "$VERSION" | sed -E 's/-beta\.?([0-9]+)$/ Beta \1/; s/-alpha\.?([0-9]+)$/ Alpha \1/; s/-rc\.?([0-9]+)$/ Release Candidate \1/')
+          OUT=android/app/build/outputs/release-files
           {
-            echo "## Clairix ${TAG}"
+            echo "## Clairix ${PRETTY}"
             echo
-            echo "**Two APKs.** \`clairix-${TAG}.apk\` is the whole app. \`clairix-comms-${TAG}.apk\`"
-            echo "is **Clairix Comms**: the encrypted messages, calls, groups and SOS and nothing else —"
-            echo "no scanner, no tools, and none of their permissions — for people you want to be able"
-            echo "to reach but not to hand the full toolkit. Both share one package name and one"
-            echo "signing key, so the full APK installs straight over a comms install and keeps its"
-            echo "number, contacts and messages."
+            if [ "$PRERELEASE" = "true" ]; then
+              echo "This is a **beta**: the first public test of Clairix 3.0. It is meant for people"
+              echo "who are happy to try new things and tell us what breaks. Keep your current"
+              echo "version if you rely on Clairix every day and don't want surprises."
+              echo
+            fi
+            echo "### What's new in 3.0"
             echo
-            echo "Clairix — defensive security monitor for Android. Detects BLE tracker tags,"
-            echo "Wi-Fi bait networks, IMSI-catcher anomalies, and sweeps NFC/RFID cards."
-            echo "Stores captured cards in an on-device AES-256 vault and can replay them"
-            echo "via Host Card Emulation. Detection data stays on the phone; the Map tab"
-            echo "downloads OpenStreetMap tiles, which exposes your IP and the area viewed."
+            echo "- **A new look.** Every screen has been redesigned: clearer status at the top of"
+            echo "  each tab, bigger touch targets, and a choice of dark colour themes in"
+            echo "  Settings → Appearance."
+            echo "- **Two editions.** Clairix now comes in a Google Play edition and a Full edition"
+            echo "  (this download). They are the same app, except that the Play edition leaves out"
+            echo "  the Card Vault with card emulation and ClairixCoin."
+            echo "- **Fixes** across the app, including the colour theme when an incoming call"
+            echo "  starts Clairix and clearer wording on the certificate-pinning check."
             echo
-            echo "**COMMS: end-to-end encrypted messaging and calls between Clairix apps.**"
-            echo "Messages use the Olm double ratchet (vodozemac) and are sealed so your"
-            echo "relay sees neither content nor sender; calls are WebRTC audio keyed inside"
-            echo "that same encrypted session. Contacts are pinned by key and verified by QR"
-            echo "code or safety number. No Google services and no phone carrier are involved."
-            echo "An **Clairix number is not a phone number**: it is a random nine-digit ID your"
-            echo "relay hands out, and it only reaches other Clairix apps on the same relay."
-            echo "Push wake-ups use UnifiedPush (install ntfy or another distributor);"
-            echo "keeping COMMS \"Online\" makes incoming calls ring reliably."
+            echo "### Which file do I want?"
             echo
-            echo "To use COMMS you (or someone you trust) deploy the relay in \`comms-worker/\`"
-            echo "to Cloudflare once; the README there has the three commands. Everyone else joins"
-            echo "by invite: COMMS → INVITE makes a one-time QR code or link, so nobody else needs"
-            echo "the relay URL or its enrollment secret. Camera is asked"
-            echo "for when scanning a contact's code; Microphone as soon as you have a number, so"
-            echo "a call can be answered straight from the lock screen. On Android 14+, allow"
-            echo "full-screen calls when COMMS settings asks, and set Clairix's battery use to"
-            echo "Unrestricted so the background connection survives the screen being off."
+            echo "| File | What it is |"
+            echo "|---|---|"
+            echo "| \`clairix-${TAG}.apk\` | **The Full edition.** The whole app, including the Card Vault and ClairixCoin. Most people want this one. |"
+            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: no scanner, no tools and none of their permissions. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
+            echo "| \`clairix-play-${TAG}.aab\` | The Google Play bundle. Phones can't install this file directly; it is here for the Play Console. |"
+            echo "| \`SHA256SUMS.txt\` | Checksums to confirm your download is intact. |"
             echo
-            echo "**Install**"
+            echo "### What Clairix does"
+            echo
+            echo "Clairix is a defensive security monitor for Android. It finds Bluetooth tracker"
+            echo "tags that travel with you, Wi-Fi bait networks and signs of fake cell towers, and"
+            echo "checks NFC cards and tags for skimmers. Detection data stays on your phone. The"
+            echo "Map tab downloads OpenStreetMap tiles, which shows the tile server your IP address"
+            echo "and the area you are looking at."
+            echo
+            echo "**COMMS** is end-to-end encrypted messaging and calling between Clairix apps. Your"
+            echo "relay passes messages along but can read neither what they say nor who sent them."
+            echo "A Clairix number is not a phone number: it only reaches other Clairix apps on the"
+            echo "same relay. You (or someone you trust) set up the relay in \`comms-worker/\` once;"
+            echo "everyone else joins by invite from COMMS → INVITE."
+            echo
+            echo "### Install"
             echo
             if [ "$STABLE" = "true" ]; then
               echo "1. Download \`clairix-${TAG}.apk\` below and tap it."
@@ -218,7 +280,24 @@ jobs:
               echo "4. Grant Nearby devices and Location (precise). Notifications is optional — declining it costs the alert, not the detector."
             fi
             echo
-            echo "**Requirements:** Android 12+ (API 31)"
+            echo "**Requirements:** Android 12 or newer."
+            echo
+            echo "### Check your download"
+            echo
+            echo "On a computer, put what you downloaded in one folder with \`SHA256SUMS.txt\` and run"
+            echo "\`sha256sum -c --ignore-missing SHA256SUMS.txt\` (on a Mac:"
+            echo "\`shasum -a 256 -c --ignore-missing SHA256SUMS.txt\`). Each file should say OK."
+            echo
+            echo '```'
+            cat "$OUT/SHA256SUMS.txt"
+            echo '```'
+            if [ "$PRERELEASE" = "true" ]; then
+              echo
+              echo "### Found a problem?"
+              echo
+              echo "Open an issue on GitHub and say which file you installed, your phone model and"
+              echo "Android version, and what you did just before it went wrong."
+            fi
           } > "$RUNNER_TEMP/notes.md"
 
       - name: Create GitHub Release
@@ -229,7 +308,9 @@ jobs:
           body_path: ${{ runner.temp }}/notes.md
           generate_release_notes: true
           files: |
-            android/app/build/outputs/apk/signed/clairix-${{ steps.tag.outputs.name }}.apk
-            android/app/build/outputs/apk/signed/clairix-comms-${{ steps.tag.outputs.name }}.apk
+            android/app/build/outputs/release-files/clairix-${{ steps.tag.outputs.name }}.apk
+            android/app/build/outputs/release-files/clairix-comms-${{ steps.tag.outputs.name }}.apk
+            android/app/build/outputs/release-files/clairix-play-${{ steps.tag.outputs.name }}.aab
+            android/app/build/outputs/release-files/SHA256SUMS.txt
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
