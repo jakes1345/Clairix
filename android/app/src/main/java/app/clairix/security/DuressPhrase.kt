@@ -42,8 +42,37 @@ object DuressPhrase {
     /** Whitespace-collapsed, lower-cased: "case-insensitive exact" tolerant of double spaces. */
     private fun normalise(s: String): String = s.trim().split(Regex("\\s+")).joinToString(" ").lowercase()
 
-    /** Saves [phrase] encrypted. A blank phrase clears it. */
+    /** A phrase must have at least this many words… */
+    const val MIN_WORDS = 3
+    /** …or at least this many characters (after collapsing spaces). */
+    const val MIN_CHARS = 12
+
+    /** What the owner is told when a phrase is too short; shown by the Settings screen. */
+    const val TOO_SHORT_MESSAGE =
+        "Too short. Use at least $MIN_WORDS words or $MIN_CHARS characters — a short phrase like " +
+            "\"ok\" is typed by accident and would send an SOS."
+
+    /**
+     * Why [phrase] cannot be the duress phrase, or null when it can. A blank phrase is
+     * valid: it clears the setting. Anything else needs [MIN_WORDS] words or
+     * [MIN_CHARS] characters, so an everyday reply ("ok", "yes", "on my way") cannot
+     * trigger an SOS by accident.
+     */
+    fun validate(phrase: String): String? {
+        val norm = normalise(phrase)
+        if (norm.isEmpty()) return null
+        val words = norm.split(' ').size
+        return if (words >= MIN_WORDS || norm.length >= MIN_CHARS) null else TOO_SHORT_MESSAGE
+    }
+
+    /**
+     * Saves [phrase] encrypted. A blank phrase clears it.
+     *
+     * @throws IllegalArgumentException when [validate] rejects the phrase; nothing is
+     *   saved and an existing phrase is kept.
+     */
     fun set(context: Context, phrase: String) {
+        validate(phrase)?.let { throw IllegalArgumentException(it) }
         val norm = normalise(phrase)
         if (norm.isEmpty()) { clear(context); return }
         val blob = Base64.encodeToString(KeystoreBox.encryptString(norm), Base64.NO_WRAP)

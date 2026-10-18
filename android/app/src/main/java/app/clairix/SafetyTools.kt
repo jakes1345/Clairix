@@ -287,7 +287,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     placeholder = "e.g. did you remember to feed the cat"
                 )
                 Text(
-                    "Pick something you would plausibly say but never would by accident. Matching ignores " +
+                    "Pick something you would plausibly say but never would by accident — at least " +
+                    "${DuressPhrase.MIN_WORDS} words or ${DuressPhrase.MIN_CHARS} characters. Matching ignores " +
                     "case and extra spaces. The phrase is stored encrypted and is never shown again — " +
                     "not here, not in the timeline, not in a notification.",
                     color = TMutedClr, fontSize = 12.sp, lineHeight = 16.sp
@@ -297,6 +298,12 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     if (configured) "REPLACE PHRASE" else "SAVE PHRASE",
                     onClick = {
                         val value = phrase
+                        val problem = DuressPhrase.validate(value)
+                        if (problem != null) {
+                            message = problem
+                            messageIsError = true
+                            return@TButton
+                        }
                         scope.launch {
                             val r = withContext(Dispatchers.IO) { runCatching { DuressPhrase.set(context, value) } }
                             r.onSuccess {
@@ -305,7 +312,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                                 message = if (configured) "Saved" else "A blank phrase clears the setting"
                                 messageIsError = false
                             }.onFailure {
-                                message = "Could not save: ${it.message ?: it.javaClass.simpleName}"
+                                message = if (it is IllegalArgumentException) it.message ?: DuressPhrase.TOO_SHORT_MESSAGE
+                                    else "Could not save: ${it.message ?: it.javaClass.simpleName}"
                                 messageIsError = true
                             }
                         }
