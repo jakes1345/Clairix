@@ -201,6 +201,87 @@ class StalkwareScannerTest {
         assertEquals(0, score(listener.copy(installer = play)))
     }
 
+    // ── Install source: who really installed it, and whether that store is genuine ──
+
+    private val fdroid = "org.fdroid.fdroid"
+
+    @Test
+    fun anAdbInstallNamingPlayAsItsInstallerIsASideload() {
+        // `adb install -i com.android.vending`: Android records no initiating app for shell or root.
+        val spoofed = AppFacts(rogue, false, installer = null, hasLauncher = true, declaredInstaller = play)
+        assertTrue(spoofed.spoofedInstaller && spoofed.sideloaded)
+        val reasons = StalkwareScanner.assess(spoofed).map { it.reason }
+        assertTrue(reasons.any { "installingPackageName says $play" in it && "initiatingPackageName is empty" in it })
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE, score(spoofed))
+        // Wearing a known admin's name it is HIGH and unvouched, badge included.
+        val admin = spoofed.copy(name = "com.google.android.gms", deviceAdminActive = true)
+        assertFalse(StalkwareScanner.isVouchedAdmin(admin))
+        assertEquals(Severity.HIGH, severity(admin))
+    }
+
+    @Test
+    fun anInitiatingAppThatDisagreesWithTheNamedInstallerIsASideload() {
+        val forged = AppFacts(rogue, false, installer = "com.evil.dropper", hasLauncher = true, declaredInstaller = play)
+        assertTrue(forged.sideloaded)
+        assertTrue(StalkwareScanner.assess(forged).any {
+            "installingPackageName says $play" in it.reason && "initiatingPackageName is com.evil.dropper" in it.reason
+        })
+        // A preloaded transfer app restoring apps under Play is not a forgery.
+        val restored = forged.copy(installer = "com.sec.android.easyMover", installerPreloaded = true)
+        assertFalse(restored.sideloaded)
+        assertEquals(0, score(restored))
+    }
+
+    @Test
+    fun onlyPreloadedStoresOrStoresInstalledByOneAreGenuine() {
+        val preloaded = setOf(play)
+        val genuine = StalkwareScanner.genuineStores(
+            systemPackages = preloaded,
+            sources = mapOf(
+                play to StalkwareScanner.InstallSource(null, null),
+                "com.sec.android.app.samsungapps" to StalkwareScanner.InstallSource(play, play),
+                fdroid to StalkwareScanner.InstallSource("com.android.chrome", "com.android.chrome"),
+                "com.amazon.venezia" to StalkwareScanner.InstallSource(null, play), // adb install -i
+            ),
+        )
+        assertEquals(setOf(play, "com.sec.android.app.samsungapps"), genuine)
+    }
+
+    @Test
+    fun aFakePlayStoreDoesNotVouchForWhatItInstalls() {
+        // A sideloaded app calling itself com.android.vending: not preloaded, installed from an APK.
+        val noGenuineStore = StalkwareScanner.genuineStores(
+            systemPackages = emptySet(),
+            sources = mapOf(play to StalkwareScanner.InstallSource("com.google.android.packageinstaller", "com.google.android.packageinstaller")),
+        )
+        assertTrue(noGenuineStore.isEmpty())
+        val installed = AppFacts("com.google.android.gms", false, installer = play, hasLauncher = true,
+            deviceAdminActive = true, genuineStores = noGenuineStore)
+        assertTrue(installed.sideloaded)
+        assertTrue(StalkwareScanner.assess(installed).any { "not the genuine store" in it.reason })
+        assertFalse(StalkwareScanner.isVouchedAdmin(installed))
+        assertEquals(Severity.HIGH, severity(installed))
+    }
+
+    @Test
+    fun anFDroidInstalledGoogleNameIsNotVouched() {
+        val gms = AppFacts("com.google.android.gms", false, installer = fdroid, hasLauncher = true, deviceAdminActive = true)
+        assertFalse(gms.sideloaded)
+        assertFalse(StalkwareScanner.isVouchedAdmin(gms))
+        val signals = StalkwareScanner.assess(gms)
+        assertTrue(signals.any { it.points == StalkwareScanner.IMPOSTOR_SCORE && "cannot vouch" in it.reason })
+        // Impostor (2) + active admin (3): HIGH without any sideload signal.
+        assertEquals(Severity.HIGH, severity(gms))
+        // Same for a Microsoft keyboard name via Aurora, with no keyboard-permission waiver.
+        val swiftkey = keyboardManifest.copy(name = "com.touchtype.swiftkey", installer = "com.aurora.store")
+        assertFalse(StalkwareScanner.isVouchedIme(swiftkey))
+        assertEquals(Severity.HIGH, severity(swiftkey))
+        // An open-source keyboard F-Droid publishes is vouched for by it.
+        val floris = keyboardManifest.copy(name = "dev.patrickgold.florisboard", installer = fdroid)
+        assertTrue(StalkwareScanner.isVouchedIme(floris))
+        assertEquals(0, score(floris))
+    }
+
     @Test
     fun restoredKeyboardNamesAreKnown() {
         for (name in listOf("com.htc.sense.ime", "com.nuance.swype.dtc", "com.minuum.keyboard", "com.transsion.sk", "com.tct.smartkeyboard")) {

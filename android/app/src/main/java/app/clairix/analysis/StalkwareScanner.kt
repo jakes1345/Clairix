@@ -101,17 +101,59 @@ object StalkwareScanner {
     /** The last scan, for the Device tab. */
     val results: StateFlow<Result?> = _results.asStateFlow()
 
-    /** Installers that are stores; anything else (or nothing) is a sideload. */
-    private val STORES = setOf(
-        "com.android.vending",
-        "com.sec.android.app.samsungapps",
+    /**
+     * Vendor stores: they verify who publishes under a name, so a Google, Microsoft or Samsung
+     * name from one of them is the real app.
+     */
+    private val VENDOR_STORES = setOf(
+        "com.android.vending",                 // Google Play
+        "com.sec.android.app.samsungapps",     // Galaxy Store
         "com.samsung.android.galaxystore",
+        "com.huawei.appmarket",                // AppGallery
+        "com.amazon.venezia"                   // Amazon Appstore
+    )
+
+    /**
+     * Open stores: not a sideload, but they install any package name from repositories the
+     * user adds, so they never vouch for a vendor's name ([VENDOR_PREFIXES]).
+     */
+    private val OPEN_STORES = setOf(
         "org.fdroid.fdroid",
         "org.fdroid.basic",
-        "com.aurora.store",
-        "com.amazon.venezia",
-        "com.huawei.appmarket"
+        "com.aurora.store"
     )
+
+    /** Installers that are stores, when genuine ([genuineStores]); anything else (or nothing) is a sideload. */
+    private val STORES = VENDOR_STORES + OPEN_STORES
+
+    /** Package-name prefixes of the vendors whose names only a vendor store may vouch for. */
+    private val VENDOR_PREFIXES = listOf(
+        "com.google.", "com.android.", "com.microsoft.", "com.azure.", "com.touchtype.",
+        "com.samsung.", "com.sec."
+    )
+
+    /**
+     * Who installed a package, as the system recorded it. [initiating] is set by the system from
+     * the calling app and cannot be chosen by it; it is null for an install over adb or by root.
+     * [installing] is the installer the app is attributed to, which the caller may name: `adb
+     * install -i com.android.vending spy.apk` sets it to Play with no initiating app at all.
+     */
+    internal data class InstallSource(val initiating: String?, val installing: String?) {
+        /** The installer named differs from the app that actually ran the install, or none ran it. */
+        val spoofed: Boolean get() = installing != null && installing != initiating
+    }
+
+    /**
+     * The members of [STORES] that are genuine: preloaded ([systemPackages]), or themselves
+     * installed by a preloaded store as recorded in [sources]. A store app sideloaded under
+     * Play's name is neither, so what it installs counts as sideloaded.
+     */
+    internal fun genuineStores(systemPackages: Set<String>, sources: Map<String, InstallSource?>): Set<String> {
+        val preloaded = STORES.filterTo(HashSet()) { it in systemPackages }
+        return STORES.filterTo(HashSet()) { store ->
+            store in preloaded || sources[store]?.let { src -> !src.spoofed && src.initiating in preloaded } == true
+        }
+    }
 
     /** Notification listeners that belong on a stock Samsung or Pixel. */
     private val KNOWN_LISTENERS = setOf(
@@ -368,6 +410,7 @@ object StalkwareScanner {
     internal data class AppFacts(
         val name: String,
         val system: Boolean,
+        /** The app that ran the install ([InstallSource.initiating]); null over adb or root. */
         val installer: String?,
         val hasLauncher: Boolean,
         val requested: Set<String> = emptySet(),
@@ -380,12 +423,40 @@ object StalkwareScanner {
         val deviceAdminActive: Boolean = false,
         /** Started a foreground service this week without ever showing a screen (usage access only). */
         val hiddenService: Boolean = false,
+        /**
+         * The installer the app is attributed to ([InstallSource.installing]), which the caller may
+         * name freely; null when none is named apart from [installer].
+         */
+        val declaredInstaller: String? = null,
+        /** The stores on this phone that are genuine ([genuineStores]). */
+        val genuineStores: Set<String> = STORES,
+        /**
+         * The app that ran the install ([installer]) is preloaded. A preloaded app with
+         * INSTALL_PACKAGES may attribute an install to a store (a phone-transfer app restoring
+         * apps under Play); forging that would take the firmware itself.
+         */
+        val installerPreloaded: Boolean = false,
     ) {
-        /** Installed by something other than a store; preloaded apps never are. */
-        val sideloaded: Boolean get() = !system && (installer == null || installer !in STORES)
+        /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
+        val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
 
-        /** From the system image or a store: only then can a known name vouch for it. */
+        /** Installed by a genuine store, as the system recorded it, or attributed to one by a preloaded app. */
+        val fromStore: Boolean get() = !spoofedInstaller && (
+            (installer != null && installer in genuineStores) ||
+                (installerPreloaded && declaredInstaller != null && declaredInstaller in genuineStores)
+            )
+
+        /** Installed by something other than a genuine store; preloaded apps never are. */
+        val sideloaded: Boolean get() = !system && !fromStore
+
+        /** From the system image or a genuine store. */
         val trustedOrigin: Boolean get() = !sideloaded
+
+        /**
+         * Whether its name can be taken at its word: preloaded, from a vendor store, or from an
+         * open store under a name that is not a vendor's.
+         */
+        val nameTrusted: Boolean get() = system || (fromStore && (installer in VENDOR_STORES || VENDOR_PREFIXES.none { name.startsWith(it) }))
     }
 
     /** Every name the scanner vouches for, so a sideloaded app wearing one stands out. */
@@ -395,9 +466,9 @@ object StalkwareScanner {
      * Whether [f]'s name in [known] vouches for it. A package name is chosen by whoever builds
      * the app, so stalkerware can ship as `com.google.android.gms` (free to take on phones
      * without Google services) or `com.touchtype.swiftkey`; only the app from the system image
-     * or a store, which enforce a name's owner, is the real one.
+     * or a store that enforces the name's owner ([AppFacts.nameTrusted]) is the real one.
      */
-    private fun vouched(f: AppFacts, known: Set<String>): Boolean = f.trustedOrigin && f.name in known
+    private fun vouched(f: AppFacts, known: Set<String>): Boolean = f.nameTrusted && f.name in known
 
     /**
      * Scores one package. Each fact is counted once, by its strongest reading:
@@ -418,23 +489,37 @@ object StalkwareScanner {
         val name = f.name
 
         if (f.sideloaded) {
-            out += Signal(SIDELOAD_SCORE, when (f.installer) {
-                null, "com.android.shell" -> "installed from a computer (adb) or an unknown source"
-                "com.android.packageinstaller", "com.google.android.packageinstaller",
-                "com.samsung.android.packageinstaller" -> "installed from an APK file, not a store"
-                else -> "installed by ${f.installer}, not a store"
+            out += Signal(SIDELOAD_SCORE, when {
+                f.spoofedInstaller && f.installer == null ->
+                    "installingPackageName says ${f.declaredInstaller}, but initiatingPackageName is empty: " +
+                        "installed over adb or by root with a forged installer"
+                f.spoofedInstaller ->
+                    "installingPackageName says ${f.declaredInstaller}, but initiatingPackageName is ${f.installer}: the installer is forged"
+                f.installer in STORES ->
+                    "installed by ${f.installer}, which is not the genuine store (it was not preloaded or installed by one)"
+                else -> when (f.installer) {
+                    null, "com.android.shell" -> "installed from a computer (adb) or an unknown source"
+                    "com.android.packageinstaller", "com.google.android.packageinstaller",
+                    "com.samsung.android.packageinstaller" -> "installed from an APK file, not a store"
+                    else -> "installed by ${f.installer}, not a store"
+                }
             })
         }
-        if (!f.trustedOrigin && name in KNOWN_NAMES) {
-            out += Signal(IMPOSTOR_SCORE, "uses the name of a known app but was not installed from a store or the system image")
+        val impostor = !f.nameTrusted && name in KNOWN_NAMES
+        if (impostor) {
+            out += Signal(
+                IMPOSTOR_SCORE,
+                if (f.sideloaded) "uses the name of a known app but was not installed from a store or the system image"
+                else "uses a vendor's app name but came from ${f.installer}, which cannot vouch for that vendor's names",
+            )
         }
         val hidden = !f.system && !f.hasLauncher
         if (hidden) out += Signal(NO_LAUNCHER_SCORE, "has no icon in the app drawer")
 
         for ((perm, weight) in SUSPECT_PERMISSIONS) {
             if (perm !in f.requested) continue
-            // Waived only for a keyboard from a store or the system image: a sideloaded one gets no benefit of the doubt.
-            if (f.imeEnabled && f.trustedOrigin && perm in KEYBOARD_PERMISSIONS) continue
+            // Waived only for a keyboard from a store or the system image that is not an impostor.
+            if (f.imeEnabled && f.trustedOrigin && !impostor && perm in KEYBOARD_PERMISSIONS) continue
             out += Signal(weight.first, weight.second)
         }
         for ((perm, weight) in SUSPECT_BINDINGS) {
@@ -511,12 +596,7 @@ object StalkwareScanner {
     /** Whether the hidden-service signal is available: Settings → Usage access → Clairix. */
     fun hasUsageAccess(context: Context): Boolean {
         val ops = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
-        } else {
-            @Suppress("DEPRECATION")
-            ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
-        }
+        val mode = ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
@@ -552,6 +632,14 @@ object StalkwareScanner {
 
         val packages = installedPackages(pm)
 
+        val stores = genuineStores(
+            systemPackages = STORES.filterTo(HashSet()) { isSystemPackage(pm, it) },
+            sources = STORES.associateWith { installSourceOf(pm, it) },
+        )
+
+        val preloadedCache = HashMap<String, Boolean>()
+        fun preloaded(pkg: String?): Boolean = pkg != null && preloadedCache.getOrPut(pkg) { isSystemPackage(pm, pkg) }
+
         val found = ArrayList<SuspiciousApp>()
         val vouchedImes = HashSet<String>()
         val vouchedAdmins = HashSet<String>()
@@ -568,18 +656,27 @@ object StalkwareScanner {
             // Only an app from a store or the system image may be vouched for by its name, so
             // the origin is read for keyboards and admins even when the app is not scored.
             if (ime || admin) {
-                val origin = AppFacts(name, system, installerOf(pm, name), hasLauncher = true)
+                val src = installSourceOf(pm, name)
+                val origin = AppFacts(
+                    name, system, src?.initiating, hasLauncher = true,
+                    declaredInstaller = src?.installing, genuineStores = stores,
+                    installerPreloaded = preloaded(src?.initiating),
+                )
                 if (ime && isVouchedIme(origin)) vouchedImes += name
                 if (admin && isVouchedAdmin(origin)) vouchedAdmins += name
             }
             if (system && !systemAppWorthScoring(name, listener, a11y, ime)) continue
 
-            val installer = installerOf(pm, name)
+            val source = installSourceOf(pm, name)
+            val installer = source?.initiating
 
             val facts = AppFacts(
                 name = name,
                 system = system,
                 installer = installer,
+                declaredInstaller = source?.installing,
+                genuineStores = stores,
+                installerPreloaded = preloaded(installer),
                 hasLauncher = name in launcherPkgs,
                 requested = pkg.requestedPermissions?.toSet() ?: emptySet(),
                 declared = declaredBindings(pkg),
@@ -609,7 +706,7 @@ object StalkwareScanner {
                 accessibilityEnabled = a11y,
                 imeEnabled = ime,
                 deviceAdminActive = admin,
-                installerPackage = installer
+                installerPackage = installer ?: source?.installing
             )
         }
 
@@ -676,15 +773,21 @@ object StalkwareScanner {
         return out
     }
 
-    private fun installerOf(pm: PackageManager, packageName: String): String? = runCatching {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val src = pm.getInstallSourceInfo(packageName)
-            src.installingPackageName ?: src.initiatingPackageName
+    /** Who installed [packageName]; null when it is not installed or not visible. (minSdk 31: always API 30+.) */
+    private fun installSourceOf(pm: PackageManager, packageName: String): InstallSource? = runCatching {
+        val src = pm.getInstallSourceInfo(packageName)
+        InstallSource(src.initiatingPackageName, src.installingPackageName)
+    }.getOrNull()
+
+    private fun isSystemPackage(pm: PackageManager, packageName: String): Boolean = runCatching {
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
         } else {
             @Suppress("DEPRECATION")
-            pm.getInstallerPackageName(packageName)
+            pm.getApplicationInfo(packageName, 0)
         }
-    }.getOrNull()
+        (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+    }.getOrDefault(false)
 
     /** Packages with at least one activity in the launcher. */
     private fun launcherPackages(pm: PackageManager): Set<String> {
