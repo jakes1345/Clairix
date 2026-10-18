@@ -4,6 +4,9 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    // JVM screenshot tests of the Compose screens (no device): layoutlib renders
+    // them; recordPaparazziFullDebug writes the PNGs to src/test/snapshots.
+    id("app.cash.paparazzi")
 }
 
 // ── COMMS end-to-end encryption: the Rust crate in ../comms-crypto ─────────
