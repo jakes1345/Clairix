@@ -131,6 +131,40 @@ class TlsCanaryTest {
     }
 
     @Test
+    fun aProxyTricklingItsAnswerIsCutOffAtTheDeadline() {
+        // One byte every nine seconds stays inside a 10 s read timeout forever; the
+        // overall deadline has to end it.
+        var clock = 0L
+        val answer = "HTTP/1.1 200 Connection established\r\n\r\n".toByteArray()
+        var read = 0
+        val trickle = object : java.io.InputStream() {
+            override fun read(): Int {
+                clock += 9_000L
+                return if (read < answer.size) answer[read++].toInt() else -1
+            }
+        }
+        val error = runCatching { TlsCanary.readConnectStatus(trickle, deadlineAt = 30_000L, now = { clock }) }.exceptionOrNull()
+        assertTrue(error.toString(), error is IOException)
+        assertEquals("proxy response too slow", error!!.message)
+        // Stopped after a handful of bytes, not after the whole answer.
+        assertTrue("read $read bytes", read <= 4)
+    }
+
+    @Test
+    fun aPromptAnswerWithinTheDeadlineIsRead() {
+        var clock = 0L
+        val answer = "HTTP/1.1 200 OK\r\n\r\n".toByteArray()
+        var read = 0
+        val quick = object : java.io.InputStream() {
+            override fun read(): Int {
+                clock += 10L
+                return if (read < answer.size) answer[read++].toInt() else -1
+            }
+        }
+        assertEquals(200, TlsCanary.readConnectStatus(quick, deadlineAt = 30_000L, now = { clock }))
+    }
+
+    @Test
     fun theGlobalProxySettingIsParsed() {
         val p = TlsCanary.parseGlobalProxy(" 10.0.0.2:8888 ")!!
         assertEquals("10.0.0.2", p.host)

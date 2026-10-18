@@ -27,6 +27,9 @@ import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
@@ -136,6 +139,19 @@ object TlsCanary {
 
     private const val INTERVAL_MS = 4 * 3600_000L
     private const val CONNECT_TIMEOUT_MS = 10_000
+    /**
+     * Ceiling on one probe from TCP connect to finished handshake, CONNECT headers
+     * included. The per-read timeout alone does not bound the total: a proxy or
+     * server trickling a byte every few seconds could hold a probe for hours, and
+     * runs are sequential, so every later run would wait behind it.
+     */
+    private const val PROBE_DEADLINE_MS = 30_000L
+
+    /** Closes a probe's socket when its deadline passes, wherever the probe is blocked. */
+    private val deadlineWatchdog: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "tls-canary-deadline").apply { isDaemon = true }
+    }
+
     /** Longest CONNECT response header block read before giving up on the proxy. */
     private const val MAX_CONNECT_RESPONSE = 16 * 1024
     /** A network change fires several callbacks in a row; one run per burst. */
@@ -515,13 +531,41 @@ object TlsCanary {
     private fun probe(host: String, port: Int): Observed {
         val recording = Recording()
         val socket = recording.context.socketFactory.createSocket() as SSLSocket
+        val deadlineAt = System.currentTimeMillis() + PROBE_DEADLINE_MS
+        return withDeadline(socket, deadlineAt) {
+            socket.connect(InetSocketAddress(host, port), remaining(deadlineAt))
+            socket.soTimeout = remaining(deadlineAt)
+            handshake(socket, host, recording)
+        }
+    }
+
+    /**
+     * Runs [block] against [socket] under the overall [deadlineAt]: a watchdog closes
+     * the socket when it passes, which unblocks a connect, read or handshake that the
+     * per-step timeouts would let run on, and the resulting failure is reported as
+     * the deadline. The socket is closed on every path.
+     */
+    private fun <T> withDeadline(socket: Socket, deadlineAt: Long, block: () -> T): T {
+        val delay = (deadlineAt - System.currentTimeMillis()).coerceAtLeast(0L)
+        val watchdog = deadlineWatchdog.schedule({ runCatching { socket.close() } }, delay, TimeUnit.MILLISECONDS)
         try {
-            socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            socket.soTimeout = CONNECT_TIMEOUT_MS
-            return handshake(socket, host, recording)
+            return block()
+        } catch (e: IOException) {
+            if (System.currentTimeMillis() >= deadlineAt) {
+                throw IOException("probe exceeded its ${PROBE_DEADLINE_MS / 1000} s deadline", e)
+            }
+            throw e
         } finally {
+            watchdog.cancel(false)
             runCatching { socket.close() }
         }
+    }
+
+    /** Milliseconds left before [deadlineAt], as a socket timeout; throws once none are left. */
+    private fun remaining(deadlineAt: Long): Int {
+        val left = deadlineAt - System.currentTimeMillis()
+        if (left <= 0) throw IOException("probe exceeded its ${PROBE_DEADLINE_MS / 1000} s deadline")
+        return minOf(left, CONNECT_TIMEOUT_MS.toLong()).toInt()
     }
 
     /**
@@ -531,23 +575,24 @@ object TlsCanary {
      */
     private fun probeViaProxy(proxyHost: String, proxyPort: Int, host: String, port: Int): Observed {
         val plain = Socket()
-        try {
-            plain.connect(InetSocketAddress(proxyHost, proxyPort), CONNECT_TIMEOUT_MS)
-            plain.soTimeout = CONNECT_TIMEOUT_MS
+        val deadlineAt = System.currentTimeMillis() + PROBE_DEADLINE_MS
+        // One deadline for the connect, the CONNECT exchange and the handshake.
+        return withDeadline(plain, deadlineAt) {
+            plain.connect(InetSocketAddress(proxyHost, proxyPort), remaining(deadlineAt))
+            plain.soTimeout = remaining(deadlineAt)
             val out = plain.getOutputStream()
             out.write("CONNECT $host:$port HTTP/1.1\r\nHost: $host:$port\r\n\r\n".toByteArray(Charsets.US_ASCII))
             out.flush()
-            val status = readConnectStatus(plain.getInputStream())
+            val status = readConnectStatus(plain.getInputStream(), deadlineAt)
             if (status != 200) throw IOException("proxy answered CONNECT with HTTP $status")
+            plain.soTimeout = remaining(deadlineAt)
             val recording = Recording()
             val tls = recording.context.socketFactory.createSocket(plain, host, port, true) as SSLSocket
             try {
-                return handshake(tls, host, recording)
+                handshake(tls, host, recording)
             } finally {
                 runCatching { tls.close() }
             }
-        } finally {
-            runCatching { plain.close() }
         }
     }
 
@@ -555,12 +600,19 @@ object TlsCanary {
      * Reads a proxy's answer to CONNECT up to the blank line that ends its headers
      * and returns the status code. Reads byte by byte so nothing past the headers —
      * the start of the tunnelled stream — is consumed. Throws on a malformed or
-     * oversized answer, or one cut off before the blank line.
+     * oversized answer, one cut off before the blank line, or one still incomplete
+     * at [deadlineAt] by [now]: each read is bounded by the socket timeout, but a
+     * proxy sending a byte just inside it would otherwise never be cut off.
      */
-    internal fun readConnectStatus(input: InputStream): Int {
+    internal fun readConnectStatus(
+        input: InputStream,
+        deadlineAt: Long = Long.MAX_VALUE,
+        now: () -> Long = System::currentTimeMillis
+    ): Int {
         val head = StringBuilder()
         while (!head.endsWith("\r\n\r\n") && !head.endsWith("\n\n")) {
             if (head.length >= MAX_CONNECT_RESPONSE) throw IOException("proxy response headers too long")
+            if (now() >= deadlineAt) throw IOException("proxy response too slow")
             val b = input.read()
             if (b < 0) throw IOException("proxy closed the connection during CONNECT")
             head.append(b.toChar())
