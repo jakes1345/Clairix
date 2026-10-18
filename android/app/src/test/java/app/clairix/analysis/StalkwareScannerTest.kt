@@ -124,9 +124,88 @@ class StalkwareScannerTest {
             val signals = StalkwareScanner.assess(f)
             assertEquals(known, 0, signals.sumOf { it.points })
             assertTrue(known, "device admin is active (a known app)" in signals.map { it.reason })
-            assertTrue(StalkwareScanner.isKnownAdmin(known))
+            assertTrue(known, StalkwareScanner.isVouchedAdmin(f))
         }
-        assertFalse(StalkwareScanner.isKnownAdmin(rogue))
+        assertFalse(StalkwareScanner.isVouchedAdmin(AppFacts(rogue, false, play, true, deviceAdminActive = true)))
+    }
+
+    @Test
+    fun mdmAgentsFromAStoreAreKnownAdmins() {
+        for (mdm in listOf(
+            "com.azure.authenticator", "com.mobileiron", "com.mobileiron.anyware.android",
+            "net.soti.mobicontrol.androidwork", "com.meraki.sm", "com.manageengine.mdm.android",
+        )) {
+            assertEquals(mdm, 0, score(AppFacts(mdm, false, play, true, deviceAdminActive = true)))
+        }
+    }
+
+    // ── Impostors: a known name only vouches from a store or the system image ──
+
+    private val impostorAdmin = AppFacts(
+        "com.google.android.gms", system = false, installer = "com.android.packageinstaller", hasLauncher = true,
+        declared = setOf(Manifest.permission.BIND_DEVICE_ADMIN), deviceAdminActive = true,
+    )
+
+    @Test
+    fun aSideloadedAdminUsingAKnownNameIsHighAndNotVouched() {
+        val signals = StalkwareScanner.assess(impostorAdmin)
+        assertTrue(signals.any { it.points == StalkwareScanner.IMPOSTOR_SCORE && "name of a known app" in it.reason })
+        assertFalse("device admin is active (a known app)" in signals.map { it.reason })
+        assertEquals(Severity.HIGH, severity(impostorAdmin))
+        // The Phone check badge reads the same verdict.
+        assertFalse(StalkwareScanner.isVouchedAdmin(impostorAdmin))
+    }
+
+    @Test
+    fun theSameAdminFromAStoreOrTheSystemImageIsStillVouched() {
+        for (real in listOf(impostorAdmin.copy(installer = play), impostorAdmin.copy(system = true, installer = null))) {
+            assertEquals(0, score(real))
+            assertTrue(StalkwareScanner.isVouchedAdmin(real))
+        }
+    }
+
+    @Test
+    fun anImpostorPlusAnyActiveCapabilityReachesHighWithoutTheSideloadSignal() {
+        // Even before the sideload signal: the impostor signal plus the weakest capability is HIGH (5).
+        for (capability in listOf(
+            StalkwareScanner.DEVICE_ADMIN_ACTIVE_SCORE, 3 /* accessibility */, 3 /* listener */, StalkwareScanner.IME_ENABLED_SCORE,
+        )) {
+            assertTrue(StalkwareScanner.IMPOSTOR_SCORE + capability >= 5)
+        }
+    }
+
+    @Test
+    fun aSideloadedKeyboardUsingAKnownNameGetsNoWaiverAndIsHigh() {
+        val fake = keyboardManifest.copy(name = "com.touchtype.swiftkey", installer = null)
+        val reasons = StalkwareScanner.assess(fake).map { it.reason }
+        assertTrue(reasons.any { "name of a known app" in it })
+        assertTrue("can record audio" in reasons && "can draw over other apps" in reasons)
+        assertTrue(reasons.any { "can log every keystroke" in it })
+        assertFalse(StalkwareScanner.isVouchedIme(fake))
+        assertEquals(Severity.HIGH, severity(fake))
+        // The store copy is the real one.
+        assertEquals(0, score(fake.copy(installer = play)))
+        assertTrue(StalkwareScanner.isVouchedIme(fake.copy(installer = play)))
+    }
+
+    @Test
+    fun sideloadedAccessibilityAndListenerImpostorsAreNotVouched() {
+        val a11y = AppFacts("com.google.android.marvin.talkback", false, null, true, accessibilityEnabled = true)
+        assertTrue(StalkwareScanner.assess(a11y).any { it.reason == "accessibility service is switched ON" })
+        assertEquals(Severity.HIGH, severity(a11y))
+        val listener = AppFacts("com.whatsapp", false, null, true, notificationListener = true)
+        assertTrue(StalkwareScanner.assess(listener).any { it.reason.startsWith("notification access is switched ON") })
+        assertEquals(Severity.HIGH, severity(listener))
+        // From the store they are what they say they are.
+        assertEquals(0, score(a11y.copy(installer = play)))
+        assertEquals(0, score(listener.copy(installer = play)))
+    }
+
+    @Test
+    fun restoredKeyboardNamesAreKnown() {
+        for (name in listOf("com.htc.sense.ime", "com.nuance.swype.dtc", "com.minuum.keyboard", "com.transsion.sk", "com.tct.smartkeyboard")) {
+            assertEquals(name, 0, score(keyboardManifest.copy(name = name)))
+        }
     }
 
     // ── Existing behaviour kept ───────────────────────────────────────────────
@@ -164,11 +243,16 @@ class StalkwareScannerTest {
     }
 
     @Test
-    fun suspiciousImesDropKnownKeyboardsAndSort() {
+    fun suspiciousImesDropVouchedKeyboardsAndSort() {
         assertEquals(
             listOf("com.a.keys", rogue),
-            StalkwareScanner.suspiciousImes(listOf(rogue, gboard, "com.a.keys", "com.samsung.android.honeyboard", rogue)),
+            StalkwareScanner.suspiciousImes(
+                listOf(rogue, gboard, "com.a.keys", "com.samsung.android.honeyboard", rogue),
+                vouchedImes = setOf(gboard, "com.samsung.android.honeyboard"),
+            ),
         )
-        assertEquals(emptyList<String>(), StalkwareScanner.suspiciousImes(emptySet()))
+        // A known name that was not vouched for (sideloaded) stays listed.
+        assertEquals(listOf(gboard), StalkwareScanner.suspiciousImes(listOf(gboard), vouchedImes = emptySet()))
+        assertEquals(emptyList<String>(), StalkwareScanner.suspiciousImes(emptySet(), emptySet()))
     }
 }

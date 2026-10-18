@@ -77,10 +77,15 @@ object StalkwareScanner {
         val accessibilityServices: List<String>,
         /** Every app that can act as the device VPN. */
         val vpnApps: List<String>,
-        /** Enabled keyboards that are not a known stock or well-known keyboard. */
+        /**
+         * Enabled keyboards not vouched for: not a known keyboard, or one using a known
+         * keyboard's name without coming from a store or the system image.
+         */
         val suspiciousImes: List<String>,
         /** Every app holding an active device-admin grant. */
         val activeDeviceAdmins: List<String>,
+        /** The members of [activeDeviceAdmins] vouched for: a known admin app from a store or the system image. */
+        val vouchedAdmins: Set<String>,
         val usageAccessGranted: Boolean,
         val scannedAt: Long
     ) {
@@ -193,8 +198,8 @@ object StalkwareScanner {
     /**
      * Keyboards (input methods) preloaded by phone makers or widely installed from a
      * store. Every name is a real package (seen in the Play Store, F-Droid, a system-app
-     * database or a debloat list); an invented name here would hand a disguise to any
-     * app willing to take it.
+     * database or a debloat list). A name vouches only for an app from a store or the
+     * system image ([vouched]); the same name on a sideloaded app is an impostor signal.
      */
     private val KNOWN_IMES = setOf(
         // Google
@@ -259,6 +264,9 @@ object StalkwareScanner {
         "com.touchtype.swiftkey",                          // Microsoft SwiftKey
         "com.touchtype.swiftkey.beta",
         "com.nuance.swype.input",
+        "com.nuance.swype.dtc",                            // Swype (Nuance)
+        "com.htc.sense.ime",                               // HTC Sense keyboard
+        "com.minuum.keyboard",                             // Minuum
         "com.grammarly.android.keyboard",
         "com.syntellia.fleksy.keyboard",                   // Fleksy
         "ch.icoaching.typewise",
@@ -280,7 +288,8 @@ object StalkwareScanner {
     /**
      * Apps that hold a device-admin grant for a stated, legitimate purpose: finding a
      * lost phone, a work or school profile, or the policies an Exchange mail account
-     * imposes. Listed, not scored, as for [KNOWN_LISTENERS].
+     * imposes. Listed, not scored, as for [KNOWN_LISTENERS], when from a store or the
+     * system image ([vouched]).
      */
     private val KNOWN_ADMINS = setOf(
         "com.google.android.gms",                          // Play services: Find My Device
@@ -289,6 +298,12 @@ object StalkwareScanner {
         "com.google.android.apps.enterprise.dmagent",      // Google Apps Device Policy
         "com.microsoft.windowsintune.companyportal",       // Intune Company Portal
         "com.airwatch.androidagent",                       // Workspace ONE Intelligent Hub
+        "com.azure.authenticator",                         // Microsoft Authenticator (device registration)
+        "com.mobileiron",                                  // Ivanti (MobileIron) Mobile@Work
+        "com.mobileiron.anyware.android",                  // Ivanti Go
+        "net.soti.mobicontrol.androidwork",                // SOTI MobiControl Agent
+        "com.meraki.sm",                                   // Cisco Meraki Systems Manager
+        "com.manageengine.mdm.android",                    // ManageEngine MDM
         "com.samsung.android.fmm",                         // Samsung Find My Mobile
         "com.samsung.android.knox.containercore",          // Knox work profile
         "com.sec.enterprise.knox.cloudmdm.smdms",          // Knox enrollment
@@ -304,6 +319,11 @@ object StalkwareScanner {
     internal const val SIDELOAD_SCORE = 3
     internal const val NO_LAUNCHER_SCORE = 2
     internal const val HIDDEN_SERVICE_SCORE = 2
+    /**
+     * Score for a sideloaded app using a known app's name. With any special access it holds
+     * (keyboard 4, admin 3, accessibility 3, listener 3) it reaches HIGH on its own.
+     */
+    internal const val IMPOSTOR_SCORE = 2
 
     /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
     private val SUSPECT_PERMISSIONS = linkedMapOf(
@@ -363,7 +383,21 @@ object StalkwareScanner {
     ) {
         /** Installed by something other than a store; preloaded apps never are. */
         val sideloaded: Boolean get() = !system && (installer == null || installer !in STORES)
+
+        /** From the system image or a store: only then can a known name vouch for it. */
+        val trustedOrigin: Boolean get() = !sideloaded
     }
+
+    /** Every name the scanner vouches for, so a sideloaded app wearing one stands out. */
+    private val KNOWN_NAMES: Set<String> by lazy { KNOWN_IMES + KNOWN_ADMINS + KNOWN_ACCESSIBILITY + KNOWN_LISTENERS + STORES }
+
+    /**
+     * Whether [f]'s name in [known] vouches for it. A package name is chosen by whoever builds
+     * the app, so stalkerware can ship as `com.google.android.gms` (free to take on phones
+     * without Google services) or `com.touchtype.swiftkey`; only the app from the system image
+     * or a store, which enforce a name's owner, is the real one.
+     */
+    private fun vouched(f: AppFacts, known: Set<String>): Boolean = f.trustedOrigin && f.name in known
 
     /**
      * Scores one package. Each fact is counted once, by its strongest reading:
@@ -376,7 +410,8 @@ object StalkwareScanner {
      *   drawer is normal for one, and an unknown preloaded keyboard (an OEM's own) is
      *   listed but scores only alongside some other, independent signal.
      * - Known apps declaring or holding the access they exist to provide are listed
-     *   with "(a known app)" and score nothing.
+     *   with "(a known app)" and score nothing, when they come from a store or the system
+     *   image. A sideloaded app using a known name is scored as an impostor instead.
      */
     internal fun assess(f: AppFacts): List<Signal> {
         val out = ArrayList<Signal>()
@@ -390,39 +425,43 @@ object StalkwareScanner {
                 else -> "installed by ${f.installer}, not a store"
             })
         }
+        if (!f.trustedOrigin && name in KNOWN_NAMES) {
+            out += Signal(IMPOSTOR_SCORE, "uses the name of a known app but was not installed from a store or the system image")
+        }
         val hidden = !f.system && !f.hasLauncher
         if (hidden) out += Signal(NO_LAUNCHER_SCORE, "has no icon in the app drawer")
 
         for ((perm, weight) in SUSPECT_PERMISSIONS) {
             if (perm !in f.requested) continue
-            if (f.imeEnabled && perm in KEYBOARD_PERMISSIONS) continue
+            // Waived only for a keyboard from a store or the system image: a sideloaded one gets no benefit of the doubt.
+            if (f.imeEnabled && f.trustedOrigin && perm in KEYBOARD_PERMISSIONS) continue
             out += Signal(weight.first, weight.second)
         }
         for ((perm, weight) in SUSPECT_BINDINGS) {
             if (perm !in f.declared) continue
             val skip = when (perm) {
-                Manifest.permission.BIND_ACCESSIBILITY_SERVICE -> name in KNOWN_ACCESSIBILITY
-                Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE -> name in KNOWN_LISTENERS
-                Manifest.permission.BIND_INPUT_METHOD -> name in KNOWN_IMES || f.imeEnabled
-                Manifest.permission.BIND_DEVICE_ADMIN -> name in KNOWN_ADMINS || f.deviceAdminActive
+                Manifest.permission.BIND_ACCESSIBILITY_SERVICE -> vouched(f, KNOWN_ACCESSIBILITY)
+                Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE -> vouched(f, KNOWN_LISTENERS)
+                Manifest.permission.BIND_INPUT_METHOD -> vouched(f, KNOWN_IMES) || f.imeEnabled
+                Manifest.permission.BIND_DEVICE_ADMIN -> vouched(f, KNOWN_ADMINS) || f.deviceAdminActive
                 else -> false
             }
             if (!skip) out += Signal(weight.first, weight.second)
         }
 
         if (f.accessibilityEnabled) {
-            out += if (name !in KNOWN_ACCESSIBILITY) Signal(3, "accessibility service is switched ON")
+            out += if (!vouched(f, KNOWN_ACCESSIBILITY)) Signal(3, "accessibility service is switched ON")
             else Signal(0, "accessibility service is on (a known app)")
         }
         if (f.notificationListener) {
-            out += if (name !in KNOWN_LISTENERS) Signal(3, "notification access is switched ON (reads every notification)")
+            out += if (!vouched(f, KNOWN_LISTENERS)) Signal(3, "notification access is switched ON (reads every notification)")
             else Signal(0, "notification access is on (a known app)")
         }
         if (f.vpnCapable) {
             out += Signal(if (f.sideloaded || hidden) 2 else 1, "can act as the VPN and see all traffic")
         }
         if (f.deviceAdminActive) {
-            out += if (name !in KNOWN_ADMINS) {
+            out += if (!vouched(f, KNOWN_ADMINS)) {
                 Signal(DEVICE_ADMIN_ACTIVE_SCORE, "device admin is ACTIVE (can block its own uninstall; may lock or wipe the phone)")
             } else {
                 Signal(0, "device admin is active (a known app)")
@@ -434,8 +473,14 @@ object StalkwareScanner {
 
         if (f.imeEnabled) {
             out += when {
-                name in KNOWN_IMES -> Signal(0, "is an enabled keyboard (a known app)")
-                // Checked last so "another signal" means everything above, none of it the keyboard itself.
+                vouched(f, KNOWN_IMES) -> Signal(0, "is an enabled keyboard (a known app)")
+                // Trade-off: an unknown keyboard in the system image (an OEM's own, of which there
+                // are too many to list) scores 0 on its own, so it is never reported as an app on
+                // its own; it is still listed in the Stalkerware page's KEYBOARDS section for the
+                // owner to judge. Spyware would have to be built into the firmware to benefit, and
+                // any other signal (permissions, accessibility, admin, hidden service) scores it in
+                // full. Checked last so "another signal" means everything above, none of it the
+                // keyboard itself.
                 f.system && out.none { it.points > 0 } -> Signal(0, "is an enabled keyboard (preloaded by the phone maker)")
                 else -> Signal(IME_ENABLED_SCORE, "is an enabled keyboard (can log every keystroke, passwords included)")
             }
@@ -453,12 +498,15 @@ object StalkwareScanner {
             (a11y && name !in KNOWN_ACCESSIBILITY) ||
             (imeEnabled && name !in KNOWN_IMES)
 
-    /** Enabled keyboards that are not in [KNOWN_IMES], sorted. */
-    internal fun suspiciousImes(enabledImes: Collection<String>): List<String> =
-        enabledImes.filter { it !in KNOWN_IMES }.distinct().sorted()
+    /** Enabled keyboards that are not in [vouchedImes], sorted. */
+    internal fun suspiciousImes(enabledImes: Collection<String>, vouchedImes: Set<String>): List<String> =
+        enabledImes.filter { it !in vouchedImes }.distinct().sorted()
 
-    /** Whether [packageName] holds device admin for a known, legitimate purpose. */
-    fun isKnownAdmin(packageName: String): Boolean = packageName in KNOWN_ADMINS
+    /** Whether [f] is a keyboard the scanner vouches for: a known name from a store or the system image. */
+    internal fun isVouchedIme(f: AppFacts): Boolean = vouched(f, KNOWN_IMES)
+
+    /** Whether [f] is a device admin the scanner vouches for: a known name from a store or the system image. */
+    internal fun isVouchedAdmin(f: AppFacts): Boolean = vouched(f, KNOWN_ADMINS)
 
     /** Whether the hidden-service signal is available: Settings → Usage access → Clairix. */
     fun hasUsageAccess(context: Context): Boolean {
@@ -505,6 +553,8 @@ object StalkwareScanner {
         val packages = installedPackages(pm)
 
         val found = ArrayList<SuspiciousApp>()
+        val vouchedImes = HashSet<String>()
+        val vouchedAdmins = HashSet<String>()
         for (pkg in packages) {
             val info = pkg.applicationInfo ?: continue
             val name = pkg.packageName
@@ -515,9 +565,17 @@ object StalkwareScanner {
             val vpn = name in vpnPkgs
             val ime = name in imePkgs
             val admin = name in deviceAdminPkgs
+            // Only an app from a store or the system image may be vouched for by its name, so
+            // the origin is read for keyboards and admins even when the app is not scored.
+            if (ime || admin) {
+                val origin = AppFacts(name, system, installerOf(pm, name), hasLauncher = true)
+                if (ime && isVouchedIme(origin)) vouchedImes += name
+                if (admin && isVouchedAdmin(origin)) vouchedAdmins += name
+            }
             if (system && !systemAppWorthScoring(name, listener, a11y, ime)) continue
 
             val installer = installerOf(pm, name)
+
             val facts = AppFacts(
                 name = name,
                 system = system,
@@ -560,8 +618,9 @@ object StalkwareScanner {
             notificationListeners = listenerPkgs.sorted(),
             accessibilityServices = accessibilityPkgs.sorted(),
             vpnApps = vpnPkgs.sorted(),
-            suspiciousImes = suspiciousImes(imePkgs),
+            suspiciousImes = suspiciousImes(imePkgs, vouchedImes),
             activeDeviceAdmins = deviceAdminPkgs.sorted(),
+            vouchedAdmins = vouchedAdmins,
             usageAccessGranted = usageAccess,
             scannedAt = System.currentTimeMillis()
         )

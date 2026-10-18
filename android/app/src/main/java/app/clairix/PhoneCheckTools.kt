@@ -131,7 +131,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                     TKv("Accessibility services", "${r.accessibilityServices.size}")
                     TKv("VPN-capable apps", "${r.vpnApps.size}")
                     TKv("Unknown keyboards", "${r.suspiciousImes.size}")
-                    val unknownAdmins = r.activeDeviceAdmins.count { !StalkwareScanner.isKnownAdmin(it) }
+                    val unknownAdmins = r.activeDeviceAdmins.count { it !in r.vouchedAdmins }
                     TKv("Active device admins", "${r.activeDeviceAdmins.size} ($unknownAdmins unknown)")
                 }
             }
@@ -192,7 +192,8 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                         context = context,
                         actionLabel = "OPEN IN SETTINGS",
                         action = StalkwareScanner.appDetailsIntent(pkg),
-                        known = StalkwareScanner.isKnownAdmin(pkg),
+                        // A known name alone is not enough: the scanner vouches only for one from a store or the system image.
+                        known = pkg in r.vouchedAdmins,
                     )
                 }
             }
