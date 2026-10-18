@@ -30,6 +30,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -395,7 +398,7 @@ private fun NetworkTab(findings: List<CameraFinding>) {
                 Spacer(Modifier.height(8.dp))
                 ActionButton("CANCEL", tone = CInkDim) { HiddenCameraScanner.cancelNetworkScan() }
             } else {
-                progress.error?.let { Text("⚠ $it", color = CCaution, fontSize = 12.sp, lineHeight = 16.sp) }
+                progress.error?.let { SweepWarning(it) }
                 if (progress.lastScanTs > 0 && progress.error == null) {
                     Text(
                         "Last sweep ${fmtAgo(now, progress.lastScanTs)} · ${progress.liveHosts} live hosts · ${progress.found} camera-like",
@@ -441,7 +444,7 @@ private fun WirelessTab(findings: List<CameraFinding>) {
                 color = CInkDim, fontSize = 12.sp, lineHeight = 16.sp
             )
             Spacer(Modifier.height(8.dp))
-            state.wifiError?.let { Text("⚠ $it", color = CCaution, fontSize = 12.sp) }
+            state.wifiError?.let { SweepWarning(it) }
             if (state.wifiScannedTs > 0) {
                 Text(
                     "Scanned ${fmtAgo(now, state.wifiScannedTs)} · ${state.wifiApsSeen} networks in range",
@@ -461,7 +464,7 @@ private fun WirelessTab(findings: List<CameraFinding>) {
                 color = CInkDim, fontSize = 12.sp, lineHeight = 16.sp
             )
             Spacer(Modifier.height(8.dp))
-            state.bleError?.let { Text("⚠ $it", color = CCaution, fontSize = 12.sp) }
+            state.bleError?.let { SweepWarning(it) }
             if (state.bleListening) {
                 val left = ((state.bleUntilTs - now) / 1000L).coerceAtLeast(0L)
                 Text(
@@ -514,7 +517,7 @@ private fun GuidedTab(findings: List<CameraFinding>) {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            mag.error?.let { Text("⚠ $it", color = CCaution, fontSize = 12.sp) }
+            mag.error?.let { SweepWarning(it) }
             if (mag.active) {
                 MagneticBar(mag.fieldUt, mag.baselineUt, mag.thresholdUt, mag.triggered)
                 Spacer(Modifier.height(6.dp))
@@ -674,6 +677,18 @@ private fun PanelBox(content: @Composable () -> Unit) {
 @Composable
 private fun SectionLabel(text: String, modifier: Modifier = Modifier, color: Color = CInkDim) {
     Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = modifier)
+}
+
+/** An error from one of the sweep methods: the warning icon, then the message. */
+@Composable
+private fun SweepWarning(text: String) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Icon(
+            Icons.Filled.Warning, contentDescription = "Warning", tint = CCaution,
+            modifier = Modifier.padding(top = 1.dp).size(15.dp)
+        )
+        Text(text, color = CCaution, fontSize = 12.sp, lineHeight = 16.sp)
+    }
 }
 
 @Composable

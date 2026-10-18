@@ -37,7 +37,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -179,28 +184,13 @@ private val COMMS_ESSENTIAL = arrayOf(
 )
 
 /**
- * Tab ids. They are stable across flavours — a notification asks for
- * [TAB_COMMS] by this number whichever build it is in — and MainApp lays out
- * whichever of them the flavour has.
+ * Route ids a [Registry.requestTab] call carries. They are the numbers the old
+ * flat tab bar used, kept because message notifications already posted send
+ * [CommsNotifications.COMMS_TAB_INDEX]; MainApp maps each onto a destination of
+ * the tabbed shell, and ignores one the flavour does not have.
  */
-private const val TAB_SCAN = 0
-private const val TAB_MAP = 1
-private const val TAB_LOG = 2
-private const val TAB_CELL = 3
-private const val TAB_NFC = 4
-private const val TAB_WIFI = 5
-private const val TAB_DEVICE = 6
-private const val TAB_COMMS = CommsNotifications.COMMS_TAB_INDEX
-private const val TAB_DRIVE = TAB_COMMS + 1
-
-private class TabSpec(val id: Int, val label: String)
-
-private val FULL_TABS = listOf(
-    TabSpec(TAB_SCAN, "SCAN"), TabSpec(TAB_MAP, "MAP"), TabSpec(TAB_LOG, "LOG"), TabSpec(TAB_CELL, "CELL"),
-    TabSpec(TAB_NFC, "NFC"), TabSpec(TAB_WIFI, "WIFI"), TabSpec(TAB_DEVICE, "DEVICE"), TabSpec(TAB_COMMS, "COMMS"),
-    TabSpec(TAB_DRIVE, "DRIVE")
-)
-private val COMMS_TABS = listOf(TabSpec(TAB_COMMS, "COMMS"))
+private const val ROUTE_NFC = 4
+private const val ROUTE_COMMS = CommsNotifications.COMMS_TAB_INDEX
 
 // ── Activity ───────────────────────────────────────────────────────────
 
@@ -492,7 +482,7 @@ class MainActivity : AppCompatActivity() {
         val tag = IntentCompat.getParcelableExtra(intent, NfcAdapter.EXTRA_TAG, Tag::class.java) ?: return
         // Consumed: a later onCreate (recreation) must not scan the same tag again.
         intent.action = null
-        Registry.requestTab(TAB_NFC)
+        Registry.requestTab(ROUTE_NFC)
         // Parsing talks to the tag over the air and must not block the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
             val parsed = try { NfcScanner.parse(tag) } catch (_: Exception) { return@launch }
@@ -1250,6 +1240,24 @@ private fun SosButton(onConfirmed: () -> Unit) {
     }
 }
 
+/** A warning: the Material warning icon in [color], then [text]. */
+@Composable
+private fun WarningLine(
+    text: String,
+    color: Color,
+    fontSize: Int,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight = FontWeight.Normal
+) {
+    Row(modifier, verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Icon(
+            Icons.Filled.Warning, contentDescription = "Warning", tint = color,
+            modifier = Modifier.padding(top = 1.dp).size((fontSize + 3).dp)
+        )
+        Text(text, color = color, fontSize = fontSize.sp, lineHeight = (fontSize + 4).sp, fontWeight = fontWeight)
+    }
+}
+
 // ── Root composable ───────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1270,45 +1278,89 @@ private fun MainApp(
     onRefreshWifi: () -> Unit
 ) {
     // The comms-only build has the one tab and draws no tab bar under it.
-    val tabs = if (BuildConfig.FULL_ACCESS) FULL_TABS else COMMS_TABS
-    var tab by remember { mutableIntStateOf(tabs.first().id) }
+    val tabs = homeTabsFor(BuildConfig.FULL_ACCESS)
 
-    val detections by Registry.detections.collectAsStateWithLifecycle()
-    val trusted by Registry.trusted.collectAsStateWithLifecycle()
-    val cell by Registry.cell.collectAsStateWithLifecycle()
-    val nfc by Registry.nfc.collectAsStateWithLifecycle()
-    val wifi by Registry.wifi.collectAsStateWithLifecycle()
-    val phoneHealth by Registry.phoneHealth.collectAsStateWithLifecycle()
+    // Where the user is. Every piece is saved by name or index, so a rotation or
+    // a process restart puts them back on the same tab, category and sub-tab.
+    var tabName by rememberSaveable { mutableStateOf(tabs.first().name) }
+    var categoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    var trackerActionName by rememberSaveable { mutableStateOf<String?>(null) }
+    var commsActionName by rememberSaveable { mutableStateOf<String?>(null) }
+    var trackerSub by rememberSaveable { mutableIntStateOf(0) }
+    var phoneSub by rememberSaveable { mutableIntStateOf(0) }
+    var activitySub by rememberSaveable { mutableIntStateOf(0) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+
+    val tab = enumByName<HomeTab>(tabName)?.takeIf { it in tabs } ?: tabs.first()
+    val category = enumByName<ScanCategory>(categoryName)
+    // The tracker actions belong to the Trackers category and the Comms menu to
+    // the full build; a saved name outside those is dropped rather than shown.
+    val trackerAction = enumByName<TrackerAction>(trackerActionName)?.takeIf { category == ScanCategory.TRACKERS }
+    val commsAction = enumByName<CommsAction>(commsActionName)?.takeIf { BuildConfig.FULL_ACCESS }
+
+    val status by Registry.status.collectAsStateWithLifecycle()
     val unreadMessages by CommsRepository.unread.collectAsStateWithLifecycle()
     val activeCall by CallManager.call.collectAsStateWithLifecycle()
     val locked by AppLock.locked.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Settings navigation and threat explainer state. TOOLS is reached from the
-    // Scan header and from the top of Settings; it is drawn over the tabs the same
-    // way Settings is, and closing it returns to wherever it was opened from.
-    var showSettings by remember { mutableStateOf(false) }
-    var showTools by remember { mutableStateOf(false) }
+    // The hub cards' status lines, and the red dot on the Scan tab, come from the
+    // same readings. The comms-only build has no scanner to read.
+    val statuses = if (BuildConfig.FULL_ACCESS) rememberCategoryStatuses() else emptyMap()
+
+    // Threat explainer state; the sheet is drawn over whichever screen is up.
     var explainerTarget by remember { mutableStateOf<ExplainerTarget?>(null) }
 
-    // A call ringing or in progress takes the COMMS tab regardless of where the
-    // user was. Settings and the explainer sheet are drawn over the tabs, so
-    // they close too; otherwise the call's ACCEPT button sat hidden behind them.
+    fun openTab(target: HomeTab) {
+        if (target !in tabs) return
+        if (target == tab) {
+            // Tapping the tab that is already showing goes back to its top.
+            when (target) {
+                HomeTab.SCAN -> { categoryName = null; trackerActionName = null }
+                HomeTab.COMMS -> commsActionName = null
+                HomeTab.DRIVE, HomeTab.ACTIVITY -> Unit
+            }
+        }
+        tabName = target.name
+    }
+
+    fun openCategory(target: ScanCategory) {
+        categoryName = target.name
+        trackerActionName = null
+    }
+
+    // A call ringing or in progress takes the Comms tab regardless of where the
+    // user was. Settings, the Comms safety pages and the explainer sheet are drawn
+    // over or instead of it, so they close too; otherwise the call's ACCEPT button
+    // sat hidden behind them.
     LaunchedEffect(activeCall?.id, activeCall?.phase) {
-        if (activeCall != null && activeCall?.phase != CallPhase.ENDED) {
-            tab = TAB_COMMS
+        if (activeCall != null && activeCall?.phase != CallPhase.ENDED && HomeTab.COMMS in tabs) {
+            tabName = HomeTab.COMMS.name
+            commsActionName = null
             showSettings = false
-            showTools = false
             explainerTarget = null
         }
     }
 
-    // A tag delivered by a system NFC intent lands on the NFC tab; a message
-    // notification lands on the COMMS tab.
+    // A tag delivered by a system NFC intent lands on Scan > NFC; a message
+    // notification or an invite link lands on the Comms tab.
     val tabRequest by Registry.tabRequest.collectAsStateWithLifecycle()
     LaunchedEffect(tabRequest) {
-        if (tabRequest != null) Registry.takeTabRequest()?.let { id -> if (tabs.any { it.id == id }) tab = id }
+        if (tabRequest == null) return@LaunchedEffect
+        when (Registry.takeTabRequest()) {
+            ROUTE_COMMS -> if (HomeTab.COMMS in tabs) {
+                tabName = HomeTab.COMMS.name
+                commsActionName = null
+                showSettings = false
+            }
+            ROUTE_NFC -> if (HomeTab.SCAN in tabs) {
+                tabName = HomeTab.SCAN.name
+                openCategory(ScanCategory.NFC)
+                showSettings = false
+            }
+            else -> Unit
+        }
     }
     val threadRequest by Registry.threadRequest.collectAsStateWithLifecycle()
     val groupRequest by Registry.groupRequest.collectAsStateWithLifecycle()
@@ -1316,80 +1368,126 @@ private fun MainApp(
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    if (showTools) {
-        ToolsScreen(onBack = { showTools = false })
-        return
-    }
-
     if (showSettings) {
         SettingsScreen(
             onBack = { showSettings = false },
-            onClearData = onClearData,
-            onOpenTools = { showTools = true }
+            onClearData = onClearData
         )
         return
     }
 
-    // One red dot per tab that currently holds something worth looking at.
-    val followingLive = detections.any { it.following && it.address !in trusted }
-    fun alertFor(id: Int): Boolean = when (id) {
-        TAB_SCAN -> followingLive
-        TAB_MAP -> followingLive && detections.any { it.following && it.points.isNotEmpty() }
-        TAB_CELL -> cell.available && cell.analysing && cell.level.ordinal >= Threat.HIGH.ordinal
-        TAB_NFC -> nfc.any { it.suspicious }
-        TAB_WIFI -> wifi.any { it.threat.ordinal >= Threat.HIGH.ordinal }
-        TAB_DEVICE -> phoneHealth.level.ordinal >= Threat.HIGH.ordinal
-        TAB_COMMS -> unreadMessages > 0
-        else -> false
+    // One step back inside a tab: a tracker action to its category, a category to
+    // the hub, a Comms safety page to the conversations. Screens with pages of
+    // their own register their handlers later, so theirs are asked first.
+    val popUp: (() -> Unit)? = when (tab) {
+        HomeTab.SCAN -> when {
+            trackerAction != null -> { { trackerActionName = null } }
+            category != null -> { { categoryName = null; trackerActionName = null } }
+            else -> null
+        }
+        HomeTab.COMMS -> if (commsAction != null) { { commsActionName = null } } else null
+        HomeTab.DRIVE, HomeTab.ACTIVITY -> null
+    }
+    BackHandler(enabled = popUp != null) { popUp?.invoke() }
+
+    val title = when (tab) {
+        HomeTab.SCAN -> trackerAction?.title ?: category?.title ?: HomeTab.SCAN.label
+        HomeTab.COMMS -> commsAction?.title ?: HomeTab.COMMS.label
+        HomeTab.DRIVE, HomeTab.ACTIVITY -> tab.label
+    }
+    val menu = if (tab == HomeTab.COMMS && commsAction == null && BuildConfig.FULL_ACCESS) {
+        CommsAction.entries.map { action -> ShellMenuItem(action.title, action.icon) { commsActionName = action.name } }
+    } else {
+        emptyList()
+    }
+
+    fun alertFor(t: HomeTab): Boolean = when (t) {
+        HomeTab.SCAN -> statuses.values.any { it.alert }
+        HomeTab.COMMS -> unreadMessages > 0
+        HomeTab.DRIVE, HomeTab.ACTIVITY -> false
     }
 
     Column(Modifier.fillMaxSize()) {
+        ShellTopBar(title = title, onBack = popUp, onSettings = { showSettings = true }, menu = menu)
+
+        when {
+            tab == HomeTab.SCAN && trackerAction == null && category == ScanCategory.TRACKERS -> {
+                ShellSubTabs(ScanCategory.TRACKERS.subTabs, trackerSub) { trackerSub = it }
+                TrackerActionsRow { action -> trackerActionName = action.name }
+            }
+            tab == HomeTab.SCAN && trackerAction == null && category == ScanCategory.PHONE ->
+                ShellSubTabs(ScanCategory.PHONE.subTabs, phoneSub) { phoneSub = it }
+            tab == HomeTab.ACTIVITY ->
+                ShellSubTabs(ACTIVITY_SUB_TABS, activitySub) { activitySub = it }
+        }
+
         Box(
             Modifier
                 .weight(1f)
-                .statusBarsPadding()
                 // Without a tab bar the content reaches the bottom edge itself.
                 .then(if (tabs.size == 1) Modifier.navigationBarsPadding() else Modifier)
         ) {
             when (tab) {
-                TAB_SCAN -> ScanScreen(
-                    onStart, onStop, hasPermissions,
-                    onSettingsClick = { showSettings = true },
-                    onToolsClick = { showTools = true },
-                    onShowExplainer = { d -> explainerTarget = ExplainerTarget.BleDevice(d) }
-                )
-                TAB_MAP -> MapScreen()
-                TAB_LOG -> TimelineScreen()
-                TAB_CELL -> CellScreen(
-                    onShowExplainer = { f -> explainerTarget = ExplainerTarget.CellIndicator(f) },
-                    onShown = onRefreshCell
-                )
-                TAB_NFC -> NfcScreen(
-                    onAddToVault = onAddToVault,
-                    onRemoveVault = onRemoveVault,
-                    onEmulate = onEmulate,
-                    onUnlockVault = onUnlockVault,
-                    onLockVault = onLockVault,
-                    onEraseVault = onEraseVault
-                )
-                TAB_WIFI -> WifiScreen(onShown = onRefreshWifi)
-                TAB_DEVICE -> DeviceScreen(onShown = onRefreshDeviceHealth)
-                TAB_COMMS -> CommsScreen(
-                    openPeer = threadRequest,
-                    onPeerConsumed = { Registry.takeThreadRequest() },
-                    openInvite = inviteRequest,
-                    onInviteConsumed = { Registry.takeInviteRequest() },
-                    openGroup = groupRequest,
-                    onGroupConsumed = { Registry.takeGroupRequest() },
-                    onAppSettings = { showSettings = true }
-                )
-                TAB_DRIVE -> DriveScreen()
+                HomeTab.SCAN -> when {
+                    trackerAction == TrackerAction.LOCATE -> FindTrackerPage()
+                    trackerAction == TrackerAction.SELF_TEST -> SelfTestPage()
+                    category == null -> ScanHub(
+                        scanning = status.scanning,
+                        statuses = statuses,
+                        onOpen = { openCategory(it) }
+                    )
+                    category == ScanCategory.TRACKERS -> if (trackerSub == 0) {
+                        ScanScreen(
+                            onStart, onStop, hasPermissions,
+                            onShowExplainer = { d -> explainerTarget = ExplainerTarget.BleDevice(d) }
+                        )
+                    } else {
+                        MapScreen()
+                    }
+                    category == ScanCategory.CAMERAS -> CameraSweepScreen()
+                    category == ScanCategory.CELL -> CellScreen(
+                        onShowExplainer = { f -> explainerTarget = ExplainerTarget.CellIndicator(f) },
+                        onShown = onRefreshCell
+                    )
+                    category == ScanCategory.WIFI -> WifiScreen(onShown = onRefreshWifi)
+                    category == ScanCategory.NFC -> NfcScreen(
+                        onAddToVault = onAddToVault,
+                        onRemoveVault = onRemoveVault,
+                        onEmulate = onEmulate,
+                        onUnlockVault = onUnlockVault,
+                        onLockVault = onLockVault,
+                        onEraseVault = onEraseVault
+                    )
+                    category == ScanCategory.PHONE -> when (phoneSub) {
+                        0 -> DeviceScreen(onShown = onRefreshDeviceHealth)
+                        1 -> StalkerwarePage()
+                        else -> CertificatesPage()
+                    }
+                }
+                HomeTab.COMMS -> when (commsAction) {
+                    CommsAction.FAKE_CALL -> FakeCallPage()
+                    CommsAction.DURESS -> DuressPage()
+                    null -> CommsScreen(
+                        openPeer = threadRequest,
+                        onPeerConsumed = { Registry.takeThreadRequest() },
+                        openInvite = inviteRequest,
+                        onInviteConsumed = { Registry.takeInviteRequest() },
+                        openGroup = groupRequest,
+                        onGroupConsumed = { Registry.takeGroupRequest() },
+                        onAppSettings = { showSettings = true }
+                    )
+                }
+                HomeTab.DRIVE -> DriveScreen()
+                HomeTab.ACTIVITY -> when (activitySub) {
+                    0 -> TimelineScreen()
+                    1 -> PatternOfLifePage()
+                    else -> UnlockLedgerPage()
+                }
             }
 
-            // SOS panic button, floating over the active tab. Hidden while settings or
-            // tools are open or the phone is locked; no animation needed for a critical
-            // safety button.
-            if (!showSettings && !showTools && !locked) {
+            // SOS panic button, floating over the active screen. Hidden while the
+            // phone is locked; no animation needed for a critical safety button.
+            if (!locked) {
                 Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)) {
                     SosButton(onConfirmed = {
                         scope.launch(Dispatchers.IO) {
@@ -1416,43 +1514,13 @@ private fun MainApp(
                 }
             }
         }
-        if (tabs.size > 1) NavigationBar(
-            containerColor = Panel,
-            tonalElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth().navigationBarsPadding()
-        ) {
-            tabs.forEach { spec ->
-                val i = spec.id
-                NavigationBarItem(
-                    selected = tab == i,
-                    onClick = { tab = i },
-                    icon = {
-                        Box {
-                            TabIcon(index = i, selected = tab == i)
-                            if (alertFor(i)) {
-                                Box(
-                                    Modifier
-                                        .size(7.dp)
-                                        .background(Critical, CircleShape)
-                                        .align(Alignment.TopEnd)
-                                        .offset(x = 2.dp, y = (-2).dp)
-                                )
-                            }
-                        }
-                    },
-                    label = {
-                        Text(spec.label, fontSize = 10.sp, letterSpacing = 0.3.sp, maxLines = 1)
-                    },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Accent,
-                        selectedTextColor = Accent,
-                        indicatorColor = Accent.copy(alpha = 0.15f),
-                        unselectedIconColor = Muted,
-                        unselectedTextColor = Muted
-                    )
-                )
-            }
-        }
+
+        if (tabs.size > 1) ShellBottomBar(
+            tabs = tabs,
+            selected = tab,
+            alert = { alertFor(it) },
+            onSelect = { openTab(it) }
+        )
     }
 
     // Threat explainer bottom sheet
@@ -1492,139 +1560,6 @@ private fun sosLocation(context: Context): LatLon? {
     return LatLon(fix.latitude, fix.longitude)
 }
 
-// ── Tab icons ──────────────────────────────────────────────────────────
-
-@Composable
-private fun TabIcon(index: Int, selected: Boolean) {
-    val color = if (selected) Accent else Muted
-    Canvas(Modifier.size(22.dp)) {
-        val cx = center.x
-        val cy = center.y
-        when (index) {
-            0 -> { // SCAN — radar rings
-                drawCircle(color.copy(alpha = 0.35f), radius = size.minDimension * 0.46f, center = center, style = Stroke(1f))
-                drawCircle(color.copy(alpha = 0.65f), radius = size.minDimension * 0.3f, center = center, style = Stroke(1.5f))
-                drawCircle(color, radius = size.minDimension * 0.14f, center = center)
-            }
-            1 -> { // MAP — location pin
-                val pinR = size.minDimension * 0.3f
-                val pinTop = Offset(cx, cy - pinR * 1.2f)
-                val path = Path().apply {
-                    addOval(androidx.compose.ui.geometry.Rect(cx - pinR, cy - pinR * 2.2f, cx + pinR, cy))
-                    moveTo(cx, cy)
-                    lineTo(cx - pinR * 0.5f, cy + pinR * 0.6f)
-                    lineTo(cx + pinR * 0.5f, cy + pinR * 0.6f)
-                    close()
-                }
-                drawPath(path, color)
-                drawCircle(Panel, radius = pinR * 0.38f, center = Offset(cx, cy - pinR))
-            }
-            2 -> { // LOG — stacked lines
-                val w = size.width * 0.75f
-                val gaps = listOf(0.25f, 0.5f, 0.75f)
-                val widths = listOf(w, w * 0.78f, w * 0.56f)
-                gaps.zip(widths).forEach { (frac, lineW) ->
-                    drawLine(color, Offset(cx - lineW / 2f, size.height * frac), Offset(cx + lineW / 2f, size.height * frac), strokeWidth = 2f)
-                }
-            }
-            3 -> { // CELL — signal bars
-                val barW = size.width * 0.13f
-                val gap = size.width * 0.07f
-                val totalW = barW * 4 + gap * 3
-                val startX = cx - totalW / 2f
-                for (b in 0..3) {
-                    val barH = size.height * (0.25f + b * 0.18f)
-                    val x = startX + b * (barW + gap)
-                    val barColor = if (selected || b < 2) color else color.copy(alpha = 0.3f)
-                    drawRect(barColor, topLeft = Offset(x, size.height - barH - 2f), size = Size(barW, barH))
-                }
-            }
-            4 -> { // NFC — near-field arcs
-                val arcSizes = listOf(0.85f, 0.55f, 0.3f)
-                arcSizes.forEachIndexed { i, scale ->
-                    val r = size.minDimension * scale * 0.5f
-                    drawArc(
-                        color = color.copy(alpha = 1f - i * 0.3f),
-                        startAngle = 210f, sweepAngle = 120f,
-                        useCenter = false,
-                        topLeft = Offset(cx - r, cy - r),
-                        size = Size(r * 2, r * 2),
-                        style = Stroke(2f - i * 0.4f)
-                    )
-                }
-                drawCircle(color, radius = 2.5f, center = Offset(cx - size.minDimension * 0.35f, cy))
-            }
-            5 -> { // WIFI — wifi arcs
-                val arcSizes = listOf(0.9f, 0.6f, 0.3f)
-                arcSizes.forEachIndexed { i, scale ->
-                    val r = size.minDimension * scale * 0.5f
-                    drawArc(
-                        color = color.copy(alpha = if (selected || i > 0) 1f else 0.5f),
-                        startAngle = 200f, sweepAngle = 140f,
-                        useCenter = false,
-                        topLeft = Offset(cx - r, cy - r * 0.5f),
-                        size = Size(r * 2, r * 2),
-                        style = Stroke(if (i == 0) 2f else 1.5f)
-                    )
-                }
-                drawCircle(color, radius = 2.5f, center = Offset(cx, size.height * 0.8f))
-            }
-            7 -> { // COMMS — speech bubble
-                val w = size.width * 0.8f
-                val h = size.height * 0.6f
-                val left = cx - w / 2f
-                val top = cy - h / 2f - size.height * 0.05f
-                val path = Path().apply {
-                    addRoundRect(
-                        androidx.compose.ui.geometry.RoundRect(
-                            androidx.compose.ui.geometry.Rect(left, top, left + w, top + h),
-                            androidx.compose.ui.geometry.CornerRadius(h * 0.3f)
-                        )
-                    )
-                    moveTo(left + w * 0.25f, top + h)
-                    lineTo(left + w * 0.18f, top + h + size.height * 0.2f)
-                    lineTo(left + w * 0.45f, top + h)
-                    close()
-                }
-                drawPath(path, color.copy(alpha = 0.2f))
-                drawPath(path, color, style = Stroke(1.5f))
-                for (i in 0..2) {
-                    drawCircle(color, radius = 1.6f, center = Offset(left + w * (0.3f + i * 0.2f), top + h / 2f))
-                }
-            }
-            TAB_DRIVE -> { // DRIVE — steering wheel
-                val r = size.minDimension * 0.44f
-                drawCircle(color, radius = r, center = center, style = Stroke(2f))
-                drawCircle(color, radius = r * 0.28f, center = center)
-                // Three spokes: left, right and down from the hub to the rim.
-                drawLine(color, Offset(cx - r, cy), Offset(cx + r, cy), strokeWidth = 1.8f)
-                drawLine(color, center, Offset(cx, cy + r), strokeWidth = 1.8f)
-            }
-            TAB_DEVICE -> { // DEVICE — shield
-                val sw = size.width * 0.76f
-                val sh = size.height * 0.88f
-                val ox = cx - sw / 2f
-                val oy = cy - sh / 2f + size.height * 0.04f
-                val shieldPath = Path().apply {
-                    moveTo(cx, oy)
-                    lineTo(ox + sw, oy + sh * 0.25f)
-                    lineTo(ox + sw, oy + sh * 0.6f)
-                    cubicTo(ox + sw, oy + sh * 0.85f, cx, oy + sh, cx, oy + sh)
-                    cubicTo(cx, oy + sh, ox, oy + sh * 0.85f, ox, oy + sh * 0.6f)
-                    lineTo(ox, oy + sh * 0.25f)
-                    close()
-                }
-                drawPath(shieldPath, color.copy(alpha = 0.2f))
-                drawPath(shieldPath, color, style = Stroke(1.5f))
-                // check mark inside
-                drawLine(color, Offset(cx - sw * 0.22f, cy + sh * 0.05f), Offset(cx - sw * 0.05f, cy + sh * 0.22f), strokeWidth = 1.8f)
-                drawLine(color, Offset(cx - sw * 0.05f, cy + sh * 0.22f), Offset(cx + sw * 0.25f, cy - sh * 0.1f), strokeWidth = 1.8f)
-            }
-            else -> Unit
-        }
-    }
-}
-
 // ── Scan (BLE) screen ────────────────────────────────────────────────────
 
 @Composable
@@ -1632,8 +1567,6 @@ private fun ScanScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     hasPermissions: () -> Boolean,
-    onSettingsClick: () -> Unit = {},
-    onToolsClick: () -> Unit = {},
     onShowExplainer: (Detection) -> Unit = {}
 ) {
     val detections by Registry.detections.collectAsStateWithLifecycle()
@@ -1660,23 +1593,20 @@ private fun ScanScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item(key = "§header") {
+            // The title and the Settings gear are in the shell's top bar; the
+            // evidence report is this screen's own action.
             Row(
-                Modifier.fillMaxWidth().padding(top = 20.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("CLAIRIX", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        val i = Report.share(context, status, detections, timeline, cell, nfc)
-                        context.startActivity(Intent.createChooser(i, "Share evidence report"))
-                    }) { Text("EXPORT", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
-                    TextButton(onClick = onToolsClick) {
-                        Text("TOOLS", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
-                    }
-                    TextButton(onClick = onSettingsClick) {
-                        Text("⚙", color = Muted, fontSize = 18.sp)
-                    }
+                TextButton(onClick = {
+                    val i = Report.share(context, status, detections, timeline, cell, nfc)
+                    context.startActivity(Intent.createChooser(i, "Share evidence report"))
+                }) {
+                    Icon(Icons.Filled.Share, contentDescription = null, tint = InkDim, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Export report", color = InkDim, fontSize = 13.sp)
                 }
             }
         }
@@ -1916,9 +1846,9 @@ private fun DetectionRow(
             }
 
             if (d.following && !trusted) {
-                Text(
-                    "⚠ Confirmed following — ${d.displacementM.roundToInt()} m apart",
-                    color = Critical, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                WarningLine(
+                    "Confirmed following — ${d.displacementM.roundToInt()} m apart",
+                    color = Critical, fontSize = 12, fontWeight = FontWeight.SemiBold
                 )
             }
 
@@ -2003,7 +1933,7 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
             FollowConfidence.NONE -> "Not enough data to assess" to Muted
             FollowConfidence.NO_POSITION -> "No GPS — cannot confirm movement" to Caution
             FollowConfidence.NOT_MOVED_ENOUGH -> "Present but not following" to Caution
-            FollowConfidence.CONFIRMED -> "⚠ Confirmed following" to Critical
+            FollowConfidence.CONFIRMED -> "Confirmed following" to Critical
         }
         Text(line, color = if (trusted) Muted else lineColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         val explanation = when (d.confidence) {
@@ -2031,7 +1961,7 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                     onClick = { Registry.untrust(d.address) },
                     shape = RoundedCornerShape(3.dp),
                     border = BorderStroke(1.dp, Rule)
-                ) { Text("TRUSTED ✓", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
+                ) { Text("TRUSTED", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp) }
                 Text("Tap to revoke and put it back in the threat picture.", color = Muted, fontSize = 10.sp,
                     modifier = Modifier.weight(1f))
             } else {
@@ -2343,7 +2273,7 @@ private fun MapScreen() {
 
         if (cellHot) {
             Text(
-                "⚠ Cell anomaly — ${cell.level.name}",
+                "Cell anomaly — ${cell.level.name}",
                 color = Caution, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -3406,7 +3336,7 @@ private fun NfcTagRow(
                         onClick = { clipboard.setText(AnnotatedString(t.uid)); copied = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
-                        Text(if (copied) "COPIED ✓" else "COPY UID",
+                        Text(if (copied) "COPIED" else "COPY UID",
                             color = if (copied) Clear else InkDim, fontSize = 11.sp, letterSpacing = 1.sp)
                     }
                 }
@@ -3814,7 +3744,7 @@ private fun WifiScreen(onShown: () -> Unit = {}) {
                     CellInfoRow("VPN", if (conn.vpnActive) "Active" else "None", if (conn.vpnActive) Clear else InkDim)
                     if (conn.metered) CellInfoRow("Metered", "Yes")
                     conn.flags.forEach { flag ->
-                        Text("⚠ $flag", color = if (conn.security.secure) Caution else Critical, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 2.dp))
+                        WarningLine(flag, color = if (conn.security.secure) Caution else Critical, fontSize = 11, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
             }
@@ -3884,7 +3814,7 @@ private fun NearbyWifiRow(n: WifiNetwork) {
                     color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                 )
                 n.flags.forEach { flag ->
-                    Text("⚠ $flag", color = stripe.takeIf { it != Rule } ?: Caution, fontSize = 11.sp, lineHeight = 14.sp)
+                    WarningLine(flag, color = stripe.takeIf { it != Rule } ?: Caution, fontSize = 11)
                 }
             }
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {

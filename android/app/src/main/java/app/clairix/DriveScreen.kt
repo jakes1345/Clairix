@@ -54,9 +54,19 @@ private const val COOLANT_HOT_C = 100
 private const val KPH_TO_MPH = 0.621f
 
 private const val SECTION_NAVIGATE = 0
-private const val SECTION_SENSORS = 1
+private const val SECTION_RADIO = 1
+private const val SECTION_VEHICLE = 2
 
-/** The Drive tab: turn-by-turn navigation, or the in-car sensors (scanner, ADS-B, OBD). */
+private val DRIVE_SECTIONS = listOf(
+    SECTION_NAVIGATE to "Navigate",
+    SECTION_RADIO to "Radio",
+    SECTION_VEHICLE to "Vehicle"
+)
+
+/**
+ * The Drive tab: turn-by-turn navigation, the radio receivers on the SDR stick
+ * (scanner and FM audio, ADS-B aircraft), or the vehicle itself over OBD.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DriveScreen(viewModel: DriveViewModel = viewModel()) {
@@ -68,22 +78,19 @@ fun DriveScreen(viewModel: DriveViewModel = viewModel()) {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                SegmentedButton(
-                    selected = section == SECTION_NAVIGATE,
-                    onClick = { section = SECTION_NAVIGATE },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
-                ) { Text("Navigate") }
-                SegmentedButton(
-                    selected = section == SECTION_SENSORS,
-                    onClick = { section = SECTION_SENSORS },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
-                ) { Text("Sensors") }
+                DRIVE_SECTIONS.forEachIndexed { index, (id, label) ->
+                    SegmentedButton(
+                        selected = section == id,
+                        onClick = { section = id },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = DRIVE_SECTIONS.size)
+                    ) { Text(label) }
+                }
             }
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                if (section == SECTION_NAVIGATE) {
-                    NavScreen(modifier = Modifier.fillMaxSize())
-                } else {
-                    DriveSensors(viewModel)
+                when (section) {
+                    SECTION_NAVIGATE -> NavScreen(modifier = Modifier.fillMaxSize())
+                    SECTION_RADIO -> DriveSensors(viewModel, showRadio = true, showVehicle = false)
+                    else -> DriveSensors(viewModel, showRadio = false, showVehicle = true)
                 }
             }
         }
@@ -91,7 +98,7 @@ fun DriveScreen(viewModel: DriveViewModel = viewModel()) {
 }
 
 @Composable
-private fun DriveSensors(viewModel: DriveViewModel) {
+private fun DriveSensors(viewModel: DriveViewModel, showRadio: Boolean, showVehicle: Boolean) {
     val obd by viewModel.obdData.collectAsStateWithLifecycle()
     val sdrState by viewModel.sdrState.collectAsStateWithLifecycle()
     val channels by viewModel.scannerChannels.collectAsStateWithLifecycle()
@@ -104,6 +111,8 @@ private fun DriveSensors(viewModel: DriveViewModel) {
     val squelchLevel by viewModel.squelchLevel.collectAsStateWithLifecycle()
 
     DriveContent(
+        showRadio = showRadio,
+        showVehicle = showVehicle,
         obd = obd,
         sdrState = sdrState,
         channels = channels,
@@ -130,6 +139,8 @@ private fun DriveSensors(viewModel: DriveViewModel) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun DriveContent(
+    showRadio: Boolean,
+    showVehicle: Boolean,
     obd: ObdData,
     sdrState: SdrState,
     channels: List<ScannerChannel>,
@@ -167,7 +178,7 @@ private fun DriveContent(
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                ScannerCard(
+                if (showRadio) ScannerCard(
                     expanded = scannerExpanded,
                     onToggle = { scannerExpanded = !scannerExpanded },
                     channels = channels,
@@ -182,12 +193,12 @@ private fun DriveContent(
                     onSetChannelActive = onSetChannelActive,
                     onOpenRecording = onOpenRecording
                 )
-                AdsbCard(
+                if (showRadio) AdsbCard(
                     expanded = adsbExpanded,
                     onToggle = { adsbExpanded = !adsbExpanded },
                     aircraft = aircraft.values.toList()
                 )
-                ObdCard(
+                if (showVehicle) ObdCard(
                     expanded = obdExpanded,
                     onToggle = { obdExpanded = !obdExpanded },
                     obd = obd,
@@ -987,6 +998,8 @@ private fun formatMhz(freqHz: Long): String =
 fun DriveScreenPreview() {
     MaterialTheme(colorScheme = darkColorScheme()) {
         DriveContent(
+            showRadio = true,
+            showVehicle = true,
             obd = ObdData(),
             sdrState = SdrState.Closed,
             channels = emptyList(),

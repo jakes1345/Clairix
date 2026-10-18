@@ -194,6 +194,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
+    // Material icons for the navigation shell and the screens. Only the core set:
+    // the handful of others the app draws are carried in ClairixIcons.kt.
+    implementation("androidx.compose.material:material-icons-core")
 
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
