@@ -130,6 +130,8 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                     TKv("Notification access", "${r.notificationListeners.size} ${if (r.notificationListeners.size == 1) "app" else "apps"}")
                     TKv("Accessibility services", "${r.accessibilityServices.size}")
                     TKv("VPN-capable apps", "${r.vpnApps.size}")
+                    TKv("Unknown keyboards", "${r.suspiciousImes.size}")
+                    TKv("Active device admins", "${r.activeDeviceAdmins.size}")
                 }
             }
             if (r.high.isEmpty() && r.medium.isEmpty()) {
@@ -152,7 +154,69 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 item(key = "§medium-hdr") { TSectionLabel("MEDIUM") }
                 items(r.medium, key = { "medium|${it.packageName}" }) { SuspiciousAppCard(it, context) }
             }
+            if (r.suspiciousImes.isNotEmpty()) {
+                item(key = "§ime-hdr") { TSectionLabel("KEYBOARDS") }
+                item(key = "§ime-note") {
+                    TNotice(
+                        TCautionClr, "UNKNOWN KEYBOARD",
+                        "An enabled keyboard sees everything typed while it is in use, passwords and " +
+                        "messages included. If you did not install it yourself, switch it off in " +
+                        "keyboard settings, then uninstall it."
+                    )
+                }
+                items(r.suspiciousImes, key = { "ime|$it" }) { pkg ->
+                    GrantCard(
+                        packageName = pkg,
+                        flagged = r.apps.firstOrNull { it.packageName == pkg },
+                        context = context,
+                        actionLabel = "KEYBOARD SETTINGS",
+                        action = StalkwareScanner.keyboardSettingsIntent(),
+                    )
+                }
+            }
+            if (r.activeDeviceAdmins.isNotEmpty()) {
+                item(key = "§admin-hdr") { TSectionLabel("DEVICE ADMINS") }
+                item(key = "§admin-note") {
+                    TNotice(
+                        TCautionClr, "ACTIVE DEVICE ADMIN",
+                        "A device admin can stop its own uninstall and may lock or wipe the phone. Work " +
+                        "profiles and Find My Device use it legitimately. To remove one you do not " +
+                        "recognise, switch it off under Settings → Security → Device admin apps, then uninstall it."
+                    )
+                }
+                items(r.activeDeviceAdmins, key = { "admin|$it" }) { pkg ->
+                    GrantCard(
+                        packageName = pkg,
+                        flagged = r.apps.firstOrNull { it.packageName == pkg },
+                        context = context,
+                        actionLabel = "OPEN IN SETTINGS",
+                        action = StalkwareScanner.appDetailsIntent(pkg),
+                    )
+                }
+            }
         }
+    }
+}
+
+/** One app holding a grant (an enabled keyboard or an active device admin), with its score when it was flagged. */
+@Composable
+private fun GrantCard(
+    packageName: String,
+    flagged: StalkwareScanner.SuspiciousApp?,
+    context: Context,
+    actionLabel: String,
+    action: Intent,
+) {
+    val label = remember(packageName) { StalkwareScanner.appLabel(context, packageName) }
+    TCard {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(label, color = TInkClr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(packageName, color = TMutedClr, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            }
+            if (flagged != null) TBadge("${flagged.severity.name} · ${flagged.score}", tSeverityColor(flagged.severity))
+        }
+        TButton(actionLabel, onClick = { openExternal(context, action) })
     }
 }
 
@@ -168,6 +232,8 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
         }
         TKv("Installed", tDay(app.installTs))
         TKv("Installer", app.installerPackage ?: if (app.sideloaded) "unknown (sideloaded)" else "—")
+        if (app.imeEnabled) TKv("Keyboard", "enabled")
+        if (app.deviceAdminActive) TKv("Device admin", "active")
         if (app.reasons.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 for (reason in app.reasons) {

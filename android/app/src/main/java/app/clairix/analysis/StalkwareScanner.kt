@@ -2,6 +2,7 @@ package app.clairix.analysis
 
 import android.Manifest
 import android.app.AppOpsManager
+import android.app.admin.DevicePolicyManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.ComponentName
@@ -13,6 +14,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Process
 import android.provider.Settings
+import android.view.inputmethod.InputMethodManager
 import app.clairix.Severity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,8 +32,9 @@ import kotlinx.coroutines.flow.flow
  * Also lists the special-access grants that are not runtime permissions and so
  * escape a permission audit: notification listeners (every notification,
  * including one-time codes, before the owner sees it), enabled accessibility
- * services (every tap and every screen), and apps that can act as the VPN
- * (every byte of traffic).
+ * services (every tap and every screen), apps that can act as the VPN (every
+ * byte of traffic), enabled third-party keyboards (every keystroke, passwords
+ * included) and active device admins (can block their own uninstall).
  *
  * Everything here is public API on stock Android. Two grants widen the view:
  * QUERY_ALL_PACKAGES (manifest; otherwise Android 11+ hides most apps) and
@@ -52,6 +55,10 @@ object StalkwareScanner {
         val vpnCapable: Boolean,
         val notificationListener: Boolean,
         val accessibilityEnabled: Boolean,
+        /** Enabled as a keyboard (input method). */
+        val imeEnabled: Boolean,
+        /** Holds an active device-admin grant. */
+        val deviceAdminActive: Boolean,
         val installerPackage: String?
     ) {
         val severity: Severity
@@ -70,6 +77,10 @@ object StalkwareScanner {
         val accessibilityServices: List<String>,
         /** Every app that can act as the device VPN. */
         val vpnApps: List<String>,
+        /** Enabled keyboards that are not a known stock or well-known keyboard. */
+        val suspiciousImes: List<String>,
+        /** Every app holding an active device-admin grant. */
+        val activeDeviceAdmins: List<String>,
         val usageAccessGranted: Boolean,
         val scannedAt: Long
     ) {
@@ -179,6 +190,39 @@ object StalkwareScanner {
         "app.clairix"
     )
 
+    /** Keyboards (input methods) that ship on stock phones or are well-known store apps. */
+    private val KNOWN_IMES = setOf(
+        "com.google.android.inputmethod.latin",       // Gboard
+        "com.samsung.android.honeyboard",              // Samsung Keyboard
+        "com.swiftkey.swiftkeyapp",                    // SwiftKey (Microsoft)
+        "com.touchtype.swiftkey",
+        "com.nuance.swype.dtc",                        // Swype
+        "com.nuance.swype.trial",
+        "com.lge.ime",                                 // LG Keyboard
+        "com.motorola.process.system",                 // Moto Keyboard
+        "com.htc.sense.ime",                           // HTC Sense
+        "jp.co.omronsoft.openwnn",
+        "com.sec.android.inputmethod",                 // older Samsung default
+        "com.android.inputmethod.latin",               // AOSP Latin IME
+        "com.android.inputmethod.pinyin",
+        "com.google.android.inputmethod.pinyin",
+        "com.google.android.inputmethod.japanese",
+        "com.google.android.inputmethod.korean",
+        "com.google.android.inputmethod.hindi",
+        "com.samsung.android.svoice",
+        "com.greyc.greyckeyboard",
+        "com.fleksy.app",
+        "com.minuum.keyboard",
+        "com.syntellia.fleksy.kb",
+        "io.verbit.keyboards",
+        "app.clairix"
+    )
+
+    /** Score for an enabled keyboard that is not in [KNOWN_IMES]: it sees every keystroke. */
+    internal const val IME_ENABLED_SCORE = 4
+    /** Score for an active device-admin grant, on top of declaring the admin receiver. */
+    internal const val DEVICE_ADMIN_ACTIVE_SCORE = 3
+
     /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
     private val SUSPECT_PERMISSIONS = linkedMapOf(
         Manifest.permission.READ_SMS to (2 to "can read SMS (including one-time codes)"),
@@ -201,8 +245,67 @@ object StalkwareScanner {
         Manifest.permission.BIND_ACCESSIBILITY_SERVICE to (2 to "declares an accessibility service (reads every screen, every tap)"),
         Manifest.permission.BIND_DEVICE_ADMIN to (1 to "declares a device admin (can resist uninstall)"),
         Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE to (1 to "declares a notification listener"),
-        Manifest.permission.BIND_VPN_SERVICE to (0 to "declares a VPN service")
+        Manifest.permission.BIND_VPN_SERVICE to (0 to "declares a VPN service"),
+        Manifest.permission.BIND_INPUT_METHOD to (1 to "declares a keyboard (sees what is typed while it is in use)")
     )
+
+    /** One scoring signal: the points it adds and the reason shown for it. */
+    internal data class Signal(val points: Int, val reason: String)
+
+    /**
+     * The signals from what package [name] declares and holds: the BIND_ permissions
+     * its components are protected with ([declared]), whether it is an enabled
+     * keyboard, and whether it holds an active device-admin grant.
+     *
+     * A known app declaring the service it exists to provide is not a signal. An
+     * enabled keyboard is scored by the enabled-keyboard signal alone: its own
+     * BIND_INPUT_METHOD service is what made it a keyboard, so counting that too
+     * would score the one fact twice. An active admin keeps both: declaring an admin
+     * receiver is common, holding the grant is what blocks the uninstall.
+     */
+    internal fun componentSignals(
+        name: String,
+        declared: Set<String>,
+        imeEnabled: Boolean,
+        deviceAdminActive: Boolean,
+    ): List<Signal> {
+        val out = ArrayList<Signal>()
+        for ((perm, weight) in SUSPECT_BINDINGS) {
+            if (perm !in declared) continue
+            val skip = when (perm) {
+                Manifest.permission.BIND_ACCESSIBILITY_SERVICE -> name in KNOWN_ACCESSIBILITY
+                Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE -> name in KNOWN_LISTENERS
+                Manifest.permission.BIND_INPUT_METHOD -> name in KNOWN_IMES || imeEnabled
+                else -> false
+            }
+            if (!skip) out += Signal(weight.first, weight.second)
+        }
+        if (imeEnabled) {
+            out += if (name !in KNOWN_IMES) {
+                Signal(IME_ENABLED_SCORE, "is an enabled keyboard (can log every keystroke, passwords included)")
+            } else {
+                Signal(0, "is an enabled keyboard (a known app)")
+            }
+        }
+        if (deviceAdminActive) {
+            out += Signal(DEVICE_ADMIN_ACTIVE_SCORE, "device admin is ACTIVE (can block its own uninstall; may lock or wipe the phone)")
+        }
+        return out
+    }
+
+    /**
+     * Whether a preloaded app is worth scoring. It is not something an abuser
+     * installed; it is only interesting when it holds a special-access grant
+     * that is not part of the stock image.
+     */
+    internal fun systemAppWorthScoring(name: String, listener: Boolean, a11y: Boolean, imeEnabled: Boolean): Boolean =
+        (listener && name !in KNOWN_LISTENERS) ||
+            (a11y && name !in KNOWN_ACCESSIBILITY) ||
+            (imeEnabled && name !in KNOWN_IMES)
+
+    /** Enabled keyboards that are not in [KNOWN_IMES], sorted. */
+    internal fun suspiciousImes(enabledImes: Collection<String>): List<String> =
+        enabledImes.filter { it !in KNOWN_IMES }.distinct().sorted()
 
     /** Whether the hidden-service signal is available: Settings → Usage access → Clairix. */
     fun hasUsageAccess(context: Context): Boolean {
@@ -240,6 +343,8 @@ object StalkwareScanner {
         val accessibilityPkgs = accessibility.map { it.packageName }.toSet()
         val vpnPkgs = vpnCapablePackages(pm)
         val launcherPkgs = launcherPackages(pm)
+        val imePkgs = imePackages(app)
+        val deviceAdminPkgs = activeDeviceAdminPackages(app)
 
         val usageAccess = hasUsageAccess(app)
         val (fgsPkgs, resumedPkgs) = if (usageAccess) usageSignals(app) else emptySet<String>() to emptySet()
@@ -255,14 +360,9 @@ object StalkwareScanner {
             val listener = name in listenerPkgs
             val a11y = name in accessibilityPkgs
             val vpn = name in vpnPkgs
-            // A preloaded app is not something an abuser installed; it is only
-            // interesting when it holds a special-access grant that is not
-            // part of the stock image.
-            if (system) {
-                val oddListener = listener && name !in KNOWN_LISTENERS
-                val oddA11y = a11y && name !in KNOWN_ACCESSIBILITY
-                if (!oddListener && !oddA11y) continue
-            }
+            val ime = name in imePkgs
+            val admin = name in deviceAdminPkgs
+            if (system && !systemAppWorthScoring(name, listener, a11y, ime)) continue
 
             val reasons = ArrayList<String>()
             var score = 0
@@ -292,19 +392,9 @@ object StalkwareScanner {
                     reasons += weight.second
                 }
             }
-            val declared = declaredBindings(pkg)
-            for ((perm, weight) in SUSPECT_BINDINGS) {
-                // A known screen reader, password manager or wearable companion
-                // declaring the service it exists to provide is not a signal.
-                val vouched = when (perm) {
-                    Manifest.permission.BIND_ACCESSIBILITY_SERVICE -> name in KNOWN_ACCESSIBILITY
-                    Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE -> name in KNOWN_LISTENERS
-                    else -> false
-                }
-                if (perm in declared && !vouched) {
-                    score += weight.first
-                    reasons += weight.second
-                }
+            for (signal in componentSignals(name, declaredBindings(pkg), ime, admin)) {
+                score += signal.points
+                reasons += signal.reason
             }
 
             if (a11y) {
@@ -346,6 +436,8 @@ object StalkwareScanner {
                 vpnCapable = vpn,
                 notificationListener = listener,
                 accessibilityEnabled = a11y,
+                imeEnabled = ime,
+                deviceAdminActive = admin,
                 installerPackage = installer
             )
         }
@@ -355,6 +447,8 @@ object StalkwareScanner {
             notificationListeners = listenerPkgs.sorted(),
             accessibilityServices = accessibilityPkgs.sorted(),
             vpnApps = vpnPkgs.sorted(),
+            suspiciousImes = suspiciousImes(imePkgs),
+            activeDeviceAdmins = deviceAdminPkgs.sorted(),
             usageAccessGranted = usageAccess,
             scannedAt = System.currentTimeMillis()
         )
@@ -443,6 +537,39 @@ object StalkwareScanner {
         }
         return list.mapTo(HashSet()) { it.serviceInfo.packageName }
     }
+
+    /** Packages of every enabled keyboard (input method), whether or not it is the current one. */
+    private fun imePackages(context: Context): Set<String> {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return emptySet()
+        val list = runCatching { imm.enabledInputMethodList }.getOrNull() ?: return emptySet()
+        return list.mapTo(HashSet()) { it.packageName }
+    }
+
+    /**
+     * Packages holding an active device-admin grant. An active admin can stop its
+     * own uninstall and, with the policies it asked for, lock or wipe the phone:
+     * a common way for stalkerware to stay installed.
+     */
+    private fun activeDeviceAdminPackages(context: Context): Set<String> {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return emptySet()
+        val admins = runCatching { dpm.activeAdmins }.getOrNull() ?: return emptySet()
+        return admins.mapTo(HashSet()) { it.packageName }
+    }
+
+    /** The label an app shows in the launcher and Settings, or [packageName] when it has none or is gone. */
+    fun appLabel(context: Context, packageName: String): String = runCatching {
+        val pm = context.packageManager
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getApplicationInfo(packageName, 0)
+        }
+        pm.getApplicationLabel(info).toString()
+    }.getOrDefault(packageName)
+
+    /** Android's keyboard settings, where an enabled keyboard is switched off. */
+    fun keyboardSettingsIntent(): Intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
 
     /** The ':'-separated component list under a Settings.Secure key, as components. */
     private fun enabledComponents(context: Context, key: String): List<ComponentName> {
