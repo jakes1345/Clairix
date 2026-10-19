@@ -12,7 +12,7 @@ export const PLAY_URL = 'https://play.google.com/store/apps/details?id=app.clair
  */
 export const PLAY_LIVE = false;
 /** Where the site sends people to get the app right now. */
-export const GET_APP_URL = PLAY_LIVE ? PLAY_URL : '/download#clairix-full';
+export const GET_APP_URL = PLAY_LIVE ? PLAY_URL : '/download#full-title-card';
 export const PACKAGE_NAME = 'app.clairix';
 export const SUPPORT_EMAIL = 'support@clairix.app';
 export const SECURITY_EMAIL = 'security@clairix.app';

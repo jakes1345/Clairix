@@ -1,7 +1,5 @@
 # Cloudflare Pages redirects. Short links from site-copy/meta.md.
 /pricing      /                                                             302
-# Points at /download until the Play listing is public; then back to the Play URL.
-/play         /download                                                     302
 /full         /download#clairix-full                                        301
 /delete       /delete-account                                               301
 /disclosure   /security#disclosure                                          301
