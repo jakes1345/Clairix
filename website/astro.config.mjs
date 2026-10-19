@@ -2,6 +2,24 @@
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { satteri } from '@astrojs/markdown-satteri';
+import { appendFile } from 'node:fs/promises';
+import { PLAY_LIVE, PLAY_URL } from './src/config/site.ts';
+
+/**
+ * Adds the /play short link to dist/_redirects from the same PLAY_LIVE switch the
+ * buttons use: the Play listing once it is public, the download page until then.
+ *
+ * @type {import('astro').AstroIntegration}
+ */
+const playRedirect = {
+  name: 'clairix-play-redirect',
+  hooks: {
+    'astro:build:done': async ({ dir }) => {
+      const target = PLAY_LIVE ? PLAY_URL : '/download';
+      await appendFile(new URL('_redirects', dir), `/play         ${target}    302\n`);
+    },
+  },
+};
 
 export default defineConfig({
   site: 'https://clairix.app',
@@ -27,6 +45,7 @@ export default defineConfig({
     processor: satteri({ features: { headingAttributes: true } }),
   },
   integrations: [
+    playRedirect,
     sitemap({
       filter: (page) => !page.endsWith('/404'),
     }),

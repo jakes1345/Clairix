@@ -1,6 +1,6 @@
 ---
 import Icon from './Icon.astro';
-import { PLAY_URL } from '../config/site';
+import { GET_APP_URL, PLAY_LIVE } from '../config/site';
 
 interface Props {
   size?: 'md' | 'lg';
@@ -9,8 +9,17 @@ interface Props {
 const { size = 'md', label = 'Get it on Google Play' } = Astro.props;
 ---
 
-<a class:list={['btn', 'cham', 'cham--oct', { 'btn--lg': size === 'lg' }]} href={PLAY_URL} rel="noopener">
-  <Icon name="play" size={16} />
-  {label}
-  <Icon name="arrowRight" size={18} class="icon--move" />
-</a>
+{
+  PLAY_LIVE ? (
+    <a class:list={['btn', 'cham', 'cham--oct', { 'btn--lg': size === 'lg' }]} href={GET_APP_URL} rel="noopener">
+      <Icon name="play" size={16} />
+      {label}
+      <Icon name="arrowRight" size={18} class="icon--move" />
+    </a>
+  ) : (
+    <a class:list={['btn', 'cham', 'cham--oct', { 'btn--lg': size === 'lg' }]} href={GET_APP_URL}>
+      Download the beta
+      <Icon name="arrowDown" size={18} />
+    </a>
+  )
+}

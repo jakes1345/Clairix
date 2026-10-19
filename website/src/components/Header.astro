@@ -1,7 +1,7 @@
 ---
 import lockup from '../assets/brand/lockup-horizontal-reversed.svg';
 import Icon from './Icon.astro';
-import { primaryNav, PLAY_URL } from '../config/site';
+import { primaryNav, GET_APP_URL, PLAY_LIVE } from '../config/site';
 
 const path = Astro.url.pathname.replace(/\.html$/, '').replace(/\/$/, '') || '/';
 const isCurrent = (href: string) => path === href;
@@ -24,8 +24,8 @@ const isCurrent = (href: string) => path === href;
     </nav>
 
     <div class="header-actions">
-      <a class="btn btn--sm cham cham--oct" href={PLAY_URL} rel="noopener">
-        <span><span class="cta-pre">Get it on </span>Google Play</span>
+      <a class="btn btn--sm cham cham--oct" href={GET_APP_URL}>
+        {PLAY_LIVE ? <span><span class="cta-pre">Get it on </span>Google Play</span> : <span><span class="cta-pre">Get the </span>beta</span>}
       </a>
       <button
         class="menu-toggle"

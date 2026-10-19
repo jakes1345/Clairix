@@ -13,13 +13,13 @@
  */
 export const release = {
   /** Clairix Full version shown next to the download, e.g. "2.7.0". */
-  version: '',
+  version: '3.0.0 Beta 2',
   /** Absolute HTTPS URL of the signed Clairix Full APK. */
-  apkUrl: '',
+  apkUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.2/clairix-v3.0.0-beta.2.apk',
   /** Lower-case hex SHA-256 of that exact APK (64 characters). */
-  sha256: '',
+  sha256: '3db841d39aeddfe14fb07caa661a7f518ada0f4d84b234931433c21a7d82b5d3',
   /** Optional: absolute URL of the release notes for this version. */
-  releaseNotesUrl: '',
+  releaseNotesUrl: 'https://github.com/jakes1345/Clairix/releases/tag/v3.0.0-beta.2',
 } as const;
 
 export const funding = {

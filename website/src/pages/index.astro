@@ -6,7 +6,7 @@ import FeatureVisual, { type VisualVariant } from '../components/FeatureVisual.a
 import Ticker from '../components/Ticker.astro';
 import PlayButton from '../components/PlayButton.astro';
 import type { IconName } from '../lib/icons';
-import { pages } from '../config/site';
+import { pages, PLAY_LIVE } from '../config/site';
 import { softwareApplication, faqPage, toPlainText } from '../lib/schema';
 
 const reasons: { icon: IconName; title: string; body: string }[] = [
@@ -175,10 +175,12 @@ const jsonLd = [softwareApplication, faqPage(faqs.map((f) => ({ q: f.q, a: toPla
         </p>
         <div class="btn-row">
           <PlayButton size="lg" />
-          <a class="btn btn--lg btn--ghost cham cham--oct" href="/download#clairix-full">
-            Download Clairix Full
-            <Icon name="arrowDown" size={18} />
-          </a>
+          {PLAY_LIVE && (
+            <a class="btn btn--lg btn--ghost cham cham--oct" href="/download#clairix-full">
+              Download Clairix Full
+              <Icon name="arrowDown" size={18} />
+            </a>
+          )}
         </div>
         <p class="hero-fine">Free. No ads, no account needed to start. Android 12 or newer.</p>
       </div>
@@ -388,9 +390,11 @@ const jsonLd = [softwareApplication, faqPage(faqs.map((f) => ({ q: f.q, a: toPla
           <div class="btn-row">
             <PlayButton size="lg" />
           </div>
-          <p class="muted final-alt">
-            Prefer to install it yourself? <a class="text-link" href="/download#clairix-full">Download Clairix Full.</a>
-          </p>
+          {PLAY_LIVE && (
+            <p class="muted final-alt">
+              Prefer to install it yourself? <a class="text-link" href="/download#clairix-full">Download Clairix Full.</a>
+            </p>
+          )}
         </div>
       </div>
     </div>

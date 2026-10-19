@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: mailto:security@clairix.app
+    about: Do not open a public issue for a vulnerability. Email security@clairix.app so it can be fixed before it is public.
+  - name: Download the latest beta
+    url: https://clairix.app/download
+    about: Check you are on the newest build before reporting a problem.
