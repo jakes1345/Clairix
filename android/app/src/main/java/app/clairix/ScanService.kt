@@ -835,6 +835,12 @@ class ScanService : LifecycleService() {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
+    /** The notification's Stop button: the same stop as the in-app toggle, so it stays off. */
+    private fun stopIntent() = PendingIntent.getService(
+        this, 1, Intent(this, ScanService::class.java).setAction(ACTION_STOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
     private fun ongoingText(watching: Int, following: Int) = when {
         running && !scanActive -> "Scan paused — retrying"
         following > 0 -> "$following confirmed following you"
@@ -847,6 +853,7 @@ class ScanService : LifecycleService() {
             .setContentTitle("Clairix").setContentText(ongoingText(watching, following))
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true).setContentIntent(contentIntent())
+            .addAction(0, "Stop scanning", stopIntent())
             .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
 
     /**
