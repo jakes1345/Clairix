@@ -6,7 +6,7 @@ import PlayButton from '../components/PlayButton.astro';
 import { Content as Also } from '../content/features/_also.md';
 import type { IconName } from '../lib/icons';
 import type { AstroComponentFactory } from 'astro/runtime/server/index.js';
-import { pages } from '../config/site';
+import { pages, PLAY_LIVE } from '../config/site';
 
 interface FeatureModule {
   frontmatter: {
@@ -96,10 +96,12 @@ const features = Object.values(modules).sort((a, b) => a.frontmatter.order - b.f
       <h2 class="display h2">Every feature, free<em>.</em></h2>
       <div class="btn-row">
         <PlayButton size="lg" />
-        <a class="btn btn--lg btn--ghost cham cham--oct" href="/download#clairix-full">
-          Download Clairix Full
-          <Icon name="arrowDown" size={18} />
-        </a>
+        {PLAY_LIVE && (
+          <a class="btn btn--lg btn--ghost cham cham--oct" href="/download#clairix-full">
+            Download Clairix Full
+            <Icon name="arrowDown" size={18} />
+          </a>
+        )}
       </div>
     </div>
   </section>

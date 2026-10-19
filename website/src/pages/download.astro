@@ -3,11 +3,13 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Icon from '../components/Icon.astro';
 import PlayButton from '../components/PlayButton.astro';
 import type { IconName } from '../lib/icons';
-import { pages, PACKAGE_NAME, SECURITY_EMAIL } from '../config/site';
+import { pages, PACKAGE_NAME, SECURITY_EMAIL, PLAY_LIVE, GITHUB_ISSUES_URL } from '../config/site';
 import { release, fullReleaseReady, releaseNotesUrl } from '../config/release';
 import { softwareApplication } from '../lib/schema';
 
-const apkName = release.version ? `clairix-full-${release.version}.apk` : 'clairix-full-<version>.apk';
+// The file name the browser saves, taken from the published URL so the hash commands match the download.
+const apkUrl: string = release.apkUrl;
+const apkName = apkUrl ? decodeURIComponent(apkUrl.split('/').pop() ?? '') : 'clairix-<version>.apk';
 
 const compare: { row: string; play: string; full: string }[] = [
   { row: 'Everything on the <a class="text-link" href="/features">features page</a>', play: 'Yes', full: 'Yes' },
@@ -40,28 +42,50 @@ const requirements: { icon: IconName; title: string; body: string }[] = [
     <div class="wrap">
       <p class="label">Download</p>
       <h1 class="display h1 slit"><span>Get Clairix<em>.</em></span><span>Free<em>.</em></span></h1>
-      <p class="lede">Get Clairix free on Google Play, or download Clairix Full as an APK and verify it with <span class="no-wrap">SHA-256</span>. Requires Android 12 or newer.</p>
+      {
+        PLAY_LIVE ? (
+          <p class="lede">Get Clairix free on Google Play, or download Clairix Full as an APK and verify it with <span class="no-wrap">SHA-256</span>. Requires Android 12 or newer.</p>
+        ) : (
+          <p class="lede">Clairix is in public beta. Download it as an APK and verify it with <span class="no-wrap">SHA-256</span>. The Google Play edition is coming soon. Requires Android 12 or newer.</p>
+        )
+      }
     </div>
   </section>
 
   <section class="section editions" aria-label="Editions">
     <div class="wrap editions-grid">
-      <article class="edition edition--play panel cham" aria-labelledby="play-title">
+      <article class:list={['edition', 'panel', 'cham', { 'edition--featured': PLAY_LIVE }]} aria-labelledby="play-title">
         <div class="edition-head">
-          <span class="tag cham cham--oct">Recommended</span>
+          <span class:list={['tag', 'cham', 'cham--oct', { 'tag--line': !PLAY_LIVE }]}>{PLAY_LIVE ? 'Recommended' : 'Coming soon'}</span>
           <h2 id="play-title" class="display edition-title">Google Play</h2>
         </div>
-        <p class="muted">
-          The Play edition is the version most people should install. It updates automatically, it is reviewed by Google, and
-          it is the edition this site describes. Every feature is free.
-        </p>
-        <PlayButton size="lg" label="Download free on Google Play" />
+        {
+          PLAY_LIVE ? (
+            <>
+              <p class="muted">
+                The Play edition is the version most people should install. It updates automatically, it is reviewed by Google,
+                and it is the edition this site describes. Every feature is free.
+              </p>
+              <PlayButton size="lg" label="Download free on Google Play" />
+            </>
+          ) : (
+            <>
+              <p class="muted">
+                The Play edition is on its way. Once it is out it will update automatically and will be the version most people
+                should install. Every feature will be free.
+              </p>
+              <span class="btn btn--lg cham cham--oct" aria-disabled="true">
+                Coming soon to Google Play
+              </span>
+            </>
+          )
+        }
         <p class="pkg">Package name: <code>{PACKAGE_NAME}</code></p>
       </article>
 
-      <article class="edition panel cham" aria-labelledby="full-title-card">
+      <article class:list={['edition', 'panel', 'cham', { 'edition--featured edition--lead': !PLAY_LIVE }]} aria-labelledby="full-title-card">
         <div class="edition-head">
-          <span class="tag tag--line cham cham--oct">Direct APK</span>
+          <span class:list={['tag', 'cham', 'cham--oct', { 'tag--line': PLAY_LIVE }]}>{PLAY_LIVE ? 'Direct APK' : 'Beta, available now'}</span>
           <h2 id="full-title-card" class="display edition-title">Clairix Full</h2>
         </div>
         <p class="muted">
@@ -70,7 +94,7 @@ const requirements: { icon: IconName; title: string; body: string }[] = [
         </p>
         {
           fullReleaseReady ? (
-            <a class="btn btn--lg btn--ghost cham cham--oct" href={release.apkUrl} download>
+            <a class:list={['btn', 'btn--lg', 'cham', 'cham--oct', { 'btn--ghost': PLAY_LIVE }]} href={release.apkUrl} download>
               Download the APK
               <Icon name="arrowDown" size={18} />
             </a>
@@ -216,6 +240,21 @@ Get-FileHash {apkName} -Algorithm SHA256</code></pre>
           </p>
         </div>
       </div>
+
+      {
+        !PLAY_LIVE && (
+          <div class="notice limits feedback cham">
+            <p class="label">Tell us what breaks</p>
+            <p>
+              This is a beta, and your reports decide what gets fixed first. If something does not work, looks wrong or
+              confuses you, <a class="text-link" href={GITHUB_ISSUES_URL} rel="noopener">open an issue on GitHub</a> with your
+              phone model, your Android version and what you did just before it happened. Security problems go to{' '}
+              <a class="text-link" href={`mailto:${SECURITY_EMAIL}`}>{SECURITY_EMAIL}</a> instead, so they are not public
+              before they are fixed.
+            </p>
+          </div>
+        )
+      }
     </div>
   </section>
 
@@ -262,10 +301,13 @@ Get-FileHash {apkName} -Algorithm SHA256</code></pre>
     justify-items: start;
     padding: clamp(28px, 4vw, 48px);
   }
-  .edition--play {
+  .edition--lead {
+    order: -1;
+  }
+  .edition--featured {
     --cham-border: var(--clx-accent);
   }
-  .edition--play::after {
+  .edition--featured::after {
     background-image: radial-gradient(90% 80% at 100% 0%, color-mix(in oklab, var(--clx-accent) 12%, transparent), transparent 60%);
   }
   .edition-head {
@@ -345,6 +387,12 @@ Get-FileHash {apkName} -Algorithm SHA256</code></pre>
     }
   }
 
+  .feedback {
+    margin-top: clamp(48px, 6vw, 72px);
+  }
+  .feedback .label::before {
+    background: var(--clx-accent);
+  }
   .notice {
     margin-top: 32px;
     display: grid;

@@ -1,4 +1,6 @@
-import { SITE_URL, PLAY_URL, SUPPORT_EMAIL } from '../config/site';
+import { SITE_URL, PLAY_LIVE, PLAY_URL, SUPPORT_EMAIL } from '../config/site';
+
+const appUrl = PLAY_LIVE ? PLAY_URL : `${SITE_URL}/download`;
 
 /** Organization. No ratings, counts, people or addresses: none exist to cite. */
 export const organization = {
@@ -28,8 +30,8 @@ export const softwareApplication = {
   operatingSystem: 'Android 12+',
   applicationCategory: 'SecurityApplication',
   url: SITE_URL,
-  downloadUrl: PLAY_URL,
-  installUrl: PLAY_URL,
+  downloadUrl: appUrl,
+  installUrl: appUrl,
   image: `${SITE_URL}/og/home.png`,
   inLanguage: 'en',
   offers: {

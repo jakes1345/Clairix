@@ -1,0 +1,60 @@
+name: Beta feedback
+description: Tell us what you think. What works, what is confusing, what is missing.
+labels: ["feedback", "beta"]
+body:
+  - type: markdown
+    attributes:
+      value: Honest answers help most, good or bad. Skip any question you have no opinion on.
+  - type: input
+    id: version
+    attributes:
+      label: Clairix version
+      placeholder: 3.0.0-beta.2
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model and Android version
+      placeholder: Pixel 8, Android 14
+  - type: dropdown
+    id: score
+    attributes:
+      label: How likely are you to recommend Clairix to a friend?
+      options:
+        - 10 (definitely)
+        - "9"
+        - "8"
+        - "7"
+        - "6"
+        - "5"
+        - "4"
+        - "3"
+        - "2"
+        - "1"
+        - 0 (not at all)
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why that score?
+    validations:
+      required: true
+  - type: textarea
+    id: useful
+    attributes:
+      label: Which feature did you actually use, and did it help?
+  - type: textarea
+    id: confusing
+    attributes:
+      label: What was confusing or hard to find?
+  - type: textarea
+    id: missing
+    attributes:
+      label: What is missing that would make you use it every day?
+  - type: textarea
+    id: trust
+    attributes:
+      label: Is there anything that made you trust the app less?
+      description: Permissions, wording, how it looks, anything.

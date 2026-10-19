@@ -5,9 +5,19 @@
 
 export const SITE_URL = 'https://clairix.app';
 export const PLAY_URL = 'https://play.google.com/store/apps/details?id=app.clairix';
+/**
+ * True once the Play listing is public. Until then every Play button becomes a
+ * link to the Clairix Full beta on /download, and the Play edition is shown as
+ * coming soon, so no button on the site leads to a missing store page.
+ */
+export const PLAY_LIVE = false;
+/** Where the site sends people to get the app right now. */
+export const GET_APP_URL = PLAY_LIVE ? PLAY_URL : '/download#clairix-full';
 export const PACKAGE_NAME = 'app.clairix';
 export const SUPPORT_EMAIL = 'support@clairix.app';
 export const SECURITY_EMAIL = 'security@clairix.app';
+export const GITHUB_URL = 'https://github.com/jakes1345/Clairix';
+export const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues/new/choose`;
 
 /**
  * Press asset folder (logos, icon, screenshots). Empty until it is published;
@@ -101,8 +111,9 @@ export const pages = {
   },
   download: {
     title: 'Download – Clairix',
-    description:
-      'Get Clairix free on Google Play, or download Clairix Full as an APK and verify it with SHA-256. Requires Android 12 or newer.',
+    description: PLAY_LIVE
+      ? 'Get Clairix free on Google Play, or download Clairix Full as an APK and verify it with SHA-256. Requires Android 12 or newer.'
+      : 'Download the Clairix beta as an APK and verify it with SHA-256. The Google Play edition is coming soon. Requires Android 12 or newer.',
     ogTitle: 'Download Clairix',
     ogImage: '/og/download.png',
     ogImageAlt: 'Get Clairix. Free.',

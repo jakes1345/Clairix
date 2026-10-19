@@ -1,0 +1,96 @@
+name: Something is broken
+description: A feature does not work, the app crashes, or something looks wrong.
+labels: ["bug", "beta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing Clairix. The more exact you are, the faster it gets fixed.
+        Please do not include your Clairix number, contacts, message text or anything else personal.
+  - type: input
+    id: version
+    attributes:
+      label: Clairix version
+      description: Settings, then About. For example 3.0.0-beta.2.
+      placeholder: 3.0.0-beta.2
+    validations:
+      required: true
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Which file did you install?
+      options:
+        - Clairix Full (clairix-vX.apk)
+        - Clairix Comms (clairix-comms-vX.apk)
+        - Google Play
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model
+      placeholder: Pixel 8, Galaxy S23, OnePlus 12
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version
+      placeholder: "14"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Hidden camera sweep (lens glint or infrared)
+        - Bluetooth tracker detection
+        - Wi-Fi checks
+        - Cell tower checks
+        - NFC and card checks
+        - Spyware and phone health checks
+        - Map and navigation
+        - COMMS messages
+        - COMMS calls
+        - COMMS invites and setup
+        - Card Vault
+        - Settings or appearance
+        - Installing or updating
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you do?
+      description: Step by step, starting from opening the app.
+      placeholder: |
+        1. Opened Scan
+        2. Tapped Lens sweep
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Screenshots or a screen recording help a lot. Blur anything personal first.
+    validations:
+      required: true
+  - type: dropdown
+    id: repeat
+    attributes:
+      label: Does it happen every time?
+      options:
+        - Every time
+        - Sometimes
+        - Only once so far
+    validations:
+      required: true
