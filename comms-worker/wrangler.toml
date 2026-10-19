@@ -49,6 +49,22 @@ class_name = "Traffic"
 name = "INCIDENTS"
 class_name = "IncidentCache"
 
+# Branch previews (Cloudflare Workers Builds runs `wrangler preview` for every
+# non-main branch). Each preview gets its own empty Durable Object storage, so it
+# never touches the live relay's mailboxes. Previews inherit no secrets: set
+# ENROLL_SECRET with `wrangler preview base-config secret put` to register on one.
+[[previews.durable_objects.bindings]]
+name = "MAILBOX"
+class_name = "Mailbox"
+
+[[previews.durable_objects.bindings]]
+name = "TRAFFIC"
+class_name = "Traffic"
+
+[[previews.durable_objects.bindings]]
+name = "INCIDENTS"
+class_name = "IncidentCache"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Mailbox"]

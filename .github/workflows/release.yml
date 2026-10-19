@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.1'
+        default: 'v3.0.0-beta.2'
 
 permissions:
   contents: write
@@ -222,11 +222,24 @@ jobs:
             echo "## Clairix ${PRETTY}"
             echo
             if [ "$PRERELEASE" = "true" ]; then
-              echo "This is a **beta**: the first public test of Clairix 3.0. It is meant for people"
+              echo "This is a **beta**: a public test of Clairix 3.0. It is meant for people"
               echo "who are happy to try new things and tell us what breaks. Keep your current"
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
+            echo "### What's new in Beta 2: stronger COMMS"
+            echo
+            echo "- **The relay no longer learns who is writing to whom.** Messages are delivered"
+            echo "  with single-use anonymous tokens instead of your number, and the sender's"
+            echo "  identity travels signed inside the encrypted message."
+            echo "- **Message lengths are hidden.** Every message is padded up to one of a few"
+            echo "  set sizes before it is encrypted, so short messages all look the same."
+            echo "- **Key changes are held for you.** If a contact's security key changes, their"
+            echo "  messages wait in a review box until you verify, accept or discard them."
+            echo "- **Screenshots and screen recording are blocked** on COMMS screens."
+            echo "- **Secret keys are wiped from memory** by the encryption library as soon as"
+            echo "  they are no longer needed."
+            echo
             echo "### What's new in 3.0"
             echo
             echo "- **A new look.** Every screen has been redesigned: clearer status at the top of"
