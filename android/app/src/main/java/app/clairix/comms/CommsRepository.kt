@@ -73,11 +73,19 @@ import java.util.UUID
 object CommsRepository {
 
     private const val TAG = "CommsRepository"
-    private const val ONE_TIME_KEYS_LOW = 20
-    private const val ONE_TIME_KEYS_BATCH = 50
+    /**
+     * One-time keys on the relay: topped up by a batch whenever fewer than
+     * [ONE_TIME_KEYS_LOW] are left, so a few hundred stay published and
+     * lookups (limited per caller and per number) cannot empty the pool.
+     */
+    private const val ONE_TIME_KEYS_LOW = 150
+    private const val ONE_TIME_KEYS_BATCH = 100
     private const val MAX_BODY = 4000
-    /** A voicemail's base64 audio: 30 s of AMR-NB at 4.75 kbit/s is under 25 KB; anything far past that is not one. */
-    private const val MAX_VOICEMAIL_B64 = 96_000
+    /**
+     * A voicemail's base64 audio: 30 s of AMR-NB at 4.75 kbit/s is under 25 KB.
+     * The cap keeps the padded payload inside the relay's largest envelope.
+     */
+    private const val MAX_VOICEMAIL_B64 = 60_000
     private const val MAX_COIN_NOTE = 140
     private const val MAX_CAPTION = 500
     /** Chunks of a file whose rest never came are forgotten after this long. */
@@ -129,9 +137,26 @@ object CommsRepository {
         for (hook in sendHooks) runCatching { hook(body) }.onFailure { CommsLog.add("Send hook failed: ${it.message}") }
     }
 
-    /** When a resync was last sent to each contact, so a run of unreadable envelopes asks only once. */
-    private val lastResync = HashMap<String, Long>()
-    private const val RESYNC_MIN_INTERVAL_MS = 60_000L
+    /**
+     * How often a new session may be started after an unreadable envelope: once
+     * a minute per contact and ten times an hour in all, so a stream of
+     * unreadable envelopes (replayed by a relay, say) cannot turn into a stream
+     * of bundle fetches and resyncs.
+     */
+    private val resyncs = ResyncLimiter()
+
+    /** Claim tickets waiting to be presented, one per peer; see [PendingClaims]. */
+    private lateinit var claims: PendingClaims
+
+    /**
+     * The one immediate retry after a send found no delivery token; anything
+     * beyond it is left to [scheduleRetry]'s backoff. See [TokenRefill].
+     */
+    private val tokenRefill = TokenRefill(
+        topUp = { topUpTokens() },
+        retry = { scope.launch { flushOutbox(); flushReceipts() } },
+        launch = { block -> scope.launch { block() } },
+    )
 
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
@@ -147,7 +172,8 @@ object CommsRepository {
     private const val RECEIPT_BATCH = 100
     private const val MAX_INBOX_PAGES = 25
     private const val ONE_TIME_KEYS_MAX_WAITING = 100
-    private const val FALLBACK_ROTATE_MS = 7L * 24 * 3600_000L
+    /** The fallback key is replaced daily; the previous one keeps working until the next rotation. */
+    private const val FALLBACK_ROTATE_MS = 24 * 3600_000L
     private const val REPLENISH_INTERVAL_MS = 3600_000L
     /** How far back unconfirmed messages are sent again when a contact asks for a new session. */
     private const val RESEND_WINDOW_MS = 7L * 24 * 3600_000L
@@ -194,7 +220,8 @@ object CommsRepository {
         identities = IdentityStore(appContext)
         store = CommsStore(appContext)
         CommsMedia.init(appContext)
-        relay = RelayClient({ identities.get() }, { config.relayUrl }, { config.number })
+        relay = RelayClient({ identities.get() }, { config.relayUrl }, { config.number }, StoredTokenPool(appContext))
+        claims = StoredPendingClaims(appContext)
         // The relay's clock, as the Device tab's clock-integrity row compares it.
         RelayClock.bind(appContext)
         relay.clockListener = { serverMs, localMs -> RelayClock.record(serverMs, localMs) }
@@ -357,6 +384,8 @@ object CommsRepository {
                     CommsLog.add("Registered as ${formatClairixNumber(registered.number)} on $url" + if (invite != null) " with ${formatClairixNumber(invite.number)}'s invite" else "")
                     CommsService.start(appContext)
                     LiveLink.refresh()
+                    // Delivery tokens from the start, so the first send has one ready.
+                    scope.launch { topUpTokens() }
                     Result.success(registered.number)
                 } catch (e: Exception) {
                     // Registration failed: keep no half-made identity around.
@@ -395,16 +424,31 @@ object CommsRepository {
             runCatching { UnifiedPush.unregister(appContext) }
             CommsService.stop(appContext)
             LiveLink.disconnect()
+            relay.clearTokens()
+            claims.clear()
             store.clearAll()
             CommsMedia.deleteAll()
+            deleteVoicemailFiles()
             identities.destroy()
             config.clear()
+            // What else this phone kept about its comms: the duress phrase (it is
+            // typed into comms), the comms log (it names contacts' numbers) and
+            // every comms notification still on screen.
+            DuressPhrase.clear(appContext)
+            CommsNotifications.cancelAll(appContext)
             KeystoreBox.destroy()
+            CommsLog.clear()
             publishConfig()
             _state.update { it.copy(connected = false, lastSync = 0L, relayOneTimeKeys = -1, balance = -1L) }
             setBusy(false)
             bump()
         }
+    }
+
+    /** Voicemail recordings and playback copies left in the cache (vm_*.amr). */
+    private fun deleteVoicemailFiles() {
+        val files = appContext.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("vm_") && f.name.endsWith(".amr") } ?: return
+        for (f in files) if (!f.delete()) Log.w(TAG, "could not delete ${f.name}")
     }
 
     // ── Settings ──────────────────────────────────────────────────────────
@@ -453,8 +497,38 @@ object CommsRepository {
         scope.launch {
             lock.withLock {
                 runCatching { relay.setPush(endpoint) }
-                    .onSuccess { config.setPushEndpoint(endpoint); publishConfig() }
+                    .onSuccess { verified ->
+                        if (endpoint == null || verified) {
+                            config.setPushEndpoint(endpoint)
+                            config.setPendingPush(null)
+                        } else {
+                            // Not a push host the relay knows: it has pushed a check code
+                            // through the endpoint, and wakes this phone through it only
+                            // once the code is echoed (see [onPushChallenge]).
+                            config.setPendingPush(endpoint)
+                            CommsLog.add("Push endpoint on a host the relay does not know; waiting for its check to arrive")
+                        }
+                        publishConfig()
+                    }
                     .onFailure { Log.w(TAG, "push endpoint not accepted: ${it.message}") }
+            }
+        }
+    }
+
+    /** The relay's check code arrived through the pending push endpoint: echo it so the endpoint goes live. */
+    fun onPushChallenge(code: String) {
+        if (!initialised || !config.isRegistered) return
+        scope.launch {
+            lock.withLock {
+                val pending = config.pendingPush ?: return@withLock
+                runCatching { relay.verifyPush(code) }
+                    .onSuccess {
+                        config.setPushEndpoint(pending)
+                        config.setPendingPush(null)
+                        publishConfig()
+                        CommsLog.add("Push endpoint checked; the relay can wake this phone")
+                    }
+                    .onFailure { CommsLog.add("Push endpoint check refused: ${it.message}") }
             }
         }
     }
@@ -515,6 +589,12 @@ object CommsRepository {
                 keyChanged = false
             )
             store.upsertContact(contact)
+            if (existing != null) {
+                // Scanned in person: these keys are theirs. Groups learn them, and
+                // anything held from exactly these keys is shown; the rest is not.
+                store.setMemberKey(contact.number, contact.ed25519)
+                releaseHeldLocked(contact)
+            }
             bump()
             Result.success(contact)
         }
@@ -532,21 +612,20 @@ object CommsRepository {
             store.contact(number)?.let { return@withLock Result.success(it) }
             setBusy(true)
             try {
-                val bundle = relay.bundle(number, null)
-                if (!verify(bundle.ed25519, "${bundle.curve25519}|${bundle.sealing}".toByteArray(Charsets.UTF_8), bundle.signature)) {
+                // Only the identity: no one-time key is claimed until there is something
+                // to send, so the first message presents the key's claim ticket.
+                val keys = relay.identity(number, null)
+                if (!verify(keys.ed25519, "${keys.curve25519}|${keys.sealing}".toByteArray(Charsets.UTF_8), keys.signature)) {
                     throw RelayException("The relay returned keys that are not signed by that number's identity key")
                 }
-                store.contactByCurve(bundle.curve25519)?.let { other ->
+                store.contactByCurve(keys.curve25519)?.let { other ->
                     // A relay answering with another contact's real keys would otherwise
                     // let messages from that identity land under this number.
                     throw RelayException("The relay returned keys that already belong to ${other.name.ifBlank { formatClairixNumber(other.number) }}")
                 }
-                val peer = PeerKeys(bundle.ed25519, bundle.curve25519, bundle.sealing, bundle.signature)
-                // The relay handed out one of their one-time keys; use it now rather than waste it.
-                identities.update { it.startSession(peer, bundle.sessionKey) }
                 val contact = Contact(
                     number = number, name = name.trim().take(40),
-                    ed25519 = bundle.ed25519, curve25519 = bundle.curve25519, sealing = bundle.sealing, signature = bundle.signature,
+                    ed25519 = keys.ed25519, curve25519 = keys.curve25519, sealing = keys.sealing, signature = keys.signature,
                     verified = false, addedTs = System.currentTimeMillis()
                 )
                 store.upsertContact(contact)
@@ -569,10 +648,81 @@ object CommsRepository {
         bump()
     }
 
-    /** The owner compared safety numbers in person, or scanned the contact's code. */
+    /**
+     * The owner compared safety numbers in person, or scanned the contact's code.
+     * Groups now know these keys for them, and whatever was held from exactly
+     * these keys is shown.
+     */
     suspend fun markVerified(number: String) = withContext(Dispatchers.IO) {
-        store.contact(number)?.let { store.upsertContact(it.copy(verified = true, keyChanged = false)) }
+        lock.withLock {
+            val c = store.contact(number) ?: return@withLock
+            val trusted = c.copy(verified = true, keyChanged = false)
+            store.upsertContact(trusted)
+            store.setMemberKey(number, trusted.ed25519)
+            releaseHeldLocked(trusted)
+        }
         bump()
+    }
+
+    /**
+     * The owner accepts a contact's new keys without verifying them: messages
+     * flow again and what was held from these keys is shown, but the contact
+     * stays unverified, and groups still take no roster changes from them until
+     * they are verified.
+     */
+    suspend fun acceptNewKeys(number: String) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val c = store.contact(number) ?: return@withLock
+            if (!c.keyChanged) return@withLock
+            val accepted = c.copy(verified = false, keyChanged = false)
+            store.upsertContact(accepted)
+            CommsLog.add("New keys of ${contactLabel(accepted)} accepted without verification")
+            releaseHeldLocked(accepted)
+        }
+        bump()
+    }
+
+    /** Deletes what was held from [number]'s new keys, unseen. */
+    suspend fun discardHeld(number: String) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val n = store.quarantineCount(number)
+            store.clearQuarantine(number)
+            if (n > 0) CommsLog.add("$n held item(s) from ${formatClairixNumber(number)} discarded unseen")
+        }
+        bump()
+    }
+
+    /** How many payloads from [number]'s new keys are held for review. */
+    fun heldCount(number: String): Int = runCatching { store.quarantineCount(number) }.getOrDefault(0)
+
+    /**
+     * Processes what was held from [contact] now that the owner verified or
+     * accepted their keys: only what came from exactly those keys, oldest
+     * first; the rest is deleted. Caller holds [lock].
+     */
+    private fun releaseHeldLocked(contact: Contact) {
+        val held = store.quarantined(contact.number)
+        var shown = 0
+        for (h in held) {
+            val json = CommsWire.parse(h.payload)
+            if (json != null && KeyChangeGuard.releasable(contact, h.curve, json)) {
+                runCatching { processPayload(contact, h.ts, json) }
+                    .onSuccess { shown++ }
+                    .onFailure { CommsLog.add("A held item from ${contactLabel(contact)} could not be shown: ${it.message}") }
+            }
+            store.deleteQuarantined(h.id)
+        }
+        if (held.isNotEmpty()) CommsLog.add("$shown of ${held.size} held item(s) from ${contactLabel(contact)} shown")
+    }
+
+    private fun contactLabel(c: Contact) = c.name.ifBlank { formatClairixNumber(c.number) }
+
+    /**
+     * Marks in [contact]'s conversation that their keys changed, so the change
+     * is visible where the messages are and not only in a badge.
+     */
+    private fun noteKeyChange(contact: Contact) {
+        store.insertMessage(KeyChangeGuard.systemMessage(UUID.randomUUID().toString(), contact, contactLabel(contact), System.currentTimeMillis()))
     }
 
     suspend fun deleteContact(number: String) = withContext(Dispatchers.IO) {
@@ -810,9 +960,12 @@ object CommsRepository {
                 if (bundle == null) return Prepared.NeedBundle
                 if (bundle.ed25519 != contact.ed25519 || bundle.curve25519 != contact.curve25519 || bundle.sealing != contact.sealing) {
                     store.upsertContact(contact.copy(keyChanged = true, verified = false))
+                    noteKeyChange(contact)
                     return Prepared.Failed("$label's keys have changed. Scan their code again before messaging them.")
                 }
                 identities.update { it.startSession(peer, bundle.sessionKey) }
+                // Kept until an envelope on this session is accepted, whichever that is.
+                claims.put(contact.number, bundle.claim, System.currentTimeMillis())
             }
             Prepared.Ready(identities.update { it.encrypt(peer, payload.toString().toByteArray(Charsets.UTF_8)) })
         } catch (e: RelayException) {
@@ -822,6 +975,8 @@ object CommsRepository {
                 is Deliver.TooLarge -> Prepared.Failed(d.reason)
                 Deliver.Sent -> Prepared.Failed(e.message ?: "Relay error")
             }
+        } catch (e: CryptoException.SessionLimit) {
+            Prepared.Failed("$label has many sessions with this phone in use already; no new one was started")
         } catch (e: CryptoException) {
             Prepared.Failed("Encryption failed: ${e.message}")
         } catch (e: IllegalStateException) {
@@ -830,29 +985,47 @@ object CommsRepository {
         }
     }
 
-    /** Posts an encrypted envelope. No lock is held. */
-    private fun transmit(contact: Contact, envelope: ByteArray): Deliver = try {
-        relay.send(contact.number, envelope)
-        Deliver.Sent
-    } catch (e: RelayException) {
-        if (e.code == 401) {
-            // The first request after start-up on a phone whose clock is off is
-            // refused; its response taught the client the relay's time, so one
-            // retry signs with that. Each attempt uses a fresh nonce.
-            try {
-                relay.send(contact.number, envelope)
-                Deliver.Sent
-            } catch (again: RelayException) {
-                relayOutcome(again)
-            }
-        } else relayOutcome(e)
+    /**
+     * Posts an encrypted envelope, anonymously (a delivery token, no identity;
+     * see [RelayClient.send]). Until the relay has accepted one envelope that
+     * presents it, every envelope to [contact] carries the claim ticket of the
+     * one-time key their newest session was built on ([claims]): a failed
+     * first envelope, or a resync that could not go, does not lose it. With no
+     * delivery token left this is Offline: the envelope stays queued, the
+     * outbox's backoff retries it (fetching tokens first), and [tokenRefill]
+     * retries once at once if a fetch does bring tokens. No lock is held.
+     */
+    private fun transmit(contact: Contact, envelope: ByteArray): Deliver {
+        val claim = claims.get(contact.number, System.currentTimeMillis())
+        return try {
+            relay.send(contact.number, envelope, claim)
+            if (claim != null) claims.accepted(contact.number, claim)
+            Deliver.Sent
+        } catch (e: RelayException) {
+            if (e.code == RelayClient.NO_TOKENS) tokenRefill.onNoTokens()
+            relayOutcome(e)
+        }
+    }
+
+    /**
+     * Fetches delivery tokens when few are left and returns how many the pool
+     * then holds (0 when the fetch failed; failures are logged and retried by
+     * the next sync or outbox retry).
+     */
+    private fun topUpTokens(): Int {
+        if (!config.isRegistered) return 0
+        return runCatching { relay.topUpTokens() }
+            .onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
+            .getOrDefault(0)
     }
 
     /** Which relay errors are worth retrying later (Offline) and which are final (Failed). */
     private fun relayOutcome(e: RelayException): Deliver = when {
         e.code == 404 -> Deliver.Failed("No such Clairix number on this relay any more")
         e.code == 401 -> Deliver.Failed("The relay does not accept this phone's signature (is its clock right?)")
+        e.code == 403 -> Deliver.Offline(e.message ?: "The relay refused this phone's delivery tokens; trying again later")
         e.code == 413 -> Deliver.TooLarge(e.message ?: "The relay refused the message as too large")
+        e.code == RelayClient.NO_TOKENS -> Deliver.Offline("Waiting for delivery tokens from the relay")
         e.code == 0 || e.code == 408 || e.code == 429 || e.code >= 500 || e.code == RelayClient.MALFORMED ->
             Deliver.Offline(e.message ?: "The relay is not reachable right now")
         else -> Deliver.Failed(e.message ?: "Relay refused the message")
@@ -865,6 +1038,7 @@ object CommsRepository {
         retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS)
         retryJob = scope.launch {
             delay(wait)
+            topUpTokens()
             flushOutbox()
             flushReceipts()
         }
@@ -1317,6 +1491,12 @@ object CommsRepository {
         val from = contact.number
         val label = contact.name.ifBlank { formatClairixNumber(from) }
         val group = store.group(gid)
+        if (type == CommsWire.T_GROUP_CTRL && !KeyChangeGuard.mayApplyGroupControl(contact, store.groupMember(gid, from)?.ed25519)) {
+            // Roster changes are never taken from keys the owner has not verified
+            // since they changed, nor from keys other than those the group knows.
+            CommsLog.add("Group change from $label dropped: it is not signed by the keys this group knows for them")
+            return
+        }
         if (type == CommsWire.T_GROUP_CTRL && json.optString(CommsWire.F_OP) == CommsWire.OP_ADD) {
             applyGroupAdd(contact, gid, group, json)
             return
@@ -1410,6 +1590,10 @@ object CommsRepository {
         val roster = CommsWire.rosterEntries(json).filter { parseClairixNumber(it.number) != null }.distinctBy { it.number }
         if (roster.none { it.number == from && it.role == OrgRole.ADMIN.name }) {
             CommsLog.add("Group invitation from $label dropped: its roster does not make them an admin")
+            return
+        }
+        if (!KeyChangeGuard.mayApplyGroupControl(contact, roster.find { it.number == from }?.ed25519)) {
+            CommsLog.add("Group invitation from $label dropped: its roster names other keys for them")
             return
         }
         if (roster.none { it.number == me }) {
@@ -1582,21 +1766,32 @@ object CommsRepository {
             return true
         } catch (e: CryptoException.NoSessionFor) {
             store.markEnvelopeSeen(key, envelope.ts)
-            recoverSession(e.senderCurve25519, "Envelope ${shortId(envelope.id)} came on a session this phone does not have")
+            recoverSession(e.senderCurve25519, e.senderEd25519, e.sentAtMs, "Envelope ${shortId(envelope.id)} came on a session this phone does not have")
             return true
         } catch (e: CryptoException.DecryptFrom) {
             store.markEnvelopeSeen(key, envelope.ts)
-            recoverSession(e.senderCurve25519, "Envelope ${shortId(envelope.id)} could not be decrypted (${e.reason})")
+            recoverSession(e.senderCurve25519, e.senderEd25519, e.sentAtMs, "Envelope ${shortId(envelope.id)} could not be decrypted (${e.reason})")
+            return true
+        } catch (e: CryptoException.BadSignature) {
+            // Its claim to come from someone is unsigned, signed for another
+            // envelope, or pairs a contact's key with someone else's: nobody is
+            // named, so nothing is done on anybody's behalf.
+            store.markEnvelopeSeen(key, envelope.ts)
+            CommsLog.add("Dropped envelope ${shortId(envelope.id)}: its sender claim is unsigned or forged")
             return true
         } catch (e: CryptoException) {
             store.markEnvelopeSeen(key, envelope.ts)
             CommsLog.add("Dropped envelope ${shortId(envelope.id)}: ${e.message}")
             return true
         }
+        if (decrypted.evictedRecentSession) {
+            val who = store.contactByCurve(decrypted.senderCurve25519)?.let { contactLabel(it) } ?: "A sender"
+            CommsLog.add("$who started yet another session; the least recently used of the sessions kept with them was dropped")
+        }
         // Durable before anything that can fail: seen and staged in one transaction.
         val text = String(decrypted.plaintext, Charsets.UTF_8)
-        if (!store.markSeenAndStage(key, envelope.ts, decrypted.senderCurve25519, text)) return true
-        processStagedLocked(CommsStore.PendingInbound(key, envelope.ts, decrypted.senderCurve25519, text))
+        if (!store.markSeenAndStage(key, envelope.ts, decrypted.senderCurve25519, decrypted.senderEd25519, text)) return true
+        processStagedLocked(CommsStore.PendingInbound(key, envelope.ts, decrypted.senderCurve25519, decrypted.senderEd25519, text))
         return true
     }
 
@@ -1617,8 +1812,8 @@ object CommsRepository {
             return true
         }
         return try {
-            when (val resolved = resolveSender(p.senderCurve25519, json)) {
-                is Resolution.Found -> { processPayload(resolved.contact, p.ts, json); store.deletePending(p.id); true }
+            when (val resolved = resolveSender(p.senderCurve25519, p.senderEd25519, json)) {
+                is Resolution.Found -> { admitLocked(resolved.contact, p, json); store.deletePending(p.id); true }
                 is Resolution.Rejected -> {
                     CommsLog.add("Envelope ${shortId(p.id)} rejected: ${resolved.reason}")
                     // Its pre-key message created a session for a sender who is not
@@ -1639,35 +1834,71 @@ object CommsRepository {
     }
 
     /**
-     * Something from [senderCurve] could not be decrypted. Every session with
-     * them is kept, since envelopes already on their way may still need one;
-     * instead a fresh session is started (it goes first, so the resync and
-     * everything after it use it) and they are asked to switch to it. At most
-     * once a minute per contact.
+     * A payload from [contact] that has been staged: processed, held for review
+     * when the contact's keys changed, or dropped (see [KeyChangeGuard]).
+     * Caller holds [lock].
+     */
+    private fun admitLocked(contact: Contact, p: CommsStore.PendingInbound, json: JSONObject) {
+        val type = CommsWire.type(json)
+        when (KeyChangeGuard.inbound(contact, json)) {
+            KeyChangeGuard.Action.PROCESS -> processPayload(contact, p.ts, json)
+            KeyChangeGuard.Action.QUARANTINE -> {
+                val before = store.quarantineCount(contact.number)
+                store.quarantine(p.id, contact.number, p.senderCurve25519, p.ts, p.payload, KeyChangeGuard.MAX_HELD_PER_CONTACT)
+                CommsLog.add("$type from ${contactLabel(contact)} held: their keys changed; review it in the conversation")
+                CommsNotifications.notifyHeld(appContext, contact, store.quarantineCount(contact.number), alert = KeyChangeGuard.alertsOnHold(before))
+            }
+            KeyChangeGuard.Action.DROP -> CommsLog.add("$type from ${contactLabel(contact)} dropped: their keys changed and have not been checked")
+        }
+    }
+
+    /**
+     * Something from [senderCurve] could not be decrypted. The envelope's sender
+     * claim was signed by [senderEd] (the crypto layer checked that), which must
+     * be the contact's own identity key: a claim anyone else signed asks for
+     * nothing. Every session with them is kept, since envelopes already on
+     * their way may still need one; instead a fresh session is started (it goes
+     * first, so the resync and everything after it use it) and they are asked
+     * to switch to it. At most once a minute per contact and ten times an hour
+     * in all ([ResyncLimiter]); not for a claim signed more than a month ago.
      *
      * Caller holds [lock]. The bundle fetch is launched in a new coroutine so
      * the network call does NOT block the lock — holding it for up to 25 s
      * would starve ICE candidate processing during an active call.
      */
-    private fun recoverSession(senderCurve: String, what: String) {
+    private fun recoverSession(senderCurve: String, senderEd: String, sentAtMs: Long, what: String) {
         val contact = store.contactByCurve(senderCurve)
         if (contact == null) {
             CommsLog.add("$what, from someone who is not a contact; dropped")
             return
         }
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
-        val now = System.currentTimeMillis()
-        if (now - (lastResync[contact.number] ?: 0L) < RESYNC_MIN_INTERVAL_MS) {
-            CommsLog.add("$what from $label; a new session was asked for moments ago")
+        if (contact.ed25519 != senderEd) {
+            CommsLog.add("$what, claiming to be from $label but signed by another key; ignored")
             return
         }
         if (contact.keyChanged) {
             CommsLog.add("$what from $label, whose keys changed; verify them before anything is sent")
             return
         }
-        // Mark rate-limit timestamp now (inside the lock) so concurrent envelopes from
-        // the same sender don't each spawn a bundle fetch.
-        lastResync[contact.number] = now
+        val now = System.currentTimeMillis()
+        // Counted now (inside the lock) so concurrent envelopes from the same
+        // sender don't each spawn a bundle fetch.
+        when (val d = synchronized(resyncs) { resyncs.tryAcquire(contact.number, sentAtMs, now) }) {
+            ResyncLimiter.Decision.Allowed -> Unit
+            ResyncLimiter.Decision.TooSoonForContact -> {
+                CommsLog.add("$what from $label; a new session was asked for moments ago")
+                return
+            }
+            is ResyncLimiter.Decision.HourlyCapReached -> {
+                CommsLog.add("$what from $label; ${ResyncLimiter.MAX_PER_HOUR} new sessions were already started this hour, so not another until ${java.text.DateFormat.getTimeInstance().format(java.util.Date(d.retryAtMs))}")
+                return
+            }
+            ResyncLimiter.Decision.StaleHint -> {
+                CommsLog.add("$what from $label, sent too long ago (or dated in the future) to act on; dropped")
+                return
+            }
+        }
         CommsLog.add("$what from $label; fetching a new session bundle")
         // Network fetch happens outside the lock in a new coroutine; this coroutine
         // suspends at lock.withLock below until the current holder releases it.
@@ -1680,17 +1911,29 @@ object CommsRepository {
                         CommsLog.add("$what from $label, but the relay now holds different keys for them; nothing sent")
                         return@withLock
                     }
-                    identities.update {
-                        it.startSession(
-                            PeerKeys(fresh.ed25519, fresh.curve25519, fresh.sealing, fresh.signature),
-                            bundle.sessionKey
-                        )
+                    try {
+                        identities.update {
+                            it.startSession(
+                                PeerKeys(fresh.ed25519, fresh.curve25519, fresh.sealing, fresh.signature),
+                                bundle.sessionKey
+                            )
+                        }
+                    } catch (e: CryptoException.SessionLimit) {
+                        // Every session with them decrypted something in the last two
+                        // weeks and there are as many as are ever kept: none is given up.
+                        CommsLog.add("$what from $label; no new session started: every session this phone keeps with them is in use")
+                        return@withLock
+                    } catch (e: CryptoException) {
+                        CommsLog.add("$what from $label; no new session started (${e.message})")
+                        return@withLock
                     }
+                    // Presented with the resync, or with whatever goes to them first if it fails.
+                    claims.put(fresh.number, bundle.claim, System.currentTimeMillis())
                     CommsLog.add("$what from $label; started a new session and asked them to use it")
                     sendControlLocked(fresh, CommsWire.resync())
                 }
             } catch (e: RelayException) {
-                lastResync.remove(contact.number)
+                synchronized(resyncs) { resyncs.forgetContact(contact.number) }
                 CommsLog.add("$what from $label; could not start a new session yet (${e.message})")
             }
         }
@@ -1928,13 +2171,22 @@ object CommsRepository {
      * unverified contact once the relay confirms that number publishes exactly
      * those keys, so nobody can send as a number they do not hold.
      */
-    private fun resolveSender(senderCurve: String, json: JSONObject): Resolution {
-        store.contactByCurve(senderCurve)?.let { return Resolution.Found(it) }
+    private fun resolveSender(senderCurve: String, senderEd: String, json: JSONObject): Resolution {
+        // A payload staged before schema 6 recorded no signing key (sender_ed is
+        // ''): Olm still vouched for its Curve25519 key, so it is resolved on
+        // that alone rather than rejected.
+        val legacy = senderEd.isEmpty()
+        store.contactByCurve(senderCurve)?.let { c ->
+            // Olm vouches for the Curve25519 key; the envelope's signature for the
+            // Ed25519 key. Both must be the contact's.
+            return if (legacy || c.ed25519 == senderEd) Resolution.Found(c)
+            else Resolution.Rejected("signed by a key that is not ${contactLabel(c)}'s")
+        }
         val from = parseClairixNumber(json.optString(CommsWire.F_FROM))
             ?: return Resolution.Rejected("sender is not a contact and gave no Clairix number")
         val ed = json.optString(CommsWire.F_ED25519); val curve = json.optString(CommsWire.F_CURVE25519)
         val sealing = json.optString(CommsWire.F_SEALING); val sig = json.optString(CommsWire.F_SIGNATURE)
-        if (curve != senderCurve || ed.isBlank() || sealing.isBlank() || sig.isBlank()) {
+        if (curve != senderCurve || (!legacy && ed != senderEd) || ed.isBlank() || sealing.isBlank() || sig.isBlank()) {
             return Resolution.Rejected("keys claimed by ${formatClairixNumber(from)} do not match the sender")
         }
         if (!verify(ed, "$curve|$sealing".toByteArray(Charsets.UTF_8), sig)) {
@@ -1954,7 +2206,8 @@ object CommsRepository {
         }
         val existing = store.contact(from)
         val contact = if (existing != null) {
-            // Same number, different keys: keep the pinned name, flag it, trust nothing.
+            // Same number, different keys: keep the pinned name, flag it, trust
+            // nothing. What comes from the new keys is held until the owner looks.
             identities.update { it.dropSessions(existing.curve25519) }
             existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = true)
         } else {
@@ -1965,6 +2218,10 @@ object CommsRepository {
             )
         }
         store.upsertContact(contact)
+        if (existing != null) {
+            noteKeyChange(contact)
+            CommsLog.add("Keys of ${contactLabel(contact)} changed; what they send is held until you verify or accept them")
+        }
         return Resolution.Found(contact)
     }
 
@@ -1975,6 +2232,8 @@ object CommsRepository {
         if (!config.isRegistered) return@withContext Result.success(Unit)
         setBusy(true)
         try {
+            // Every sync tops up delivery tokens, ahead of the sends below.
+            topUpTokens()
             lock.withLock { retryPendingLocked() }
             // The relay hands out its queue a page at a time; acked envelopes are
             // deleted, so each fetch returns the next page.
@@ -2032,8 +2291,8 @@ object CommsRepository {
     }
 
     /**
-     * Publishes more one-time keys when the relay is running low, and a new
-     * fallback key once a week. The network calls are made without the lock.
+     * Publishes more one-time keys when the relay is running low, a new
+     * fallback key once a day, and fetches delivery tokens when few are left. The network calls are made without the lock.
      * Keys generated for an upload that failed are uploaded next time rather
      * than piling up with new ones.
      */
@@ -2064,6 +2323,8 @@ object CommsRepository {
         }
         if (me.listed != config.listed) config.setListed(me.listed)
         _state.update { it.copy(relayOneTimeKeys = count, listed = me.listed) }
+        // Delivery tokens are fetched here, ahead of need and apart from any send.
+        runCatching { relay.topUpTokens() }.onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
     }
 
     /** Marks a conversation read and tells the sender (retried until it goes). */

@@ -1,22 +1,45 @@
 import { DurableObject } from "cloudflare:workers";
 import { verifyEd25519 } from "./auth";
 import type { Env } from "./env";
+import {
+  DELIVERY_TOKEN_TTL_MS,
+  expireClaims,
+  MemoryBuckets,
+  OTK_CLAIMS_PER_PAIR_BURST,
+  OTK_CLAIMS_PER_PAIR_PER_MINUTE,
+  OTK_CLAIMS_PER_REQUESTER_BURST,
+  OTK_CLAIMS_PER_REQUESTER_PER_MINUTE,
+  OTK_CLAIMS_PER_TARGET_BURST,
+  OTK_CLAIMS_PER_TARGET_PER_MINUTE,
+  OTK_LAPSED_TICKET_TTL_MS,
+  OTK_LAPSED_TICKETS_MAX,
+  type LapsedClaim,
+  PUSH_CHALLENGE_TTL_MS,
+  randomToken,
+  tokenHash,
+  type OtkClaim,
+  type SignedKey,
+} from "./comms-logic";
+
+export type { SignedKey } from "./comms-logic";
 
 /**
  * One Durable Object per Clairix number: the device's published keys, its queue
  * of sealed envelopes, its live WebSocket(s) and its push endpoint.
  *
  * The relay never sees a message: envelopes are opaque bytes sealed to the
- * owner's sealing key, and they carry no sender. What this object knows is the
- * owner's public keys (which are public), how many envelopes are waiting, and
- * the push endpoint the owner chose to be woken through.
+ * owner's sealing key, and they carry no sender, not even in the request that
+ * delivered them. Sending is not signed: it spends a single-use delivery token
+ * (see comms-logic.ts), and the token's hash is kept in a separate shard object
+ * with nothing that links it to the account it was issued to. What this object
+ * knows is the owner's public keys (which are public), how many envelopes are
+ * waiting, the one-time keys handed out and not yet used, and the push endpoint
+ * the owner chose to be woken through.
+ *
+ * The same class also serves a few objects that are not mailboxes, each named
+ * after what it holds: "invite:<code>", "register-guard:<address>" and the
+ * delivery-token shards "dtok:<xx>".
  */
-
-export interface SignedKey {
-  id: string;
-  key: string;
-  signature: string;
-}
 
 export interface Profile {
   number: string;
@@ -29,7 +52,6 @@ export interface Profile {
   /** Whether the number can be looked up. Unlisted numbers are reached by QR only. */
   listed: boolean;
   createdAt: number;
-  lastSeen: number;
 }
 
 export interface Envelope {
@@ -48,26 +70,38 @@ export interface Bundle {
   signature: string;
   oneTimeKey: SignedKey | null;
   fallback: SignedKey | null;
+  /**
+   * With a one-time key: the ticket the send that starts the session presents.
+   * Unpresented within the claim window, the key goes back into the pool.
+   */
+  claim: string | null;
 }
 
 const MAX_QUEUE = 2000;
-const MAX_ENVELOPE_BYTES = 64 * 1024;
+/**
+ * The largest envelope: a plaintext padded to the top 64 KiB bucket, sealed,
+ * fits (see comms-crypto's padding). Media chunks sit well below it.
+ */
+const MAX_ENVELOPE_BYTES = 72 * 1024;
 const ENVELOPE_TTL_MS = 30 * 24 * 60 * 60_000;
-const MAX_ONE_TIME_KEYS = 100;
+/** One-time keys a mailbox holds; the app keeps a few hundred published so lookups cannot empty it. */
+const MAX_ONE_TIME_KEYS = 500;
 const NONCE_WINDOW_MS = 5 * 60_000;
 const LOOKUP_LIMIT_PER_MINUTE = 30;
 /**
- * Per sender. A reconnecting phone sends a receipt for every message it
- * missed, so bursts are normal; the recipient is protected by MAX_QUEUE.
+ * Envelopes into one mailbox, from everyone together: the relay no longer knows
+ * who sends, so the recipient is protected here and by MAX_QUEUE. A
+ * reconnecting contact sends a receipt for every message it missed, so bursts
+ * are normal.
  */
-const SEND_LIMIT_PER_MINUTE = 600;
-const SEND_BURST = 300;
+const INBOUND_LIMIT_PER_MINUTE = 600;
+const INBOUND_BURST = 1200;
 /** Registration attempts per client address, against guessing the enrollment secret. */
 const REGISTER_LIMIT_PER_MINUTE = 10;
 /** After one push wake, further envelopes do not wake again until the phone has fetched, or this long. */
 const WAKE_COALESCE_MS = 30_000;
-/** One-time key ids already handed out, remembered so a key is never offered twice. */
-const MAX_CLAIMED_IDS = 2_000;
+/** One-time key ids already used, remembered so a key is never offered twice. */
+const MAX_CLAIMED_IDS = 5_000;
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
 /** How long a live socket has to ack an envelope before the owner is also woken by push. */
 const UNACKED_WAKE_MS = 8_000;
@@ -103,6 +137,28 @@ interface WakeCheck {
   due: number;
   ids: string[];
 }
+
+/** A push endpoint on an untrusted host, waiting for the owner to echo the code sent through it. */
+interface PendingPush {
+  endpoint: string;
+  codeHash: string;
+  expiresAt: number;
+}
+
+export type EnqueueResult =
+  | { ok: true; id: string }
+  | { ok: false; reason: string; status: 404 | 413 | 429; retryAfter?: number };
+
+/** Constant-time comparison of two hex digests. */
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** How long an issued delivery token can be spent; re-exported for the Worker. */
+export const TOKEN_TTL_MS = DELIVERY_TOKEN_TTL_MS;
 
 /**
  * One ClairixCoin transfer as this mailbox's owner saw it. Every relay is its
@@ -189,8 +245,9 @@ export class Mailbox extends DurableObject<Env> {
     for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS) delete nonces[n];
     if (nonces[nonce] !== undefined) return null;
     nonces[nonce] = ts;
-    profile.lastSeen = now;
-    await this.ctx.storage.put({ nonces, profile });
+    // Only the nonces are written: no "last seen" is kept, so the object does not
+    // record when its owner was active.
+    await this.ctx.storage.put("nonces", nonces);
     return profile;
   }
 
@@ -202,6 +259,7 @@ export class Mailbox extends DurableObject<Env> {
     // A key already handed out is spent on the owner's phone; offering it again
     // would make the next contact's first message undecryptable.
     const claimed = new Set((await this.ctx.storage.get<string[]>("claimedOtks")) ?? []);
+    for (const c of (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? []) claimed.add(c.key.id);
     const known = new Set(existing.map((k) => k.id));
     const merged = existing.concat(oneTimeKeys.filter((k) => !known.has(k.id) && !claimed.has(k.id))).slice(-MAX_ONE_TIME_KEYS);
     if (fallback) profile.fallback = fallback;
@@ -210,23 +268,68 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   async oneTimeKeyCount(): Promise<number> {
-    return ((await this.ctx.storage.get<SignedKey[]>("otks")) ?? []).length;
+    return (await this.releaseExpiredClaims()).length;
   }
 
   /**
-   * The bundle a contact needs. Claims one one-time key (each is handed out
-   * exactly once); when none are left the fallback key is offered instead.
+   * Puts the keys of claims whose window has passed back at the end of the
+   * pool, and returns the pool. A claim nobody followed up costs the owner
+   * nothing. Each lapsed ticket is remembered with its key's id, so a send
+   * that presents it late still takes the key out of the pool (see
+   * [confirmClaim]); at the end of the pool the key is the last to be offered
+   * again in the meantime.
    */
-  async bundle(requireListed: boolean): Promise<Bundle | null> {
+  private async releaseExpiredClaims(now = Date.now()): Promise<SignedKey[]> {
+    const otks = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
+    const claims = (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? [];
+    if (claims.length === 0) return otks;
+    const { kept, expired } = expireClaims(claims, now);
+    if (expired.length === 0) return otks;
+    const pool = otks.concat(expired.map((c) => c.key)).slice(-MAX_ONE_TIME_KEYS);
+    const lapsed = ((await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [])
+      .concat(expired.map((c) => ({ ticket: c.ticket, keyId: c.key.id, at: now })))
+      .filter((l) => now - l.at < OTK_LAPSED_TICKET_TTL_MS)
+      .slice(-OTK_LAPSED_TICKETS_MAX);
+    await this.ctx.storage.put({ otks: pool, claims: kept, lapsedClaims: lapsed });
+    return pool;
+  }
+
+  /** Per-requester-per-target claim limits: in this object's memory only, never stored. */
+  private pairClaims: MemoryBuckets | null = null;
+
+  /**
+   * Whether this mailbox's owner may claim a one-time key from [target] now:
+   * within its own total (stored, naming no target) and within its limit for
+   * that target (kept in memory only, so no contact graph is ever written).
+   */
+  async mayClaimFrom(target: string): Promise<boolean> {
+    this.pairClaims ??= new MemoryBuckets(OTK_CLAIMS_PER_PAIR_PER_MINUTE, OTK_CLAIMS_PER_PAIR_BURST);
+    if (!this.pairClaims.take(target, Date.now())) return false;
+    return (await this.rateOk("otk-claims-out", OTK_CLAIMS_PER_REQUESTER_PER_MINUTE, OTK_CLAIMS_PER_REQUESTER_BURST)).ok;
+  }
+
+  /**
+   * The bundle a contact needs. With [mayClaim] (the requester is within its
+   * own limit for this number) and this number within the limit of keys it
+   * hands out, one one-time key is taken from the pool with a claim ticket;
+   * otherwise, or when none are left, the fallback key is offered instead.
+   */
+  async bundle(requireListed: boolean, mayClaim = true): Promise<Bundle | null> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     if (requireListed && !profile.listed) return null;
-    const otks = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
-    const oneTimeKey = otks.shift() ?? null;
-    if (oneTimeKey) {
-      const claimed = (await this.ctx.storage.get<string[]>("claimedOtks")) ?? [];
-      claimed.push(oneTimeKey.id);
-      await this.ctx.storage.put({ otks, claimedOtks: claimed.slice(-MAX_CLAIMED_IDS) });
+    const now = Date.now();
+    const otks = await this.releaseExpiredClaims(now);
+    let oneTimeKey: SignedKey | null = null;
+    let claim: string | null = null;
+    if (mayClaim && otks.length > 0 && (await this.rateOk("otk-claims", OTK_CLAIMS_PER_TARGET_PER_MINUTE, OTK_CLAIMS_PER_TARGET_BURST)).ok) {
+      oneTimeKey = otks.shift() ?? null;
+      if (oneTimeKey) {
+        claim = randomToken();
+        const claims = (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? [];
+        claims.push({ ticket: await tokenHash(claim), key: oneTimeKey, at: now });
+        await this.ctx.storage.put({ otks, claims });
+      }
     }
     return {
       number: profile.number,
@@ -236,7 +339,36 @@ export class Mailbox extends DurableObject<Env> {
       signature: profile.signature,
       oneTimeKey,
       fallback: oneTimeKey ? null : profile.fallback,
+      claim,
     };
+  }
+
+  /**
+   * Spends the one-time key claimed with [ticket], so it is never offered
+   * again. A ticket presented after its window (the sender was offline) still
+   * spends its key: the key is taken back out of the pool it returned to.
+   * False when no claim, current or lapsed, matches.
+   */
+  private async confirmClaim(ticket: string): Promise<boolean> {
+    const hash = await tokenHash(ticket);
+    const claims = (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? [];
+    const spent = (await this.ctx.storage.get<string[]>("claimedOtks")) ?? [];
+    const i = claims.findIndex((c) => c.ticket === hash);
+    if (i >= 0) {
+      const [used] = claims.splice(i, 1);
+      if (used) spent.push(used.key.id);
+      await this.ctx.storage.put({ claims, claimedOtks: spent.slice(-MAX_CLAIMED_IDS) });
+      return true;
+    }
+    const lapsed = (await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [];
+    const j = lapsed.findIndex((l) => l.ticket === hash);
+    if (j < 0) return false;
+    const [late] = lapsed.splice(j, 1);
+    if (!late) return false;
+    const otks = ((await this.ctx.storage.get<SignedKey[]>("otks")) ?? []).filter((k) => k.id !== late.keyId);
+    spent.push(late.keyId);
+    await this.ctx.storage.put({ otks, lapsedClaims: lapsed, claimedOtks: spent.slice(-MAX_CLAIMED_IDS) });
+    return true;
   }
 
   /** The owner's public identity, for confirming who sent a message; claims no key. */
@@ -260,9 +392,74 @@ export class Mailbox extends DurableObject<Env> {
     await this.ctx.storage.put("profile", profile);
   }
 
+  /** Sets (or with null clears) the endpoint the owner is woken through; any pending check is dropped. */
   async setPush(endpoint: string | null): Promise<void> {
+    await this.ctx.storage.delete("pushPending");
     if (endpoint) await this.ctx.storage.put("push", endpoint);
     else await this.ctx.storage.delete("push");
+  }
+
+  /**
+   * Holds [endpoint] until the owner echoes the code that was sent through it
+   * (whose hash is [codeHash]). The endpoint in use, if any, stays in use.
+   */
+  async setPendingPush(endpoint: string, codeHash: string): Promise<void> {
+    await this.ctx.storage.put<PendingPush>("pushPending", { endpoint, codeHash, expiresAt: Date.now() + PUSH_CHALLENGE_TTL_MS });
+  }
+
+  /** Makes the pending endpoint the one in use when [codeHash] matches its code; false otherwise. */
+  async verifyPush(codeHash: string): Promise<boolean> {
+    const pending = await this.ctx.storage.get<PendingPush>("pushPending");
+    if (!pending || pending.expiresAt <= Date.now() || !timingSafeEqualHex(pending.codeHash, codeHash)) return false;
+    await this.ctx.storage.delete("pushPending");
+    await this.ctx.storage.put("push", pending.endpoint);
+    return true;
+  }
+
+  /** The endpoint in use (null when none); for tests and the owner's own view. */
+  async pushEndpoint(): Promise<string | null> {
+    return (await this.ctx.storage.get<string>("push")) ?? null;
+  }
+
+  // ── Delivery tokens (in shard objects of their own, named "dtok:<xx>") ──
+
+  /** Stores issued token hashes until [expiresAt]. Nothing about who they went to is kept. */
+  async addTokens(hashes: string[], expiresAt: number): Promise<void> {
+    const entries: Record<string, number> = {};
+    for (const h of hashes) entries[`t:${h}`] = expiresAt;
+    for (let i = 0, keys = Object.keys(entries); i < keys.length; i += DELETE_BATCH) {
+      const batch: Record<string, number> = {};
+      for (const k of keys.slice(i, i + DELETE_BATCH)) batch[k] = expiresAt;
+      await this.ctx.storage.put(batch);
+    }
+    if (!(await this.ctx.storage.get("tokenShard"))) await this.ctx.storage.put("tokenShard", true);
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
+  }
+
+  /** Spends the token with this hash. False when it is unknown, expired or already spent. */
+  async redeemToken(hash: string): Promise<boolean> {
+    const key = `t:${hash}`;
+    const expiresAt = await this.ctx.storage.get<number>(key);
+    if (expiresAt === undefined) return false;
+    await this.ctx.storage.delete(key);
+    return expiresAt > Date.now();
+  }
+
+  /** Drops expired token hashes, a page at a time; true when any are left. */
+  private async cleanupTokens(now: number): Promise<boolean> {
+    let startAfter: string | undefined;
+    let left = 0;
+    for (;;) {
+      const page = await this.ctx.storage.list<number>({ prefix: "t:", startAfter, limit: DELETE_BATCH });
+      if (page.size === 0) break;
+      const keys = [...page.keys()];
+      const stale = [...page].filter(([, exp]) => exp <= now).map(([k]) => k);
+      if (stale.length > 0) await this.deleteKeys(stale);
+      left += keys.length - stale.length;
+      startAfter = keys[keys.length - 1];
+    }
+    return left > 0;
   }
 
   /**
@@ -282,14 +479,32 @@ export class Mailbox extends DurableObject<Env> {
     return { ok, retryAfter: ok ? 0 : Math.max(1, Math.ceil(((1 - b.tokens) * 60) / perMinute)) };
   }
 
+  /**
+   * Like [rateOk] for [want] units at once: takes as many as the bucket holds,
+   * up to [want], and returns how many it took (0 with a Retry-After when none).
+   */
+  async rateTake(action: string, want: number, perMinute: number, burst: number): Promise<{ granted: number; retryAfter: number }> {
+    const key = `bucket:${action}`;
+    const now = Date.now();
+    const b = (await this.ctx.storage.get<{ tokens: number; at: number }>(key)) ?? { tokens: burst, at: now };
+    b.tokens = Math.min(burst, b.tokens + ((now - b.at) * perMinute) / 60_000);
+    b.at = now;
+    const granted = Math.max(0, Math.min(Math.floor(want), Math.floor(b.tokens)));
+    b.tokens -= granted;
+    await this.ctx.storage.put(key, b);
+    return { granted, retryAfter: granted > 0 ? 0 : Math.max(1, Math.ceil(((1 - b.tokens) * 60) / perMinute)) };
+  }
+
   static readonly LOOKUP_LIMIT = LOOKUP_LIMIT_PER_MINUTE;
-  static readonly SEND_LIMIT = SEND_LIMIT_PER_MINUTE;
-  static readonly SEND_BURST = SEND_BURST;
   static readonly REGISTER_LIMIT = REGISTER_LIMIT_PER_MINUTE;
+  /** Push endpoints an owner may set in an hour: each one that needs a check costs a request to it. */
+  static readonly PUSH_LIMIT = 6 / 60;
+  static readonly PUSH_BURST = 6;
   /** Invites per identity: twenty a day, refilled over the day. */
   static readonly INVITE_LIMIT = 20 / (24 * 60);
   static readonly INVITE_BURST = 20;
-  static readonly TURN_LIMIT = 20;
+  /** Each request mints fresh TURN credentials with the provider: ten a minute is plenty for calls. */
+  static readonly TURN_LIMIT = 10;
 
   /** storage.delete() takes at most 128 keys; larger sets go in batches. */
   private async deleteKeys(keys: string[]): Promise<number> {
@@ -388,12 +603,16 @@ export class Mailbox extends DurableObject<Env> {
    * Queues an envelope for the owner and delivers it to any live socket. Returns
    * false when the mailbox does not exist or is full.
    */
-  async enqueue(data: string): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
+  async enqueue(data: string, claim: string | null = null): Promise<EnqueueResult> {
     const profile = await this.ctx.storage.get<Profile>("profile");
-    if (!profile) return { ok: false, reason: "no such number" };
-    if (data.length > (MAX_ENVELOPE_BYTES * 4) / 3 + 4) return { ok: false, reason: "envelope too large" };
+    if (!profile) return { ok: false, reason: "no such number", status: 404 };
+    if (data.length > (MAX_ENVELOPE_BYTES * 4) / 3 + 4) return { ok: false, reason: "envelope too large", status: 413 };
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
-    if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full" };
+    if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };
+    const inbound = await this.rateOk("inbound", INBOUND_LIMIT_PER_MINUTE, INBOUND_BURST);
+    if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
+    // The first envelope of a session spends the one-time key it was built on.
+    if (claim !== null) await this.confirmClaim(claim);
     const id = `${Date.now().toString(36)}-${crypto.randomUUID()}`;
     const envelope: Envelope = { id, ts: Date.now(), data };
     await this.ctx.storage.put({ [`q:${id}`]: envelope, queueCount: count + 1 });
@@ -485,6 +704,16 @@ export class Mailbox extends DurableObject<Env> {
       else await this.ctx.storage.setAlarm(invite.expiresAt);
       return;
     }
+    if (await this.ctx.storage.get("tokenShard")) {
+      try {
+        if (await this.cleanupTokens(now)) await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
+        else await this.ctx.storage.deleteAll();
+      } catch (e) {
+        console.error("token cleanup failed", e);
+        await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
+      }
+      return;
+    }
     for (const ws of this.ctx.getWebSockets()) {
       try {
         ws.send(JSON.stringify({ type: "hb", ts: now }));
@@ -535,6 +764,11 @@ export class Mailbox extends DurableObject<Env> {
       }
     } catch (e) {
       console.error("envelope cleanup failed", e);
+    }
+    try {
+      await this.releaseExpiredClaims();
+    } catch (e) {
+      console.error("claim cleanup failed", e);
     }
   }
 
@@ -611,6 +845,8 @@ async function wake(endpoint: string): Promise<number> {
       method: "POST",
       headers: { "content-type": "text/plain", ttl: "86400", urgency: "high" },
       body: "wake",
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) console.error("push wake refused", res.status);
     return res.status;

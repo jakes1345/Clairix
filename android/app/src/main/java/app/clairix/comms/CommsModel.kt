@@ -125,11 +125,16 @@ const val STATUS_PAYMENT = "payment"
 /** Status value of a [ChatMessage] that carries a voicemail; its body is [VoicemailBody] JSON. */
 const val STATUS_VOICEMAIL = "voicemail"
 /**
+ * Status value of a [ChatMessage] this phone wrote into a conversation itself,
+ * such as "Safety number changed"; never sent, never receipted.
+ */
+const val STATUS_SYSTEM = "system"
+/**
  * Statuses that mark what a message *is* rather than how far it got. A delivery
  * receipt must never replace one of these, or the message loses its meaning
  * (a voicemail bubble would turn into a wall of base64 text).
  */
-val TYPE_STATUSES = setOf(STATUS_CALL, STATUS_PAYMENT, STATUS_VOICEMAIL)
+val TYPE_STATUSES = setOf(STATUS_CALL, STATUS_PAYMENT, STATUS_VOICEMAIL, STATUS_SYSTEM)
 
 /** The ticker every relay's coin community uses. */
 const val COIN_SYMBOL = "AC"

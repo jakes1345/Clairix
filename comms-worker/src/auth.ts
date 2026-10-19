@@ -4,11 +4,15 @@ import { base64ToBytes, HttpError, sha256Hex } from "./env";
  * Request authentication.
  *
  * Every authenticated request is signed by the caller's Ed25519 identity key,
- * the same key their contacts verify. Nothing else is ever issued: no passwords,
- * no bearer tokens the relay could leak. The signed string binds the caller's
- * Clairix number, a timestamp (±5 minutes), a nonce (single-use within that
- * window), the method, the path and a hash of the body, so a captured request
- * cannot be replayed or altered.
+ * the same key their contacts verify. There are no passwords and no session
+ * tokens. The signed string binds the caller's Clairix number, a timestamp
+ * (±5 minutes), a nonce (single-use within that window), the method, the path
+ * and a hash of the body, so a captured request cannot be replayed or altered.
+ *
+ * Sending an envelope is the one exception, and it is deliberately not signed:
+ * it spends a single-use delivery token instead (see comms-logic.ts), so the
+ * relay does not learn who sent it. A token authorises one envelope to anyone
+ * and nothing else.
  */
 
 export const TS_WINDOW_MS = 5 * 60_000;

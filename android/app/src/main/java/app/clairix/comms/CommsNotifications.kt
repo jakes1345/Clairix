@@ -339,6 +339,52 @@ object CommsNotifications {
         context.getSystemService(NotificationManager::class.java)?.notify(notificationId(contact.number), notification)
     }
 
+    /**
+     * Something from [contact]'s new keys is held for review: a notification
+     * that opens the conversation, where the review card is. [alert] is true
+     * for the first item held; later items only update a notification still
+     * showing, quietly.
+     */
+    fun notifyHeld(context: Context, contact: Contact, held: Int, alert: Boolean) {
+        if (!canPost(context)) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val id = notificationId(contact.number)
+        if (!alert && runCatching { manager.activeNotifications.none { it.id == id } }.getOrDefault(true)) return
+        ensureChannels(context)
+        val open = Intent(context, MainActivity::class.java)
+            .setAction("app.clairix.OPEN_THREAD")
+            .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
+            .putExtra(EXTRA_PEER, contact.number)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val contentIntent = PendingIntent.getActivity(
+            context, contact.number.hashCode(), open,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
+        val text = KeyChangeGuard.heldNotice(label, held)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Safety number changed")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setSilent(!alert)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle("Safety number changed")
+                    .setContentText("Unlock to review")
+                    .build()
+            )
+            .build()
+        manager.notify(id, notification)
+    }
+
     /** The group conversation [gid] in MainActivity; see [CommsRepository.EXTRA_GROUP]. */
     private fun openGroup(context: Context, gid: String, requestCode: Int): PendingIntent {
         val open = Intent(context, MainActivity::class.java)
@@ -411,6 +457,24 @@ object CommsNotifications {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(panicId(panicId), notification)
+    }
+
+    /**
+     * Clears every comms notification still showing: messages, missed calls,
+     * SOS alerts, calls and the connection's own. Notifications of the rest of
+     * the app (the scanner's, say) are left alone.
+     */
+    fun cancelAll(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val comms = setOf(CHANNEL_MESSAGES, CHANNEL_LINK, CHANNEL_CALLS, CHANNEL_RINGING, CHANNEL_SOS)
+        runCatching {
+            for (n in manager.activeNotifications) {
+                if (n.notification.channelId in comms) manager.cancel(n.tag, n.id)
+            }
+        }
+        manager.cancel(INCOMING_CALL_NOTIFICATION_ID)
+        manager.cancel(CALL_NOTIFICATION_ID)
+        manager.cancel(LINK_NOTIFICATION_ID)
     }
 
     /** Clears both the message and the missed-call notification for [peer]. */

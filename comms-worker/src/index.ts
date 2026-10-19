@@ -1,4 +1,21 @@
 import { parseSigned, verifyEd25519 } from "./auth";
+import {
+  checkPushEndpoint,
+  DELIVERY_TOKEN_BATCH_MAX,
+  DELIVERY_TOKEN_BURST,
+  DELIVERY_TOKEN_PER_MINUTE,
+  DELIVERY_TOKEN_RE,
+  groupByShard,
+  parseIceServers,
+  PUSH_CHALLENGE_PREFIX,
+  randomToken,
+  STUN_ONLY,
+  tokenHash,
+  tokenShardName,
+  tokenBatchExpiry,
+  TURN_TTL_S,
+  type IceServer,
+} from "./comms-logic";
 import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, timingSafeEqual, type Env } from "./env";
 import { INVITE_TTL_MS, Mailbox, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
@@ -21,21 +38,31 @@ export { IncidentCache, Mailbox, Traffic };
  *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}
  *   GET    /i                                              → invite page; the invite itself is in the URL fragment,
  *                                                            which browsers never send to the relay
+ * Anonymous (no identity header; refused if one is sent):
+ *   POST   /v1/send            {to, envelope, claim?}      → queue for a contact; X-Clairix-Token: one delivery
+ *                              token, spent by this request. "claim" is the ticket of the one-time key the
+ *                              envelope's session was built on, which spends that key for good.
  * Signed (see auth.ts):
  *   GET    /v1/me                                          → profile + key counts
  *   PUT    /v1/keys            {oneTimeKeys, fallback?}    → replenish
  *   PUT    /v1/listed          {listed}
- *   PUT    /v1/push            {endpoint|null}             → UnifiedPush endpoint to wake this device
+ *   PUT    /v1/push            {endpoint|null}             → UnifiedPush endpoint to wake this device: in use at
+ *                                                            once on a trusted host ({verified: true}), else a code
+ *                                                            is pushed through it first ({verified: false})
+ *   PUT    /v1/push/verify     {code}                      → the code that arrived by push: the endpoint goes live
  *   DELETE /v1/me                                          → wipe the mailbox
  *   POST   /v1/invites                                     → {code, expiresAt}: one registration, no secret, 7 days
- *   GET    /v1/bundle/:number                              → a contact's keys + one session key (listed only)
+ *   POST   /v1/tokens          {count}                     → {tokens, expiresAt}: single-use delivery tokens; the
+ *                                                            relay keeps only their hashes, apart from the account
+ *   GET    /v1/bundle/:number                              → a contact's keys + one session key and its claim
+ *                                                            ticket (listed only); past the claim limits, the fallback
  *   GET    /v1/bundle/:number?pin=<ed25519 fingerprint>    → also unlisted, when the caller has the key from a QR
  *   GET    /v1/identity/:number[?pin=]                     → the same keys without claiming a one-time key
- *   POST   /v1/send            {to, envelope}              → queue for a contact
  *   GET    /v1/inbox                                       → waiting envelopes
  *   POST   /v1/ack             {ids}
  *   GET    /v1/ws                                          → live delivery (hibernatable WebSocket)
- *   GET    /v1/turn                                        → ICE servers for a call
+ *   GET    /v1/turn                                        → ICE servers for a call, with TURN credentials minted
+ *                                                            for this request alone
  * ClairixCoin (each relay is its own coin community; balances live in the mailboxes):
  *   GET    /v1/coin/balance                                → {balance, symbol: "AC"}
  *   POST   /v1/coin/pay        {to, amount, note?}         → {txid, balance, ok}: moves coins to a contact
@@ -89,7 +116,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, "") || "/";
 
   if (request.method === "GET" && path === "/") {
-    return json({ service: "clairix-comms", version: 2, ok: true, note: "Clairix numbers are not phone numbers." });
+    return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers." });
   }
 
   const bodyText = request.method === "GET" || request.method === "HEAD" ? "" : await request.text();
@@ -115,6 +142,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (!path.startsWith("/v1/")) throw new HttpError(404, "Not found");
+
+  // ── Anonymous delivery ────────────────────────────────────────────────
+  if (path === "/v1/send") {
+    if (request.method !== "POST") throw new HttpError(405, "POST only");
+    return send(env, request, bodyText);
+  }
 
   // ── Authenticated ─────────────────────────────────────────────────────
   const signed = await parseSigned(request, bodyText);
@@ -156,14 +189,53 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (path === "/v1/push" && request.method === "PUT") {
     const body = parseJson<{ endpoint?: unknown }>(bodyText);
-    const endpoint = body.endpoint;
-    if (endpoint !== null && endpoint !== undefined) {
-      if (typeof endpoint !== "string" || !/^https:\/\/[^\s]{8,2048}$/.test(endpoint)) {
-        throw new HttpError(400, "endpoint must be an https URL");
-      }
+    if (body.endpoint === null || body.endpoint === undefined) {
+      await me.setPush(null);
+      return json({ ok: true, verified: false });
     }
-    await me.setPush(typeof endpoint === "string" ? endpoint : null);
-    return json({ ok: true });
+    const check = checkPushEndpoint(body.endpoint, env.PUSH_HOSTS);
+    if (!check.ok) throw new HttpError(400, check.reason);
+    const allowed = await me.rateOk("push", Mailbox.PUSH_LIMIT, Mailbox.PUSH_BURST);
+    if (!allowed.ok) throw new HttpError(429, "Too many push endpoints; try again later", allowed.retryAfter);
+    if (check.trusted) {
+      await me.setPush(check.url);
+      return json({ ok: true, verified: true });
+    }
+    // Any other host is woken only once the phone proves the endpoint reaches
+    // it, so the relay cannot be pointed at arbitrary URLs to post to.
+    const code = randomToken();
+    await me.setPendingPush(check.url, await tokenHash(code));
+    const status = await postPush(check.url, `${PUSH_CHALLENGE_PREFIX}${code}`);
+    if (status < 200 || status >= 300) {
+      throw new HttpError(400, status === 0 ? "The push endpoint could not be reached" : `The push endpoint refused the check (HTTP ${status})`);
+    }
+    return json({ ok: true, verified: false }, 202);
+  }
+
+  if (path === "/v1/push/verify" && request.method === "PUT") {
+    const body = parseJson<{ code?: unknown }>(bodyText);
+    if (typeof body.code !== "string" || !DELIVERY_TOKEN_RE.test(body.code)) throw new HttpError(400, "code required");
+    if (!(await me.verifyPush(await tokenHash(body.code)))) throw new HttpError(403, "That code does not match the pending push endpoint");
+    return json({ ok: true, verified: true });
+  }
+
+  if (path === "/v1/tokens" && request.method === "POST") {
+    const body = parseJson<{ count?: unknown }>(bodyText);
+    const want = body.count;
+    if (typeof want !== "number" || !Number.isInteger(want) || want < 1 || want > DELIVERY_TOKEN_BATCH_MAX) {
+      throw new HttpError(400, `count must be a whole number from 1 to ${DELIVERY_TOKEN_BATCH_MAX}`);
+    }
+    const taken = await me.rateTake("tokens", want, DELIVERY_TOKEN_PER_MINUTE, DELIVERY_TOKEN_BURST);
+    if (taken.granted === 0) throw new HttpError(429, "Too many messages; try again shortly", taken.retryAfter);
+    const tokens = Array.from({ length: taken.granted }, () => randomToken());
+    const hashes = await Promise.all(tokens.map((t) => tokenHash(t)));
+    const expiresAt = tokenBatchExpiry(Date.now());
+    // Stored by hash in shard objects that never learn the account: the only
+    // link between this caller and these tokens is this response.
+    await Promise.all(
+      [...groupByShard(hashes)].map(([name, list]) => env.MAILBOX.get(env.MAILBOX.idFromName(name)).addTokens(list, expiresAt)),
+    );
+    return json({ tokens, expiresAt });
   }
 
   const bundleMatch = /^\/v1\/bundle\/([0-9]{9})$/.exec(path);
@@ -178,12 +250,17 @@ async function route(request: Request, env: Env): Promise<Response> {
     // owner's identity key (from a QR scan) and proves it with its fingerprint.
     // The pin is checked before any key is claimed, so a wrong pin neither
     // reveals the bundle nor consumes a one-time key.
+    // Each caller may take only a few one-time keys from each number and so
+    // many in all, and each number hands out only so many; past any limit the
+    // fallback key is offered, which starts a session just as well and drains
+    // nothing. Who looked up whom is never stored.
+    const mayClaim = target !== profile.number && (await me.mayClaimFrom(target));
     let bundle = null;
     if (pin === null) {
-      bundle = await them.bundle(true);
+      bundle = await them.bundle(true, mayClaim);
     } else {
       const p = await them.profile();
-      if (p && timingSafeEqual(await fingerprint(p.ed25519), pin)) bundle = await them.bundle(false);
+      if (p && timingSafeEqual(await fingerprint(p.ed25519), pin)) bundle = await them.bundle(false, mayClaim);
     }
     if (!bundle) throw new HttpError(404, "No such Clairix number, or it is unlisted");
     return json({ bundle });
@@ -210,22 +287,6 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ identity });
   }
 
-  if (path === "/v1/send" && request.method === "POST") {
-    // Per-sender cap, so one registered identity cannot fill another's mailbox.
-    const allowed = await me.rateOk("send", Mailbox.SEND_LIMIT, Mailbox.SEND_BURST);
-    if (!allowed.ok) throw new HttpError(429, "Too many messages; try again shortly", allowed.retryAfter);
-    const body = parseJson<{ to?: unknown; envelope?: unknown }>(bodyText);
-    const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
-    if (!to) throw new HttpError(400, "to must be a Clairix number");
-    if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
-      throw new HttpError(400, "envelope must be base64");
-    }
-    const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
-    const result = await them.enqueue(body.envelope);
-    if (!result.ok) throw new HttpError(result.reason === "no such number" ? 404 : 413, result.reason);
-    return json({ id: result.id }, 202);
-  }
-
   if (path === "/v1/inbox" && request.method === "GET") {
     return json({ envelopes: await me.inbox() });
   }
@@ -244,6 +305,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/turn" && request.method === "GET") {
     const allowed = await me.rateOk("turn", Mailbox.TURN_LIMIT);
     if (!allowed.ok) throw new HttpError(429, "Too many requests; try again in a minute", allowed.retryAfter);
+    // Minted for this request and handed to this caller only: no two phones, and
+    // no two calls, ever share TURN credentials.
     const servers = await iceServers(env);
     // "turn" tells the app whether calls can be relayed when the phones cannot reach each other directly.
     return json({ iceServers: servers, turn: servers.some((s) => s.urls.some((u) => u.startsWith("turn"))) });
@@ -585,7 +648,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const number = randomNumber();
     const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(number));
     const now = Date.now();
-    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: now, lastSeen: now };
+    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: now };
     if (await mailbox.claim(profile, oneTimeKeys)) {
       // A new member of this relay's coin community starts with what the
       // operator set; nothing when they set nothing.
@@ -636,59 +699,90 @@ function publicProfile(p: Profile) {
   };
 }
 
-/** An ICE server entry as WebRTC clients consume it. */
-interface IceServer {
-  urls: string[];
-  username?: string;
-  credential?: string;
+/** The relay API this Worker speaks; 3 is anonymous sending, claim tickets and checked push endpoints. */
+const API_VERSION = 3;
+
+/**
+ * Anonymous delivery. The request names a recipient and spends one delivery
+ * token; it carries no identity, and one that tries to is refused, so a client
+ * bug cannot quietly undo the anonymity. Abuse is bounded by the token supply
+ * (issued per account at a limited rate, each spent once) and by each
+ * mailbox's own inbound rate and queue limits.
+ */
+async function send(env: Env, request: Request, bodyText: string): Promise<Response> {
+  for (const h of ["x-clairix-number", "x-clairix-sig", "x-clairix-nonce", "x-clairix-ts"]) {
+    if (request.headers.has(h)) throw new HttpError(400, "A send carries no identity; use a delivery token");
+  }
+  const token = request.headers.get("x-clairix-token");
+  if (token === null || token.length === 0) throw new HttpError(401, "Delivery token required");
+  if (!DELIVERY_TOKEN_RE.test(token)) throw new HttpError(403, "Delivery token rejected");
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown }>(bodyText);
+  const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
+  if (!to) throw new HttpError(400, "to must be a Clairix number");
+  if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
+    throw new HttpError(400, "envelope must be base64");
+  }
+  let claim: string | null = null;
+  if (body.claim !== undefined && body.claim !== null) {
+    if (typeof body.claim !== "string" || !DELIVERY_TOKEN_RE.test(body.claim)) throw new HttpError(400, "claim must be a claim ticket");
+    claim = body.claim;
+  }
+  // The token is spent before anything else happens, whatever the outcome:
+  // each one buys exactly one attempt.
+  const hash = await tokenHash(token);
+  if (!(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(hash))).redeemToken(hash))) {
+    throw new HttpError(403, "Delivery token rejected: unknown, expired or already used");
+  }
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(body.envelope, claim);
+  if (!result.ok) throw new HttpError(result.status, result.reason, result.retryAfter);
+  return json({ id: result.id }, 202);
 }
-
-const STUN_ONLY: IceServer[] = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
-const TURN_TTL_S = 24 * 60 * 60;
-/** Credentials are minted for 24 h and handed out for at most 6 h, so a call never outlives them. */
-const TURN_CACHE_MS = 6 * 60 * 60_000;
-
-let turnCache: { servers: IceServer[]; expires: number } | null = null;
 
 /**
  * ICE servers for a call. With a Cloudflare Realtime TURN key configured,
- * short-lived TURN credentials are minted and cached in this isolate; without
- * one, calls get STUN only and connect when both phones can reach each other
- * directly. Media is DTLS-SRTP between the two phones either way: a TURN
- * server forwards packets it cannot decrypt.
+ * TURN credentials are minted for every request, live two hours and are never
+ * cached or shared; without a key, or when minting fails, calls get STUN only
+ * and connect when both phones can reach each other directly. Media is
+ * DTLS-SRTP between the two phones either way: a TURN server forwards packets
+ * it cannot decrypt.
  */
 async function iceServers(env: Env): Promise<IceServer[]> {
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return STUN_ONLY;
-  if (turnCache && turnCache.expires > Date.now()) return turnCache.servers;
   let res: Response;
   try {
     res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
       method: "POST",
       headers: { authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, "content-type": "application/json" },
       body: JSON.stringify({ ttl: TURN_TTL_S }),
+      signal: AbortSignal.timeout(5_000),
     });
   } catch (e) {
     console.error("TURN credential request threw", e);
-    return turnCache?.servers ?? STUN_ONLY;
+    return STUN_ONLY;
   }
   if (!res.ok) {
     console.error("TURN credential request failed", res.status, await res.text());
-    return turnCache?.servers ?? STUN_ONLY;
+    return STUN_ONLY;
   }
-  const body = (await res.json()) as { iceServers?: unknown };
-  const list = Array.isArray(body.iceServers) ? body.iceServers : body.iceServers ? [body.iceServers] : [];
-  const servers: IceServer[] = [];
-  for (const item of list as Array<Partial<IceServer> & { urls?: string | string[] }>) {
-    const urls = typeof item.urls === "string" ? [item.urls] : Array.isArray(item.urls) ? item.urls.filter((u): u is string => typeof u === "string") : [];
-    if (urls.length === 0) continue;
-    const entry: IceServer = { urls };
-    if (typeof item.username === "string") entry.username = item.username;
-    if (typeof item.credential === "string") entry.credential = item.credential;
-    servers.push(entry);
+  const servers = parseIceServers(await res.json().catch(() => null));
+  return servers.length > 0 ? servers : STUN_ONLY;
+}
+
+/** POSTs [body] to a push endpoint; returns the HTTP status, or 0 when it could not be reached. */
+async function postPush(endpoint: string, body: string): Promise<number> {
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "text/plain", ttl: "600", urgency: "high" },
+      body,
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.status;
+  } catch (e) {
+    console.error("push check failed", e);
+    return 0;
   }
-  if (servers.length === 0) return STUN_ONLY;
-  turnCache = { servers, expires: Date.now() + TURN_CACHE_MS };
-  return servers;
 }
 
 /** Matches the app's `fingerprint()`: base64url of the first 12 bytes of SHA-256 over the key text. */

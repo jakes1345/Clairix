@@ -93,6 +93,7 @@ import app.clairix.comms.OrgRole
 import app.clairix.comms.STATUS_CALL
 import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
+import app.clairix.comms.STATUS_SYSTEM
 import app.clairix.comms.STATUS_VOICEMAIL
 import app.clairix.comms.VoicemailBody
 import app.clairix.comms.VoicemailPlayer
@@ -993,6 +994,11 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     val messages by produceState(initialValue = emptyList<ChatMessage>(), version, peer) {
         value = withContext(Dispatchers.IO) { CommsRepository.messages(peer) }
     }
+    // What arrived from this contact's new keys, held until the owner looks.
+    val held by produceState(initialValue = 0, version, peer) {
+        value = withContext(Dispatchers.IO) { CommsRepository.heldCount(peer) }
+    }
+    var reviewing by remember(peer) { mutableStateOf(false) }
     var draft by rememberSaveable(peer) { mutableStateOf("") }
     var sendError by remember(peer) { mutableStateOf<String?>(null) }
     var paying by remember(peer) { mutableStateOf(false) }
@@ -1111,6 +1117,15 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     val c = contact
     val placeCall = rememberMicrophoneGate { c?.let { CallManager.place(it) } }
     if (BuildConfig.CLAIRIX_COIN && paying && c != null) PayDialog(c, onDismiss = { paying = false })
+    if (reviewing && c != null) {
+        HeldReviewDialog(
+            c, held,
+            onVerify = { reviewing = false; onVerify() },
+            onAccept = { reviewing = false; scope.launch { CommsRepository.acceptNewKeys(c.number) } },
+            onDiscard = { reviewing = false; scope.launch { CommsRepository.discardHeld(c.number) } },
+            onDismiss = { reviewing = false }
+        )
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
         Header(c?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
@@ -1138,6 +1153,21 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 "They may have reinstalled Clairix, or someone may be in between. Scan their code or compare safety numbers before you carry on.",
                 title = "This contact's keys changed"
             )
+        }
+        if (c != null && (c.keyChanged || held > 0)) {
+            Spacer(Modifier.height(6.dp))
+            ClairixCard(tone = Tone.Caution, onClick = { reviewing = true }, onClickLabel = "Review held messages", spacing = 4.dp) {
+                Text(
+                    if (held > 0) "$held held from their new keys" else "Anything from their new keys is held",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClairixTheme.colors.text
+                )
+                Text(
+                    "Messages, files and group posts from the new keys stay hidden until you verify or accept them. Tap to review.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textSubtle
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
 
@@ -1244,6 +1274,39 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     }
 }
 
+/**
+ * What to do with what arrived from a contact's new keys: verify them (the
+ * safety number or their code), accept them unverified, or throw it away.
+ */
+@Composable
+private fun HeldReviewDialog(c: Contact, held: Int, onVerify: () -> Unit, onAccept: () -> Unit, onDiscard: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("${contactLabel(c)}'s new keys", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    (if (held > 0) "$held item(s) arrived from keys you have not checked. " else "Nothing has arrived from the new keys yet. ") +
+                        "If they reinstalled Clairix, compare safety numbers or scan their code. If someone is in between, the held items are theirs.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
+                )
+                Text(
+                    "Accepting shows them and lets you message again, but leaves the contact unverified, and groups take no roster changes from them until you verify.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                GhostButton("Compare safety numbers", onClick = onVerify, tone = Tone.Safe)
+                if (c.keyChanged) GhostButton("Accept new keys", onClick = onAccept, tone = Tone.Caution)
+                if (held > 0) GhostButton("Discard held items", onClick = onDiscard, tone = Tone.Danger)
+            }
+        },
+        confirmButton = { GhostButton("Close", onClick = onDismiss, tone = Tone.Neutral) }
+    )
+}
+
 @Composable
 private fun MessageBubble(
     m: ChatMessage,
@@ -1257,6 +1320,19 @@ private fun MessageBubble(
     val mine = m.direction == Direction.OUT
     if (m.isMedia) {
         MediaBubble(m, mine, progress, onOpen, onRetry)
+        return
+    }
+    if (m.status == STATUS_SYSTEM) {
+        // Something this phone noted in the conversation, such as a key change.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "⚠ " + m.body + " · " + timeFmt.format(Date(m.ts)),
+                style = MaterialTheme.typography.monoSmall,
+                color = ClairixTheme.colors.caution,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.background(ClairixTheme.colors.surface, ClairixShapes.Tag).padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+        }
         return
     }
     if (m.status == STATUS_CALL || m.status == STATUS_PAYMENT) {
