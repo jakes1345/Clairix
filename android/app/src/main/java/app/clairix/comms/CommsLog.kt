@@ -2,7 +2,6 @@ package app.clairix.comms
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +20,6 @@ import org.json.JSONObject
  */
 object CommsLog {
 
-    private const val TAG = "CommsLog"
     private const val PREFS = "comms_log"
     private const val KEY = "entries"
     private const val MAX_ENTRIES = 150
@@ -46,7 +44,8 @@ object CommsLog {
     }
 
     fun add(text: String) {
-        Log.i(TAG, text)
+        // Never to logcat: entries name contacts, calls and SOS events, and logcat
+        // is in every bug report and readable over ADB.
         synchronized(this) {
             val next = (_entries.value + Entry(System.currentTimeMillis(), text)).takeLast(MAX_ENTRIES)
             _entries.value = next

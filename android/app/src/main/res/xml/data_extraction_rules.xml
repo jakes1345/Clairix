@@ -1,32 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Keys held by the Android Keystore never leave the phone, so anything
-    encrypted with them is useless on another device. A "copy apps & data"
-    transfer used to carry the COMMS identity and its wrapped key across
-    without the Keystore key: the new phone looked registered under the old
-    Clairix number but could not send, receive or unpair. These stay behind;
-    the new phone registers its own identity. The card vault is sealed the
-    same way. Cloud backup is off entirely (allowBackup="false").
+    Nothing leaves the phone. Cloud backup is off (allowBackup="false"); a
+    "copy apps & data" device transfer on Android 12+ is governed by this file,
+    not by that flag, so every domain is excluded here as well. The COMMS
+    identity and the card vault are sealed to this phone's Keystore and would
+    be unusable elsewhere; the scanner's location log, timeline, cell baseline,
+    trips and unlock ledger are a record of where the owner has been and must
+    not travel with the account to a phone someone else holds.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="file" path="comms_identity.pickle" />
-        <exclude domain="sharedpref" path="comms_identity.xml" />
-        <exclude domain="sharedpref" path="comms.xml" />
-        <exclude domain="sharedpref" path="comms_log.xml" />
-        <exclude domain="sharedpref" path="card_vault.xml" />
-        <exclude domain="sharedpref" path="app_lock.xml" />
-        <exclude domain="sharedpref" path="prefs.xml" />
-        <exclude domain="database" path="comms_e2ee.db" />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="file" path="comms_identity.pickle" />
-        <exclude domain="sharedpref" path="comms_identity.xml" />
-        <exclude domain="sharedpref" path="comms.xml" />
-        <exclude domain="sharedpref" path="comms_log.xml" />
-        <exclude domain="sharedpref" path="card_vault.xml" />
-        <exclude domain="sharedpref" path="app_lock.xml" />
-        <exclude domain="sharedpref" path="prefs.xml" />
-        <exclude domain="database" path="comms_e2ee.db" />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </device-transfer>
 </data-extraction-rules>
