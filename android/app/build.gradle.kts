@@ -288,6 +288,8 @@ dependencies {
     // a distributor of the owner's choosing (for example the ntfy app). No Google
     // service is involved anywhere.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Every page of the comms database encrypted; see comms/CommsDb.kt.
+    implementation("net.zetetic:sqlcipher-android:4.19.1")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("com.google.zxing:core:3.5.4")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

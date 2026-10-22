@@ -43,7 +43,9 @@ the comms log sealed in its prefs; the file provider limited to reports and
 camera captures; an armed card disarmed when the screen goes off and five
 minutes after arming in any case; a relay-only calls setting; TURN
 credentials bounded to thirty an hour; payments made idempotent by a
-phone-chosen id.
+phone-chosen id; the comms database moved to SQLCipher under a
+Keystore-wrapped key, with the plain database converted once; the comms
+preferences sealed.
 
 
 ## Tier 1 — the relay is a single point of compulsion
@@ -100,9 +102,15 @@ phone-chosen id.
    the baseline with the keyguard up; see the class comment for what that
    does and does not protect against. **Done for the unlock ledger** (PR #15):
    it is a sealed `Store` document, `unlock_ledger.json`; the SQLite file is
-   read once into it and deleted. Still open: the prefs files, the comms
-   database's contact list and message times (the bodies are sealed), and
-   a retention setting that defaults short.
+   read once into it and deleted. **Done for the comms database and the
+   comms preferences** (PR #15): the database is SQLCipher under a random key
+   that `KeystoreBox` wraps (`CommsDb.kt`), with a plain database from an
+   earlier version exported into a sealed copy once and replaced; the comms
+   preferences (relay, number, name, push endpoint) are a `SealedPrefs`
+   document, migrated from the plain file once. The remaining preference
+   files hold settings (thresholds, the sleep window, the passcode's HMAC
+   verifier, TLS pins), not records of the owner's life. Still open: a
+   retention setting that defaults short.
 7. **`KeystoreBox` key is not user-auth bound and not StrongBox**
    (`KeystoreBox.kt:48-55`). A logical extraction with the device unlocked
    reads everything it protects. *Reported.* **Considered, not done:** a
@@ -335,8 +343,7 @@ one-time-key limits match the code.
 7. README with an explicit threat model. *Done.*
 
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
-30, the prefs files and the comms database's contact list and message times
-(6), and the phase-2 work (several relays, a mesh for no network, cover
+30, a retention setting (6), and the phase-2 work (several relays, a mesh for no network, cover
 traffic, an on-device geocoder, reproducible builds, an audit).
 
 ## Not re-tested

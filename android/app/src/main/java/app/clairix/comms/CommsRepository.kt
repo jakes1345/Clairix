@@ -455,6 +455,11 @@ object CommsRepository {
             DuressPhrase.clear(appContext)
             CommsNotifications.cancelAll(appContext)
             KeystoreBox.destroy()
+            // The database key was wrapped by the key just destroyed; the database
+            // goes with it, and the next one starts clean under a new key.
+            runCatching { store.close() }
+            CommsDb.reset(appContext)
+            store = CommsStore(appContext)
             CommsLog.clear()
             publishConfig()
             _state.update { it.copy(connected = false, lastSync = 0L, relayOneTimeKeys = -1, balance = -1L) }

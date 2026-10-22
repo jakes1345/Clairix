@@ -62,8 +62,9 @@ relay's storage shows public keys, queued envelopes with their recipient, size
 and time, and nothing about senders, lookups or activity.
 
 **What is on the phone when it is seized locked.** The location log, the
-timeline, the cell-tower baseline, vehicle trips, the unlock ledger, message
-bodies, keys and saved cards are sealed on disk under keys in the phone's secure hardware, so a
+timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the
+whole Comms database (contacts, messages, groups), the Comms settings, keys
+and saved cards are sealed on disk under keys in the phone's secure hardware, so a
 copy of the app's files is ciphertext. The app lock wipes after a run of wrong
 passcodes (three by default; you can choose the number, or none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
@@ -123,11 +124,12 @@ Read this part twice.
   them.
 - **Detection is best-effort.** No app finds every camera, tracker or piece
   of spyware. A finding is a reason to look, not proof.
-- **Not yet encrypted at rest:** the app's settings files, and the contact
-  list and message times in the Comms database (the message bodies are
-  sealed). The keys that seal the rest are not bound to the phone being
-  unlocked, because the scanner has to write while the keyguard is up; code
-  running as the app on an unlocked phone can read what the app can.
+- **The keys are not bound to the phone being unlocked.** The scanner has
+  to write while the keyguard is up, so the keys that seal the records work
+  while the phone is locked; code running as the app on an unlocked phone
+  can read what the app can. The settings files (thresholds, the sleep
+  window, the passcode's verifier, TLS pins) are not encrypted; they hold
+  settings, not records.
 - **No independent audit.** vodozemac has been audited. Clairix has not.
   `docs/SECURITY-FINDINGS.md` is the running list of what has been found,
   what is fixed and what is still open.

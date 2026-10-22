@@ -3,10 +3,15 @@ package app.clairix.comms
 import android.content.Context
 import android.util.Base64
 
-/** Plain preference data for the comms module; secrets live in [IdentityStore]. */
+/**
+ * Preference data for the comms module; secrets live in [IdentityStore]. Kept
+ * in [SealedPrefs]: the relay, the Clairix number, the display name and the
+ * push endpoint name this phone's account, and a copy of the app's files must
+ * not give that up either.
+ */
 class CommsConfig(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val prefs = SealedPrefs(context, PREFS)
 
     /** Base URL of the relay Worker, no trailing slash, or null until registered. */
     val relayUrl: String? get() = prefs.getString(KEY_RELAY, null)

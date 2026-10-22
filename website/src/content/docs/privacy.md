@@ -13,7 +13,7 @@ The following is created and stored only on your phone. We never upload it and c
 - The event timeline, the location history used for pattern-of-life and following detection, and vehicle trip records.
 - The results of the spyware and phone-health checks, including the list of apps installed on your phone.
 - The unlock ledger, which records lock-screen unlock successes and failures.
-- Your Comms encryption keys, contacts and message history.
+- Your Comms encryption keys, contacts and message history, in a database that is encrypted as a whole.
 - Your duress phrase and app-lock settings.
 - Hidden-camera sweep images. The camera feed is analysed live and is not saved.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
@@ -100,7 +100,7 @@ Clairix is not directed to children under 13, and we do not knowingly collect in
 
 ## 8. Security
 
-Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, messages, saved cards, location history, timeline, cell-tower baseline, trip records and unlock ledger on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
+Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, contacts, messages, groups, Comms settings, saved cards, location history, timeline, cell-tower baseline, trip records and unlock ledger on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
 
 ## 9. Legal basis and your rights
 
