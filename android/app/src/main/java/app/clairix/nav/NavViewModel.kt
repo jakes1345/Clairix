@@ -282,18 +282,26 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     // Builds the spatial index now rather than on the first tap or route request.
                     graph.nearestEdges((graph.minLat + graph.maxLat) / 2, (graph.minLon + graph.maxLon) / 2, 50.0, 1)
-                    val traffic = TrafficClient(ctx, slug)
+                    // One pseudonym per drive, shared by probes, reports and votes, so the
+                    // relay sees one vehicle and never a phone.
+                    val trip = TripPseudonym()
+                    val traffic = TrafficClient(ctx, slug, trip)
                     traffic.focus = ::providerFocus
                     val closures = RoadClosures(graph)
                     val router = Router(graph, traffic, restrictions = closures)
-                    val probe = ProbeReporter(ctx, slug)
+                    val probe = ProbeReporter(ctx, slug, trip)
                     val navigator = Navigator(ctx, graph, router, traffic, probe)
                     navigator.muted = _muted.value
                     Session(slug, graph, traffic, router, navigator, WorkZoneFeed(ctx, slug), closures)
                 }
                 session.value = s
                 _graph.value = GraphState.Ready(slug, name, s.graph)
-                if (locationActive) launch { s.traffic.refreshLive() }
+                // Tokens first, so the first poll (and the first drive) spends ones
+                // fetched well before, not ones fetched the moment before.
+                launch {
+                    s.traffic.prefetchTokens()
+                    if (locationActive) s.traffic.refreshLive()
+                }
                 launch { s.workZones.refresh() }
             } catch (e: CancellationException) {
                 throw e

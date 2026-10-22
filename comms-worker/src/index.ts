@@ -1,20 +1,23 @@
 import { parseSigned, verifyEd25519 } from "./auth";
 import {
   checkPushEndpoint,
+  dayFloor,
   DELIVERY_TOKEN_BATCH_MAX,
-  DELIVERY_TOKEN_BURST,
-  DELIVERY_TOKEN_PER_MINUTE,
   DELIVERY_TOKEN_RE,
   groupByShard,
+  isTokenKind,
   parseIceServers,
   PUSH_CHALLENGE_PREFIX,
   randomToken,
   STUN_ONLY,
+  TOKEN_KINDS,
   tokenHash,
   tokenShardName,
   tokenBatchExpiry,
+  TRIP_RE,
   TURN_TTL_S,
   type IceServer,
+  type TokenKind,
 } from "./comms-logic";
 import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, timingSafeEqual, type Env } from "./env";
 import { INVITE_TTL_MS, Mailbox, type CoinTx, type Profile, type SignedKey } from "./mailbox";
@@ -38,10 +41,22 @@ export { IncidentCache, Mailbox, Traffic };
  *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}
  *   GET    /i                                              → invite page; the invite itself is in the URL fragment,
  *                                                            which browsers never send to the relay
- * Anonymous (no identity header; refused if one is sent):
- *   POST   /v1/send            {to, envelope, claim?}      → queue for a contact; X-Clairix-Token: one delivery
- *                              token, spent by this request. "claim" is the ticket of the one-time key the
- *                              envelope's session was built on, which spends that key for good.
+ * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
+ * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
+ * account they went to:
+ *   POST   /v1/send            {to, envelope, claim?}      → queue for a contact; a "delivery" token.
+ *                              "claim" is the ticket of the one-time key the envelope's session was built
+ *                              on, which spends that key for good.
+ *   Traffic (one Durable Object per map region; "traffic" tokens, "report" tokens for new reports; probes,
+ *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
+ *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
+ *   GET    /v1/traffic/live?region=                        → {now, segments: {seg: {kph, n, t}}, incidents}
+ *   GET    /v1/traffic/typical?region=&segs=a,b            → {segments: {seg: {h: [168]}}}
+ *   POST   /v1/traffic/report  {region, trip, type, lat, lon, seg|null} → {incident}   ("report" token)
+ *   POST   /v1/traffic/report/vote {region, trip, id, still} → {incident|null}
+ *   GET    /v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon (≤ 1°×1°)
+ *                              → {now, incidents, providers: {here, tomtom}}: HERE / TomTom incidents,
+ *                                cached per 0.25° tile for 5 minutes in the IncidentCache object
  * Signed (see auth.ts):
  *   GET    /v1/me                                          → profile + key counts
  *   PUT    /v1/keys            {oneTimeKeys, fallback?}    → replenish
@@ -52,12 +67,17 @@ export { IncidentCache, Mailbox, Traffic };
  *   PUT    /v1/push/verify     {code}                      → the code that arrived by push: the endpoint goes live
  *   DELETE /v1/me                                          → wipe the mailbox
  *   POST   /v1/invites                                     → {code, expiresAt}: one registration, no secret, 7 days
- *   POST   /v1/tokens          {count}                     → {tokens, expiresAt}: single-use delivery tokens; the
+ *   POST   /v1/tokens          {count, kind?}             → {tokens, expiresAt}: single-use tokens of one kind
+ *                                                            ("delivery" unless given, "traffic" or "report"); the
  *                                                            relay keeps only their hashes, apart from the account
- *   GET    /v1/bundle/:number                              → a contact's keys + one session key and its claim
- *                                                            ticket (listed only); past the claim limits, the fallback
- *   GET    /v1/bundle/:number?pin=<ed25519 fingerprint>    → also unlisted, when the caller has the key from a QR
- *   GET    /v1/identity/:number[?pin=]                     → the same keys without claiming a one-time key
+ *   POST   /v1/lookup          {number, pin?, claim}       → claim true: {bundle}, a contact's keys + one session
+ *                                                            key and its claim ticket (listed only; past the claim
+ *                                                            limits, the fallback); claim false: {identity}, the keys
+ *                                                            alone. pin (the ed25519 fingerprint from a QR) also
+ *                                                            unlocks an unlisted number. The number travels in the
+ *                                                            body, never in a URL anything might log.
+ *   GET    /v1/bundle/:number[?pin=]                       → as a claiming lookup; for apps before 3.0.0-beta.3
+ *   GET    /v1/identity/:number[?pin=]                     → as a non-claiming lookup; likewise
  *   GET    /v1/inbox                                       → waiting envelopes
  *   POST   /v1/ack             {ids}
  *   GET    /v1/ws                                          → live delivery (hibernatable WebSocket)
@@ -68,15 +88,6 @@ export { IncidentCache, Mailbox, Traffic };
  *   POST   /v1/coin/pay        {to, amount, note?}         → {txid, balance, ok}: moves coins to a contact
  *   GET    /v1/coin/history                                → {txs: [...]}, newest first
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
- * Traffic (one Durable Object per map region; senders are kept only as salted hashes):
- *   POST   /v1/traffic/probe   {region, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
- *   GET    /v1/traffic/live?region=                        → {now, segments: {seg: {kph, n, t}}, incidents}
- *   GET    /v1/traffic/typical?region=&segs=a,b            → {segments: {seg: {h: [168]}}}
- *   POST   /v1/traffic/report  {region, type, lat, lon, seg|null} → {incident}
- *   POST   /v1/traffic/report/vote {region, id, still}     → {incident|null}
- *   GET    /v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon (≤ 1°×1°)
- *                              → {now, incidents, providers: {here, tomtom}}: HERE / TomTom incidents,
- *                                cached per 0.25° tile for 5 minutes in the IncidentCache object
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
  */
 export default {
@@ -143,10 +154,14 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (!path.startsWith("/v1/")) throw new HttpError(404, "Not found");
 
-  // ── Anonymous delivery ────────────────────────────────────────────────
+  // ── Anonymous: one token, no identity ─────────────────────────────────
   if (path === "/v1/send") {
     if (request.method !== "POST") throw new HttpError(405, "POST only");
     return send(env, request, bodyText);
+  }
+
+  if (path.startsWith("/v1/traffic/")) {
+    return trafficRoute(env, request, url, path, bodyText);
   }
 
   // ── Authenticated ─────────────────────────────────────────────────────
@@ -165,7 +180,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/invites" && request.method === "POST") {
-    const allowed = await me.rateOk("invite", Mailbox.INVITE_LIMIT, Mailbox.INVITE_BURST);
+    const allowed = await me.allowanceOk("invite", Mailbox.INVITE_PER_HOUR, Mailbox.INVITE_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many invites today; try again later", allowed.retryAfter);
     const code = randomInviteCode();
     const expiresAt = Date.now() + INVITE_TTL_MS;
@@ -195,7 +210,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
     const check = checkPushEndpoint(body.endpoint, env.PUSH_HOSTS);
     if (!check.ok) throw new HttpError(400, check.reason);
-    const allowed = await me.rateOk("push", Mailbox.PUSH_LIMIT, Mailbox.PUSH_BURST);
+    const allowed = await me.allowanceOk("push", Mailbox.PUSH_PER_HOUR, Mailbox.PUSH_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many push endpoints; try again later", allowed.retryAfter);
     if (check.trusted) {
       await me.setPush(check.url);
@@ -220,71 +235,57 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/tokens" && request.method === "POST") {
-    const body = parseJson<{ count?: unknown }>(bodyText);
+    const body = parseJson<{ count?: unknown; kind?: unknown }>(bodyText);
     const want = body.count;
     if (typeof want !== "number" || !Number.isInteger(want) || want < 1 || want > DELIVERY_TOKEN_BATCH_MAX) {
       throw new HttpError(400, `count must be a whole number from 1 to ${DELIVERY_TOKEN_BATCH_MAX}`);
     }
-    const taken = await me.rateTake("tokens", want, DELIVERY_TOKEN_PER_MINUTE, DELIVERY_TOKEN_BURST);
-    if (taken.granted === 0) throw new HttpError(429, "Too many messages; try again shortly", taken.retryAfter);
+    let kind: TokenKind = "delivery";
+    if (body.kind !== undefined && body.kind !== null) {
+      if (!isTokenKind(body.kind)) throw new HttpError(400, "kind must be delivery, traffic or report");
+      kind = body.kind;
+    }
+    const spec = TOKEN_KINDS[kind];
+    const taken = await me.allowance(`tokens-${kind}`, spec.perHour, spec.burst, want);
+    if (taken.granted === 0) throw new HttpError(429, `No more ${kind} tokens this hour`, taken.retryAfter);
     const tokens = Array.from({ length: taken.granted }, () => randomToken());
     const hashes = await Promise.all(tokens.map((t) => tokenHash(t)));
     const expiresAt = tokenBatchExpiry(Date.now());
     // Stored by hash in shard objects that never learn the account: the only
     // link between this caller and these tokens is this response.
     await Promise.all(
-      [...groupByShard(hashes)].map(([name, list]) => env.MAILBOX.get(env.MAILBOX.idFromName(name)).addTokens(list, expiresAt)),
+      [...groupByShard(hashes, kind)].map(([name, list]) => env.MAILBOX.get(env.MAILBOX.idFromName(name)).addTokens(list, expiresAt)),
     );
-    return json({ tokens, expiresAt });
+    return json({ tokens, expiresAt, kind });
   }
 
+  if (path === "/v1/lookup" && request.method === "POST") {
+    const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown }>(bodyText);
+    const target = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+    if (!target) throw new HttpError(400, "number must be a Clairix number");
+    let pin: string | null = null;
+    if (body.pin !== undefined && body.pin !== null) {
+      if (typeof body.pin !== "string" || body.pin.length === 0 || body.pin.length > 64) throw new HttpError(400, "pin must be a key fingerprint");
+      pin = body.pin;
+    }
+    if (body.claim !== undefined && typeof body.claim !== "boolean") throw new HttpError(400, "claim must be a boolean");
+    return lookup(env, me, profile, target, pin, body.claim !== false);
+  }
+
+  // The lookups apps before 3.0.0-beta.3 make, with the number in the path.
+  // They answer exactly as /v1/lookup does, and go once every phone has moved.
   const bundleMatch = /^\/v1\/bundle\/([0-9]{9})$/.exec(path);
   if (bundleMatch && bundleMatch[1] && request.method === "GET") {
-    const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
-    if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
     const target = normaliseNumber(bundleMatch[1]);
     if (!target) throw new HttpError(400, "Bad number");
-    const pin = url.searchParams.get("pin");
-    const them = env.MAILBOX.get(env.MAILBOX.idFromName(target));
-    // Unlisted numbers are only handed out to a caller who already holds the
-    // owner's identity key (from a QR scan) and proves it with its fingerprint.
-    // The pin is checked before any key is claimed, so a wrong pin neither
-    // reveals the bundle nor consumes a one-time key.
-    // Each caller may take only a few one-time keys from each number and so
-    // many in all, and each number hands out only so many; past any limit the
-    // fallback key is offered, which starts a session just as well and drains
-    // nothing. Who looked up whom is never stored.
-    const mayClaim = target !== profile.number && (await me.mayClaimFrom(target));
-    let bundle = null;
-    if (pin === null) {
-      bundle = await them.bundle(true, mayClaim);
-    } else {
-      const p = await them.profile();
-      if (p && timingSafeEqual(await fingerprint(p.ed25519), pin)) bundle = await them.bundle(false, mayClaim);
-    }
-    if (!bundle) throw new HttpError(404, "No such Clairix number, or it is unlisted");
-    return json({ bundle });
+    return lookup(env, me, profile, target, url.searchParams.get("pin"), true);
   }
 
   const identityMatch = /^\/v1\/identity\/([0-9]{9})$/.exec(path);
   if (identityMatch && identityMatch[1] && request.method === "GET") {
-    // Who holds a number, without claiming one of their one-time keys: used to
-    // confirm the sender of a first message. Same listed/pin rules as bundles.
-    const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
-    if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
     const target = normaliseNumber(identityMatch[1]);
     if (!target) throw new HttpError(400, "Bad number");
-    const pin = url.searchParams.get("pin");
-    const them = env.MAILBOX.get(env.MAILBOX.idFromName(target));
-    let identity = null;
-    if (pin === null) {
-      identity = await them.identity(true);
-    } else {
-      const p = await them.profile();
-      if (p && timingSafeEqual(await fingerprint(p.ed25519), pin)) identity = await them.identity(false);
-    }
-    if (!identity) throw new HttpError(404, "No such Clairix number, or it is unlisted");
-    return json({ identity });
+    return lookup(env, me, profile, target, url.searchParams.get("pin"), false);
   }
 
   if (path === "/v1/inbox" && request.method === "GET") {
@@ -310,11 +311,6 @@ async function route(request: Request, env: Env): Promise<Response> {
     const servers = await iceServers(env);
     // "turn" tells the app whether calls can be relayed when the phones cannot reach each other directly.
     return json({ iceServers: servers, turn: servers.some((s) => s.urls.some((u) => u.startsWith("turn"))) });
-  }
-
-  // ── Traffic ───────────────────────────────────────────────────────────
-  if (path.startsWith("/v1/traffic/")) {
-    return trafficRoute(env, request, url, path, bodyText, me, profile.number);
   }
 
   // ── ClairixCoin ─────────────────────────────────────────────────────────
@@ -376,14 +372,61 @@ async function route(request: Request, env: Env): Promise<Response> {
   throw new HttpError(404, "Not found");
 }
 
-/** Per-sender limits for traffic calls, kept in the sender's own mailbox so the Traffic objects never see the number at rest. */
-const TRAFFIC_LIMITS = {
-  probe: { perMinute: 12, burst: 30 },
-  read: { perMinute: 30, burst: 30 },
-  report: { perMinute: 6, burst: 10 },
-  vote: { perMinute: 30, burst: 30 },
-  incidents: { perMinute: 10, burst: 20 },
-} as const;
+/**
+ * A contact's keys, by Clairix number. Unlisted numbers are only handed out
+ * to a caller who already holds the owner's identity key (from a QR scan) and
+ * proves it with its fingerprint; the pin is checked before any key is
+ * claimed, so a wrong pin neither reveals the bundle nor consumes a one-time
+ * key. With [claim], one one-time key comes with the keys: each caller may
+ * take only a few from each number and so many in all, and each number hands
+ * out only so many; past any limit the fallback key is offered, which starts
+ * a session just as well and drains nothing. Who looked up whom is never
+ * stored, and the number asked about is in the request body, not its URL.
+ */
+async function lookup(env: Env, me: MailboxStub, profile: Profile, target: string, pin: string | null, claim: boolean): Promise<Response> {
+  const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
+  const them = env.MAILBOX.get(env.MAILBOX.idFromName(target));
+  let unlisted = false;
+  if (pin !== null) {
+    const p = await them.profile();
+    if (!p || !timingSafeEqual(await fingerprint(p.ed25519), pin)) throw new HttpError(404, "No such Clairix number, or it is unlisted");
+    unlisted = true;
+  }
+  if (claim) {
+    const mayClaim = target !== profile.number && (await me.mayClaimFrom(target));
+    const bundle = await them.bundle(!unlisted, mayClaim);
+    if (!bundle) throw new HttpError(404, "No such Clairix number, or it is unlisted");
+    return json({ bundle });
+  }
+  // Who holds a number, without claiming one of their one-time keys: used to
+  // confirm the sender of a first message.
+  const identity = await them.identity(!unlisted);
+  if (!identity) throw new HttpError(404, "No such Clairix number, or it is unlisted");
+  return json({ identity });
+}
+
+const IDENTITY_HEADERS = ["x-clairix-number", "x-clairix-sig", "x-clairix-nonce", "x-clairix-ts"] as const;
+
+/**
+ * Spends the token an anonymous request carries, of the [kind] the route
+ * needs, before anything else happens: each one buys exactly one attempt. A
+ * request that also names an identity is refused outright, so a client bug
+ * cannot quietly undo the anonymity.
+ */
+async function spendToken(env: Env, request: Request, kind: TokenKind): Promise<void> {
+  for (const h of IDENTITY_HEADERS) {
+    if (request.headers.has(h)) throw new HttpError(400, "This request carries no identity; it spends a token");
+  }
+  const token = request.headers.get("x-clairix-token");
+  if (token === null || token.length === 0) throw new HttpError(401, `A ${kind} token is required`);
+  if (!DELIVERY_TOKEN_RE.test(token)) throw new HttpError(403, "Token rejected");
+  const hash = await tokenHash(token);
+  if (!(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(hash, kind))).redeemToken(hash))) {
+    throw new HttpError(403, `Token rejected: unknown, expired, already used, or not a ${kind} token`);
+  }
+}
+
 const MAX_PROBE_SAMPLES = 60;
 const MAX_TYPICAL_SEGS = 500;
 /** Phone clocks drift; a sample stamped slightly in the future is still a fresh one. */
@@ -392,19 +435,22 @@ const INCIDENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 type MailboxStub = DurableObjectStub<Mailbox>;
 
-async function trafficRoute(env: Env, request: Request, url: URL, path: string, bodyText: string, me: MailboxStub, number: string): Promise<Response> {
+/**
+ * Traffic. Every request spends a "traffic" token (a new report, a "report"
+ * token) and names no identity; what a phone may do is bounded by the tokens
+ * its account is issued. Probes, reports and votes carry a trip pseudonym
+ * the phone made up for the drive, which is what the region's object counts
+ * vehicles and votes by.
+ */
+async function trafficRoute(env: Env, request: Request, url: URL, path: string, bodyText: string): Promise<Response> {
   const now = Math.floor(Date.now() / 1000);
-  const limit = async (action: keyof typeof TRAFFIC_LIMITS) => {
-    const { perMinute, burst } = TRAFFIC_LIMITS[action];
-    const allowed = await me.rateOk(`traffic-${action}`, perMinute, burst);
-    if (!allowed.ok) throw new HttpError(429, "Too many traffic requests; try again shortly", allowed.retryAfter);
-  };
   const regionStub = (region: string) => env.TRAFFIC.get(env.TRAFFIC.idFromName(`traffic:${region}`));
 
   if (path === "/v1/traffic/probe" && request.method === "POST") {
-    await limit("probe");
-    const body = parseJson<{ region?: unknown; samples?: unknown }>(bodyText);
+    await spendToken(env, request, "traffic");
+    const body = parseJson<{ region?: unknown; trip?: unknown; samples?: unknown }>(bodyText);
     const region = trafficRegion(body.region);
+    const trip = tripPseudonym(body.trip);
     if (!Array.isArray(body.samples)) throw new HttpError(400, "samples must be an array");
     if (body.samples.length > MAX_PROBE_SAMPLES) throw new HttpError(400, `at most ${MAX_PROBE_SAMPLES} samples per request`);
     const samples: ProbeSample[] = [];
@@ -414,18 +460,18 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
       if (s.t < now - PROBE_MAX_AGE_SEC || s.t > now + PROBE_CLOCK_SKEW_SEC) continue;
       samples.push(s);
     }
-    const accepted = samples.length === 0 ? 0 : await regionStub(region).ingestProbes(region, number, samples, now);
+    const accepted = samples.length === 0 ? 0 : await regionStub(region).ingestProbes(region, trip, samples, now);
     return json({ ok: true, accepted });
   }
 
   if (path === "/v1/traffic/live" && request.method === "GET") {
-    await limit("read");
+    await spendToken(env, request, "traffic");
     const region = trafficRegion(url.searchParams.get("region"));
     return json(await regionStub(region).live(now));
   }
 
   if (path === "/v1/traffic/typical" && request.method === "GET") {
-    await limit("read");
+    await spendToken(env, request, "traffic");
     const region = trafficRegion(url.searchParams.get("region"));
     const segs = (url.searchParams.get("segs") ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0);
     if (segs.length > MAX_TYPICAL_SEGS) throw new HttpError(400, `at most ${MAX_TYPICAL_SEGS} segments per request`);
@@ -435,16 +481,17 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
   }
 
   if (path === "/v1/traffic/incidents" && request.method === "GET") {
-    await limit("incidents");
+    await spendToken(env, request, "traffic");
     const parsed = parseBBoxParam(url.searchParams.get("bbox"));
     if ("error" in parsed) throw new HttpError(400, parsed.error);
-    return jsonText(await env.INCIDENTS.get(env.INCIDENTS.idFromName(INCIDENTS_NAME)).incidents(parsed.bbox, now, number));
+    return jsonText(await env.INCIDENTS.get(env.INCIDENTS.idFromName(INCIDENTS_NAME)).incidents(parsed.bbox, now));
   }
 
   if (path === "/v1/traffic/report" && request.method === "POST") {
-    await limit("report");
-    const body = parseJson<{ region?: unknown; type?: unknown; lat?: unknown; lon?: unknown; seg?: unknown }>(bodyText);
+    await spendToken(env, request, "report");
+    const body = parseJson<{ region?: unknown; trip?: unknown; type?: unknown; lat?: unknown; lon?: unknown; seg?: unknown }>(bodyText);
     const region = trafficRegion(body.region);
+    const trip = tripPseudonym(body.trip);
     if (typeof body.type !== "string" || !(INCIDENT_TYPES as readonly string[]).includes(body.type)) {
       throw new HttpError(400, `type must be one of ${INCIDENT_TYPES.join(", ")}`);
     }
@@ -454,17 +501,18 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
       if (typeof body.seg !== "string" || !SEGMENT_RE.test(body.seg)) throw new HttpError(400, "seg must be \"<wayId>:<0|1>\" or null");
       seg = body.seg;
     }
-    const incident = await regionStub(region).report(region, number, body.type as IncidentType, lat, lon, seg, now);
+    const incident = await regionStub(region).report(region, trip, body.type as IncidentType, lat, lon, seg, now);
     return json({ incident });
   }
 
   if (path === "/v1/traffic/report/vote" && request.method === "POST") {
-    await limit("vote");
-    const body = parseJson<{ region?: unknown; id?: unknown; still?: unknown }>(bodyText);
+    await spendToken(env, request, "traffic");
+    const body = parseJson<{ region?: unknown; trip?: unknown; id?: unknown; still?: unknown }>(bodyText);
     const region = trafficRegion(body.region);
+    const trip = tripPseudonym(body.trip);
     if (typeof body.id !== "string" || !INCIDENT_ID_RE.test(body.id)) throw new HttpError(400, "id must be an incident id");
     if (typeof body.still !== "boolean") throw new HttpError(400, "still must be a boolean");
-    const incident = await regionStub(region).vote(region, number, body.id, body.still, now);
+    const incident = await regionStub(region).vote(region, trip, body.id, body.still, now);
     return json({ incident });
   }
 
@@ -473,6 +521,11 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
 
 function trafficRegion(raw: unknown): string {
   if (typeof raw !== "string" || !REGION_RE.test(raw)) throw new HttpError(400, "region must be a map region slug, e.g. north-america-us-ohio");
+  return raw;
+}
+
+function tripPseudonym(raw: unknown): string {
+  if (typeof raw !== "string" || !TRIP_RE.test(raw)) throw new HttpError(400, "trip must be a 22-character trip pseudonym");
   return raw;
 }
 
@@ -648,7 +701,8 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const number = randomNumber();
     const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(number));
     const now = Date.now();
-    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: now };
+    // Dated to the day: enough for anything that asks how old an account is.
+    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: dayFloor(now) };
     if (await mailbox.claim(profile, oneTimeKeys)) {
       // A new member of this relay's coin community starts with what the
       // operator set; nothing when they set nothing.
@@ -699,23 +753,20 @@ function publicProfile(p: Profile) {
   };
 }
 
-/** The relay API this Worker speaks; 3 is anonymous sending, claim tickets and checked push endpoints. */
-const API_VERSION = 3;
+/**
+ * The relay API this Worker speaks; 3 is anonymous sending, claim tickets and
+ * checked push endpoints; 4 is lookups by body, anonymous traffic and no
+ * stored activity times.
+ */
+const API_VERSION = 4;
 
 /**
  * Anonymous delivery. The request names a recipient and spends one delivery
- * token; it carries no identity, and one that tries to is refused, so a client
- * bug cannot quietly undo the anonymity. Abuse is bounded by the token supply
- * (issued per account at a limited rate, each spent once) and by each
- * mailbox's own inbound rate and queue limits.
+ * token; it carries no identity. Abuse is bounded by the token supply (issued
+ * per account at a limited rate, each spent once) and by each mailbox's own
+ * inbound and queue limits.
  */
 async function send(env: Env, request: Request, bodyText: string): Promise<Response> {
-  for (const h of ["x-clairix-number", "x-clairix-sig", "x-clairix-nonce", "x-clairix-ts"]) {
-    if (request.headers.has(h)) throw new HttpError(400, "A send carries no identity; use a delivery token");
-  }
-  const token = request.headers.get("x-clairix-token");
-  if (token === null || token.length === 0) throw new HttpError(401, "Delivery token required");
-  if (!DELIVERY_TOKEN_RE.test(token)) throw new HttpError(403, "Delivery token rejected");
   const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
@@ -727,12 +778,7 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     if (typeof body.claim !== "string" || !DELIVERY_TOKEN_RE.test(body.claim)) throw new HttpError(400, "claim must be a claim ticket");
     claim = body.claim;
   }
-  // The token is spent before anything else happens, whatever the outcome:
-  // each one buys exactly one attempt.
-  const hash = await tokenHash(token);
-  if (!(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(hash))).redeemToken(hash))) {
-    throw new HttpError(403, "Delivery token rejected: unknown, expired or already used");
-  }
+  await spendToken(env, request, "delivery");
   const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(body.envelope, claim);
   if (!result.ok) throw new HttpError(result.status, result.reason, result.retryAfter);
   return json({ id: result.id }, 202);

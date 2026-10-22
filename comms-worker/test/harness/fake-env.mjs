@@ -4,7 +4,8 @@
 // across the stub, as Durable Object RPC does, so no test can share an object
 // with the "remote" side by accident.
 
-import worker, { Mailbox } from "../../src/index.ts";
+import { DatabaseSync } from "node:sqlite";
+import worker, { IncidentCache, Mailbox, Traffic } from "../../src/index.ts";
 
 export const ENROLL_SECRET = "test-enrollment-secret-0123456789";
 export const RELAY = "https://relay.test";
@@ -26,10 +27,68 @@ export function resetClock() {
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 
+/**
+ * The SQL side of Durable Object storage, over Node's own SQLite: exec() with
+ * bindings, cursors with toArray(), one() and rowsWritten, and
+ * transactionSync(). Opened on first use, so mailboxes (key-value only) never
+ * pay for a database.
+ */
+class FakeSql {
+  constructor() {
+    this.db = new DatabaseSync(":memory:");
+  }
+
+  exec(query, ...bindings) {
+    const text = query.trim();
+    // A script of several statements (the schema) has no bindings and no rows.
+    if (bindings.length === 0 && /;[\s\S]*\S/.test(text)) {
+      this.db.exec(text);
+      return cursor([], 0);
+    }
+    const stmt = this.db.prepare(text);
+    const args = bindings.map((b) => (b === undefined ? null : b));
+    if (/^(SELECT|WITH|PRAGMA)\b/i.test(text) || /\bRETURNING\b/i.test(text)) return cursor(stmt.all(...args), 0);
+    const r = stmt.run(...args);
+    return cursor([], r.changes);
+  }
+}
+
+function cursor(rows, rowsWritten) {
+  const plain = rows.map((r) => ({ ...r }));
+  return {
+    rowsWritten,
+    toArray: () => plain,
+    one: () => {
+      if (plain.length !== 1) throw new Error(`expected one row, got ${plain.length}`);
+      return plain[0];
+    },
+    [Symbol.iterator]: () => plain[Symbol.iterator](),
+  };
+}
+
 class FakeStorage {
   constructor() {
     this.data = new Map();
     this.alarm = null;
+    this.sqlInstance = null;
+  }
+
+  get sql() {
+    this.sqlInstance ??= new FakeSql();
+    return this.sqlInstance;
+  }
+
+  transactionSync(fn) {
+    const db = this.sql.db;
+    db.exec("BEGIN");
+    try {
+      const result = fn();
+      db.exec("COMMIT");
+      return result;
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   async get(key) {
@@ -165,9 +224,8 @@ class FakeNamespace {
 export function makeRelay(vars = {}) {
   const env = { ENROLL_SECRET, ...vars };
   env.MAILBOX = new FakeNamespace(Mailbox, env);
-  // Traffic and incidents are not exercised here; nothing may reach them.
-  env.TRAFFIC = { idFromName: () => ({}), get: () => { throw new Error("traffic not simulated"); } };
-  env.INCIDENTS = env.TRAFFIC;
+  env.TRAFFIC = new FakeNamespace(Traffic, env);
+  env.INCIDENTS = new FakeNamespace(IncidentCache, env);
   const call = async (method, path, { body, headers = {} } = {}) => {
     const init = { method, headers: { ...headers } };
     if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
@@ -263,10 +321,15 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
     fallbackId: fallback.id,
     signed,
     signedKey,
-    async tokens(count) {
-      const res = await signed("POST", "/v1/tokens", { count });
+    async tokens(count, kind) {
+      const res = await signed("POST", "/v1/tokens", kind === undefined ? { count } : { count, kind });
       if (res.status !== 200) throw new Error(`tokens: ${res.status} ${JSON.stringify(res.json)}`);
       return res.json.tokens;
+    },
+    /** An anonymous traffic request: a token and nothing that names this phone. */
+    traffic(token, method, path, body) {
+      const headers = token === null ? {} : { "x-clairix-token": token };
+      return relay.call(method, path, body === undefined ? { headers } : { body, headers });
     },
     /** An anonymous send: a token, the recipient and the envelope, and nothing that names this phone. */
     send(token, to, envelope = randomB64(200), claim) {
@@ -282,8 +345,17 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
     async oneTimeKeys() {
       return (await signed("GET", "/v1/me")).json.oneTimeKeys;
     },
-    async bundle(target, pin) {
-      return signed("GET", `/v1/bundle/${target}` + (pin ? `?pin=${pin}` : ""));
+    /** A lookup as the app makes it: the number in the body, never in the URL. */
+    lookup(target, pin, claim = true) {
+      const body = { number: target, claim };
+      if (pin) body.pin = pin;
+      return signed("POST", "/v1/lookup", body);
+    },
+    bundle(target, pin) {
+      return this.lookup(target, pin, true);
+    },
+    identity(target, pin) {
+      return this.lookup(target, pin, false);
     },
   };
 }

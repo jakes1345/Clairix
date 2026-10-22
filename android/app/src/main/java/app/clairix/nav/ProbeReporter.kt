@@ -24,8 +24,12 @@ import java.io.IOException
  * discards whatever had not been sent. The first [PRIVACY_ZONE_M] driven and the last stretch
  * before the destination (see [nearDestination]) are never reported, so the relay cannot learn
  * where trips begin or end.
+ *
+ * Each batch is posted anonymously (a traffic token, no identity) under [trip], the pseudonym
+ * this drive is known by on the relay, which changes every few minutes: the relay can tell
+ * this vehicle's samples from another's for long enough to detect a stoppage, and no longer.
  */
-class ProbeReporter(context: Context, val region: String) {
+class ProbeReporter(context: Context, val region: String, private val trip: TripPseudonym) {
 
     private companion object {
         const val TAG = "ProbeReporter"
@@ -96,6 +100,8 @@ class ProbeReporter(context: Context, val region: String) {
             pending.clear()
             drivenM = 0.0
             suppressed = false
+            // A new drive is a new vehicle as far as the relay can tell.
+            trip.reset()
             flushJob = scope.launch(Dispatchers.IO) {
                 while (isActive) {
                     delay(FLUSH_INTERVAL_MS)
@@ -195,8 +201,9 @@ class ProbeReporter(context: Context, val region: String) {
                     arr.put(o)
                 }
                 try {
-                    relay.trafficProbe(region, arr)
+                    relay.trafficProbe(region, trip.current(), arr)
                 } catch (e: RelayException) {
+                    // No token left (NO_TOKENS is negative) is a deferral: the live loop tops up each minute.
                     val refused = e.code in 400..499 && e.code != 408 && e.code != 429
                     if (!refused) {
                         Log.i(TAG, "Probe upload deferred: ${e.message}")

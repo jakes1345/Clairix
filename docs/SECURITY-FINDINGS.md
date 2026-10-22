@@ -16,16 +16,21 @@ to logcat; every data domain excluded from cloud backup and device transfer;
 release builds minified with `android.util.Log` stripped; the four `Store`
 documents (location log, timeline, cell baseline, trips) sealed on disk under
 a Keystore key, with plaintext files from earlier versions resealed on first
-load.
+load; lookups by signed body (`POST /v1/lookup`); no stored activity times on
+the relay (minute-scale limits in memory, slow allowances to the hour and
+deleted once refilled, no last-seen/fetched/woken, registration to the day,
+lapsed claims to the day); traffic made anonymous (token-spending requests,
+per-trip pseudonyms, no salted number hash, no per-caller incident quota).
 
 ## Tier 1 — the relay is a single point of compulsion
 
 1. **Lookups reveal the contact graph.** `GET /v1/bundle/<number>` and
    `/v1/identity/<number>` carry the target in the URL and the caller in
    `X-Clairix-Number`. With observability on, that pair was in Cloudflare's
-   logs for days. *Verified.* Observability is now off; the target should also
-   move out of the URL, and the README's "if its operator logs requests"
-   should say Cloudflare is the operator that matters.
+   logs for days. *Verified.* **Done:** observability off; `POST /v1/lookup`
+   takes the number in the signed body and the app uses it; the GET routes
+   remain for beta-2 phones and are to be removed once they have updated;
+   README rewritten to name the platform as the operator that matters.
 2. **Traffic probes are tied to the sender.** `RelayClient.trafficProbe`
    (`RelayClient.kt:400`) goes through `signed()`, against the comment at
    `:396`. `trafficReport` sends exact lat/lon with the number. The relay's
@@ -33,13 +38,26 @@ load.
    object's meta (`traffic.ts:364-371`, `incidents.ts:154-161`): a nine-digit
    space, reversed in one pass by anyone with storage access. The code's own
    comment at `comms-logic.ts:95` says a hash of a number is no protection.
-   README lines 139-140 and 196-198 overstate this. *Verified.* Fix: probes
-   unauthenticated with a blind rate-limit token, or drop the feature.
+   README lines 139-140 and 196-198 overstate this. *Verified.* **Done:**
+   every traffic request spends a single-use `traffic` (or `report`) token
+   issued over the signed channel into its own shards, carries no identity
+   and is refused if it names one; probes, reports and votes carry a trip
+   pseudonym the phone rotates every ten minutes; the salted hash, its salt
+   and the per-caller incident quota are gone (`traffic.ts`, `incidents.ts`,
+   `TripPseudonym.kt`). What remains: the relay sees a region per request
+   and, for two hours, pseudonymous segment speeds; and a token fetch can be
+   paired with the request that follows it by timing, which the phone blunts
+   by fetching ahead in batches.
 3. **Mailbox keeps when the owner was last online.** `lastFetchAt` on every
    inbox fetch and WebSocket connect (`mailbox.ts:680, 796`), `lastWakeAt`
    (`:658`), and `at` on every rate bucket (`:475, :491`) — `bucket:turn.at`
    alone is "when did they last make a call". `relay.test.mjs:154-162` only
-   asserts `profile` is unchanged, so it passes. *Verified.*
+   asserts `profile` is unchanged, so it passes. *Verified.* **Done:** both
+   wake fields are memory-only; minute-scale limits (lookup, TURN, pay,
+   register) are memory-only; stored allowances keep `{tokens, hour}` and are
+   deleted by the daily cleanup once full; nonces hold the minute; the test
+   now walks every key a mailbox holds after a quarter-hour of activity.
+   Legacy `bucket:*`/`last*At` keys are deleted by the next daily cleanup.
 4. **Send-time to fetch-time correlation** across the relay is visible to
    anyone at Cloudflare's edge regardless of padding. Not solved; say so.
 5. **One relay is one order.** Many small relays is the defence; document it.

@@ -220,7 +220,12 @@ object CommsRepository {
         identities = IdentityStore(appContext)
         store = CommsStore(appContext)
         CommsMedia.init(appContext)
-        relay = RelayClient({ identities.get() }, { config.relayUrl }, { config.number }, StoredTokenPool(appContext))
+        relay = RelayClient(
+            { identities.get() }, { config.relayUrl }, { config.number },
+            tokens = StoredTokenPool(appContext),
+            trafficTokens = StoredTokenPool(appContext, "traffic"),
+            reportTokens = StoredTokenPool(appContext, "report"),
+        )
         claims = StoredPendingClaims(appContext)
         // The relay's clock, as the Device tab's clock-integrity row compares it.
         RelayClock.bind(appContext)

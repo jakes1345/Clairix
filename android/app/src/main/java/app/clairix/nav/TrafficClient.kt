@@ -348,7 +348,7 @@ internal fun navRelay(context: Context): RelayClient? = try {
  * [liveKph] and [typicalKph] are called from the router's inner loop, so they only read
  * in-memory maps and never touch the network or disk.
  */
-class TrafficClient(context: Context, val region: String) : SpeedSource {
+class TrafficClient(context: Context, val region: String, private val trip: TripPseudonym) : SpeedSource {
 
     private companion object {
         const val TAG = "TrafficClient"
@@ -437,8 +437,25 @@ class TrafficClient(context: Context, val region: String) : SpeedSource {
             while (isActive) {
                 refreshLive()
                 refreshProviders(PROVIDER_NAV_INTERVAL_MS)
+                // For the next minute's requests, after this minute's: a fetch right
+                // before a request would let the relay pair the two.
+                prefetchTokens()
                 delay(LIVE_INTERVAL_MS)
             }
+        }
+    }
+
+    /**
+     * Keeps the anonymous traffic and report tokens stocked, apart from the
+     * requests that spend them. Called when a map session opens and once a
+     * minute while live; a failure (offline) is harmless, the next minute tries again.
+     */
+    suspend fun prefetchTokens() = withContext(Dispatchers.IO) {
+        val relay = navRelay(appContext) ?: return@withContext
+        try {
+            relay.topUpTrafficTokens()
+        } catch (e: IOException) {
+            Log.i(TAG, "Traffic tokens not fetched: ${e.message}")
         }
     }
 
@@ -581,7 +598,7 @@ class TrafficClient(context: Context, val region: String) : SpeedSource {
         require(type in Incident.TYPES) { "Unknown incident type $type" }
         val relay = navRelay(appContext) ?: return@withContext Result.failure(IOException("COMMS is not set up, so reports cannot be sent"))
         runCatching {
-            val json = relay.trafficReport(region, type, lat, lon, seg)
+            val json = relay.trafficReport(region, trip.current(), type, lat, lon, seg)
             val inc = try {
                 Incident.fromJson(json.getJSONObject("incident"))
             } catch (e: JSONException) {
@@ -596,7 +613,7 @@ class TrafficClient(context: Context, val region: String) : SpeedSource {
     suspend fun vote(id: String, still: Boolean): Result<Incident?> = withContext(Dispatchers.IO) {
         val relay = navRelay(appContext) ?: return@withContext Result.failure(IOException("COMMS is not set up, so votes cannot be sent"))
         runCatching {
-            val json = relay.trafficVote(region, id, still)
+            val json = relay.trafficVote(region, trip.current(), id, still)
             val inc = json.optJSONObject("incident")?.let {
                 try { Incident.fromJson(it) } catch (e: JSONException) { throw IOException("The relay returned an unexpected incident: ${e.message}") }
             }

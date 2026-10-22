@@ -5,13 +5,30 @@ import org.json.JSONObject
 import java.security.SecureRandom
 
 /**
- * Single-use delivery tokens waiting to be spent on sends.
+ * What a single-use token buys. The relay issues each kind over the signed
+ * channel into shards of its own, so one kind can never be spent as another,
+ * and bounds each by an allowance per account per hour
+ * (comms-worker/src/comms-logic.ts). [low] is the pool level that triggers a
+ * fetch of [batch] more.
+ */
+enum class TokenKind(val wire: String, val low: Int, val batch: Int) {
+    /** One per envelope sent. */
+    DELIVERY("delivery", low = 40, batch = 100),
+    /** One per traffic request while navigating: a probe batch, a live poll, a provider poll, a vote. */
+    TRAFFIC("traffic", low = 60, batch = 100),
+    /** One per new incident report; the relay issues only a few an hour. */
+    REPORT("report", low = 5, batch = 10),
+}
+
+/**
+ * Single-use tokens waiting to be spent.
  *
  * The relay hands them out in batches over the signed channel and takes one,
- * with no identity, for every envelope (comms-worker/src/comms-logic.ts). They
- * are spent in random order, never in the order they were issued, and fetched
- * when the pool runs low rather than when a message is about to go, so the
- * relay cannot match a send to the batch request that came just before it.
+ * with no identity, for every envelope sent and every traffic request
+ * (comms-worker/src/comms-logic.ts). They are spent in random order, never in
+ * the order they were issued, and fetched when the pool runs low rather than
+ * when a request is about to go, so the relay cannot match a request to the
+ * batch fetch that came just before it.
  */
 interface TokenPool {
     /** Removes and returns an unexpired token, or null when there is none. */

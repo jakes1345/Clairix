@@ -22,14 +22,27 @@ giving them your real number or your identity key.
   links an envelope to its sender. Never the content: envelopes are sealed to
   the recipient's sealing key with an anonymous box, and inside that sits an
   Olm double-ratchet message the relay could not read even if it opened the box.
-- What it can still learn while running, if its operator logs requests: the
-  address a request comes from (the same phone fetches tokens and sends, so use
-  Tor or a VPN if that matters), and which account fetched a batch of tokens,
-  since the tokens are random values the relay itself hands out rather than
-  blind-signed ones. The first envelope of a new session also carries the claim
-  ticket of the one-time key it was built on, which the relay handed to the
-  sender's account with the key; that envelope is linkable to that lookup, as the
-  lookup itself already showed who wanted to reach whom.
+- Not when you were last here. A signed request leaves behind its nonce, kept
+  five minutes to the minute, and nothing else: no last-seen, no last-fetched,
+  no last-woken. Limits that must survive the object being evicted (invites,
+  push endpoints, one-time keys handed out, the tokens an account may draw,
+  what a mailbox takes in) are stored down to the hour, not the moment, and
+  are deleted once they have refilled; the faster limits live in memory and
+  are forgotten with it. Registration dates are kept to the day.
+- Not who you look up. A lookup names the number in its signed body, never in
+  the URL, so no request log at Cloudflare or anywhere else carries "who asked
+  about whom"; the relay's own observability logging is off. The one-time key
+  it hands out is remembered only as a claim ticket in the target's mailbox,
+  with no requester.
+- What it can still learn while running, if its operator (or the platform it
+  runs on) captures live requests: the address a request comes from (the same
+  phone fetches tokens and sends, so use Tor or a VPN if that matters), and
+  which account fetched a batch of tokens, since the tokens are random values
+  the relay itself hands out rather than blind-signed ones. The first envelope
+  of a new session also carries the claim ticket of the one-time key it was
+  built on, which the relay handed to the sender's account with the key; that
+  envelope is linkable to that lookup, as the lookup itself already showed who
+  wanted to reach whom. None of this is written down.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
   "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
   up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
@@ -51,7 +64,7 @@ sixty an hour; past any limit the lookup offers the fallback key (rotated
 daily), so nobody can drain anyone's keys.
 
 Delivery tokens expire fourteen days after issue, plus up to twelve hours of
-random jitter, rounded to the hour.
+random jitter, rounded to the hour. Each account may draw 1,000 an hour.
 
 ## One-time setup
 
@@ -133,19 +146,31 @@ The relay also carries crowd-sourced traffic for Clairix navigation, in a
 `traffic:north-america-us-ohio`). Roads are identified by directed OSM way,
 `"<wayId>:<dir>"`.
 
+Nothing about traffic is signed. Every request spends a single-use **traffic
+token** (a new report, a **report token**) that the phone fetched earlier over
+its signed channel, exactly as sends spend delivery tokens: the relay keeps
+only token hashes, in shards that never learn the account, so a traffic
+request carries no identity and a request that names one is refused. An
+account may draw 400 traffic tokens and 30 report tokens an hour, which is
+the only per-phone bound on traffic. Probes, reports and votes carry a
+**trip pseudonym**, 16 random bytes the phone makes up when a drive begins and
+replaces every ten minutes; it lets the region's object count distinct
+vehicles and take one vote per vehicle, and reaches back to no phone.
+
 - **Probes** (`POST /v1/traffic/probe`, up to 60 samples, each at most 15
-  minutes old) give a segment's speed. The sender's Clairix number is used for
-  rate limiting in its own mailbox and is never stored by the traffic object:
-  each sample carries a SHA-256 of the number with a salt that exists only
-  inside that region's object. Raw probes are deleted after two hours.
-- **Live** speed is the median over the last ten minutes, one vote per phone
+  minutes old) give a segment's speed under the trip pseudonym. Raw probes
+  are deleted after two hours, so the most a region ever holds is two hours
+  of segment speeds from pseudonymous vehicles. The phone reports nothing for
+  the first 500 m of a drive or the last stretch before its destination.
+- **Live** speed is the median over the last ten minutes, one vote per vehicle
   per segment (its latest sample). **Typical** speed is a 168-slot week
   (hour of week, UTC, Monday first) updated with an EWMA (α = 0.2) of each
   segment's 15-minute medians.
 - **Reports** (police, crash, hazard, closure, jam) of the same type within
-  150 m and 30 minutes merge into one incident with more confirmations.
-  Incidents last 45 / 90 / 60 / 240 / 30 minutes respectively, renewed by each
-  new confirmation; two net "gone" votes remove one.
+  150 m and 30 minutes merge into one incident with more confirmations, one
+  per trip pseudonym. Incidents last 45 / 90 / 60 / 240 / 30 minutes
+  respectively, renewed by each new confirmation; two net "gone" votes remove
+  one.
 - **Automatic detection**: two or more phones under 8 km/h on a normally fast
   segment (typical 40 km/h or more) within five minutes make a "jam"; if they
   were doing over 60 km/h in the two minutes before, a "crash". The relay has
@@ -193,13 +218,14 @@ upstream failure is not retried for a minute, and meanwhile a tile's last good
 result (up to 30 minutes old) is still served. Daily caps protect the free
 tiers: `HERE_DAILY_CAP` (default 1000) and `TOMTOM_DAILY_CAP` (default 2300)
 upstream calls per UTC day; at the cap the provider reports `"quota"` until
-UTC midnight. So that one phone cannot spend a cap for everyone, each phone
-(counted under a salted hash of its number) may make at most
-`INCIDENTS_PER_CALLER_DAILY_SHARE` (default 0.25) of a provider's daily calls,
-and once a provider has used 80% of its cap only tiles with nothing cached are
-fetched. A tile held back by either keeps serving its last result; the
-provider then reports `"ok"` if anything was served, else `"quota"`. A failing provider reports `"error"`; the request itself still
-succeeds with whatever the other provider returned.
+UTC midnight. Once a provider has used 80% of its cap only tiles with nothing
+cached are fetched; a tile held back keeps serving its last result, and the
+provider then reports `"ok"` if anything was served, else `"quota"`. The
+requests arrive anonymously, each having spent a traffic token, so the relay
+cannot count per phone; what bounds one phone's share of a cap is the 400
+traffic tokens an hour its account may draw. A failing provider reports
+`"error"`; the request itself still succeeds with whatever the other provider
+returned.
 
 ```json
 {"now": 1760500000,
@@ -229,8 +255,10 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
-| GET | `/v1/bundle/:number` | A contact's keys and one session key (unlisted numbers need `?pin=<fingerprint>`) |
-| POST | `/v1/send` | `{to, envelope}`: queue a sealed envelope for a contact |
+| POST | `/v1/tokens` | `{count, kind?}` → `{tokens, expiresAt, kind}`: single-use tokens, `delivery` (default), `traffic` or `report` |
+| POST | `/v1/lookup` | `{number, pin?, claim}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL |
+| GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
+| POST | `/v1/send` | `{to, envelope}` with a delivery token: queue a sealed envelope for a contact |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |
 | GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat every two minutes, and `pong` for a client's `{"type":"ping"}` |
@@ -239,12 +267,12 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/coin/pay` | `{to, amount, note?}` → `{txid, balance, ok}`: pays a contact; 30 a minute |
 | GET | `/v1/coin/history` | `{txs}`: the last transactions, newest first (`?limit=`, up to 100) |
 | POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `ADMIN_SECRET` is set |
-| POST | `/v1/traffic/probe` | `{region, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; 12 a minute |
-| GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}` |
-| GET | `/v1/traffic/typical?region=&segs=a,b` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments |
-| POST | `/v1/traffic/report` | `{region, type, lat, lon, seg?}` → `{incident}`; merges with a nearby report of the same type |
-| POST | `/v1/traffic/report/vote` | `{region, id, still}` → `{incident}`, null once voted away |
-| GET | `/v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon` | `{now, incidents, providers: {here, tomtom}}`: HERE / TomTom incidents in a box of at most 1° × 1°; 10 a minute |
+| POST | `/v1/traffic/probe` | `{region, trip, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; a traffic token, no identity |
+| GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}`; a traffic token |
+| GET | `/v1/traffic/typical?region=&segs=a,b` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments; a traffic token |
+| POST | `/v1/traffic/report` | `{region, trip, type, lat, lon, seg?}` → `{incident}`; merges with a nearby report of the same type; a report token |
+| POST | `/v1/traffic/report/vote` | `{region, trip, id, still}` → `{incident}`, null once voted away; a traffic token |
+| GET | `/v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon` | `{now, incidents, providers: {here, tomtom}}`: HERE / TomTom incidents in a box of at most 1° × 1°; a traffic token |
 
 Each Clairix number is a Durable Object holding the keys, the queue (up to 2000
 envelopes of 64 KiB, kept 30 days) and the live sockets. Incident times
@@ -252,6 +280,8 @@ envelopes of 64 KiB, kept 30 days) and the live sockets. Incident times
 
 ## Development
 
-`npm run typecheck` runs the TypeScript compiler; `npm test` runs the
-traffic logic tests (Node 22.18 or later, which runs TypeScript directly); `npx wrangler deploy --dry-run`
-bundles the Worker. `npm run dev` runs it locally with a local Durable Object.
+`npm run typecheck` runs the TypeScript compiler; `npm test` runs the relay,
+traffic and incident tests end to end over in-memory storage and Node's own
+SQLite (Node 22.18 or later, which runs TypeScript directly); `npx wrangler
+deploy --dry-run` bundles the Worker. `npm run dev` runs it locally with a
+local Durable Object.

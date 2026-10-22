@@ -27,10 +27,11 @@ class RelayException(message: String, val code: Int = 0) : IOException(message)
 /**
  * HTTP and WebSocket client for the relay Worker. Every request about this
  * phone's own mailbox is signed with the identity's Ed25519 key (see
- * comms-worker/src/auth.ts). Sending an envelope is not: it spends one of the
- * single-use delivery tokens in [tokens] and carries no identity at all, on a
- * connection of its own, so the relay does not learn who sent it. Calls are
- * blocking and belong on an IO dispatcher.
+ * comms-worker/src/auth.ts). Sending an envelope and everything about traffic
+ * are not: each spends one single-use token of the right kind ([tokens],
+ * [trafficTokens], [reportTokens]) and carries no identity at all, on a
+ * connection of its own, so the relay does not learn who sent or asked.
+ * Calls are blocking and belong on an IO dispatcher.
  *
  * It depends on nothing Android-specific, so the relay round-trip tests run it
  * on the JVM against a real relay; the app hands it its identity, relay URL and
@@ -41,7 +42,15 @@ class RelayClient(
     private val relayUrl: () -> String?,
     private val number: () -> String?,
     private val tokens: TokenPool = MemoryTokenPool(),
+    private val trafficTokens: TokenPool = MemoryTokenPool(),
+    private val reportTokens: TokenPool = MemoryTokenPool(),
 ) {
+
+    private fun pool(kind: TokenKind): TokenPool = when (kind) {
+        TokenKind.DELIVERY -> tokens
+        TokenKind.TRAFFIC -> trafficTokens
+        TokenKind.REPORT -> reportTokens
+    }
 
     /** What a signed request signs. The signature headers themselves are added per attempt by [signer]. */
     private class Signing(val method: String, val pathAndQuery: String, val bodyText: String)
@@ -185,10 +194,13 @@ class RelayClient(
 
     // ── Contacts and envelopes ────────────────────────────────────────────
 
-    /** A contact's keys plus one key to start a session; [pin] unlocks an unlisted number. */
+    /**
+     * A contact's keys plus one key to start a session; [pin] unlocks an
+     * unlisted number. The number asked about travels in the signed body,
+     * never in the URL, so no request log anywhere names it.
+     */
     fun bundle(number: String, pin: String?): Bundle {
-        val path = "/v1/bundle/$number" + (pin?.let { "?pin=$it" } ?: "")
-        val json = signed("GET", path)
+        val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = true))
         return parsed {
             val b = json.getJSONObject("bundle")
             val key = b.optJSONObject("oneTimeKey") ?: b.optJSONObject("fallback")
@@ -210,12 +222,17 @@ class RelayClient(
 
     /** Who holds [number] (unlisted numbers need their key's [pin]); claims none of their keys. */
     fun identity(number: String, pin: String?): IdentityKeys {
-        val path = "/v1/identity/$number" + (pin?.let { "?pin=$it" } ?: "")
-        val json = signed("GET", path)
+        val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = false))
         return parsed {
             val o = json.getJSONObject("identity")
             IdentityKeys(o.getString("number"), o.getString("ed25519"), o.getString("curve25519"), o.getString("sealing"), o.getString("signature"))
         }
+    }
+
+    private fun lookupBody(number: String, pin: String?, claim: Boolean): JSONObject {
+        val body = JSONObject().put("number", number).put("claim", claim)
+        if (pin != null) body.put("pin", pin)
+        return body
     }
 
     /**
@@ -230,27 +247,40 @@ class RelayClient(
      * [topUpTokens] before trying again.
      */
     fun send(to: String, envelope: ByteArray, claim: String? = null): String {
-        val relay = relayUrl() ?: throw RelayException("Not registered with a relay")
         val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
         if (claim != null) body.put("claim", claim)
-        val text = body.toString()
+        val json = anonymous(TokenKind.DELIVERY, "POST", "/v1/send", body)
+        return parsed { json.getString("id") }
+    }
+
+    /**
+     * One request that spends a token of [kind] and names nobody, on the
+     * anonymous connection. A token the relay refuses (expired, say) is
+     * replaced once from the pool. Never fetches tokens: with the pool empty
+     * this throws [NO_TOKENS], and the caller tops up apart from the request.
+     */
+    private fun anonymous(kind: TokenKind, method: String, pathAndQuery: String, body: JSONObject?): JSONObject {
+        val relay = relayUrl() ?: throw RelayException("Not registered with a relay")
+        val text = body?.toString()
         var refused: RelayException? = null
         repeat(2) {
-            val token = nextToken()
+            val token = nextToken(kind)
             val request = Request.Builder()
-                .url("$relay/v1/send")
+                .url(relay + pathAndQuery)
                 .header("X-Clairix-Token", token)
                 .header("Accept", "application/json")
-                .post(text.toRequestBody(JSON))
+            when (method.uppercase()) {
+                "GET" -> request.get()
+                else -> request.post((text ?: "{}").toRequestBody(JSON))
+            }
             try {
-                val json = execute(request, sender)
-                return parsed { json.getString("id") }
+                return execute(request, sender)
             } catch (e: RelayException) {
                 if (e.code != 401 && e.code != 403) throw e
                 refused = e
             }
         }
-        throw refused ?: RelayException("The relay refused the delivery token", 403)
+        throw refused ?: RelayException("The relay refused the ${kind.wire} token", 403)
     }
 
     /** Delivery tokens this phone holds, unexpired. */
@@ -262,18 +292,32 @@ class RelayClient(
      * send found the pool empty; never by [send] itself, so tokens are fetched
      * apart from the sends that spend them.
      */
-    fun topUpTokens(low: Int = TOKENS_LOW, batch: Int = TOKENS_BATCH): Int {
-        if (tokens.size(System.currentTimeMillis()) < low) fetchTokens(batch)
-        return tokens.size(System.currentTimeMillis())
+    fun topUpTokens(low: Int = TOKENS_LOW, batch: Int = TOKENS_BATCH): Int = topUpTokens(TokenKind.DELIVERY, low, batch)
+
+    /** Fetches a batch of [kind] tokens when fewer than [low] are left; returns how many the pool then holds. */
+    fun topUpTokens(kind: TokenKind, low: Int = kind.low, batch: Int = kind.batch): Int {
+        val p = pool(kind)
+        if (p.size(System.currentTimeMillis()) < low) fetchTokens(kind, batch)
+        return p.size(System.currentTimeMillis())
+    }
+
+    /**
+     * Keeps the traffic and report pools stocked. Called when a drive begins
+     * and after each minute's polls, for the next minute's: never right before
+     * the request that would spend one.
+     */
+    fun topUpTrafficTokens() {
+        topUpTokens(TokenKind.TRAFFIC)
+        topUpTokens(TokenKind.REPORT)
     }
 
     /** One token from the pool; none left is a [NO_TOKENS] failure for the caller to retry after a top-up. */
-    private fun nextToken(): String =
-        tokens.take(System.currentTimeMillis()) ?: throw RelayException("No delivery tokens on this phone yet", NO_TOKENS)
+    private fun nextToken(kind: TokenKind): String =
+        pool(kind).take(System.currentTimeMillis()) ?: throw RelayException("No ${kind.wire} tokens on this phone yet", NO_TOKENS)
 
     @Synchronized
-    private fun fetchTokens(count: Int) {
-        val body = JSONObject().put("count", count.coerceIn(1, TOKENS_BATCH))
+    private fun fetchTokens(kind: TokenKind, count: Int) {
+        val body = JSONObject().put("count", count.coerceIn(1, TOKENS_BATCH)).put("kind", kind.wire)
         val json = try {
             signed("POST", "/v1/tokens", body)
         } catch (e: RelayException) {
@@ -284,12 +328,16 @@ class RelayClient(
         }
         parsed {
             val arr = json.getJSONArray("tokens")
-            tokens.add((0 until arr.length()).map { arr.getString(it) }, json.getLong("expiresAt"))
+            pool(kind).add((0 until arr.length()).map { arr.getString(it) }, json.getLong("expiresAt"))
         }
     }
 
-    /** Forgets every delivery token (the phone is unpairing). */
-    fun clearTokens() = tokens.clear()
+    /** Forgets every token of every kind (the phone is unpairing). */
+    fun clearTokens() {
+        tokens.clear()
+        trafficTokens.clear()
+        reportTokens.clear()
+    }
 
     fun inbox(): List<Envelope> {
         val json = signed("GET", "/v1/inbox")
@@ -392,37 +440,41 @@ class RelayClient(
     // ── Traffic ───────────────────────────────────────────────────────────
     //
     // The relay keeps one traffic store per map region (comms-worker Traffic
-    // object). Probes carry segment speeds only: no position and, on the relay,
-    // no sender number beyond rate limiting.
+    // object). Every traffic request is anonymous: it spends a traffic token
+    // (a new report, a report token) and carries no identity. Probes, reports
+    // and votes carry a trip pseudonym (app.clairix.nav.TripPseudonym) the
+    // phone made up for the drive, so the relay can count vehicles and votes
+    // without anything that reaches back to this phone.
 
-    /** Posts up to 60 per-segment speed samples ({"seg","kph","t"}); returns the relay's reply ({"ok","accepted"}). */
-    fun trafficProbe(region: String, samples: JSONArray): JSONObject =
-        signed("POST", "/v1/traffic/probe", JSONObject().put("region", region).put("samples", samples))
+    /** Posts up to 60 per-segment speed samples ({"seg","kph","t"}) under [trip]; returns the relay's reply ({"ok","accepted"}). */
+    fun trafficProbe(region: String, trip: String, samples: JSONArray): JSONObject =
+        anonymous(TokenKind.TRAFFIC, "POST", "/v1/traffic/probe", JSONObject().put("region", region).put("trip", trip).put("samples", samples))
 
     /** Live segment speeds and current incidents for [region]: {"now","segments","incidents"}. */
     fun trafficLive(region: String): JSONObject =
-        signed("GET", "/v1/traffic/live?region=${query(region)}")
+        anonymous(TokenKind.TRAFFIC, "GET", "/v1/traffic/live?region=${query(region)}", null)
 
     /** Hour-of-week speed profiles for at most 500 segments: {"segments":{seg:{"h":[168]}}}. */
     fun trafficTypical(region: String, segs: List<String>): JSONObject {
         require(segs.size <= TRAFFIC_TYPICAL_MAX) { "At most $TRAFFIC_TYPICAL_MAX segments per request" }
-        return signed("GET", "/v1/traffic/typical?region=${query(region)}&segs=${query(segs.joinToString(","))}")
+        return anonymous(TokenKind.TRAFFIC, "GET", "/v1/traffic/typical?region=${query(region)}&segs=${query(segs.joinToString(","))}", null)
     }
 
-    /** Reports an incident ("police", "crash", "hazard", "closure" or "jam"); returns {"incident"}. */
-    fun trafficReport(region: String, type: String, lat: Double, lon: Double, seg: String?): JSONObject {
+    /** Reports an incident ("police", "crash", "hazard", "closure" or "jam") under [trip]; returns {"incident"}. */
+    fun trafficReport(region: String, trip: String, type: String, lat: Double, lon: Double, seg: String?): JSONObject {
         val body = JSONObject()
             .put("region", region)
+            .put("trip", trip)
             .put("type", type)
             .put("lat", lat)
             .put("lon", lon)
             .put("seg", seg ?: JSONObject.NULL)
-        return signed("POST", "/v1/traffic/report", body)
+        return anonymous(TokenKind.REPORT, "POST", "/v1/traffic/report", body)
     }
 
-    /** Confirms ([still] = true) or clears an incident; returns {"incident"}, null once it is removed. */
-    fun trafficVote(region: String, id: String, still: Boolean): JSONObject =
-        signed("POST", "/v1/traffic/report/vote", JSONObject().put("region", region).put("id", id).put("still", still))
+    /** Confirms ([still] = true) or clears an incident, one vote per [trip]; returns {"incident"}, null once it is removed. */
+    fun trafficVote(region: String, trip: String, id: String, still: Boolean): JSONObject =
+        anonymous(TokenKind.TRAFFIC, "POST", "/v1/traffic/report/vote", JSONObject().put("region", region).put("trip", trip).put("id", id).put("still", still))
 
     /**
      * HERE / TomTom incidents the relay proxies for a box of at most 1° × 1°,
@@ -446,7 +498,7 @@ class RelayClient(
             kotlin.math.floor(maxLon * 1e5) / 1e5,
         )
         val box = inward.joinToString(",") { String.format(java.util.Locale.ROOT, "%.5f", it) }
-        return signed("GET", "/v1/traffic/incidents?bbox=${query(box)}")
+        return anonymous(TokenKind.TRAFFIC, "GET", "/v1/traffic/incidents?bbox=${query(box)}", null)
     }
 
     fun trafficIncidents(minLat: Double, minLon: Double, maxLat: Double, maxLon: Double): JSONObject =
