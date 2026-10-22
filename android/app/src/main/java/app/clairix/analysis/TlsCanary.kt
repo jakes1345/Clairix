@@ -134,6 +134,7 @@ object TlsCanary {
     private const val KEY_HOST = "host"
     private const val KEY_PIN = "spki"
     private const val KEY_PINNED_AT = "pinned_at"
+    private const val KEY_STRICT = "strict"
     private const val KEY_LAST_RESULT = "last_result"
     private const val KEY_LAST_TS = "last_ts"
 
@@ -225,6 +226,25 @@ object TlsCanary {
         val host = p.getString(KEY_HOST, null) ?: return null
         val pin = p.getString(KEY_PIN, null) ?: return null
         return host to pin
+    }
+
+    /**
+     * Whether the comms connection itself refuses any key but the pinned one
+     * (see [app.clairix.comms.RelayTls]), rather than only reporting a change
+     * here. Off, a changed key is CRITICAL in the timeline and comms carry on;
+     * on, comms stop until the owner forgets the pin on the Certificates page.
+     */
+    fun strict(context: Context): Boolean = prefs(context).getBoolean(KEY_STRICT, false)
+
+    fun setStrict(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_STRICT, on).apply()
+    }
+
+    /** The pin the comms connection must see for [host], or null when none is enforced. */
+    fun enforcedPin(context: Context, host: String?): String? {
+        if (host == null || !strict(context)) return null
+        val (pinnedHost, pin) = pinned(context) ?: return null
+        return if (pinnedHost.equals(host, ignoreCase = true)) pin else null
     }
 
     /** The outcome of the last run this install made, or null. */

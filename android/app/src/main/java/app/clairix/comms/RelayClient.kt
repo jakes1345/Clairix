@@ -44,6 +44,13 @@ class RelayClient(
     private val tokens: TokenPool = MemoryTokenPool(),
     private val trafficTokens: TokenPool = MemoryTokenPool(),
     private val reportTokens: TokenPool = MemoryTokenPool(),
+    /**
+     * The relay's pinned certificate key ("sha256/…" of its SubjectPublicKeyInfo),
+     * or null to trust the platform's verdict alone. Read on every handshake,
+     * so a pin set or forgotten on the Certificates page applies at once. See
+     * [RelayTls].
+     */
+    private val pin: () -> String? = { null },
 ) {
 
     private fun pool(kind: TokenKind): TokenPool = when (kind) {
@@ -71,7 +78,7 @@ class RelayClient(
     }
 
     /** The live socket's client: no overall call timeout, which would cut the socket itself. */
-    val http: OkHttpClient = OkHttpClient.Builder()
+    val http: OkHttpClient = RelayTls.pinned(OkHttpClient.Builder(), pin)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -95,7 +102,7 @@ class RelayClient(
      * anonymous send never rides a connection a signed request used.
      */
     private val sender: OkHttpClient by lazy {
-        OkHttpClient.Builder()
+        RelayTls.pinned(OkHttpClient.Builder(), pin)
             .connectionPool(okhttp3.ConnectionPool())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)

@@ -17,6 +17,7 @@ import app.clairix.Registry
 import app.clairix.Severity
 import app.clairix.TimelineEvent
 import app.clairix.TimelineLog
+import app.clairix.analysis.TlsCanary
 import app.clairix.security.DuressPhrase
 import app.clairix.security.RelayClock
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -225,6 +226,8 @@ object CommsRepository {
             tokens = StoredTokenPool(appContext),
             trafficTokens = StoredTokenPool(appContext, "traffic"),
             reportTokens = StoredTokenPool(appContext, "report"),
+            // The canary's pin, enforced on every handshake when the owner asked for it.
+            pin = { TlsCanary.enforcedPin(appContext, config.relayUrl?.let { runCatching { java.net.URI(it).host }.getOrNull() }) },
         )
         claims = StoredPendingClaims(appContext)
         // The relay's clock, as the Device tab's clock-integrity row compares it.

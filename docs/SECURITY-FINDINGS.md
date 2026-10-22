@@ -13,7 +13,9 @@ re-read). Line numbers are as of commit `366aabb`.
 
 Fixed so far: observability off on the relay; `CommsLog` no longer writes
 to logcat; every data domain excluded from cloud backup and device transfer;
-release builds minified with `android.util.Log` stripped; the four `Store`
+release builds minified with `android.util.Log` stripped; system-only CA
+trust and no cleartext app-wide, with optional strict pinning of the relay's
+key on every comms handshake; the four `Store`
 documents (location log, timeline, cell baseline, trips) sealed on disk under
 a Keystore key, with plaintext files from earlier versions resealed on first
 load; lookups by signed body (`POST /v1/lookup`); no stored activity times on
@@ -117,8 +119,15 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
     relay, Nominatim and map downloads; `TlsCanary` notices and
     `RelayClient` keeps talking. A MITM sees the enrollment secret, invite
     codes, TURN credentials and the token-fetch to identity correlation the
-    anonymous-send design depends on. *Verified.* Fix: pin the relay's key
-    (you control rotation); `<certificates src="system"/>` only elsewhere.
+    anonymous-send design depends on. *Verified.* **Done:**
+    `network_security_config.xml` trusts system CAs only and forbids
+    cleartext for every connection the app makes; `RelayTls` installs a
+    trust manager on the relay clients that, after the platform's verdict,
+    refuses any leaf key but the one the canary pinned when the owner turns
+    on "Refuse the relay if its key changes" on the Certificates page. Off
+    by default because a Workers relay's key rotates with its certificate
+    and the operator does not control that; on, a rotation stops comms until
+    the pin is forgotten there, which is the point.
 16. **Map graphs and work zones are integrity-checked, not authenticated.**
     `GraphStore.kt:166-168` fetches the `.sha256` from the same release URL;
     `WorkZoneFeed.kt:233-260` has no checksum. `RoadGraph.open` parses that

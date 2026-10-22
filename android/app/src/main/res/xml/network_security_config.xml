@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Every connection the app makes (the comms relay, map and work-zone
+    downloads, the geocoder) trusts the system's own certificate authorities
+    and nothing added by a user. A CA installed on the phone is the usual way
+    to intercept TLS without root, and it is exactly what the trust-store
+    audit and the TLS canary exist to detect; trusting it anyway would make
+    both pointless. Nothing is ever sent in the clear.
+
+    The TLS canary's own probe is unaffected: it opens a raw socket with a
+    recording trust manager, by design, and then asks this configuration
+    whether the chain it saw would have been accepted.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
