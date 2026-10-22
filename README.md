@@ -106,9 +106,11 @@ Read this part twice.
   tower; it cannot hide you from a real one. Nothing an app can do changes
   this. Airplane mode, or leaving the phone behind, is the only answer.
 - **Traffic analysis.** Anyone watching the network sees that your phone
-  talks to the relay and when. Envelopes are padded to a few fixed sizes, but
-  there is no cover traffic and no mixing network yet, so timing can still
-  pair a sender with a recipient for someone watching both ends. The relay's
+  talks to the relay and when. Envelopes are padded to a few fixed sizes, and
+  "Cover traffic" (Comms settings, off by default) sends envelopes nobody
+  reads to random contacts at random intervals, so the real ones are not the
+  only traffic there is. There is no mixing network, so someone watching both
+  ends can still pair a sender with a recipient by timing. The relay's
   operator, or the platform under it, could capture live requests and see the
   address each one came from and which account fetched a batch of tokens.
   None of this is written down, but it is possible while a request is in
@@ -116,9 +118,12 @@ Read this part twice.
   address to the contact's phone, answered or not, unless "Relay-only calls"
   is on.
 - **One relay.** There is one relay, on one platform. An order can shut it
-  down or make it refuse you; it cannot make it read your messages. Several
-  independent relays and a mesh for when there is no network are the next
-  phase, not this one.
+  down or make it refuse you; it cannot make it read your messages. The
+  operator can publish other addresses the same relay answers at, and the
+  app falls back to them when the first is blocked (unless you have pinned
+  the relay's key, in which case only the pinned address is used); those are
+  doors to one relay, not several relays. Independent relays and a mesh for
+  when there is no network are the next phase, not this one.
 - **Your contacts' phones.** A delivered message is theirs. A contact whose
   phone is compromised or seized unlocked gives up every conversation with
   them.
@@ -179,6 +184,9 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   relay's TURN server, so a contact never learns your IP address from a
   call. Off by default; a call cannot connect while the relay has no call
   servers.
+- **Cover traffic** (Comms settings): envelopes nobody reads, to random
+  contacts at random intervals while the background connection is on. Off by
+  default; costs a little data and battery.
 - **Refuse the relay if its key changes** (Phone check → Certificates): pins
   the relay's TLS key. Off by default because the relay's key rotates with its
   certificate; turn it on if you would rather lose the relay than trust a

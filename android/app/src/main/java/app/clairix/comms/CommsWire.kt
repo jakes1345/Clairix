@@ -81,6 +81,8 @@ object CommsWire {
     const val T_THREAT = "threat"
     /** An SOS to a group: "gid", "id", "ts", "lat", "lon", "note". */
     const val T_PANIC = "panic"
+    /** Cover traffic: an envelope sized like a message that the recipient drops unread, with no receipt. */
+    const val T_NOISE = "noise"
 
     // group
     const val F_GID = "gid"
@@ -197,6 +199,9 @@ object CommsWire {
         base(T_RECEIPT).put(F_STATUS, status).put(F_IDS, JSONArray(ids))
 
     fun resync(): JSONObject = base(T_RESYNC)
+
+    /** Cover traffic: [fill] is random filler, so the padded envelope is sized like a text. */
+    fun noise(fill: String): JSONObject = base(T_NOISE).put(F_BODY, fill)
 
     private fun call(kind: String, cid: String) = base(T_CALL).put(F_CALL_KIND, kind).put(F_CALL_ID, cid)
 

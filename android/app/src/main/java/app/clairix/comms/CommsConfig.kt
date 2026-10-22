@@ -2,6 +2,7 @@ package app.clairix.comms
 
 import android.content.Context
 import android.util.Base64
+import org.json.JSONArray
 
 /**
  * Preference data for the comms module; secrets live in [IdentityStore]. Kept
@@ -47,6 +48,23 @@ class CommsConfig(context: Context) {
     val relayOnlyCalls: Boolean get() = prefs.getBoolean(KEY_RELAY_ONLY_CALLS, false)
 
     fun setRelayOnlyCalls(on: Boolean) { prefs.edit().putBoolean(KEY_RELAY_ONLY_CALLS, on).apply() }
+
+    /**
+     * Whether this phone sends cover traffic: sealed envelopes nobody reads, to
+     * random contacts at random intervals, so the real ones are not the only
+     * traffic there is. Off by default: it costs some data and battery.
+     */
+    val coverTraffic: Boolean get() = prefs.getBoolean(KEY_COVER_TRAFFIC, false)
+
+    fun setCoverTraffic(on: Boolean) { prefs.edit().putBoolean(KEY_COVER_TRAFFIC, on).apply() }
+
+    /** The other addresses the relay answers at, as it last told this phone; see [RelayClient.info]. */
+    val relayAlternates: List<String>
+        get() = prefs.getString(KEY_ALTERNATES, null)
+            ?.let { text -> runCatching { JSONArray(text).let { a -> (0 until a.length()).map { i -> a.getString(i) } } }.getOrNull() }
+            ?: emptyList()
+
+    fun setRelayAlternates(urls: List<String>) { prefs.edit().putString(KEY_ALTERNATES, JSONArray(urls).toString()).apply() }
 
     /** An endpoint the relay is checking: in use once the code it pushed through it is echoed. */
     val pendingPush: String? get() = prefs.getString(KEY_PUSH_PENDING, null)
@@ -106,6 +124,8 @@ class CommsConfig(context: Context) {
         const val KEY_FALLBACK_ROTATED = "fallback_rotated_at"
         const val KEY_HIDE_PREVIEWS = "hide_previews"
         const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
+        const val KEY_COVER_TRAFFIC = "cover_traffic"
+        const val KEY_ALTERNATES = "relay_alternates"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

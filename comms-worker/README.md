@@ -88,6 +88,17 @@ captured registration (it carries the secret) cannot be replayed into a second
 account, and nobody can register someone else's key as their own. Two people pair by scanning each other's QR code in
 person, or by typing a listed Clairix number and then comparing safety numbers.
 
+### Several doors to one relay
+
+A relay that lives at one name can be blocked at that name. Set
+`RELAY_ALTERNATES` to the other addresses the same Worker answers at (a second
+custom domain, its `workers.dev` name, comma-separated) and the relay names
+them in `GET /`. A phone keeps the list and, when the address it registered at
+stops answering, tries the others and stays on the one that works; a phone
+whose owner has pinned the relay's TLS key stays on the pinned address, since
+the pin is that host's key. These are doors to one relay, not several relays:
+the accounts, the envelopes and the coin community are the same behind each.
+
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else

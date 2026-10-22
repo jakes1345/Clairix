@@ -132,7 +132,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, "") || "/";
 
   if (request.method === "GET" && path === "/") {
-    return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers." });
+    return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers.", alternates: alternates(env) });
   }
 
   let bodyText = "";
@@ -656,6 +656,20 @@ async function refreshWzdx(env: Env, now: number): Promise<void> {
 
 const COIN_SYMBOL = "AC";
 const COIN_NOTE_MAX = 140;
+
+/**
+ * The other addresses this relay answers at, from RELAY_ALTERNATES: https
+ * origins only, trimmed, at most eight. A phone that registered at one address
+ * keeps these and tries them when that address stops answering (a block, a
+ * domain seizure); with the relay's key pinned it stays on the pinned one.
+ */
+function alternates(env: Env): string[] {
+  return (env.RELAY_ALTERNATES ?? "")
+    .split(",")
+    .map((s) => s.trim().replace(/\/+$/, ""))
+    .filter((s) => /^https:\/\/[^\s/]+$/.test(s))
+    .slice(0, 8);
+}
 
 /** A payment id the phone chose: a UUID, so nothing else names two payments alike. */
 const TXID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

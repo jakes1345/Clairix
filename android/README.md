@@ -81,6 +81,9 @@ gradle test                         # unit tests for every variant
   passcode is set.
 - **Comms → "Relay-only calls"**: audio only through the relay's TURN server,
   so no contact learns this phone's address from a call. Off by default.
+- **Comms → "Cover traffic"**: sealed envelopes nobody reads, to random
+  contacts at random intervals, so real messages are not the only traffic.
+  Off by default.
 - **Settings → App lock → wipe after N wrong passcodes** (1, 3, 5, 10 or never)
   and the duress passcode.
 - **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists

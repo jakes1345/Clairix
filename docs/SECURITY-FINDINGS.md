@@ -45,7 +45,8 @@ minutes after arming in any case; a relay-only calls setting; TURN
 credentials bounded to thirty an hour; payments made idempotent by a
 phone-chosen id; the comms database moved to SQLCipher under a
 Keystore-wrapped key, with the plain database converted once; the comms
-preferences sealed.
+preferences sealed; optional cover traffic; alternate relay addresses with
+failover.
 
 
 ## Tier 1 — the relay is a single point of compulsion
@@ -86,7 +87,18 @@ preferences sealed.
    Legacy `bucket:*`/`last*At` keys are deleted by the next daily cleanup.
 4. **Send-time to fetch-time correlation** across the relay is visible to
    anyone at Cloudflare's edge regardless of padding. Not solved; say so.
+   **Partly done** (PR #15): "Cover traffic" (off by default) sends sealed
+   envelopes of random size to random contacts with sessions at random
+   intervals (exponential, mean twenty minutes), dropped unread with no
+   receipt (`CommsWire.T_NOISE`), so a real message is one envelope among
+   many to the relay and to the edge. A recipient is still visible per
+   envelope, and no mixing network exists; the README says both.
 5. **One relay is one order.** Many small relays is the defence; document it.
+   **Partly done** (PR #15): the relay publishes alternate addresses it
+   answers at (`RELAY_ALTERNATES`, named in `GET /`); the app keeps them and
+   fails over to one when the registered address stops answering, staying
+   on the one that works, except with the TLS pin on. Doors to one relay,
+   documented as such; independent relays remain phase 2.
 
 ## Tier 2 — the seized phone
 

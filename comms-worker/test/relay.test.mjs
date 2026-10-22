@@ -749,3 +749,10 @@ test("a payment repeated under the same txid moves the coins once", async () => 
   assert.match(minted.json.txid, /^[0-9a-f-]{36}$/);
   assert.equal(minted.json.balance, 89);
 });
+
+test("the relay names its alternate addresses: https origins only, trimmed, in order", async () => {
+  const relay = makeRelay({ RELAY_ALTERNATES: " https://door-two.example/, https://clairix-relay.example.workers.dev ,http://plain.example, https://bad.example/path, " });
+  const info = (await relay.call("GET", "/")).json;
+  assert.deepEqual(info.alternates, ["https://door-two.example", "https://clairix-relay.example.workers.dev"]);
+  assert.deepEqual((await makeRelay().call("GET", "/")).json.alternates, []);
+});
