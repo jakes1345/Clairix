@@ -63,10 +63,12 @@ Sending an envelope and reporting traffic are deliberately not signed. Each spen
 ### Calls
 Signalling for a call travels inside the same encrypted envelopes as messages. The audio is WebRTC with DTLS-SRTP between the two phones. The fingerprints that key the audio are carried inside the encrypted envelopes and are therefore authenticated by your contact's pinned identity. Neither the relay nor a TURN server can read or replace them. A TURN server forwards packets it cannot decrypt.
 
-### On your phone
-Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. Message bodies in the local database are encrypted the same way, and the scanner's records (location history, timeline, cell-tower baseline, trips) are sealed on disk under a keystore key as well. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
+To connect directly, the two phones exchange their network addresses, as WebRTC does; a contact you call learns yours whether or not they answer. "Relay-only calls" in Comms settings sends the audio through the TURN server always, so your contact's phone learns only the server's address.
 
-Not yet: the unlock ledger and the app's settings files are stored in the clear, and the keys that seal the rest are not bound to the phone being unlocked, because the scanner has to write while the keyguard is up. Both are on the list in the project's security findings.
+### On your phone
+Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. Message bodies in the local database are encrypted the same way, and the scanner's records (location history, timeline, cell-tower baseline, trips) and the unlock ledger are sealed on disk under a keystore key as well. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
+
+Not yet: the app's settings files, and the contact list and message times in the Comms database (the message bodies are sealed), are stored in the clear, and the keys that seal the rest are not bound to the phone being unlocked, because the scanner has to write while the keyguard is up. Both are on the list in the project's security findings.
 
 ## What the relay stores, and for how long {#relay}
 

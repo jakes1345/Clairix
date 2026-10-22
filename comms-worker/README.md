@@ -63,6 +63,10 @@ who looked up whom) and ten an hour in all, and a number hands out at most
 twenty an hour; past any limit the lookup offers the fallback key (rotated
 daily), so nobody can drain anyone's keys.
 
+TURN credentials are minted per call attempt, ten a minute and thirty an hour
+per account (the hour recorded as an hour, never the moment). A payment carries
+an id the phone chose, and a repeat under the same id moves nothing twice.
+
 Delivery tokens expire fourteen days after issue, plus up to twelve hours of
 random jitter, rounded to the hour. Each account may draw 1,000 an hour.
 

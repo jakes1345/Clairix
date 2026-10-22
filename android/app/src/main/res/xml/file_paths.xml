@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only what is meant to leave the phone through the share sheet is reachable
+    by URI: exported evidence reports and a photo the camera app is writing for
+    an attachment. Voicemails, decrypted media and everything else in the cache
+    are not.
+-->
 <paths>
-    <cache-path name="reports" path="." />
+    <cache-path name="reports" path="reports/" />
+    <cache-path name="camera" path="camera/" />
 </paths>

@@ -100,7 +100,7 @@ Clairix is not directed to children under 13, and we do not knowingly collect in
 
 ## 8. Security
 
-Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, messages, saved cards, location history, timeline, cell-tower baseline and trip records on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
+Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, messages, saved cards, location history, timeline, cell-tower baseline, trip records and unlock ledger on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
 
 ## 9. Legal basis and your rights
 

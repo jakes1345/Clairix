@@ -79,6 +79,8 @@ gradle test                         # unit tests for every variant
   relay's key rotates with its certificate.
 - **Comms → "Hide names and previews in notifications"**, on by default once a
   passcode is set.
+- **Comms → "Relay-only calls"**: audio only through the relay's TURN server,
+  so no contact learns this phone's address from a call. Off by default.
 - **Settings → App lock → wipe after N wrong passcodes** (1, 3, 5, 10 or never)
   and the duress passcode.
 - **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists

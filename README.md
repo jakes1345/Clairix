@@ -62,8 +62,8 @@ relay's storage shows public keys, queued envelopes with their recipient, size
 and time, and nothing about senders, lookups or activity.
 
 **What is on the phone when it is seized locked.** The location log, the
-timeline, the cell-tower baseline, vehicle trips, message bodies, keys and
-saved cards are sealed on disk under keys in the phone's secure hardware, so a
+timeline, the cell-tower baseline, vehicle trips, the unlock ledger, message
+bodies, keys and saved cards are sealed on disk under keys in the phone's secure hardware, so a
 copy of the app's files is ciphertext. The app lock wipes after a run of wrong
 passcodes (three by default; you can choose the number, or none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
@@ -111,7 +111,9 @@ Read this part twice.
   operator, or the platform under it, could capture live requests and see the
   address each one came from and which account fetched a batch of tokens.
   None of this is written down, but it is possible while a request is in
-  flight. If your IP address matters, use Tor or a VPN.
+  flight. If your IP address matters, use Tor or a VPN. A call hands your
+  address to the contact's phone, answered or not, unless "Relay-only calls"
+  is on.
 - **One relay.** There is one relay, on one platform. An order can shut it
   down or make it refuse you; it cannot make it read your messages. Several
   independent relays and a mesh for when there is no network are the next
@@ -121,8 +123,9 @@ Read this part twice.
   them.
 - **Detection is best-effort.** No app finds every camera, tracker or piece
   of spyware. A finding is a reason to look, not proof.
-- **Not yet encrypted at rest:** the unlock ledger and the app's settings
-  files. The keys that seal the rest are not bound to the phone being
+- **Not yet encrypted at rest:** the app's settings files, and the contact
+  list and message times in the Comms database (the message bodies are
+  sealed). The keys that seal the rest are not bound to the phone being
   unlocked, because the scanner has to write while the keyguard is up; code
   running as the app on an unlocked phone can read what the app can.
 - **No independent audit.** vodozemac has been audited. Clairix has not.
@@ -170,6 +173,10 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
 - **Hide names and previews in notifications** (Comms settings, on by
   default once a passcode is set): notifications name nobody and quote
   nothing.
+- **Relay-only calls** (Comms settings): call audio always goes through the
+  relay's TURN server, so a contact never learns your IP address from a
+  call. Off by default; a call cannot connect while the relay has no call
+  servers.
 - **Refuse the relay if its key changes** (Phone check → Certificates): pins
   the relay's TLS key. Off by default because the relay's key rotates with its
   certificate; turn it on if you would rather lose the relay than trust a

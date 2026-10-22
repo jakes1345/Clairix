@@ -33,6 +33,16 @@ class CommsConfig(context: Context) {
 
     fun setHidePreviews(hide: Boolean) { prefs.edit().putBoolean(KEY_HIDE_PREVIEWS, hide).apply() }
 
+    /**
+     * Whether call audio may only travel through the relay's TURN servers, so
+     * no contact, and nobody holding a contact's phone, learns this phone's
+     * network address from a call. Off by default: it costs some delay and
+     * needs the relay to have call servers at all.
+     */
+    val relayOnlyCalls: Boolean get() = prefs.getBoolean(KEY_RELAY_ONLY_CALLS, false)
+
+    fun setRelayOnlyCalls(on: Boolean) { prefs.edit().putBoolean(KEY_RELAY_ONLY_CALLS, on).apply() }
+
     /** An endpoint the relay is checking: in use once the code it pushed through it is echoed. */
     val pendingPush: String? get() = prefs.getString(KEY_PUSH_PENDING, null)
 
@@ -90,6 +100,7 @@ class CommsConfig(context: Context) {
         const val KEY_ONLINE_DEFAULT = "online_default_applied"
         const val KEY_FALLBACK_ROTATED = "fallback_rotated_at"
         const val KEY_HIDE_PREVIEWS = "hide_previews"
+        const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

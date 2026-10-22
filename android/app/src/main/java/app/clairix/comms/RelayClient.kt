@@ -19,6 +19,7 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** A relay call that did not succeed, with the relay's message when it gave one. */
@@ -424,11 +425,20 @@ class RelayClient(
      * the payer wrote travels to the recipient inside an encrypted envelope
      * (see CommsWire.payment), never here.
      */
-    fun pay(to: String, amount: Long, note: String?): PayResult {
+    fun pay(to: String, amount: Long, note: String?, txid: String = UUID.randomUUID().toString()): PayResult {
         requireCoin()
-        val body = JSONObject().put("to", to).put("amount", amount)
+        val body = JSONObject().put("to", to).put("amount", amount).put("txid", txid)
         if (!note.isNullOrBlank()) body.put("note", note)
-        val json = signed("POST", "/v1/coin/pay", body)
+        // The payment is named here, and the relay makes it once per name: a
+        // request whose answer was lost on the network is repeated under the
+        // same name, and cannot move the coins twice. An answer the relay gave
+        // (any HTTP status) is final either way.
+        val json = try {
+            signed("POST", "/v1/coin/pay", body)
+        } catch (e: RelayException) {
+            if (e.code != 0) throw e
+            signed("POST", "/v1/coin/pay", body)
+        }
         return parsed { PayResult(json.getString("txid"), json.getLong("balance")) }
     }
 

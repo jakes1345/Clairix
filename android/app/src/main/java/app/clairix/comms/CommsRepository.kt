@@ -1219,6 +1219,11 @@ object CommsRepository {
     /** The owner's choice about what notifications say; see [CommsConfig.hidePreviews]. */
     fun setHidePreviews(hide: Boolean) = config.setHidePreviews(hide)
 
+    /** See [CommsConfig.relayOnlyCalls]. */
+    fun relayOnlyCalls(): Boolean = initialised && config.relayOnlyCalls
+
+    fun setRelayOnlyCalls(on: Boolean) = config.setRelayOnlyCalls(on)
+
     fun group(gid: String): Group? = store.group(gid)?.let { it.copy(memberCount = store.groupMembers(gid).size) }
 
     fun groupMembers(gid: String): List<GroupMember> = store.groupMembers(gid)

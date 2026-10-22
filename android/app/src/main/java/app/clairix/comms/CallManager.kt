@@ -621,6 +621,14 @@ object CallManager {
         } else if (servers.none { s -> s.urls.any { it.startsWith("turn") } }) {
             CommsLog.add("No TURN relay configured: calls connect only when both networks allow a direct path")
         }
+        // With relay-only on, the connection gathers no host or reflexive
+        // candidates at all, so the other phone is told nothing but the TURN
+        // server's address; and without a TURN server there is no call.
+        val relayOnly = CommsRepository.relayOnlyCalls()
+        if (relayOnly && servers.none { s -> s.urls.any { it.startsWith("turn") } }) {
+            CommsLog.add("Relay-only calls are on and the relay offered no TURN server, so the call cannot be placed")
+            throw IllegalStateException("Relay-only calls need the relay's call servers, and none are available right now")
+        }
         val ice = servers.map { s ->
             PeerConnection.IceServer.builder(s.urls).apply {
                 s.username?.let { setUsername(it) }
@@ -632,6 +640,7 @@ object CallManager {
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            if (relayOnly) iceTransportsType = PeerConnection.IceTransportsType.RELAY
         }
         val f = ensureFactory()
         val peer = f.createPeerConnection(config, observer(callId)) ?: throw IllegalStateException("WebRTC refused to create a connection")

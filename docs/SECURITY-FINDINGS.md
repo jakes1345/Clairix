@@ -11,7 +11,7 @@ Each item says whether it was **verified** (read end to end in this audit),
 **reported** (anchored to file:line by a reviewer but not independently
 re-read). Line numbers are as of commit `366aabb`.
 
-Fixed so far (PRs #12, #13 and #14): observability off on the relay;
+Fixed so far (PRs #12 to #15): observability off on the relay;
 `CommsLog` no longer writes to logcat; every data domain excluded from cloud
 backup and device transfer; release builds minified with `android.util.Log`
 stripped; the four `Store` documents (location log, timeline, cell baseline,
@@ -37,7 +37,13 @@ relay records which account each key belongs to, dates registrations, caps
 request bodies, compares secrets as digests, accepts-and-drops sends to
 unknown numbers, restricts traffic regions to published ones and refunds a
 credit into a deleted mailbox; the READMEs and the website's security and
-privacy pages rewritten around the threat model.
+privacy pages rewritten around the threat model; the unlock ledger moved
+into a sealed `Store` document and the plain database migrated and deleted;
+the comms log sealed in its prefs; the file provider limited to reports and
+camera captures; an armed card disarmed when the screen goes off and five
+minutes after arming in any case; a relay-only calls setting; TURN
+credentials bounded to thirty an hour; payments made idempotent by a
+phone-chosen id.
 
 
 ## Tier 1 — the relay is a single point of compulsion
@@ -92,11 +98,21 @@ privacy pages rewritten around the threat model.
    **Done for the `Store` documents** (`StoreCipher.kt`): AES-256-GCM under
    a hardware Keystore key. Not unlock-bound, because the scanner writes
    the baseline with the keyguard up; see the class comment for what that
-   does and does not protect against. Still open: `unlock_ledger.db`, the
-   prefs files, and a retention setting that defaults short.
+   does and does not protect against. **Done for the unlock ledger** (PR #15):
+   it is a sealed `Store` document, `unlock_ledger.json`; the SQLite file is
+   read once into it and deleted. Still open: the prefs files, the comms
+   database's contact list and message times (the bodies are sealed), and
+   a retention setting that defaults short.
 7. **`KeystoreBox` key is not user-auth bound and not StrongBox**
    (`KeystoreBox.kt:48-55`). A logical extraction with the device unlocked
-   reads everything it protects. *Reported.*
+   reads everything it protects. *Reported.* **Considered, not done:** a
+   StrongBox key would put every message-body and store decrypt through the
+   secure element, far slower than the TEE, and a software data key wrapped
+   by it would be weaker at rest than today's TEE key; user-auth binding
+   would stop the background receive that shows a message with the phone in
+   a pocket. What StrongBox buys is resistance to a TEE key-extraction
+   exploit, and a logical extraction with the device unlocked reads the
+   plaintext either way.
 8. **App lock does not lock COMMS.** `onResume` locks first
    (`MainActivity.kt:413`), then the open thread's `ON_RESUME` sets
    `openPeer` (`CommsScreen.kt:1089-1114`) and `markRead` queues a READ
@@ -131,11 +147,16 @@ privacy pages rewritten around the threat model.
     (`MainActivity.kt:559-565`, `CardEmulationService.kt:59-62`); only the
     device PIN gates it. *Reported.* **Done for the app lock and the wipe:**
     `CardEmulationBridge.disarm()` forgets the pairs and withdraws the AIDs
-    whenever the app locks or wipes. Screen-off alone still leaves it armed,
-    which is what tap-to-pay needs.
+    whenever the app locks or wipes. **Done for screen-off and time** (PR
+    #15): `EmulationGuard` disarms the card when the screen goes off and five
+    minutes after arming in any case. The vault re-locking on its own leaves
+    it armed, so a card can be armed, the vault closed and the reader tapped
+    within those minutes.
 11. **`CommsLog` persisted plaintext** in `comms_log` prefs with contact
     names, numbers, call and SOS events (`CommsLog.kt:64-68`). Logcat output
-    is removed in this PR; the prefs copy remains.
+    is removed in this PR; the prefs copy remains. **Done:** sealed under
+    `KeystoreBox` in the same prefs (`sealed`, base64); a plaintext `entries`
+    value from an earlier version is read once, resealed and removed.
 12. **FLAG_SECURE only with a passcode** (`MainActivity.kt:237-243`): vault,
     timeline and map are screenshot-able otherwise. *Reported.* **Done:**
     set unconditionally for every screen.
@@ -145,7 +166,10 @@ privacy pages rewritten around the threat model.
     copy goes through `setSensitiveText` (marked sensitive on Android 13+)
     and the wipe clears the clipboard.
 14. **`file_paths.xml`** exposes all of `cacheDir` (voicemails, decrypted
-    media) rather than a `reports/` subdirectory. *Reported.*
+    media) rather than a `reports/` subdirectory. *Reported.* **Done:** the
+    provider reaches `reports/` and `camera/` only, reports are written to
+    `reports/`, and a report an earlier version left at the cache root is
+    deleted.
 
 ## Tier 3 — supply chain
 
@@ -239,8 +263,19 @@ privacy pages rewritten around the threat model.
     debit-then-credit across two DOs with no idempotency key; a `DELETE
     /v1/me` between them leaves coins in a wiped box for the next holder of
     that number. *Reported.* **Partly done:** a credit into a deleted mailbox
-    now fails and the payer is refunded. Farming and idempotency remain.
+    now fails and the payer is refunded. **Idempotency done:** the phone
+    names each payment with a UUID and the relay makes the debit and the
+    credit once per name, so a request repeated after a lost answer moves
+    nothing twice (the phone repeats once, under the same name, on a network
+    failure only); a payment refunded under a name is refused under it.
+    Farming remains a product question: the coin has no monetary value, and
+    the only brake short of a per-identity cost is to grant no starting
+    balance.
 26. **TURN**: 10/min, 2 h TTL, no daily cap, no call required. *Reported.*
+    **Done:** thirty credentials an hour per account on top of the ten a
+    minute, as a stored allowance kept to the hour. A call being signalled
+    cannot be required: the signalling is inside envelopes the relay cannot
+    read.
 27. **Traffic DO sprawl**: any account can name any `traffic:<slug>`; objects
     are never deleted. *Reported.* **Done:** a region must be one the graph
     builder publishes a map for (`src/regions.ts`, kept in step with
@@ -256,7 +291,13 @@ privacy pages rewritten around the threat model.
 
 29. ICE host/srflx candidates are sent while dialing
     (`CallManager.kt:630-667`), so placing a call hands your IP to a contact
-    who never answers; no relay-only option. *Reported.*
+    who never answers; no relay-only option. *Reported.* **Done for the
+    option:** "Relay-only calls" (Comms settings) sets the ICE transport
+    policy to relay, so the connection gathers no host or reflexive
+    candidates and the contact learns only the TURN server's address; with no
+    TURN server the call is refused with a message. Off by default (a little
+    delay, and the relay must have call servers); with it off, candidates
+    still go out while dialing, as the protocol needs.
 30. `clairix://invite` is a custom scheme any app can claim; the invite link
     dictates the relay URL at registration (`CommsRepository.kt:365`).
     *Verified for the URL; interception reported.*
@@ -293,10 +334,10 @@ one-time-key limits match the code.
 6. OTK-burn ordering and curve-rebind refusal in the crate (19, 20). *Done.*
 7. README with an explicit threat model. *Done.*
 
-Still open after PR #14: 4, 5, 7, 10 (screen-off), 11, 14, 23, 25 (coin
-farming), 26, 29, 30, and the phase-2 work (several relays, a mesh for no
-network, cover traffic, an on-device geocoder, reproducible builds, an
-audit).
+Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
+30, the prefs files and the comms database's contact list and message times
+(6), and the phase-2 work (several relays, a mesh for no network, cover
+traffic, an on-device geocoder, reproducible builds, an audit).
 
 ## Not re-tested
 

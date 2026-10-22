@@ -243,6 +243,11 @@ class MainActivity : AppCompatActivity() {
             // enrolment tripwire is tested once per launch — Keystore work, off the
             // main thread. Each publishes straight into the Registry.
             UnlockLedger.init(this)
+            lifecycleScope.launch {
+                // A card the guard disarmed (screen off, time up) while this screen
+                // is up: back to reader mode, as STOP would have done.
+                Registry.emulating.collect { if (it == null) applyNfcMode() }
+            }
             ScreenRecordingMonitor.start(this, windowManager)
             lifecycleScope.launch(Dispatchers.IO) { runCatching { BiometricTripwire.check(applicationContext) } }
 
@@ -673,10 +678,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Registry.setEmulating(ArmedCard(card.id, card.label))
+        EmulationGuard.watch(this)
         applyNfcMode()
     }
 
     private fun stopEmulation() {
+        EmulationGuard.unwatch(this)
         CardEmulationBridge.clear()
         clearHceAids()
         Registry.setEmulating(null)
