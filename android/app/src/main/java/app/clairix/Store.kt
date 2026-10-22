@@ -30,14 +30,25 @@ import java.io.File
  * given that lock as its guard: then the serialisation runs on the IO dispatcher
  * inside the guard, which keeps a large document off the main thread. Either way
  * the file writer only ever sees a finished string.
+ *
+ * On disk the document is sealed by [cipher] (see [KeystoreStoreCipher]): the
+ * file starts with [MAGIC], then the ciphertext. A file that starts with `{`
+ * instead was written by a version that kept these stores in the clear; it is
+ * read once, and the sealed form is written over it straight away.
  */
 class Store(
     private val file: File,
     /** Where background writes run. A parameter so tests can hold them back. */
-    ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val cipher: StoreCipher = KeystoreStoreCipher
 ) {
 
     constructor(context: Context, filename: String) : this(File(context.filesDir, filename))
+
+    companion object {
+        /** Marks a sealed file. Plain JSON never starts with these bytes. */
+        val MAGIC: ByteArray = "CLXS1\n".toByteArray(Charsets.US_ASCII)
+    }
 
     /**
      * Guards [data], [dirty], [lastFlush] and the snapshot sequence. It does not
@@ -65,16 +76,47 @@ class Store(
     private var pending: Pair<Long, String>? = null
 
     fun load(fallback: () -> JSONObject): JSONObject {
-        synchronized(lock) {
+        val reseal = synchronized(lock) {
             data?.let { return it }
+            var legacy = false
             val loaded = try {
-                if (file.exists()) JSONObject(file.readText()) else fallback()
+                if (file.exists()) {
+                    val bytes = file.readBytes()
+                    if (isSealed(bytes)) {
+                        JSONObject(cipher.open(bytes.copyOfRange(MAGIC.size, bytes.size)))
+                    } else {
+                        legacy = true
+                        JSONObject(String(bytes, Charsets.UTF_8))
+                    }
+                } else {
+                    fallback()
+                }
             } catch (_: Exception) {
+                // Unreadable: a sealed file the Keystore would not open just now, or
+                // a damaged one. Set it aside rather than let the next write bury the
+                // owner's baseline and location history under an empty document.
+                runCatching { file.renameTo(File(file.parentFile, "${file.name}.unreadable")) }
                 fallback()
             }
             data = loaded
-            return loaded
+            // A document found in the clear goes back to disk sealed before anything
+            // else happens to it, so the plaintext does not sit there until the next
+            // routine write.
+            if (legacy) {
+                dirty = true
+                snapshotLocked()
+            } else {
+                null
+            }
         }
+        if (reseal != null) ioScope.launch { write(reseal.first, reseal.second) }
+        return data!!
+    }
+
+    private fun isSealed(bytes: ByteArray): Boolean {
+        if (bytes.size < MAGIC.size) return false
+        for (i in MAGIC.indices) if (bytes[i] != MAGIC[i]) return false
+        return true
     }
 
     val json: JSONObject
@@ -189,12 +231,13 @@ class Store(
             if (Wiper.isActive) return
             try {
                 file.parentFile?.mkdirs()
+                val sealed = MAGIC + cipher.seal(text)
                 // Write to a temp file and rename so a crash mid-write cannot leave a
                 // half-written, unparseable baseline behind.
                 val tmp = File(file.parentFile, "${file.name}.tmp")
-                tmp.writeText(text)
+                tmp.writeBytes(sealed)
                 if (!tmp.renameTo(file)) {
-                    file.writeText(text)
+                    file.writeBytes(sealed)
                     tmp.delete()
                 }
                 writtenSeq = seq
