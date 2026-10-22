@@ -125,6 +125,8 @@ import app.clairix.ui.components.*
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
+import app.clairix.security.AppLock
+import app.clairix.ui.components.setSensitiveText
 
 // ── Colour tokens local to this file ──────────────────────────────────────────
 
@@ -1086,32 +1088,34 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     // would be receipted as read.
     val lifecycleOwner = LocalLifecycleOwner.current
     var resumed by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+    val locked by AppLock.locked.collectAsStateWithLifecycle()
     DisposableEffect(peer, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    resumed = true
-                    CommsRepository.openPeer = peer
-                    CommsNotifications.cancel(context, peer)
-                }
-                Lifecycle.Event.ON_PAUSE -> {
-                    resumed = false
-                    if (CommsRepository.openPeer == peer) CommsRepository.openPeer = null
-                }
+                Lifecycle.Event.ON_RESUME -> resumed = true
+                Lifecycle.Event.ON_PAUSE -> resumed = false
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (resumed) {
-            CommsRepository.openPeer = peer
-            CommsNotifications.cancel(context, peer)
-        }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (CommsRepository.openPeer == peer) CommsRepository.openPeer = null
         }
     }
-    LaunchedEffect(peer, version, resumed) { if (resumed) CommsRepository.markRead(peer) }
+    // On screen means resumed and not behind the lock screen, which is drawn over
+    // this one: only then do messages arrive read, go out as read receipts and
+    // clear their notification.
+    val onScreen = resumed && !locked
+    LaunchedEffect(peer, onScreen) {
+        if (onScreen) {
+            CommsRepository.openPeer = peer
+            CommsNotifications.cancel(context, peer)
+        } else if (CommsRepository.openPeer == peer) {
+            CommsRepository.openPeer = null
+        }
+    }
+    LaunchedEffect(peer, version, onScreen) { if (onScreen) CommsRepository.markRead(peer) }
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
 
     val c = contact
@@ -1895,7 +1899,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GhostButton("Copy", onClick = { clipboard.setText(AnnotatedString(safety)) }, tone = Tone.Neutral)
+                    GhostButton("Copy", onClick = { clipboard.setSensitiveText("Safety number", safety) }, tone = Tone.Neutral)
                     if (!c.verified || c.keyChanged) GhostButton("They match — mark verified", onClick = { scope.launch { CommsRepository.markVerified(c.number) } }, tone = Tone.Safe)
                 }
             } else {
@@ -2002,7 +2006,7 @@ private fun InviteScreen(onBack: () -> Unit) {
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GhostButton("Copy link", onClick = { clipboard.setText(AnnotatedString(link)) }, tone = Tone.Neutral)
+                    GhostButton("Copy link", onClick = { clipboard.setSensitiveText("Clairix invite", link) }, tone = Tone.Neutral)
                     GhostButton("New invite", onClick = { made = null; create() }, tone = Tone.Neutral, enabled = !busy)
                 }
             }
@@ -2077,8 +2081,8 @@ private fun MyCodeScreen(onBack: () -> Unit) {
                 color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.number?.let { n -> GhostButton("Copy number", onClick = { clipboard.setText(AnnotatedString(formatClairixNumber(n))) }, tone = Tone.Neutral) }
-                code?.let { c -> GhostButton("Copy code text", onClick = { clipboard.setText(AnnotatedString(c.encode())) }, tone = Tone.Neutral) }
+                state.number?.let { n -> GhostButton("Copy number", onClick = { clipboard.setSensitiveText("Clairix number", formatClairixNumber(n)) }, tone = Tone.Neutral) }
+                code?.let { c -> GhostButton("Copy code text", onClick = { clipboard.setSensitiveText("Clairix pairing code", c.encode()) }, tone = Tone.Neutral) }
             }
         }
         Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
@@ -2178,6 +2182,13 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 checked = state.online,
                 onCheckedChange = { CommsRepository.setOnline(it) },
                 subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way."
+            )
+            var hidePreviews by remember { mutableStateOf(CommsNotifications.hidePreviews(context)) }
+            ToggleRow(
+                title = "Hide names and previews in notifications",
+                checked = hidePreviews,
+                onCheckedChange = { on -> hidePreviews = on; CommsRepository.setHidePreviews(on) },
+                subtitle = "Notifications say only that a message, a changed safety number or a missed call is waiting, naming nobody and quoting nothing, for a phone that is sometimes in other hands while unlocked. On by default once a passcode is set. Whenever the app locks, the notifications already showing collapse to one \"unlock to read\" either way."
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -2373,32 +2384,34 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
     // foreground, its messages arrive read and raise no notification.
     val lifecycleOwner = LocalLifecycleOwner.current
     var resumed by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+    val locked by AppLock.locked.collectAsStateWithLifecycle()
     DisposableEffect(groupId, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    resumed = true
-                    CommsRepository.openPeer = groupId
-                    CommsNotifications.cancel(context, groupId)
-                }
-                Lifecycle.Event.ON_PAUSE -> {
-                    resumed = false
-                    if (CommsRepository.openPeer == groupId) CommsRepository.openPeer = null
-                }
+                Lifecycle.Event.ON_RESUME -> resumed = true
+                Lifecycle.Event.ON_PAUSE -> resumed = false
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (resumed) {
-            CommsRepository.openPeer = groupId
-            CommsNotifications.cancel(context, groupId)
-        }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (CommsRepository.openPeer == groupId) CommsRepository.openPeer = null
         }
     }
-    LaunchedEffect(groupId, version, resumed) { if (resumed) CommsRepository.markGroupRead(groupId) }
+    // On screen means resumed and not behind the lock screen, which is drawn over
+    // this one: only then do messages arrive read, go out as read receipts and
+    // clear their notification.
+    val onScreen = resumed && !locked
+    LaunchedEffect(groupId, onScreen) {
+        if (onScreen) {
+            CommsRepository.openPeer = groupId
+            CommsNotifications.cancel(context, groupId)
+        } else if (CommsRepository.openPeer == groupId) {
+            CommsRepository.openPeer = null
+        }
+    }
+    LaunchedEffect(groupId, version, onScreen) { if (onScreen) CommsRepository.markGroupRead(groupId) }
 
     var draft by rememberSaveable(groupId) { mutableStateOf("") }
     var sendError by remember(groupId) { mutableStateOf<String?>(null) }
@@ -2777,7 +2790,7 @@ private fun DiagnosticsCard() {
                 "Copy",
                 onClick = {
                     val text = entries.joinToString("\n") { "${logTimeFmt.format(Date(it.ts))}  ${it.text}" }
-                    clipboard.setText(AnnotatedString("Clairix comms log\n$text"))
+                    clipboard.setSensitiveText("Clairix comms log", "Clairix comms log\n$text")
                 },
                 enabled = entries.isNotEmpty()
             )

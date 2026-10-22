@@ -89,7 +89,15 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
    The sender sees "read" while the lock screen is up and the owner gets no
    notification. *Verified.* Notification previews also show full text
    regardless of the Clairix lock (`CommsNotifications.kt:299-340`); there is
-   no hide-previews setting and `lock()` cancels nothing.
+   no hide-previews setting and `lock()` cancels nothing. **Done:** the
+   thread and group screens treat "on screen" as resumed *and* not locked
+   (`openPeer` is cleared and nothing is marked read behind the lock;
+   `markRead`/`markGroupRead` and the inbound `read` flag check the lock as
+   well); `AppLock.lock()` collapses every message and missed-call
+   notification to one "Unlock to read"; a "Hide names and previews in
+   notifications" setting (on by default once a passcode is set) makes every
+   message, held-key and missed-call notification name nobody and quote
+   nothing.
 9. **No one-tap wipe.** `Wiper.start` is reached only from `AppLock.kt`
    (duress code, failure limit, pending marker). README says "one tap".
    *Verified.* The wipe also never cancels notifications (SOS and message
@@ -97,18 +105,29 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
    UnifiedPush or deactivates the device admin, so the app cannot be
    uninstalled normally afterwards. `unpair()` calls `relay.wipe()` first
    with a 25 s timeout inside a 6 s budget, so with the relay unreachable the
-   notification cancel and push unregister never run. *Reported.*
+   notification cancel and push unregister never run. *Reported.* **Done:**
+   "Wipe Clairix" page under the Comms menu (type WIPE, one button); the
+   wipe now cancels every notification, clears the clipboard, unregisters
+   push, deactivates the device admin and disarms the card before touching
+   the files; `unpair()` bounds the relay call to four seconds on its own
+   thread so the local steps always run.
 10. **HCE stays armed** after vault lock, app lock and screen off
     (`MainActivity.kt:559-565`, `CardEmulationService.kt:59-62`); only the
-    device PIN gates it. *Reported.*
+    device PIN gates it. *Reported.* **Done for the app lock and the wipe:**
+    `CardEmulationBridge.disarm()` forgets the pairs and withdraws the AIDs
+    whenever the app locks or wipes. Screen-off alone still leaves it armed,
+    which is what tap-to-pay needs.
 11. **`CommsLog` persisted plaintext** in `comms_log` prefs with contact
     names, numbers, call and SOS events (`CommsLog.kt:64-68`). Logcat output
     is removed in this PR; the prefs copy remains.
 12. **FLAG_SECURE only with a passcode** (`MainActivity.kt:237-243`): vault,
-    timeline and map are screenshot-able otherwise. *Reported.*
+    timeline and map are screenshot-able otherwise. *Reported.* **Done:**
+    set unconditionally for every screen.
 13. **Clipboard** copies of the safety number, invite link, pairing code and
     diagnostics (`CommsScreen.kt:1898, 2005, 2080, 2780`) lack
-    `EXTRA_IS_SENSITIVE` and are never cleared. *Reported.*
+    `EXTRA_IS_SENSITIVE` and are never cleared. *Reported.* **Done:** every
+    copy goes through `setSensitiveText` (marked sensitive on Android 13+)
+    and the wipe clears the clipboard.
 14. **`file_paths.xml`** exposes all of `cacheDir` (voicemails, decrypted
     media) rather than a `reports/` subdirectory. *Reported.*
 
@@ -187,10 +206,12 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
     *Verified for the URL; interception reported.*
 31. The duress phrase sends nothing when the phone is in no group
     (`CommsRepository.kt:1459-1468`) and the UI does not warn. *Reported.*
+    **Done:** the Duress phrase page says so, in red, while the owner is in
+    no group.
 
 ## README claims to correct
 
-- "Panic wipe — one tap": not implemented (9).
+- "Panic wipe — one tap": now the "Wipe Clairix" page (9).
 - "Quietly sends your location as an SOS": silent with no group (31).
 - "The relay knows as little as possible": true of content, not of metadata
   (1, 2, 3). List what is kept, by whom, for how long.

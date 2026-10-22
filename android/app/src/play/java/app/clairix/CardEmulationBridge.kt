@@ -18,4 +18,7 @@ internal object CardEmulationBridge {
     fun load(hexPairs: List<Pair<String, String>>): Boolean = false
 
     fun clear() = Unit
+
+    @Suppress("UNUSED_PARAMETER")
+    fun disarm(context: Context) = Unit
 }

@@ -18,6 +18,7 @@ import app.clairix.Severity
 import app.clairix.TimelineEvent
 import app.clairix.TimelineLog
 import app.clairix.analysis.TlsCanary
+import app.clairix.security.AppLock
 import app.clairix.security.DuressPhrase
 import app.clairix.security.RelayClock
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -34,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import org.unifiedpush.android.connector.UnifiedPush
@@ -74,6 +76,8 @@ import java.util.UUID
 object CommsRepository {
 
     private const val TAG = "CommsRepository"
+    /** How long an unpair waits for the relay to delete the account before moving on. */
+    private const val RELAY_WIPE_BUDGET_MS = 4_000L
     /**
      * One-time keys on the relay: topped up by a batch whenever fewer than
      * [ONE_TIME_KEYS_LOW] are left, so a few hundred stay published and
@@ -428,7 +432,13 @@ object CommsRepository {
     suspend fun unpair() = withContext(Dispatchers.IO) {
         lock.withLock {
             setBusy(true)
-            runCatching { relay.wipe() }.onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
+            // The relay gets a few seconds to delete the account; an unreachable relay
+            // must not hold up what follows (a wipe gives this whole call six). The
+            // call itself blocks on its own thread until the client's timeout.
+            val remote = scope.launch(Dispatchers.IO) {
+                runCatching { relay.wipe() }.onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
+            }
+            withTimeoutOrNull(RELAY_WIPE_BUDGET_MS) { remote.join() }
             runCatching { UnifiedPush.unregister(appContext) }
             CommsService.stop(appContext)
             LiveLink.disconnect()
@@ -1206,6 +1216,9 @@ object CommsRepository {
 
     fun groups(): List<Group> = store.groups().map { it.copy(memberCount = store.groupMembers(it.id).size) }
 
+    /** The owner's choice about what notifications say; see [CommsConfig.hidePreviews]. */
+    fun setHidePreviews(hide: Boolean) = config.setHidePreviews(hide)
+
     fun group(gid: String): Group? = store.group(gid)?.let { it.copy(memberCount = store.groupMembers(gid).size) }
 
     fun groupMembers(gid: String): List<GroupMember> = store.groupMembers(gid)
@@ -1223,6 +1236,7 @@ object CommsRepository {
 
     /** Marks a group conversation read; group messages carry no receipts. */
     suspend fun markGroupRead(gid: String) = withContext(Dispatchers.IO) {
+        if (AppLock.locked.value) return@withContext
         if (store.groupUnread(gid) == 0) return@withContext
         store.markGroupRead(gid)
         bump()
@@ -1525,7 +1539,7 @@ object CommsRepository {
                 val body = json.optString(CommsWire.F_BODY).take(MAX_BODY)
                 if (body.isEmpty()) return
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
-                val onScreen = openPeer == gid
+                val onScreen = openPeer == gid && !AppLock.locked.value
                 store.insertGroupMessage(gid, ChatMessage(id, gid, Direction.IN, body, ts, "received", read = onScreen, sender = from))
                 if (!onScreen) {
                     CommsNotifications.notifyGroupInbound(appContext, group, store.unreadGroupInbound(gid, 5)) { memberName(gid, it) }
@@ -1966,7 +1980,7 @@ object CommsRepository {
                 }
                 val body = json.optString(CommsWire.F_BODY).take(MAX_BODY)
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
-                val onScreen = openPeer == contact.number
+                val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body, ts, "received", read = onScreen))
                 store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                 if (!onScreen) {
@@ -2019,7 +2033,7 @@ object CommsRepository {
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 val note = json.optString(CommsWire.F_NOTE, "").take(MAX_COIN_NOTE)
                 store.insertTransaction(CoinTx(id, contact.number, Direction.IN, amount, ts, note, txid))
-                val onScreen = openPeer == contact.number
+                val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, paymentLine(amount, note, sent = false), ts, STATUS_PAYMENT, read = onScreen))
                 store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                 if (!onScreen) {
@@ -2046,7 +2060,7 @@ object CommsRepository {
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 // Arrives unread even to an open conversation: it is audio, and the
                 // owner has not heard it; the conversation marks it read as usual.
-                val onScreen = openPeer == contact.number
+                val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, VoicemailBody(audioB64, durationMs).encode(), ts, STATUS_VOICEMAIL, read = false))
                 store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
                 if (!onScreen) {
@@ -2141,7 +2155,7 @@ object CommsRepository {
         }
         CommsMedia.save(id, bytes)
         store.deleteChunks(id)
-        val onScreen = openPeer == contact.number
+        val onScreen = openPeer == contact.number && !AppLock.locked.value
         store.setStatus(id, "received")
         if (onScreen) {
             store.queueReceipt(contact.number, store.markRead(contact.number), CommsWire.STATUS_READ)
@@ -2337,6 +2351,8 @@ object CommsRepository {
 
     /** Marks a conversation read and tells the sender (retried until it goes). */
     suspend fun markRead(peer: String) = withContext(Dispatchers.IO) {
+        // Behind the lock nothing is being read, whatever is on screen underneath it.
+        if (AppLock.locked.value) return@withContext
         val ids = store.markRead(peer)
         if (ids.isEmpty()) return@withContext
         bump()

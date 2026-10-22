@@ -24,6 +24,15 @@ class CommsConfig(context: Context) {
     /** The UnifiedPush endpoint the relay last acknowledged. */
     val pushEndpoint: String? get() = prefs.getString(KEY_PUSH, null)
 
+    /**
+     * Whether notifications say only that something arrived, naming no contact
+     * and quoting nothing: for a phone that is sometimes in other hands while
+     * unlocked. Until the owner chooses, it follows the passcode: set, hide.
+     */
+    fun hidePreviews(passcodeSet: Boolean): Boolean = prefs.getBoolean(KEY_HIDE_PREVIEWS, passcodeSet)
+
+    fun setHidePreviews(hide: Boolean) { prefs.edit().putBoolean(KEY_HIDE_PREVIEWS, hide).apply() }
+
     /** An endpoint the relay is checking: in use once the code it pushed through it is echoed. */
     val pendingPush: String? get() = prefs.getString(KEY_PUSH_PENDING, null)
 
@@ -80,6 +89,7 @@ class CommsConfig(context: Context) {
         const val KEY_PUSH_PENDING = "push_endpoint_pending"
         const val KEY_ONLINE_DEFAULT = "online_default_applied"
         const val KEY_FALLBACK_ROTATED = "fallback_rotated_at"
+        const val KEY_HIDE_PREVIEWS = "hide_previews"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

@@ -32,6 +32,7 @@ import app.clairix.ui.components.SecondaryButton
 import app.clairix.ui.components.SectionHeader
 import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
+import app.clairix.security.Wiper
 
 // The personal-safety pages reached from the Comms tab: fake call and the
 // duress phrase.
@@ -205,6 +206,11 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
         tooShortStored = configured &&
             withContext(Dispatchers.IO) { runCatching { DuressPhrase.needsReplacing(context) }.getOrDefault(false) }
     }
+    // The SOS goes to the owner's groups; in none, the phrase sends nothing at all.
+    var groupCount by remember { mutableStateOf(-1) }
+    LaunchedEffect(Unit) {
+        groupCount = withContext(Dispatchers.IO) { runCatching { CommsRepository.groups().size }.getOrDefault(0) }
+    }
 
     if (showClear) {
         AlertDialog(
@@ -262,6 +268,14 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     Text(
                         "The saved phrase is shorter than the current minimum and will not send an SOS. " +
                         "Replace it below.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClairixTheme.colors.danger
+                    )
+                }
+                if (groupCount == 0) {
+                    Text(
+                        "You are in no group, so the phrase would send nothing. The SOS goes to your groups: " +
+                        "make one in COMMS, or accept an invitation to one, before relying on this.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.danger
                     )
@@ -339,3 +353,69 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
         }
     }
 }
+
+// ── Wipe ───────────────────────────────────────────────────────────────────────
+
+/**
+ * The one-tap wipe the lock screen's duress code also triggers, for when there
+ * is time to open the app: everything Clairix holds is erased and the relay
+ * account deleted. Typing the word is the only safeguard; there is no undo.
+ */
+@Composable
+internal fun WipePage(onBack: (() -> Unit)? = null) {
+    val context = LocalContext.current
+    var typed by remember { mutableStateOf("") }
+    var started by remember { mutableStateOf(false) }
+    val ready = typed.trim().equals(WIPE_WORD, ignoreCase = false)
+
+    ToolPageList(title = "Wipe Clairix", onBack = onBack) {
+        item(key = "§what") {
+            ClairixCard(spacing = 6.dp) {
+                Text("What is erased", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(
+                    "• Every conversation, contact, group and call record, and the keys behind them\n" +
+                    "• Your Clairix number: the relay is asked to delete the account, given a few seconds\n" +
+                    "• The scanner's timeline, location history, cell-tower baseline and trips\n" +
+                    "• The card vault, the passcode, the duress phrase and every setting\n" +
+                    "• Downloaded maps and map tiles, voicemails, attachments and the comms log\n" +
+                    "• Every notification, the clipboard, the push registration and the device-admin role, " +
+                    "so nothing in the shade or in Settings says what was here",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                Text(
+                    "Clairix then restarts as a fresh install. There is no undo and no backup to restore " +
+                    "from. The same wipe runs when the duress passcode is entered at the lock screen, " +
+                    "or after too many wrong passcodes.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+            }
+        }
+        item(key = "§do-hdr") { SectionHeader("Wipe now") }
+        item(key = "§do") {
+            ClairixCard {
+                ClairixTextField(
+                    value = typed,
+                    onValueChange = { typed = it.take(8) },
+                    label = "Type $WIPE_WORD to confirm",
+                    placeholder = WIPE_WORD,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                PrimaryButton(
+                    if (started) "Wiping…" else "Wipe everything now",
+                    onClick = {
+                        if (!ready || started) return@PrimaryButton
+                        started = true
+                        Wiper.start(context)
+                    },
+                    enabled = ready && !started,
+                    tone = Tone.Danger,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+private const val WIPE_WORD = "WIPE"
