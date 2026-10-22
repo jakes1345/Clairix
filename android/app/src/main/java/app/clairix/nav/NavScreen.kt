@@ -335,7 +335,7 @@ private fun NavMapLayer(
                         onShowRegions = onShowRegions,
                     )
                     if (options == null && (search.loading || search.results.isNotEmpty() || search.error != null)) {
-                        SearchResults(search, location, vm::chooseDestination)
+                        SearchResults(search, location, vm::chooseDestination, vm::searchOnline)
                     }
                 }
             }
@@ -713,12 +713,29 @@ private fun SearchBar(
 }
 
 @Composable
-private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -> Unit) {
+private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -> Unit, onOnline: () -> Unit) {
     Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
         Column(Modifier.fillMaxWidth()) {
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             state.error?.let {
                 Text(it, Modifier.padding(14.dp), color = MaterialTheme.colorScheme.error)
+            }
+            if (state.source == SearchSource.OFFLINE && !state.loading) {
+                // The offline search sent nothing anywhere; going online is the owner's call, said plainly.
+                Row(
+                    Modifier.fillMaxWidth().clickable { onOnline() }.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Search online instead", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Sends what you typed, and your IP address, to OpenStreetMap. Finds addresses and places, not only roads.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                HorizontalDivider()
             }
             LazyColumn(Modifier.heightIn(max = 320.dp)) {
                 items(state.results) { place ->
@@ -1279,7 +1296,8 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
             }
             Text(
                 "Routes are planned on your phone from a road map of one state. Download your state once; " +
-                    "routing then works without a connection. Place search, live traffic and reports use the network. " +
+                    "routing then works without a connection, and so does searching the map's road names; searching online " +
+                    "for an address or a place is a separate tap that sends the text to OpenStreetMap. Live traffic and reports use the network. " +
                     "Large states are big downloads, so Wi-Fi is best.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

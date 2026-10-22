@@ -46,7 +46,9 @@ credentials bounded to thirty an hour; payments made idempotent by a
 phone-chosen id; the comms database moved to SQLCipher under a
 Keystore-wrapped key, with the plain database converted once; the comms
 preferences sealed; optional cover traffic; alternate relay addresses with
-failover.
+failover; destination search on the phone over the map's road names, with
+the online search a separate, labelled choice and a dropped pin named from
+the map rather than looked up.
 
 
 ## Tier 1 — the relay is a single point of compulsion
@@ -355,8 +357,10 @@ one-time-key limits match the code.
 7. README with an explicit threat model. *Done.*
 
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
-30, a retention setting (6), and the phase-2 work (several relays, a mesh for no network, cover
-traffic, an on-device geocoder, reproducible builds, an audit).
+30, a retention setting (6), and the phase-2 work still ahead: independent
+relays, a mesh for no network, a mixing layer (cover traffic exists; mixing
+does not), place search beyond road names on the phone, reproducible builds,
+an audit.
 
 ## Not re-tested
 

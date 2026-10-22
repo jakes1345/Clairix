@@ -52,7 +52,7 @@ Live traffic is used only when you are actively navigating and are registered wi
 ### 2.5 Maps and search
 
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's servers. Those servers see your IP address and the area being viewed.
-- **Address search.** When you search for an address, the search text is sent to OpenStreetMap's Nominatim service. When you look up the address of a point, its coordinates are sent there too.
+- **Address search.** A search runs on your phone over the road names of the offline map you downloaded, and a dropped pin is named after the nearest road on that map; nothing is sent. Only when you choose "Search online instead" is the search text sent to OpenStreetMap's Nominatim service.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
 - **Offline road maps and work-zone lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify.
 

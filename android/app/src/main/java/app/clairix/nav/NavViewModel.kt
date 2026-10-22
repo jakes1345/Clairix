@@ -60,11 +60,15 @@ sealed interface GraphState {
     data class Failed(val slug: String, val name: String, val message: String) : GraphState
 }
 
+/** Where a search's results came from. */
+enum class SearchSource { NONE, OFFLINE, ONLINE }
+
 data class SearchState(
     val query: String = "",
     val loading: Boolean = false,
     val results: List<Place> = emptyList(),
     val error: String? = null,
+    val source: SearchSource = SearchSource.NONE,
 )
 
 /** The route choice shown before navigating to [dest]. */
@@ -197,6 +201,9 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var routeJob: Job? = null
     private var reverseJob: Job? = null
+
+    /** How far from a dropped pin the road it is named after may be. */
+    private val PIN_NAME_RADIUS_M = 300.0
 
     init {
         viewModelScope.launch {
@@ -467,20 +474,58 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         _search.value = _search.value.copy(query = q, error = null)
     }
 
+    /** The road-name index of the loaded graph, built once per graph. */
+    private var local: Pair<RoadGraph, LocalGeocoder>? = null
+
+    private fun localGeocoder(graph: RoadGraph): LocalGeocoder {
+        local?.let { (g, geocoder) -> if (g === graph) return geocoder }
+        val name = (_graph.value as? GraphState.Ready)?.name ?: session.value?.slug ?: "this region"
+        return LocalGeocoder(graph, name).also { local = graph to it }
+    }
+
     /**
-     * Runs the typed search. Only on submit: Nominatim's usage policy forbids search-as-you-type.
+     * Runs the typed search on the phone, over the road names of the loaded
+     * map, so nothing typed leaves it. Only without a map does it go online
+     * at once; otherwise online is a separate tap ([searchOnline]). Only on
+     * submit either way: Nominatim's usage policy forbids search-as-you-type.
      */
     fun submitSearch() {
         val q = _search.value.query.trim()
         if (q.isEmpty()) return
+        val graph = session.value?.graph
+        if (graph == null) {
+            searchOnline()
+            return
+        }
         searchJob?.cancel()
-        _search.value = _search.value.copy(loading = true, error = null, results = emptyList())
+        _search.value = _search.value.copy(loading = true, error = null, results = emptyList(), source = SearchSource.OFFLINE)
+        searchJob = viewModelScope.launch {
+            val here = _location.value
+            val results = withContext(Dispatchers.Default) {
+                localGeocoder(graph).search(q, here?.latitude, here?.longitude)
+            }
+            _search.value = _search.value.copy(
+                loading = false,
+                results = results,
+                source = SearchSource.OFFLINE,
+                error = if (results.isEmpty()) "No road named like that on the offline map. Search online to look further." else null,
+            )
+        }
+    }
+
+    /** Sends the typed search to OpenStreetMap, on the owner's say-so. */
+    fun searchOnline() {
+        val q = _search.value.query.trim()
+        if (q.isEmpty()) return
+        searchJob?.cancel()
+        _search.value = _search.value.copy(loading = true, error = null, results = emptyList(), source = SearchSource.ONLINE)
         searchJob = viewModelScope.launch {
             try {
                 val results = geocoder.search(q, session.value?.graph)
                 _search.value = _search.value.copy(
                     loading = false,
                     results = results,
+                    source = SearchSource.ONLINE,
                     error = if (results.isEmpty()) "No places found for \"$q\"" else null,
                 )
             } catch (e: IOException) {
@@ -502,17 +547,24 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         computeRoutes(place, RouteProfile.FASTEST)
     }
 
-    /** Long-press on the map: route there at once, and fill in the address when the lookup returns. */
+    /**
+     * Long-press on the map: route there at once, and name the spot after the
+     * nearest road on the offline map. The spot is the owner's destination, so
+     * it is never sent anywhere to be named; without a map it stays a pin.
+     */
     fun pickPoint(lat: Double, lon: Double) {
         val label = String.format(Locale.US, "%.5f, %.5f", lat, lon)
         val pin = Place("Dropped pin", label, lat, lon)
         _search.value = SearchState()
         computeRoutes(pin, RouteProfile.FASTEST)
         reverseJob?.cancel()
+        val graph = session.value?.graph ?: return
         reverseJob = viewModelScope.launch {
-            val found = try { geocoder.reverse(lat, lon) } catch (e: IOException) { null } ?: return@launch
-            // Keep the pin's exact coordinates: the user chose that spot, not the address centroid.
-            val named = Place(found.name, found.displayName, lat, lon)
+            val road = withContext(Dispatchers.Default) {
+                graph.nearestEdges(lat, lon, PIN_NAME_RADIUS_M, 8).firstNotNullOfOrNull { graph.edgeName(it.edge) }
+            } ?: return@launch
+            // Keep the pin's exact coordinates: the owner chose that spot, not the road.
+            val named = Place("Dropped pin near $road", label, lat, lon)
             val cur = _options.value ?: return@launch
             if (cur.dest.lat == lat && cur.dest.lon == lon) _options.value = cur.copy(dest = named)
         }

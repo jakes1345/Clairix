@@ -683,8 +683,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             "Detection data stays on this phone. Location history, device identifiers, cell tower " +
                                 "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
                                 " are stored locally, sealed under a key in this phone's secure hardware, and never " +
-                                "uploaded. The map downloads tiles from OpenStreetMap and sends address searches to its " +
-                                "Nominatim service; both see your IP address and the area you're looking at. Offline maps " +
+                                "uploaded. The map downloads tiles from OpenStreetMap, which sees your IP address and the " +
+                                "area you're looking at; a place search runs on the phone over the offline map's road names " +
+                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps " +
                                 "and work zones come signed from GitHub. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
                                 "phone only when you export it."

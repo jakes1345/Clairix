@@ -81,10 +81,14 @@ Certificates page can pin the relay's key so that a certificate from a
 compelled authority is refused too.
 
 **Where you go.** Routing runs from map files on the phone, so directions
-keep working with no connection. The map's background tiles and address search
-come from OpenStreetMap's servers when you are online, which see your IP
-address and the area you are looking at; the GPS track never leaves the phone,
-and a trip's first 500 m and final approach are never reported to traffic.
+keep working with no connection, and so does searching for a road: the map's
+road names are indexed on the phone, and a dropped pin is named after the
+nearest road from the same map, so a destination is never sent anywhere to be
+found or named. Searching online for an address or a place is a separate tap
+that says it sends the text to OpenStreetMap. The map's background tiles come
+from OpenStreetMap's servers when you are online, which see your IP address and
+the area you are looking at; the GPS track never leaves the phone, and a trip's
+first 500 m and final approach are never reported to traffic.
 
 ### What it cannot do
 
