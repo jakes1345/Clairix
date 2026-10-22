@@ -34,6 +34,7 @@ import app.clairix.ui.components.KeyValueRow
 import app.clairix.ui.components.LoadingBlock
 import app.clairix.ui.components.Notice
 import app.clairix.ui.components.SecondaryButton
+import app.clairix.ui.components.ToggleRow
 import app.clairix.ui.components.SectionHeader
 import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
@@ -237,6 +238,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
     var tls by remember { mutableStateOf<TlsCanaryResult?>(null) }
     var last by remember { mutableStateOf(TlsCanary.lastResult(context)) }
     var pinned by remember { mutableStateOf(TlsCanary.pinned(context)) }
+    var strict by remember { mutableStateOf(TlsCanary.strict(context)) }
     var checking by remember { mutableStateOf(false) }
     var confirmPin by remember { mutableStateOf(false) }
 
@@ -325,6 +327,17 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     KeyValueRow("Last result", "never run")
                 }
                 pinned?.let { (host, pin) -> KeyValueRow("Pinned ($host)", pin.take(24) + "…") }
+                if (pinned != null) {
+                    ToggleRow(
+                        title = "Refuse the relay if its key changes",
+                        subtitle = "Every comms connection, not only this check, is held to the pinned key: a different one is " +
+                            "refused even when the phone's trust store accepts it, which is what a coerced certificate " +
+                            "authority would produce. Comms then stop until you forget the pin here. Expect that once " +
+                            "whenever the relay's certificate is renewed with a new key.",
+                        checked = strict,
+                        onCheckedChange = { on -> strict = on; TlsCanary.setStrict(context, on) }
+                    )
+                }
                 if (r != null) {
                     r.relayHost?.let { KeyValueRow("Relay", it) }
                     r.observedSpki?.let { KeyValueRow("Observed key", it.take(24) + "…") }

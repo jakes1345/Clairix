@@ -8,11 +8,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * Keeps the comms screens out of screenshots, screen recordings and the
- * Recents thumbnail, whatever the passcode setting. Every comms screen holds
- * [KeepOffScreen] while it is composed; MainActivity sets FLAG_SECURE whenever
- * a hold is taken, a passcode is on, or the build is the comms-only one (where
- * every screen is a comms screen). CallActivity sets it unconditionally.
+ * Which screens asked to be kept out of screenshots, screen recordings and
+ * the Recents thumbnail. MainActivity sets FLAG_SECURE for every screen
+ * unconditionally, as CallActivity always did, so the holds no longer decide
+ * anything about the window; they remain the record of which screens are
+ * showing something that must not leave the phone, which [secure] answers.
  */
 object CommsSecureWindow {
     private val _holds = MutableStateFlow(0)

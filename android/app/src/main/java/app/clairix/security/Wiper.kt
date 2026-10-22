@@ -1,8 +1,13 @@
 package app.clairix.security
 
+import android.app.admin.DevicePolicyManager
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Process
+import androidx.core.app.NotificationManagerCompat
+import app.clairix.CardEmulationBridge
+import app.clairix.Registry
 import app.clairix.ScanService
 import app.clairix.comms.CallService
 import app.clairix.comms.CommsRepository
@@ -12,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.unifiedpush.android.connector.UnifiedPush
 import java.io.File
 import java.security.KeyStore
 
@@ -28,16 +34,22 @@ import java.security.KeyStore
  *   1. Ask the relay to delete this phone's account (CommsRepository.unpair),
  *      given a few seconds: it needs the identity keys that go next, but the
  *      network must never hold up the wipe of what is on the phone.
- *   2. Delete every AndroidKeyStore key. From here on, whatever survives
+ *   2. What lives outside the app's files and would otherwise survive the
+ *      process dying: every notification (a message preview or an SOS with a
+ *      position stays in the shade after the app is gone), the clipboard (a
+ *      safety number or invite link copied earlier), the push registration,
+ *      the device-admin role (an active admin cannot be uninstalled, which is
+ *      itself evidence) and an armed card's answers to NFC readers.
+ *   3. Delete every AndroidKeyStore key. From here on, whatever survives
  *      below by accident (the vault, cached message bodies, the identity
  *      pickle) is ciphertext nobody holds a key to.
- *   3. Clear and delete every SharedPreferences file.
- *   4. Delete every SQLite database.
- *   5. Delete everything under filesDir, cacheDir, code_cache, no_backup, any
+ *   4. Clear and delete every SharedPreferences file.
+ *   5. Delete every SQLite database.
+ *   6. Delete everything under filesDir, cacheDir, code_cache, no_backup, any
  *      other private directory except the native-library link, and the
  *      external files and cache directories (osmdroid's map tiles live there,
  *      and tiles are a record of where the owner has been).
- *   6. Kill the process — Android restarts it to a blank slate.
+ *   7. Kill the process — Android restarts it to a blank slate.
  *
  * [isActive] is also read by the stores that buffer writes ([app.clairix.Store]):
  * a flush after step 5 would put a plaintext timeline straight back on disk.
@@ -70,6 +82,7 @@ object Wiper {
             try {
                 val remote = launch { runCatching { CommsRepository.unpair() } }
                 withTimeoutOrNull(RELAY_BUDGET_MS) { remote.join() }
+                runCatching { wipeOutsideFiles(app) }
                 runCatching { wipeKeystore() }
                 runCatching { wipePrefs(app) }
                 runCatching { wipeDatabases(app) }
@@ -93,6 +106,20 @@ object Wiper {
     fun isPending(context: Context): Boolean = runCatching { pendingMarker(context).exists() }.getOrDefault(false)
 
     private const val PENDING_MARKER = "wipe_pending"
+
+    /** Step 2: what the system holds on the app's behalf rather than in its files. */
+    private fun wipeOutsideFiles(app: Context) {
+        runCatching { NotificationManagerCompat.from(app).cancelAll() }
+        runCatching { app.getSystemService(ClipboardManager::class.java)?.clearPrimaryClip() }
+        runCatching { UnifiedPush.unregister(app) }
+        runCatching {
+            val admin = UnlockLedger.adminComponent(app)
+            val dpm = app.getSystemService(DevicePolicyManager::class.java)
+            if (dpm?.isAdminActive(admin) == true) dpm.removeActiveAdmin(admin)
+        }
+        runCatching { CardEmulationBridge.disarm(app) }
+        Registry.setEmulating(null)
+    }
 
     /** Every key in the app's Keystore namespace: the vault's, the lock's, the biometric one, COMMS'. */
     private fun wipeKeystore() {

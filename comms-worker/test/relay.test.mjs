@@ -4,7 +4,8 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { advance, makePhone, makeRelay, mockFetch, resetClock } from "./harness/fake-env.mjs";
-import { tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
+import { DAY_MS, HOUR_MS, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
+import { sha256Hex } from "../src/env.ts";
 
 afterEach(() => resetClock());
 
@@ -103,7 +104,7 @@ test("issued tokens are stored only as hashes, apart from the account", async ()
   for (const h of hashes) assert.ok(!mine.includes(h));
 });
 
-test("token issuance is rate limited per account", async () => {
+test("token issuance is an hourly allowance per account", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);
   let got = 0;
@@ -111,12 +112,54 @@ test("token issuance is rate limited per account", async () => {
   assert.equal(got, 1000);
   const more = await alice.signed("POST", "/v1/tokens", { count: 100 });
   assert.equal(more.status, 429);
-  assert.ok(Number(more.headers.get("retry-after")) >= 1);
+  const retryAfter = Number(more.headers.get("retry-after"));
+  assert.ok(retryAfter >= 1 && retryAfter <= 3600, `retry-after ${retryAfter}`);
   assert.equal((await alice.signed("POST", "/v1/tokens", { count: 0 })).status, 400);
   assert.equal((await alice.signed("POST", "/v1/tokens", { count: 101 })).status, 400);
-  // Refilled with time.
+  assert.equal((await alice.signed("POST", "/v1/tokens", { count: 5, kind: "coupons" })).status, 400);
+  // Nothing comes back within the hour; the next hour refills the whole allowance.
   advance(60_000);
-  assert.equal((await alice.tokens(100)).length, 40);
+  assert.equal((await alice.signed("POST", "/v1/tokens", { count: 100 })).status, 429);
+  advance(HOUR_MS);
+  assert.equal((await alice.tokens(100)).length, 100);
+});
+
+test("the allowance remembers the hour it was drawn on, never the moment, and is forgotten once full", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  await alice.tokens(10);
+  const box = relay.env.MAILBOX.storageOf(alice.number);
+  const bucket = box.get("hourly:tokens-delivery");
+  assert.deepEqual(Object.keys(bucket).sort(), ["burst", "hour", "perHour", "tokens"]);
+  assert.equal(bucket.hour, Math.floor(Date.now() / HOUR_MS));
+  assert.ok(!JSON.stringify(bucket).includes(String(Date.now()).slice(0, 8)), "a timestamp is stored");
+  // A day later the daily cleanup finds it full and drops it.
+  advance(DAY_MS + 60_000);
+  await relay.env.MAILBOX.runDueAlarms();
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).has("hourly:tokens-delivery"), false);
+});
+
+test("each token kind has its own shards and allowance: one kind cannot be spent as another", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const [traffic] = await alice.tokens(1, "traffic");
+  const [report] = await alice.tokens(1, "report");
+  const [delivery] = await alice.tokens(1, "delivery");
+  assert.ok(relay.env.MAILBOX.storageOf(tokenShardName(await tokenHash(traffic), "traffic")).has(`t:${await tokenHash(traffic)}`));
+  assert.ok(relay.env.MAILBOX.storageOf(tokenShardName(await tokenHash(report), "report")).has(`t:${await tokenHash(report)}`));
+  // Neither buys a send.
+  assert.equal((await alice.send(traffic, bob.number)).status, 403);
+  assert.equal((await alice.send(report, bob.number)).status, 403);
+  assert.equal((await alice.send(delivery, bob.number)).status, 202);
+  // Report tokens are the scarce kind.
+  let reports = 1;
+  for (let i = 0; i < 40; i++) {
+    const res = await alice.signed("POST", "/v1/tokens", { count: 10, kind: "report" });
+    if (res.status !== 200) break;
+    reports += res.json.tokens.length;
+  }
+  assert.equal(reports, 30);
 });
 
 test("expired token hashes are cleaned up by the shard's alarm", async () => {
@@ -136,12 +179,12 @@ test("each mailbox caps what it accepts from everyone together", async () => {
   const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
   let accepted = 0;
   let last;
-  for (let i = 0; i < 1300; i++) {
+  for (let i = 0; i < 2500; i++) {
     last = await box.enqueue("AAAA");
     if (last.ok) accepted++;
     else break;
   }
-  assert.equal(accepted, 1200);
+  assert.equal(accepted, 1800);
   assert.equal(last.status, 429);
   // Through the Worker the same limit is a 429 with Retry-After.
   const alice = await makePhone(relay);
@@ -151,14 +194,64 @@ test("each mailbox caps what it accepts from everyone together", async () => {
   assert.ok(res.headers.get("retry-after"));
 });
 
-test("a signed request no longer records when its owner was last seen", async () => {
+test("nothing a mailbox stores says when its owner was last here", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);
-  const before = relay.env.MAILBOX.storageOf(alice.number).get("profile");
-  assert.equal(before.lastSeen, undefined);
-  advance(60_000);
-  await alice.signed("GET", "/v1/me");
-  assert.deepEqual(relay.env.MAILBOX.storageOf(alice.number).get("profile"), before);
+  const bob = await makePhone(relay);
+  const fetches = mockFetch(() => new Response("ok"));
+  try {
+    await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAlice" });
+    const box = relay.env.MAILBOX.storageOf(alice.number);
+    const before = new Map([...box].map(([k, v]) => [k, JSON.stringify(v)]));
+    advance(7 * 60_000 + 1234);
+    const t0 = Date.now();
+    // Everything an active owner does in a quiet quarter of an hour.
+    await alice.signed("GET", "/v1/me");
+    await alice.signed("GET", "/v1/turn");
+    await alice.lookup(bob.number, undefined, false);
+    await alice.inbox();
+    const [t] = await bob.tokens(1);
+    await bob.send(t, alice.number);
+    await relay.env.MAILBOX.settle();
+    await alice.inbox();
+    const after = relay.env.MAILBOX.storageOf(alice.number);
+    for (const [k, v] of after) {
+      if (k === "nonces") {
+        // Kept for the replay window, to the minute.
+        for (const seen of Object.values(v)) assert.equal(seen % 60_000, 0, "a nonce is stored with its exact time");
+        continue;
+      }
+      if (k.startsWith("q:") || k === "queueCount" || k === "wakeCheck") continue; // the envelope itself, until acked
+      if (k.startsWith("hourly:")) {
+        assert.equal(v.hour, Math.floor(t0 / HOUR_MS), `${k} keeps something finer than the hour`);
+        continue;
+      }
+      assert.equal(JSON.stringify(v), before.get(k), `${k} changed`);
+    }
+    assert.equal(after.has("lastFetchAt"), false);
+    assert.equal(after.has("lastWakeAt"), false);
+    assert.ok(![...after.keys()].some((k) => k.startsWith("bucket:")));
+    assert.equal(after.get("profile").createdAt % DAY_MS, 0, "the registration time is kept to the day");
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a lookup takes the number in the body, and the old paths still answer the same", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay, { oneTimeKeys: 5 });
+  const byBody = (await alice.lookup(bob.number, undefined, false)).json.identity;
+  const byPath = (await alice.signed("GET", `/v1/identity/${bob.number}`)).json.identity;
+  assert.deepEqual(byBody, byPath);
+  assert.equal(byBody.ed25519, bob.ed25519);
+  assert.equal((await alice.lookup("123", undefined, false)).status, 400);
+  assert.equal((await alice.lookup(bob.number, "wrong-pin")).status, 404);
+  const claimed = (await alice.lookup(bob.number)).json.bundle;
+  assert.ok(claimed.oneTimeKey);
+  const legacy = (await alice.signed("GET", `/v1/bundle/${bob.number}`)).json.bundle;
+  assert.ok(legacy.oneTimeKey);
+  assert.notEqual(legacy.oneTimeKey.id, claimed.oneTimeKey.id);
 });
 
 // ── One-time keys ──────────────────────────────────────────────────────────
@@ -215,6 +308,8 @@ test("a claimed key that no send follows up goes back into the pool, last", asyn
   assert.equal(await bob.oneTimeKeys(), 2);
   advance(OTK_CLAIM_WINDOW_MS + 1);
   assert.equal(await bob.oneTimeKeys(), 3);
+  // The lapsed ticket is dated to the day, not the minute the lookup happened.
+  for (const l of relay.env.MAILBOX.storageOf(bob.number).get("lapsedClaims")) assert.equal(l.at % DAY_MS, 0);
   // It is offered again only after every key that was never handed out.
   const carol = await makePhone(relay);
   const offered = [];
@@ -267,7 +362,7 @@ test("who looked up whom is never stored", async () => {
   const alice = await makePhone(relay);
   const bob = await makePhone(relay, { oneTimeKeys: 5 });
   await alice.bundle(bob.number);
-  await alice.signed("GET", `/v1/identity/${bob.number}`);
+  await alice.identity(bob.number);
   const stored = everythingStored(relay, (n) => n === alice.number);
   assert.ok(!stored.includes(bob.number), "the target's number is in the requester's storage");
   // Nor any hash of it: no stored key or value mentions a digest of the number.
@@ -275,7 +370,7 @@ test("who looked up whom is never stored", async () => {
     const h = await tokenHash(prefix + bob.number);
     assert.ok(!stored.includes(h.slice(0, 16)));
   }
-  assert.ok(![...relay.env.MAILBOX.storageOf(alice.number).keys()].some((k) => k.startsWith("bucket:claim")));
+  assert.ok(![...relay.env.MAILBOX.storageOf(alice.number).keys()].some((k) => k.startsWith("bucket:")));
 });
 
 test("token batches expire on the hour", async () => {
@@ -511,4 +606,95 @@ test("push endpoint changes are rate limited", async () => {
   } finally {
     fetches.restore();
   }
+});
+
+// ── Registration, replay and what a send reveals ──────────────────────────
+
+test("a registration must be recent, and a captured one cannot be replayed into a second account", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const headers = { "x-clairix-sig": await alice.sign(alice.registrationBody), "cf-connecting-ip": "203.0.113.9" };
+  // The same body again, at once: its keys are Alice's.
+  const again = await relay.call("POST", "/v1/register", { body: alice.registrationBody, headers });
+  assert.equal(again.status, 409);
+  // And six minutes on, it is stale before its keys are even looked at.
+  advance(6 * 60_000);
+  const stale = await relay.call("POST", "/v1/register", { body: alice.registrationBody, headers });
+  assert.equal(stale.status, 401);
+  // A body without a timestamp never registers.
+  const without = JSON.stringify({ ...JSON.parse(alice.registrationBody), ts: undefined });
+  const res = await relay.call("POST", "/v1/register", { body: without, headers: { ...headers, "x-clairix-sig": await alice.sign(without) } });
+  assert.equal(res.status, 401);
+});
+
+test("a key belongs to one account; deleting the account gives it back", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  // Mallory registers again with her own identity key but Alice's Curve25519 key.
+  const body = { ...JSON.parse(mallory.registrationBody), ts: Date.now(), curve25519: alice.curve25519 };
+  body.signature = await mallory.sign(`${alice.curve25519}|${body.sealing}`);
+  const text = JSON.stringify(body);
+  const res = await relay.call("POST", "/v1/register", { body: text, headers: { "x-clairix-sig": await mallory.sign(text), "cf-connecting-ip": "203.0.113.10" } });
+  assert.equal(res.status, 409);
+  assert.ok(!(await relay.call("GET", "/")).json.error);
+  // Alice deletes her account, and so does Mallory: Alice's Curve25519 key and
+  // Mallory's own keys are all free, and the same body now registers.
+  assert.equal((await alice.signed("DELETE", "/v1/me")).status, 200);
+  assert.equal((await mallory.signed("DELETE", "/v1/me")).status, 200);
+  const retry = JSON.stringify({ ...body, ts: Date.now() });
+  const after = await relay.call("POST", "/v1/register", { body: retry, headers: { "x-clairix-sig": await mallory.sign(retry), "cf-connecting-ip": "203.0.113.11" } });
+  assert.equal(after.status, 201);
+  // While Alice still held her account, Mallory's first account kept its own keys.
+  const stillMine = await relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(`key:${await sha256Hex(mallory.ed25519)}`)).claimKey("000000000");
+  assert.equal(stillMine, false);
+});
+
+test("an account from before keys were recorded has them recorded on its next request", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const box = relay.env.MAILBOX.storageOf(alice.number);
+  const profile = box.get("profile");
+  delete profile.keysClaimed;
+  box.set("profile", profile);
+  for (const [name] of relay.env.MAILBOX.objects) if (name.startsWith("key:")) relay.env.MAILBOX.objects.delete(name);
+  await alice.signed("GET", "/v1/me");
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).get("profile").keysClaimed, true);
+  assert.equal([...relay.env.MAILBOX.objects.keys()].filter((n) => n.startsWith("key:")).length, 3);
+});
+
+test("a send to a number that does not exist looks exactly like one that does", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [t1, t2] = await alice.tokens(2);
+  const res = await alice.send(t1, "987654321");
+  assert.equal(res.status, 202);
+  assert.match(res.json.id, /^[0-9a-z]+-[0-9a-f-]{36}$/);
+  // The token was spent all the same.
+  assert.equal((await alice.send(t1, "987654321")).status, 403);
+  assert.equal((await alice.send(t2, "987654321")).status, 202);
+  // And a payment to it is refused like any other refused payment.
+  const pay = await alice.signed("POST", "/v1/coin/pay", { to: "987654321", amount: 1 });
+  assert.equal(pay.status, 400);
+  assert.equal(pay.json.error, "Payment refused");
+});
+
+test("a body larger than the relay could ever want is refused before anything else", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [token] = await alice.tokens(1);
+  const huge = "A".repeat(300 * 1024);
+  const res = await relay.call("POST", "/v1/send", { body: { to: alice.number, envelope: huge }, headers: { "x-clairix-token": token } });
+  assert.equal(res.status, 413);
+  // Not spent: the request was refused before the token was looked at.
+  assert.equal((await alice.send(token, alice.number)).status, 202);
+});
+
+test("the secret comparison gives nothing away about the secret's length", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  const body = { ...JSON.parse(bob.registrationBody), ts: Date.now(), secret: "x".repeat(200) };
+  const text = JSON.stringify(body);
+  const res = await relay.call("POST", "/v1/register", { body: text, headers: { "x-clairix-sig": await bob.sign(text), "cf-connecting-ip": "203.0.113.12" } });
+  assert.equal(res.status, 403);
 });

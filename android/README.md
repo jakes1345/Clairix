@@ -72,6 +72,18 @@ gradle test                         # unit tests for every variant
 
 `./gradlew` works too; CI installs Gradle itself.
 
+## Settings that matter for privacy
+
+- **Phone check → Certificates → "Refuse the relay if its key changes"** pins
+  the relay's TLS key on every handshake; off by default because a Workers
+  relay's key rotates with its certificate.
+- **Comms → "Hide names and previews in notifications"**, on by default once a
+  passcode is set.
+- **Settings → App lock → wipe after N wrong passcodes** (1, 3, 5, 10 or never)
+  and the duress passcode.
+- **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists
+  what it takes with it, in order.
+
 ## Release signing
 
 Release builds are signed by Gradle when these environment variables are set,
@@ -118,6 +130,13 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 
 ## Cutting a release
 
+Before the first release, make the asset signing key (`tools/signing/README.md`):
+`python3 tools/signing/keygen.py` writes `android/asset-signing.pub` and
+`android/asset-signing.pem` (commit both) and prints the secret for the
+`ASSET_SIGNING_KEY` repository secret. The maps, work zones and the release
+checksums are signed with it, and the app refuses downloads it cannot verify;
+a release build fails without the public key file.
+
 1. Set `versionName` and raise `versionCode` in `app/build.gradle.kts`
    (3.0.0-beta.1 is versionCode 21). The workflow refuses a tag that does not
    match `versionName`.
@@ -126,9 +145,11 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
    created at its head); or Actions → Release → Run workflow with the tag.
 3. The workflow tests the crypto crate, builds and signs `fullSuite` and
    `fullComms` APKs and the `playSuite` bundle, checks the Play manifest has no
-   card emulation, and publishes a GitHub Release with the three files and
-   `SHA256SUMS.txt`. A tag ending in `-alpha.N`, `-beta.N` or `-rc.N` is marked
-   as a pre-release.
+   card emulation, and publishes a GitHub Release with the three files,
+   `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed by the
+   asset signing key). A tag ending in `-alpha.N`, `-beta.N` or `-rc.N` is
+   marked as a pre-release. A run started by hand must start from `main`, a
+   `release/v*` branch or a `v*` tag.
 4. Check the certificate digest the "Collect and verify artifacts" step prints:
    it must be the same as the previous release's, or phones will refuse the update.
 5. Upload `clairix-play-<tag>.aab` in the Play Console (a beta goes to a testing
@@ -148,9 +169,13 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 
 Declining notifications costs you the alert, not the detector — scanning still runs.
 
-Detection data stays on the phone. The one network use is the Map tab, which
-downloads map tiles from OpenStreetMap — the tile server sees your IP address and
-the area you are viewing, and nothing else.
+Detection data stays on the phone, sealed on disk under a key in the phone's
+secure hardware. The app's network connections are: the Clairix relay (Comms,
+and anonymous live traffic while navigating), OpenStreetMap's tile servers and
+its Nominatim address search (the Map tab), GitHub Releases (signed offline map
+graphs and work-zone files) and Cloudflare TURN (a call that cannot connect
+directly). What each one sees, and what the app can and cannot protect against,
+is in the root [`README.md`](../README.md) and at clairix.app/security.
 
 ## Screen on versus screen off
 

@@ -131,6 +131,7 @@ import app.clairix.ui.components.*
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
+import app.clairix.ui.components.setSensitiveText
 
 // ── Permissions ─────────────────────────────────────────────────────────
 
@@ -229,19 +230,11 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         AppSettings.load(this)
         AppLock.init(this)
-        // With a passcode set, what was on screen must not outlive the lock in the
-        // Recents thumbnail (taken as the app leaves, before the relock delay is
-        // up) or in a screenshot taken by another app. The comms screens are kept
-        // out of screenshots, recordings and Recents always, passcode or not (and
-        // in the comms-only build every screen is one).
-        lifecycleScope.launch {
-            combine(AppLock.enabled, CommsSecureWindow.holds) { passcode, holds ->
-                CommsSecureWindow.secure(passcode, holds, commsOnlyBuild = !BuildConfig.FULL_ACCESS)
-            }.collect { on ->
-                if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            }
-        }
+        // Nothing this app shows belongs in a screenshot, a screen recording or
+        // the Recents thumbnail: a card's UID and APDUs, the timeline with its
+        // positions, a conversation, the Device tab. Secure always, passcode or
+        // not; the screen-recording monitor reports attempts regardless.
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         Registry.bindTrustStore(this)
 
         if (BuildConfig.FULL_ACCESS) {
@@ -1391,6 +1384,7 @@ private fun MainApp(
                 when (commsAction) {
                     CommsAction.FAKE_CALL -> FakeCallPage()
                     CommsAction.DURESS -> DuressPage()
+                    CommsAction.WIPE -> WipePage()
                     null -> CommsScreen(
                         openPeer = threadRequest,
                         onPeerConsumed = { Registry.takeThreadRequest() },
@@ -3169,7 +3163,7 @@ private fun NfcTagRow(
             Spacer(Modifier.weight(1f))
             GhostButton(
                 if (copied) "Copied" else "Copy UID",
-                onClick = { clipboard.setText(AnnotatedString(t.uid)); copied = true },
+                onClick = { clipboard.setSensitiveText("Card UID", t.uid); copied = true },
                 tone = if (copied) Tone.Safe else Tone.Neutral
             )
         }

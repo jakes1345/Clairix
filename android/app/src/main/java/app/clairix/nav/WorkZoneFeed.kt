@@ -116,6 +116,8 @@ class WorkZoneFeed(context: Context, val slug: String) {
         private const val RELEASE_BASE = "https://github.com/jakes1345/Clairix/releases/download/workzones"
         const val REFRESH_INTERVAL_MS = 15 * 60_000L
         const val MAX_BYTES = 10L * 1024 * 1024
+        /** A signature file is one line. */
+        const val SIGNATURE_MAX_BYTES = 1024L
         private const val FORMAT_VERSION = 1
 
         fun url(slug: String): String = "$RELEASE_BASE/workzones-$slug.json.gz"
@@ -233,8 +235,9 @@ class WorkZoneFeed(context: Context, val slug: String) {
     private fun download() {
         val meta = readMeta()
         val builder = Request.Builder().url(url(slug)).get()
-        // Validators only make sense while the file they describe is still on disk.
-        if (cacheFile.isFile) {
+        // Validators only make sense while the file they describe is still on
+        // disk, and only for a copy whose signature was checked when it was stored.
+        if (cacheFile.isFile && meta?.optBoolean("signed") == true) {
             meta?.optString("etag")?.takeIf { it.isNotEmpty() }?.let { builder.header("If-None-Match", it) }
             meta?.optString("lastModified")?.takeIf { it.isNotEmpty() }?.let { builder.header("If-Modified-Since", it) }
         }
@@ -248,14 +251,29 @@ class WorkZoneFeed(context: Context, val slug: String) {
             val declared = body.contentLength()
             if (declared > MAX_BYTES) throw IOException("Work zone file is larger than ${MAX_BYTES / (1024 * 1024)} MiB")
             val raw = body.byteStream().use { readCapped(it, MAX_BYTES) }
+            // Verified before it is parsed or kept: the file is published by the
+            // same workflow as the maps, and signed by the same key.
+            if (!AssetSignature.verify(raw, fetchSignature(url(slug) + ".sig"))) {
+                throw IOException("The work zone file is not signed by the Clairix release key")
+            }
             val text = String(gunzipCapped(raw), Charsets.UTF_8)
             val zones = parse(text, nowSec(), slug)
             writeAtomically(cacheFile, raw)
-            val m = JSONObject()
+            val m = JSONObject().put("signed", true)
             resp.header("ETag")?.let { m.put("etag", it) }
             resp.header("Last-Modified")?.let { m.put("lastModified", it) }
             writeAtomically(metaFile, m.toString().toByteArray(Charsets.UTF_8))
             _zones.value = zones
+        }
+    }
+
+    /** The one-line signature published beside a work zone file. */
+    private fun fetchSignature(url: String): String {
+        http.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+            if (resp.code == 404) throw IOException("No signature has been published for this work zone file")
+            if (!resp.isSuccessful) throw IOException("Signature download failed: HTTP ${resp.code}")
+            val body = resp.body ?: throw IOException("Empty signature")
+            return String(body.byteStream().use { readCapped(it, SIGNATURE_MAX_BYTES) }, Charsets.US_ASCII).trim()
         }
     }
 
@@ -270,6 +288,12 @@ class WorkZoneFeed(context: Context, val slug: String) {
 
     private fun loadCache() {
         if (!cacheFile.isFile) return
+        // A copy kept by a version that did not check signatures is not trusted now.
+        if (readMeta()?.optBoolean("signed") != true) {
+            cacheFile.delete()
+            metaFile.delete()
+            return
+        }
         try {
             val raw = cacheFile.inputStream().use { readCapped(it, MAX_BYTES) }
             _zones.value = parse(String(gunzipCapped(raw), Charsets.UTF_8), nowSec(), slug)

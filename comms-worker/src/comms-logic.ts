@@ -21,13 +21,45 @@ export const DELIVERY_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 export const DELIVERY_TOKEN_TTL_MS = 14 * 24 * 60 * 60_000;
 /** Most tokens handed out in one request. */
 export const DELIVERY_TOKEN_BATCH_MAX = 100;
+
+// ── Token kinds ─────────────────────────────────────────────────────────────
+//
+// The same mechanism authorises every request the relay must not be able to
+// tie to an account: sends, and everything about traffic. Each kind has its
+// own shards (a traffic token cannot buy a send, nor the other way round) and
+// its own allowance per account per hour, which is the only per-phone bound
+// the anonymous routes have.
+
+export type TokenKind = "delivery" | "traffic" | "report";
+
+export interface TokenKindSpec {
+  /** Shard object name prefix: one of 256 objects per kind, by the hash's first byte. */
+  shard: string;
+  /** Issued per account per hour, and the most saved up. */
+  perHour: number;
+  burst: number;
+}
+
+export const TOKEN_KINDS: Record<TokenKind, TokenKindSpec> = {
+  /** A 5 MB video is 171 envelopes and a message to a full group 199; a script cannot flood anyone faster than this. */
+  delivery: { shard: "dtok", perHour: 1000, burst: 1000 },
+  /** A navigating phone spends about four a minute: a probe batch, a live poll, a provider poll, the odd vote. */
+  traffic: { shard: "ttok", perHour: 360, burst: 400 },
+  /** New incident reports: a person makes a handful an hour; a script that makes more is what this stops. */
+  report: { shard: "rtok", perHour: 20, burst: 30 },
+};
+
+export function isTokenKind(raw: unknown): raw is TokenKind {
+  return raw === "delivery" || raw === "traffic" || raw === "report";
+}
+
 /**
- * Tokens per account: a refill of 40 a minute (2,400 an hour) and up to 1,000
- * saved up. A 5 MB video is 171 envelopes and a message to a full group 199, so
- * a burst covers either; a script cannot flood anyone faster than this.
+ * A trip pseudonym: 16 random bytes the phone makes up for a drive and
+ * changes every few minutes. Probes, reports and votes carry it so the
+ * traffic object can count distinct vehicles and take one vote per vehicle,
+ * without anything that reaches back to a phone.
  */
-export const DELIVERY_TOKEN_PER_MINUTE = 40;
-export const DELIVERY_TOKEN_BURST = 1000;
+export const TRIP_RE = /^[A-Za-z0-9_-]{22}$/;
 
 export function base64url(bytes: Uint8Array): string {
   let bin = "";
@@ -44,16 +76,16 @@ export async function tokenHash(token: string): Promise<string> {
   return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
 }
 
-/** The object a token hash lives in: one of 256, by its first byte. */
-export function tokenShardName(hashHex: string): string {
-  return `dtok:${hashHex.slice(0, 2)}`;
+/** The object a token hash lives in: one of 256 per kind, by its first byte. */
+export function tokenShardName(hashHex: string, kind: TokenKind = "delivery"): string {
+  return `${TOKEN_KINDS[kind].shard}:${hashHex.slice(0, 2)}`;
 }
 
 /** Groups token hashes by the shard object that keeps them. */
-export function groupByShard(hashes: string[]): Map<string, string[]> {
+export function groupByShard(hashes: string[], kind: TokenKind = "delivery"): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const h of hashes) {
-    const name = tokenShardName(h);
+    const name = tokenShardName(h, kind);
     const list = out.get(name);
     if (list) list.push(h);
     else out.set(name, [h]);
@@ -85,10 +117,10 @@ export interface OtkClaim {
 /** How long a claimed key waits for the send that uses it. */
 export const OTK_CLAIM_WINDOW_MS = 15 * 60_000;
 /**
- * One-time keys one requester may claim in all, from anyone: thirty an hour,
- * ten at once. The bucket is the requester's own and names no target.
+ * One-time keys one requester may claim in all, from anyone: ten an hour.
+ * The allowance is the requester's own and names no target.
  */
-export const OTK_CLAIMS_PER_REQUESTER_PER_MINUTE = 0.5;
+export const OTK_CLAIMS_PER_REQUESTER_PER_HOUR = 10;
 export const OTK_CLAIMS_PER_REQUESTER_BURST = 10;
 /**
  * One-time keys one requester may claim from one target: three an hour. Kept
@@ -98,8 +130,8 @@ export const OTK_CLAIMS_PER_REQUESTER_BURST = 10;
  */
 export const OTK_CLAIMS_PER_PAIR_PER_MINUTE = 3 / 60;
 export const OTK_CLAIMS_PER_PAIR_BURST = 3;
-/** One-time keys a target hands out in all: sixty an hour, twenty at once. */
-export const OTK_CLAIMS_PER_TARGET_PER_MINUTE = 1;
+/** One-time keys a target hands out in all: twenty an hour. */
+export const OTK_CLAIMS_PER_TARGET_PER_HOUR = 20;
 export const OTK_CLAIMS_PER_TARGET_BURST = 20;
 /**
  * How long the ticket of a claim whose window passed is remembered. A send
@@ -113,7 +145,22 @@ export const OTK_LAPSED_TICKETS_MAX = 2000;
 export interface LapsedClaim {
   ticket: string;
   keyId: string;
+  /** The day (not the moment) the window passed, for the ticket's own expiry. */
   at: number;
+}
+
+export const DAY_MS = 24 * 60 * 60_000;
+export const HOUR_MS = 60 * 60_000;
+export const MINUTE_MS = 60_000;
+
+/** [nowMs] rounded down to the start of its UTC day. */
+export function dayFloor(nowMs: number): number {
+  return Math.floor(nowMs / DAY_MS) * DAY_MS;
+}
+
+/** [nowMs] rounded down to the minute. */
+export function minuteFloor(nowMs: number): number {
+  return Math.floor(nowMs / MINUTE_MS) * MINUTE_MS;
 }
 
 /** Splits claims into those still waiting and those whose window has passed. */
@@ -158,6 +205,61 @@ export class MemoryBuckets {
     }
     return ok;
   }
+}
+
+// ── Hourly allowances ────────────────────────────────────────────────────────
+//
+// A limit that must survive the object being evicted is stored, and what is
+// stored about it is kept to the hour: the bucket remembers the hour it was
+// last drawn on, not the moment, refills at the top of each hour, and is
+// deleted once it is full again. So the relay holds "drawn on in hour X" for
+// as long as the allowance takes to come back, and nothing after that.
+
+export interface HourlyBucket {
+  tokens: number;
+  /** Hours since the epoch of the last draw. */
+  hour: number;
+  perHour: number;
+  burst: number;
+}
+
+export function hourOf(nowMs: number): number {
+  return Math.floor(nowMs / HOUR_MS);
+}
+
+/** [b], or a fresh full bucket, refilled to [nowMs]. */
+export function hourlyRefill(b: HourlyBucket | null, nowMs: number, perHour: number, burst: number): HourlyBucket {
+  const hour = hourOf(nowMs);
+  if (!b) return { tokens: burst, hour, perHour, burst };
+  const tokens = Math.min(burst, Math.max(0, b.tokens) + Math.max(0, hour - b.hour) * perHour);
+  return { tokens, hour, perHour, burst };
+}
+
+/**
+ * Draws up to [want] from the bucket: as many as it holds, and nothing with
+ * a Retry-After (seconds until it next holds one) when it holds none.
+ */
+export function hourlyTake(
+  b: HourlyBucket | null,
+  nowMs: number,
+  perHour: number,
+  burst: number,
+  want = 1,
+): { granted: number; bucket: HourlyBucket; retryAfter: number } {
+  const bucket = hourlyRefill(b, nowMs, perHour, burst);
+  const granted = Math.max(0, Math.min(Math.floor(want), Math.floor(bucket.tokens)));
+  bucket.tokens -= granted;
+  let retryAfter = 0;
+  if (granted === 0) {
+    const hoursNeeded = perHour > 0 ? Math.max(1, Math.ceil((1 - bucket.tokens) / perHour)) : 1;
+    retryAfter = Math.max(1, Math.ceil(((bucket.hour + hoursNeeded) * HOUR_MS - nowMs) / 1000));
+  }
+  return { granted, bucket, retryAfter };
+}
+
+/** Whether the bucket would be full again now: nothing left worth remembering. */
+export function hourlyFull(b: HourlyBucket, nowMs: number): boolean {
+  return hourlyRefill(b, nowMs, b.perHour, b.burst).tokens >= b.burst;
 }
 
 /**

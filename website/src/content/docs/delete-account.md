@@ -51,7 +51,7 @@ Because the relay has no email address or phone number on file, we cannot verify
 ## What is not deleted, and why
 
 - **Messages already delivered to other people.** They hold their own copies on their own phones, encrypted with their own keys. We cannot reach them and neither can the relay.
-- **Anonymous traffic samples** sent while navigating. These carry only a salted one-way hash of your number and are deleted automatically within two hours.
+- **Anonymous traffic samples** sent while navigating. These carry no account at all, only a pseudonym your phone made up for that drive and replaced every ten minutes, and they are deleted automatically within two hours.
 - **Clairix Full only: other people's record of coin transfers** with you. Each account keeps its own transaction list.
 
 ## Retention if you do nothing

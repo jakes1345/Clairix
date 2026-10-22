@@ -340,35 +340,18 @@ export function quotaTake(counter: QuotaCounter | null, now: number, cap: number
 }
 
 /**
- * Share of a provider's daily cap one caller (phone) may spend, so one phone,
- * or one cycling through boxes, cannot use up the shared cap for everyone.
- */
-export const PER_CALLER_DAILY_SHARE = 0.25;
-/**
  * Once a provider's calls today reach this share of its cap, only tiles with
  * nothing to show are fetched; tiles with a usable result keep serving it, so
- * the rest of the cap goes to areas that would otherwise show nothing.
+ * the rest of the cap goes to areas that would otherwise show nothing. One
+ * phone's share of the cap is bounded elsewhere, by the traffic tokens its
+ * account is issued: the requests arrive here anonymously.
  */
 export const HIGH_WATER_SHARE = 0.8;
 
-/** A share in (0, 1] from an env var, or the default. */
-export function parseShare(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 && n <= 1 ? n : fallback;
-}
-
-/** Upstream calls one caller may make per provider per UTC day: at least one while the cap allows any. */
-export function callerAllowance(cap: number, share: number): number {
-  return cap <= 0 ? 0 : Math.max(1, Math.floor(cap * share));
-}
-
-/** Today's upstream calls for one provider: all callers', and the requesting caller's. */
+/** Today's upstream calls for one provider, from everyone together. */
 export interface UpstreamUsage {
   globalCount: number;
   cap: number;
-  callerCount: number;
-  callerAllowance: number;
 }
 
 export function highWater(u: UpstreamUsage): boolean {
@@ -378,12 +361,11 @@ export function highWater(u: UpstreamUsage): boolean {
 /**
  * Whether one more upstream call may start: "cap" when the provider's daily
  * cap is reached, "limited" when the high-water mark (for a tile that has a
- * usable result) or the caller's allowance stands in the way.
+ * usable result) stands in the way.
  */
 export function upstreamGate(u: UpstreamUsage, hasUsable: boolean): "fetch" | "cap" | "limited" {
   if (u.globalCount >= u.cap) return "cap";
   if (hasUsable && highWater(u)) return "limited";
-  if (u.callerCount >= u.callerAllowance) return "limited";
   return "fetch";
 }
 
@@ -482,11 +464,10 @@ export function planUpstream(
     else eligible.push(t);
   }
   const capLeft = Math.max(0, usage.cap - usage.globalCount);
-  const callerLeft = Math.max(0, usage.callerAllowance - usage.callerCount);
-  const budget = Math.min(perRequest, capLeft, callerLeft);
+  const budget = Math.min(perRequest, capLeft);
   const picked = new Set(pickTilesToFetch(eligible, rows, bbox, now, budget));
-  // Why the tiles left over were left over: the tightest of the three limits.
-  const leftover: UpstreamPlan = capLeft <= budget ? "quota" : callerLeft <= budget ? "limited" : "defer";
+  // Why the tiles left over were left over: the cap, or just this request's share.
+  const leftover: UpstreamPlan = capLeft <= budget ? "quota" : "defer";
   for (const t of eligible) out.set(t.key, picked.has(t.key) ? "fetch" : leftover);
   return out;
 }

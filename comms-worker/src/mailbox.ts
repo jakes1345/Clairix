@@ -3,14 +3,19 @@ import { verifyEd25519 } from "./auth";
 import type { Env } from "./env";
 import {
   DELIVERY_TOKEN_TTL_MS,
+  dayFloor,
   expireClaims,
+  hourlyFull,
+  hourlyTake,
+  type HourlyBucket,
   MemoryBuckets,
+  minuteFloor,
   OTK_CLAIMS_PER_PAIR_BURST,
   OTK_CLAIMS_PER_PAIR_PER_MINUTE,
   OTK_CLAIMS_PER_REQUESTER_BURST,
-  OTK_CLAIMS_PER_REQUESTER_PER_MINUTE,
+  OTK_CLAIMS_PER_REQUESTER_PER_HOUR,
   OTK_CLAIMS_PER_TARGET_BURST,
-  OTK_CLAIMS_PER_TARGET_PER_MINUTE,
+  OTK_CLAIMS_PER_TARGET_PER_HOUR,
   OTK_LAPSED_TICKET_TTL_MS,
   OTK_LAPSED_TICKETS_MAX,
   type LapsedClaim,
@@ -36,9 +41,15 @@ export type { SignedKey } from "./comms-logic";
  * waiting, the one-time keys handed out and not yet used, and the push endpoint
  * the owner chose to be woken through.
  *
+ * What it does not know is when its owner was last here. Nothing about a
+ * request is written beyond its nonce (kept five minutes, to the minute), and
+ * the allowances that have to be stored remember the hour they were drawn on,
+ * not the moment, and only until they have refilled (see comms-logic.ts).
+ *
  * The same class also serves a few objects that are not mailboxes, each named
  * after what it holds: "invite:<code>", "register-guard:<address>" and the
- * delivery-token shards "dtok:<xx>".
+ * token shards "dtok:<xx>" (delivery), "ttok:<xx>" (traffic) and "rtok:<xx>"
+ * (incident reports).
  */
 
 export interface Profile {
@@ -52,6 +63,8 @@ export interface Profile {
   /** Whether the number can be looked up. Unlisted numbers are reached by QR only. */
   listed: boolean;
   createdAt: number;
+  /** Whether this account's keys are recorded as its own (see Mailbox.claimKey); accounts from before that are claimed on their next request. */
+  keysClaimed?: boolean;
 }
 
 export interface Envelope {
@@ -89,13 +102,14 @@ const MAX_ONE_TIME_KEYS = 500;
 const NONCE_WINDOW_MS = 5 * 60_000;
 const LOOKUP_LIMIT_PER_MINUTE = 30;
 /**
- * Envelopes into one mailbox, from everyone together: the relay no longer knows
+ * Envelopes into one mailbox, from everyone together: the relay does not know
  * who sends, so the recipient is protected here and by MAX_QUEUE. A
  * reconnecting contact sends a receipt for every message it missed, so bursts
- * are normal.
+ * are normal. Stored to the hour, so the hourly refill is what the burst
+ * allows in any one hour.
  */
-const INBOUND_LIMIT_PER_MINUTE = 600;
-const INBOUND_BURST = 1200;
+const INBOUND_PER_HOUR = 36_000;
+const INBOUND_BURST = 1800;
 /** Registration attempts per client address, against guessing the enrollment secret. */
 const REGISTER_LIMIT_PER_MINUTE = 10;
 /** After one push wake, further envelopes do not wake again until the phone has fetched, or this long. */
@@ -201,6 +215,33 @@ export class Mailbox extends DurableObject<Env> {
     return true;
   }
 
+  // ── Key ownership (in objects of their own, named "key:<sha256 of the key>") ──
+
+  /**
+   * Records that [holder] registered this key. False when another number
+   * already did: one identity, Curve25519 or sealing key belongs to one
+   * account, so nobody can register a key that is someone else's and have
+   * their contacts' phones bind it to the wrong identity.
+   */
+  async claimKey(holder: string): Promise<boolean> {
+    const current = await this.ctx.storage.get<string>("keyHolder");
+    if (current !== undefined && current !== holder) return false;
+    if (current === undefined) await this.ctx.storage.put("keyHolder", holder);
+    return true;
+  }
+
+  /** Gives the key back when [holder]'s account is deleted. */
+  async releaseKey(holder: string): Promise<void> {
+    if ((await this.ctx.storage.get<string>("keyHolder")) === holder) await this.ctx.storage.deleteAll();
+  }
+
+  async markKeysClaimed(): Promise<void> {
+    const profile = await this.ctx.storage.get<Profile>("profile");
+    if (!profile || profile.keysClaimed) return;
+    profile.keysClaimed = true;
+    await this.ctx.storage.put("profile", profile);
+  }
+
   // ── Invites (in an object of their own, named "invite:<code>") ────────
 
   async createInvite(inviter: string, expiresAt: number): Promise<void> {
@@ -244,9 +285,10 @@ export class Mailbox extends DurableObject<Env> {
     const now = Date.now();
     for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS) delete nonces[n];
     if (nonces[nonce] !== undefined) return null;
-    nonces[nonce] = ts;
-    // Only the nonces are written: no "last seen" is kept, so the object does not
-    // record when its owner was active.
+    // Only the nonces are written, each with the minute it arrived (enough to
+    // expire it): no "last seen" is kept, so the object does not record when
+    // its owner was active, and nothing outlives the replay window.
+    nonces[nonce] = minuteFloor(now);
     await this.ctx.storage.put("nonces", nonces);
     return profile;
   }
@@ -286,8 +328,10 @@ export class Mailbox extends DurableObject<Env> {
     const { kept, expired } = expireClaims(claims, now);
     if (expired.length === 0) return otks;
     const pool = otks.concat(expired.map((c) => c.key)).slice(-MAX_ONE_TIME_KEYS);
+    // A lapsed ticket is dated to the day: its expiry needs no more, and the
+    // moment someone looked this number up is not worth keeping for a month.
     const lapsed = ((await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [])
-      .concat(expired.map((c) => ({ ticket: c.ticket, keyId: c.key.id, at: now })))
+      .concat(expired.map((c) => ({ ticket: c.ticket, keyId: c.key.id, at: dayFloor(now) })))
       .filter((l) => now - l.at < OTK_LAPSED_TICKET_TTL_MS)
       .slice(-OTK_LAPSED_TICKETS_MAX);
     await this.ctx.storage.put({ otks: pool, claims: kept, lapsedClaims: lapsed });
@@ -305,7 +349,7 @@ export class Mailbox extends DurableObject<Env> {
   async mayClaimFrom(target: string): Promise<boolean> {
     this.pairClaims ??= new MemoryBuckets(OTK_CLAIMS_PER_PAIR_PER_MINUTE, OTK_CLAIMS_PER_PAIR_BURST);
     if (!this.pairClaims.take(target, Date.now())) return false;
-    return (await this.rateOk("otk-claims-out", OTK_CLAIMS_PER_REQUESTER_PER_MINUTE, OTK_CLAIMS_PER_REQUESTER_BURST)).ok;
+    return (await this.allowanceOk("otk-claims-out", OTK_CLAIMS_PER_REQUESTER_PER_HOUR, OTK_CLAIMS_PER_REQUESTER_BURST)).ok;
   }
 
   /**
@@ -322,7 +366,7 @@ export class Mailbox extends DurableObject<Env> {
     const otks = await this.releaseExpiredClaims(now);
     let oneTimeKey: SignedKey | null = null;
     let claim: string | null = null;
-    if (mayClaim && otks.length > 0 && (await this.rateOk("otk-claims", OTK_CLAIMS_PER_TARGET_PER_MINUTE, OTK_CLAIMS_PER_TARGET_BURST)).ok) {
+    if (mayClaim && otks.length > 0 && (await this.allowanceOk("otk-claims", OTK_CLAIMS_PER_TARGET_PER_HOUR, OTK_CLAIMS_PER_TARGET_BURST)).ok) {
       oneTimeKey = otks.shift() ?? null;
       if (oneTimeKey) {
         claim = randomToken();
@@ -462,46 +506,71 @@ export class Mailbox extends DurableObject<Env> {
     return left > 0;
   }
 
+  // ── Limits ───────────────────────────────────────────────────────────
+  //
+  // Two kinds. Minute-scale limits live in this object's memory and are
+  // forgotten when it is evicted: what they guard (lookups, TURN credentials,
+  // payments) is cheap to grant a few more of, and they must leave no trace
+  // of when the owner was active. Allowances that an eviction must not reset
+  // (invites, push endpoints, one-time keys, the tokens an account may draw,
+  // what a mailbox takes in) are stored, down to the hour, and only until
+  // they have refilled.
+
+  private readonly memory = new Map<string, { tokens: number; at: number }>();
+
   /**
-   * A token bucket per action: [perMinute] refill, up to [burst] saved up.
-   * Returns whether this request may go ahead and, if not, how many seconds
-   * until it may (sent to the client as Retry-After).
+   * A token bucket per action in memory: [perMinute] refill, up to [burst]
+   * saved up. Returns whether this request may go ahead and, if not, how many
+   * seconds until it may (sent to the client as Retry-After).
    */
   async rateOk(action: string, perMinute: number, burst: number = perMinute): Promise<{ ok: boolean; retryAfter: number }> {
-    const key = `bucket:${action}`;
     const now = Date.now();
-    const b = (await this.ctx.storage.get<{ tokens: number; at: number }>(key)) ?? { tokens: burst, at: now };
+    const b = this.memory.get(action) ?? { tokens: burst, at: now };
     b.tokens = Math.min(burst, b.tokens + ((now - b.at) * perMinute) / 60_000);
     b.at = now;
     const ok = b.tokens >= 1;
     if (ok) b.tokens -= 1;
-    await this.ctx.storage.put(key, b);
+    this.memory.set(action, b);
     return { ok, retryAfter: ok ? 0 : Math.max(1, Math.ceil(((1 - b.tokens) * 60) / perMinute)) };
   }
 
   /**
-   * Like [rateOk] for [want] units at once: takes as many as the bucket holds,
-   * up to [want], and returns how many it took (0 with a Retry-After when none).
+   * Draws [want] from a stored hourly allowance: as many as it holds, up to
+   * [want], and how many that was (0 with a Retry-After when none). What is
+   * written is the bucket's level and the hour, never the time.
    */
-  async rateTake(action: string, want: number, perMinute: number, burst: number): Promise<{ granted: number; retryAfter: number }> {
-    const key = `bucket:${action}`;
-    const now = Date.now();
-    const b = (await this.ctx.storage.get<{ tokens: number; at: number }>(key)) ?? { tokens: burst, at: now };
-    b.tokens = Math.min(burst, b.tokens + ((now - b.at) * perMinute) / 60_000);
-    b.at = now;
-    const granted = Math.max(0, Math.min(Math.floor(want), Math.floor(b.tokens)));
-    b.tokens -= granted;
-    await this.ctx.storage.put(key, b);
-    return { granted, retryAfter: granted > 0 ? 0 : Math.max(1, Math.ceil(((1 - b.tokens) * 60) / perMinute)) };
+  async allowance(action: string, perHour: number, burst: number, want = 1): Promise<{ granted: number; retryAfter: number }> {
+    const key = `hourly:${action}`;
+    const stored = (await this.ctx.storage.get<HourlyBucket>(key)) ?? null;
+    const { granted, bucket, retryAfter } = hourlyTake(stored, Date.now(), perHour, burst, want);
+    await this.ctx.storage.put(key, bucket);
+    return { granted, retryAfter };
+  }
+
+  /** [allowance] for one unit. */
+  async allowanceOk(action: string, perHour: number, burst: number): Promise<{ ok: boolean; retryAfter: number }> {
+    const { granted, retryAfter } = await this.allowance(action, perHour, burst, 1);
+    return { ok: granted > 0, retryAfter };
+  }
+
+  /** Forgets every stored allowance that is full again, and anything an earlier version kept about activity. */
+  private async forgetRefilledAllowances(now: number): Promise<void> {
+    const stale: string[] = [];
+    for (const [key, bucket] of await this.ctx.storage.list<HourlyBucket>({ prefix: "hourly:" })) {
+      if (hourlyFull(bucket, now)) stale.push(key);
+    }
+    for (const key of (await this.ctx.storage.list({ prefix: "bucket:" })).keys()) stale.push(key);
+    stale.push("lastWakeAt", "lastFetchAt");
+    await this.deleteKeys(stale);
   }
 
   static readonly LOOKUP_LIMIT = LOOKUP_LIMIT_PER_MINUTE;
   static readonly REGISTER_LIMIT = REGISTER_LIMIT_PER_MINUTE;
   /** Push endpoints an owner may set in an hour: each one that needs a check costs a request to it. */
-  static readonly PUSH_LIMIT = 6 / 60;
+  static readonly PUSH_PER_HOUR = 6;
   static readonly PUSH_BURST = 6;
   /** Invites per identity: twenty a day, refilled over the day. */
-  static readonly INVITE_LIMIT = 20 / (24 * 60);
+  static readonly INVITE_PER_HOUR = 20 / 24;
   static readonly INVITE_BURST = 20;
   /** Each request mints fresh TURN credentials with the provider: ten a minute is plenty for calls. */
   static readonly TURN_LIMIT = 10;
@@ -560,9 +629,12 @@ export class Mailbox extends DurableObject<Env> {
   /** Adds [amount] to the owner's balance, for a payment from [from]; returns the new balance. */
   async credit(from: string, amount: number, txid: string, note: string): Promise<number> {
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) throw new Error("Invalid amount");
-    const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
     const profile = await this.ctx.storage.get<Profile>("profile");
-    const to = profile?.number ?? "";
+    // A mailbox deleted between the payer's debit and this credit must not
+    // keep coins for whoever is given the number next; the payer is refunded.
+    if (!profile) throw new Error("no such number");
+    const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
+    const to = profile.number;
     const next = balance + amount;
     const history = await this.appendTx({ id: txid, from, to, amount, ts: Date.now(), direction: "in", note });
     await this.ctx.storage.put({ balance: next, txHistory: history });
@@ -609,7 +681,7 @@ export class Mailbox extends DurableObject<Env> {
     if (data.length > (MAX_ENVELOPE_BYTES * 4) / 3 + 4) return { ok: false, reason: "envelope too large", status: 413 };
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
     if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };
-    const inbound = await this.rateOk("inbound", INBOUND_LIMIT_PER_MINUTE, INBOUND_BURST);
+    const inbound = await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST);
     if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     // The first envelope of a session spends the one-time key it was built on.
     if (claim !== null) await this.confirmClaim(claim);
@@ -650,12 +722,18 @@ export class Mailbox extends DurableObject<Env> {
    * distributor's quota and leave the next call offer unannounced. An
    * endpoint the distributor says is gone is forgotten.
    */
+  /**
+   * When the owner was last woken and last fetched, in memory only: they
+   * exist to coalesce wakes, and an eviction costs at worst one extra wake.
+   * Nothing stored says when the owner was last here.
+   */
+  private lastWakeAt = 0;
+  private lastFetchAt = 0;
+
   private async wakeOwner(endpoint: string, force = false): Promise<void> {
     const now = Date.now();
-    const last = (await this.ctx.storage.get<number>("lastWakeAt")) ?? 0;
-    const fetched = (await this.ctx.storage.get<number>("lastFetchAt")) ?? 0;
-    if (!force && last > fetched && now - last < WAKE_COALESCE_MS) return;
-    await this.ctx.storage.put("lastWakeAt", now);
+    if (!force && this.lastWakeAt > this.lastFetchAt && now - this.lastWakeAt < WAKE_COALESCE_MS) return;
+    this.lastWakeAt = now;
     const status = await wake(endpoint);
     if (status === 404 || status === 410) await this.ctx.storage.delete("push");
   }
@@ -677,7 +755,7 @@ export class Mailbox extends DurableObject<Env> {
 
   /** Queued envelopes, oldest first, one page at a time (acked ones are deleted, so the next call gets the next page). */
   async inbox(limit = 200): Promise<Envelope[]> {
-    await this.ctx.storage.put("lastFetchAt", Date.now());
+    this.lastFetchAt = Date.now();
     const map = await this.ctx.storage.list<Envelope>({ prefix: "q:", limit });
     return [...map.values()].sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
   }
@@ -769,6 +847,11 @@ export class Mailbox extends DurableObject<Env> {
       await this.releaseExpiredClaims();
     } catch (e) {
       console.error("claim cleanup failed", e);
+    }
+    try {
+      await this.forgetRefilledAllowances(Date.now());
+    } catch (e) {
+      console.error("allowance cleanup failed", e);
     }
   }
 

@@ -2,6 +2,8 @@ package app.clairix
 
 import android.content.ComponentName
 import android.content.Context
+import android.nfc.NfcAdapter
+import android.nfc.cardemulation.CardEmulation
 
 /**
  * The full edition's link between the NFC tab and [CardEmulationService].
@@ -24,5 +26,16 @@ internal object CardEmulationBridge {
     /** Forgets the loaded pairs, so a reader that still reaches the service gets nothing. */
     fun clear() {
         CardEmulationService.activePairs = emptyList()
+    }
+
+    /**
+     * Stops an armed card answering readers at all: the pairs are forgotten and
+     * the AIDs registered for it are withdrawn (they otherwise persist across
+     * reboots). Safe from any context; used when the app locks or wipes.
+     */
+    fun disarm(context: Context) {
+        clear()
+        val adapter = NfcAdapter.getDefaultAdapter(context.applicationContext) ?: return
+        runCatching { CardEmulation.getInstance(adapter).removeAidsForService(component(context), CardEmulation.CATEGORY_OTHER) }
     }
 }

@@ -610,6 +610,13 @@ impl Identity {
         if inner.sessions.get(&peer.curve25519).is_some_and(|list| at_hard_limit(list, now)) {
             return Err(CryptoError::SessionLimit { peer_curve25519: peer.curve25519 });
         }
+        // A Curve25519 key this device already knows as one identity's is not
+        // rebound to another: whoever offers it with a different Ed25519 key is
+        // not its owner (the relay refuses such a registration too), and
+        // accepting would make the real owner's envelopes unreadable here.
+        if inner.peers.get(&peer.curve25519).is_some_and(|known| *known != ed.to_base64()) {
+            return Err(CryptoError::BadKey { reason: "this Curve25519 key already belongs to another identity".into() });
+        }
         let session = inner
             .account
             .create_outbound_session(SessionConfig::version_2(), their_identity, their_key)
@@ -793,11 +800,20 @@ impl Identity {
                         },
                         other => CryptoError::Decrypt { reason: other.to_string() },
                     })?;
-                let padded = Zeroizing::new(created.plaintext);
-                let plaintext = unpad(&padded)?.to_vec();
                 // Olm has now authenticated the Curve25519 key, and the claim's
-                // signature the Ed25519 key: from here on they belong together.
+                // signature the Ed25519 key: from here on they belong together,
+                // unless the Curve25519 key is already another identity's.
+                if inner.peers.get(&curve_b64).is_some_and(|known| *known != ed_b64) {
+                    return Err(CryptoError::BadKey { reason: "this Curve25519 key already belongs to another identity".into() });
+                }
                 inner.peers.insert(curve_b64.clone(), ed_b64.clone());
+                // The one-time key is spent whatever the plaintext turns out to
+                // be, so the session is kept and the pre-key message remembered
+                // before the padding is checked: a sender whose first message
+                // was malformed can still be read afterwards, and the message
+                // cannot be replayed.
+                let padded = Zeroizing::new(created.plaintext);
+                let plaintext = unpad(&padded).map(|p| p.to_vec());
                 let evicted_recent_session = make_room
                     && inner.sessions.get_mut(&curve_b64).is_some_and(evict_least_recently_used);
                 push_session(
@@ -810,6 +826,7 @@ impl Identity {
                 while inner.used_prekeys.len() > MAX_USED_PREKEYS {
                     inner.used_prekeys.pop_front();
                 }
+                let plaintext = plaintext?;
                 Ok(Decrypted {
                     sender_curve25519: curve_b64,
                     sender_ed25519: ed_b64,
@@ -1407,6 +1424,54 @@ mod tests {
         }
         // Nor did the claim teach Bob that Alice's Curve25519 key is Mallory's.
         assert!(!bob.inner.lock().unwrap().peers.contains_key(&alice.curve25519()));
+    }
+
+    #[test]
+    fn a_curve_key_bound_to_one_identity_is_not_rebound_to_another() {
+        // Bob knows Alice. Mallory offers Alice's Curve25519 key as her own,
+        // with a binding she signed herself (which is all a relay checks).
+        let (alice, bob) = paired();
+        let mallory = Identity::create();
+        let sealing = mallory.public_bundle().sealing;
+        let signature = mallory.inner.lock().unwrap().account.sign(format!("{}|{}", alice.curve25519(), sealing).as_bytes()).to_base64();
+        let offered = PeerKeys { ed25519: mallory.ed25519(), curve25519: alice.curve25519(), sealing, signature };
+        match bob.start_session(offered, mallory.public_bundle().fallback.unwrap()) {
+            Err(CryptoError::BadKey { .. }) => {}
+            other => panic!("expected BadKey, got {other:?}"),
+        }
+        // Bob still knows the key as Alice's, and still reads her.
+        assert_eq!(bob.inner.lock().unwrap().peers.get(&alice.curve25519()), Some(&alice.ed25519()));
+        let got = bob.decrypt(alice.encrypt(peer_keys(&bob), b"still me".to_vec()).unwrap()).unwrap();
+        assert_eq!(got.plaintext, b"still me");
+    }
+
+    #[test]
+    fn a_first_message_with_bad_padding_still_leaves_a_usable_session() {
+        // Alice's first message to Bob is built on one of his one-time keys but
+        // its plaintext is not padded: the key is spent either way, so the
+        // session must be kept, or every later message from Alice would ask
+        // for a key Bob no longer has.
+        let alice = Identity::create();
+        let bob = Identity::create();
+        bob.generate_one_time_keys(1);
+        let key = bob.public_bundle().one_time_keys[0].clone();
+        bob.mark_keys_published();
+        alice.start_session(peer_keys(&bob), key).unwrap();
+        let (message_type, ciphertext) = {
+            let mut me = alice.inner.lock().unwrap();
+            let session = &mut me.sessions.get_mut(&bob.curve25519()).unwrap()[0].session;
+            let (t, c) = session.encrypt(b"not padded").unwrap().to_parts();
+            (t as u8, c)
+        };
+        let malformed = forge(&bob, message_type, curve_bytes(&alice), ed_bytes(&alice), signer(&alice), &ciphertext);
+        match bob.decrypt(malformed) {
+            Err(CryptoError::Decrypt { .. }) => {}
+            other => panic!("expected a decrypt error for bad padding, got {other:?}"),
+        }
+        assert!(bob.has_session(alice.curve25519()), "the session was not kept");
+        let next = bob.decrypt(alice.encrypt(peer_keys(&bob), b"hello".to_vec()).unwrap()).unwrap();
+        assert_eq!(next.plaintext, b"hello");
+        assert!(!next.new_session);
     }
 
     #[test]

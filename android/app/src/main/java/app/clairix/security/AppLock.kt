@@ -7,7 +7,9 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import app.clairix.CardEmulationBridge
 import app.clairix.Registry
+import app.clairix.comms.CommsNotifications
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -133,9 +135,12 @@ object AppLock {
     /** When the app last left the screen ([SystemClock.elapsedRealtime]); 0 while it is on screen. */
     @Volatile private var backgroundedAt = 0L
 
+    @Volatile private var appContext: Context? = null
+
     /** Reads whether a passcode is set. A new process always starts locked. Idempotent. */
     fun init(context: Context) {
         synchronized(this) {
+            appContext = context.applicationContext
             if (initialised) return
             val on = isEnabled(context)
             _enabled.value = on
@@ -278,11 +283,22 @@ object AppLock {
 
     // ── Locking ─────────────────────────────────────────────────────────────
 
-    /** Puts the app behind the lock screen, if a passcode is set, and closes the card vault. */
+    /**
+     * Puts the app behind the lock screen, if a passcode is set. Nothing that
+     * could be read or used without the passcode outlives this: the card vault
+     * closes, an armed card stops answering readers, and message notifications
+     * collapse to "unlock to read". The conversation screens watch [locked]
+     * and stop marking messages read while it is up.
+     */
     fun lock() {
         if (!_enabled.value) return
         _locked.value = true
         Registry.lockVault()
+        appContext?.let { app ->
+            runCatching { CardEmulationBridge.disarm(app) }
+            Registry.setEmulating(null)
+            runCatching { CommsNotifications.redact(app) }
+        }
     }
 
     /** The last Clairix screen has left the foreground. */

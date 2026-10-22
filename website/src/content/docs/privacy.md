@@ -30,10 +30,12 @@ If you choose to use Comms, your phone registers with the Clairix relay server. 
 - **Encrypted message envelopes waiting to be delivered.** These are deleted when your phone collects them, or after 30 days if they are never collected.
 - **Your push endpoint, if you set one up.** This is the UnifiedPush address your phone can be woken through. The push itself carries only the word "wake".
 - **Unused invite codes you created.** These expire after 7 days.
+- **Hashes of the single-use tokens your phone fetched ahead of time** to send messages and traffic reports with. They are kept until spent, or 14 days, and do not record which account they were issued to.
+- **A note that your keys belong to your number**, so that nobody else can register them.
 
 Messages, voice notes, photos, videos, emergency (SOS) alerts and calls are end-to-end encrypted. The relay cannot read their content and does not learn who sent a message. Call audio travels directly between the two phones, or through a relay server that cannot decrypt it.
 
-The relay can observe the recipient of each envelope, its size and the time it was queued, and, at the moment of sending, the sender who signed the request. The sender is not stored with the envelope. We do not keep request logs.
+The relay can observe the recipient of each envelope, its size and the time it was queued. A send is not signed and names no account: it spends one of the single-use tokens above, and the token's hash does not say which account it was issued to. Like any server, the relay handles the network address a request comes from while answering it. We do not keep request logs, and the relay stores nothing that says when you were last online.
 
 ### 2.2 ClairixCoin (Clairix Full only)
 
@@ -45,14 +47,14 @@ When you press SOS or type your duress phrase, Clairix reads your current locati
 
 ### 2.4 Traffic and navigation
 
-Live traffic is used only when you are actively navigating and are registered with Comms. In that case Clairix sends anonymous speed samples to the relay. Each sample contains a road segment, the segment's map position, a speed and a time. Your GPS track is never sent. Nothing is sent for the first 500 metres of a trip or the final approach to your destination, so trips cannot be traced back to where they start or end. Samples are linked only to a salted, one-way hash of your Clairix number and are deleted after two hours. Learned road-segment positions are kept for 30 days. Traffic incidents you choose to report are shared with other users until they expire.
+Live traffic is used only when you are actively navigating and are registered with Comms. In that case Clairix sends anonymous speed samples to the relay. Each sample contains a road segment, the segment's map position, a speed and a time. Your GPS track is never sent. Nothing is sent for the first 500 metres of a trip or the final approach to your destination, so trips cannot be traced back to where they start or end. Samples are sent without your Clairix number: each request spends a single-use token, and samples from one drive share a temporary pseudonym your phone creates and replaces every ten minutes. They are deleted after two hours. Learned road-segment positions are kept for 30 days. Traffic incidents you choose to report are shared with other users until they expire.
 
 ### 2.5 Maps and search
 
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's servers. Those servers see your IP address and the area being viewed.
 - **Address search.** When you search for an address, the search text is sent to OpenStreetMap's Nominatim service. When you look up the address of a point, its coordinates are sent there too.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
-- **Offline road maps.** These are downloaded from GitHub, which sees your IP address and the region you downloaded.
+- **Offline road maps and work-zone lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify.
 
 ### 2.6 Things you choose to share
 
@@ -98,7 +100,7 @@ Clairix is not directed to children under 13, and we do not knowingly collect in
 
 ## 8. Security
 
-Data in transit is protected with TLS, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Sensitive data on your device is encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
+Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, messages, saved cards, location history, timeline, cell-tower baseline and trip records on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
 
 ## 9. Legal basis and your rights
 

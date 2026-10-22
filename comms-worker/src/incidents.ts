@@ -1,18 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
-import { hex, sha256Hex, type Env } from "./env";
+import type { Env } from "./env";
 import {
   DEFAULT_DAILY_CAP,
-  PER_CALLER_DAILY_SHARE,
   PROVIDERS,
   TILE_ERROR_BACKOFF_SEC,
-  callerAllowance,
   decideTile,
   hereUrl,
   mergeForBBox,
   normalizeHere,
   normalizeTomTom,
   parseCap,
-  parseShare,
   planUpstream,
   providerStatus,
   serializeTile,
@@ -40,10 +37,10 @@ import { readTextCapped, type BBox } from "./traffic-logic";
  *
  * There is one instance, idFromName("incidents"). Being single-threaded, it
  * makes the daily quota counters exact and lets concurrent requests for the
- * same tile wait on one in-flight upstream call. Besides each provider's daily
- * cap, every caller has its own daily allowance, counted under a salted hash
- * of its Clairix number (the salt lives only in this object; the number is
- * never stored).
+ * same tile wait on one in-flight upstream call. It never learns who asks:
+ * the requests reach it anonymously, each having spent a traffic token, and
+ * the tokens an account is issued are what bounds one phone's share of the
+ * daily caps.
  */
 
 export const INCIDENTS_NAME = "incidents";
@@ -81,11 +78,8 @@ export class IncidentCache extends DurableObject<Env> {
         PRIMARY KEY (provider, tile)
       ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS quota (provider TEXT PRIMARY KEY, day INTEGER NOT NULL, count INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS caller_quota (
-        provider TEXT NOT NULL, caller TEXT NOT NULL, day INTEGER NOT NULL, count INTEGER NOT NULL,
-        PRIMARY KEY (provider, caller)
-      ) WITHOUT ROWID;
-      CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+      DROP TABLE IF EXISTS caller_quota;
+      DROP TABLE IF EXISTS meta;
     `);
   }
 
@@ -93,10 +87,8 @@ export class IncidentCache extends DurableObject<Env> {
    * Incidents from every configured provider for [bbox], which the caller has
    * already validated, as the JSON text of an IncidentsReply: serialised here
    * so the Worker in front, on the 10 ms Free CPU budget, only passes it on.
-   * [number] is the authenticated caller's Clairix number, used only hashed.
    */
-  async incidents(bbox: BBox, now: number, number: string): Promise<string> {
-    const caller = await this.callerHash(number);
+  async incidents(bbox: BBox, now: number): Promise<string> {
     this.prune(now);
     const box = Array.from(bbox) as BBox;
     const tiles = tilesForBBox(box);
@@ -112,9 +104,9 @@ export class IncidentCache extends DurableObject<Env> {
         const metas = new Map<string, TileRow | null>(
           [...rows].map(([k, r]) => [k, r ? { goodAt: r.good_at, errorAt: r.error_at } : null]),
         );
-        const plan = planUpstream(tiles, metas, box, now, this.usage(provider, caller, now));
+        const plan = planUpstream(tiles, metas, box, now, this.usage(provider, now));
         const outcomes = await Promise.all(
-          tiles.map((t) => this.tile(provider, caller, t, rows.get(t.key) ?? null, now, plan.get(t.key) ?? "defer")),
+          tiles.map((t) => this.tile(provider, t, rows.get(t.key) ?? null, now, plan.get(t.key) ?? "defer")),
         );
         providers[provider] = providerStatus(outcomes);
         for (const o of outcomes) lists.push(o.incidents);
@@ -135,29 +127,11 @@ export class IncidentCache extends DurableObject<Env> {
       : parseCap(this.env.TOMTOM_DAILY_CAP, DEFAULT_DAILY_CAP.tomtom);
   }
 
-  /** Today's counters for [provider], read synchronously so a check and its increment cannot interleave. */
-  private usage(provider: ProviderName, caller: string, now: number): UpstreamUsage {
+  /** Today's counter for [provider], read synchronously so a check and its increment cannot interleave. */
+  private usage(provider: ProviderName, now: number): UpstreamUsage {
     const day = utcDay(now);
     const g = this.sql.exec<{ count: number }>("SELECT count FROM quota WHERE provider = ? AND day = ?", provider, day).toArray()[0];
-    const c = this.sql
-      .exec<{ count: number }>("SELECT count FROM caller_quota WHERE provider = ? AND caller = ? AND day = ?", provider, caller, day)
-      .toArray()[0];
-    const cap = this.cap(provider);
-    return {
-      globalCount: g?.count ?? 0,
-      cap,
-      callerCount: c?.count ?? 0,
-      callerAllowance: callerAllowance(cap, parseShare(this.env.INCIDENTS_PER_CALLER_DAILY_SHARE, PER_CALLER_DAILY_SHARE)),
-    };
-  }
-
-  private async callerHash(number: string): Promise<string> {
-    let salt = this.sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = 'salt'").toArray()[0]?.v ?? null;
-    if (salt === null) {
-      salt = hex(crypto.getRandomValues(new Uint8Array(32)));
-      this.sql.exec("INSERT INTO meta (k, v) VALUES ('salt', ?)", salt);
-    }
-    return (await sha256Hex(`${salt}:${number}`)).slice(0, 32);
+    return { globalCount: g?.count ?? 0, cap: this.cap(provider) };
   }
 
   /** A tile's cached incidents, parsed once per stored result rather than on every request. */
@@ -176,9 +150,7 @@ export class IncidentCache extends DurableObject<Env> {
     while (this.parsed.size > PARSED_TILES_MAX) this.parsed.delete(this.parsed.keys().next().value!);
   }
 
-  private tile(
-    provider: ProviderName, caller: string, tile: Tile, row: TileDbRow | null, now: number, plan: UpstreamPlan,
-  ): Promise<TileOutcome> {
+  private tile(provider: ProviderName, tile: Tile, row: TileDbRow | null, now: number, plan: UpstreamPlan): Promise<TileOutcome> {
     const flightKey = `${provider}|${tile.key}`;
     const pending = this.inflight.get(flightKey);
     if (pending) return pending;
@@ -193,7 +165,7 @@ export class IncidentCache extends DurableObject<Env> {
     // Over this request's upstream budget: a later poll fetches it.
     if (plan === "defer") return stale("ok");
     if (plan !== "fetch") return stale(plan);
-    const taken = this.takeQuota(provider, caller, usable, now);
+    const taken = this.takeQuota(provider, usable, now);
     if (taken !== "fetch") return stale(taken === "cap" ? "quota" : "limited");
 
     const call = this.fetchTile(provider, tile, now)
@@ -245,28 +217,19 @@ export class IncidentCache extends DurableObject<Env> {
   }
 
   /**
-   * Counts one upstream call against today's provider cap and the caller's
-   * allowance, or counts nothing and says which limit stood in the way.
-   * Synchronous from read to write, so concurrent requests cannot overshoot.
+   * Counts one upstream call against today's provider cap, or counts nothing
+   * and says which limit stood in the way. Synchronous from read to write, so
+   * concurrent requests cannot overshoot.
    */
-  private takeQuota(provider: ProviderName, caller: string, hasUsable: boolean, now: number): "fetch" | "cap" | "limited" {
-    const usage = this.usage(provider, caller, now);
+  private takeQuota(provider: ProviderName, hasUsable: boolean, now: number): "fetch" | "cap" | "limited" {
+    const usage = this.usage(provider, now);
     const gate = upstreamGate(usage, hasUsable);
     if (gate !== "fetch") return gate;
-    const day = utcDay(now);
     this.sql.exec(
       "INSERT INTO quota (provider, day, count) VALUES (?, ?, ?) ON CONFLICT (provider) DO UPDATE SET day = excluded.day, count = excluded.count",
       provider,
-      day,
+      utcDay(now),
       usage.globalCount + 1,
-    );
-    this.sql.exec(
-      `INSERT INTO caller_quota (provider, caller, day, count) VALUES (?, ?, ?, ?)
-       ON CONFLICT (provider, caller) DO UPDATE SET day = excluded.day, count = excluded.count`,
-      provider,
-      caller,
-      day,
-      usage.callerCount + 1,
     );
     return "fetch";
   }
@@ -279,7 +242,6 @@ export class IncidentCache extends DurableObject<Env> {
   private prune(now: number): void {
     const cutoff = now - Math.max(TILE_RETENTION_SEC, TILE_ERROR_BACKOFF_SEC);
     this.sql.exec("DELETE FROM tiles WHERE COALESCE(good_at, 0) < ? AND COALESCE(error_at, 0) < ?", cutoff, cutoff);
-    this.sql.exec("DELETE FROM caller_quota WHERE day < ?", utcDay(now));
   }
 }
 

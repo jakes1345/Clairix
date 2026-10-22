@@ -133,12 +133,14 @@ internal enum class TrackerAction(val title: String) {
 /** The safety pages reached from the Comms menu, each opened as its own screen. */
 internal enum class CommsAction(val title: String) {
     FAKE_CALL("Fake call"),
-    DURESS("Duress phrase");
+    DURESS("Duress phrase"),
+    WIPE("Wipe Clairix");
 
     val icon: ImageVector
         get() = when (this) {
             FAKE_CALL -> ClairixIcons.PhoneInTalk
             DURESS -> ClairixIcons.Shield
+            WIPE -> ClairixIcons.Remove
         }
 }
 

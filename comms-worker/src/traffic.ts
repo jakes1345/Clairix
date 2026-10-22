@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { hex, sha256Hex, type Env } from "./env";
+import type { Env } from "./env";
 import {
   BUCKET_SEC,
   GONE_VOTES_TO_REMOVE,
@@ -31,11 +31,14 @@ import {
  * extra instance, "traffic-registry", that only remembers which regions exist
  * so the WZDx cron knows where to deliver work zones.
  *
- * Probes arrive keyed by directed OSM way ("<wayId>:<dir>"). The sender's
- * Clairix number is never stored: each probe carries a salted SHA-256 of it,
- * with a salt that lives only in this object, so samples from one phone can be
- * told apart from another's (one vote per phone per segment, sudden-stop
- * detection) without the relay being able to say whose they were.
+ * Probes arrive keyed by directed OSM way ("<wayId>:<dir>"). Nothing here
+ * ever sees a Clairix number: the requests that feed this object spend
+ * anonymous tokens (see index.ts), and each probe, report and vote carries
+ * only a trip pseudonym the phone made up for the drive and changes every
+ * few minutes. That is enough to tell one vehicle's samples from another's
+ * (one vote per vehicle per segment, sudden-stop detection) and to take one
+ * vote per vehicle on an incident, and it reaches back to no phone. A trip's
+ * probes are gone within two hours; its votes go with the incident.
  */
 
 export interface ProbeSample {
@@ -145,9 +148,9 @@ export class Traffic extends DurableObject<Env> {
 
   // ── Probes ────────────────────────────────────────────────────────────
 
-  /** Stores already-validated samples; returns how many were new. */
-  async ingestProbes(region: string, senderNumber: string, samples: ProbeSample[], now: number): Promise<number> {
-    const sender = await this.senderHash(senderNumber);
+  /** Stores already-validated samples under the trip pseudonym; returns how many were new. */
+  async ingestProbes(region: string, trip: string, samples: ProbeSample[], now: number): Promise<number> {
+    const sender = trip;
     await this.ensureRegistered(region, now);
     let accepted = 0;
     const stoppedSegs = new Set<string>();
@@ -197,8 +200,8 @@ export class Traffic extends DurableObject<Env> {
 
   // ── Reports and votes ─────────────────────────────────────────────────
 
-  async report(region: string, reporterNumber: string, type: IncidentType, lat: number, lon: number, seg: string | null, now: number): Promise<Incident> {
-    const reporter = await this.senderHash(reporterNumber);
+  async report(region: string, trip: string, type: IncidentType, lat: number, lon: number, seg: string | null, now: number): Promise<Incident> {
+    const reporter = trip;
     await this.ensureRegistered(region, now);
     return this.ctx.storage.transactionSync(() => {
       this.prune(now);
@@ -236,8 +239,8 @@ export class Traffic extends DurableObject<Env> {
     });
   }
 
-  async vote(region: string, voterNumber: string, id: string, still: boolean, now: number): Promise<Incident | null> {
-    const voter = await this.senderHash(voterNumber);
+  async vote(region: string, trip: string, id: string, still: boolean, now: number): Promise<Incident | null> {
+    const voter = trip;
     await this.ensureRegistered(region, now);
     return this.ctx.storage.transactionSync(() => {
       this.prune(now);
@@ -361,16 +364,15 @@ export class Traffic extends DurableObject<Env> {
 
   // ── Internals ─────────────────────────────────────────────────────────
 
-  private async senderHash(number: string): Promise<string> {
-    let salt = this.getMeta("salt");
-    if (salt === null) {
-      salt = hex(crypto.getRandomValues(new Uint8Array(32)));
-      this.setMeta("salt", salt);
-    }
-    return (await sha256Hex(`${salt}:${number}`)).slice(0, 32);
-  }
-
   private async ensureRegistered(region: string, now: number): Promise<void> {
+    // Earlier versions kept a salt here for hashing sender numbers, and
+    // probes under those hashes. Neither has a place any more.
+    if (this.getMeta("salt") !== null) {
+      this.sql.exec("DELETE FROM meta WHERE k = 'salt'");
+      this.sql.exec("DELETE FROM probes");
+      this.sql.exec("DELETE FROM votes");
+      this.sql.exec("DELETE FROM confirmers");
+    }
     const at = Number(this.getMeta("registeredAt") ?? "0");
     if (this.getMeta("region") === region && now - at < REGISTER_EVERY_SEC) return;
     this.setMeta("region", region);

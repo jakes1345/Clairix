@@ -15,6 +15,7 @@ import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import app.clairix.CallActivity
 import app.clairix.MainActivity
+import app.clairix.security.AppLock
 
 /**
  * Notifications for the comms module: one per conversation for new messages,
@@ -54,6 +55,8 @@ object CommsNotifications {
     const val LINK_NOTIFICATION_ID = 0x5C00_0001
     const val INCOMING_CALL_NOTIFICATION_ID = 0x5C00_0002
     const val CALL_NOTIFICATION_ID = 0x5C00_0003
+    /** The one "unlock to read" notification that stands in for every message notification once the app locks. */
+    const val SUMMARY_NOTIFICATION_ID = 0x5C00_0004
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -191,6 +194,11 @@ object CommsNotifications {
     fun missedCall(context: Context, contact: Contact) {
         if (!canPost(context)) return
         ensureChannels(context)
+        if (hidePreviews(context)) {
+            context.getSystemService(NotificationManager::class.java)
+                ?.notify(missedCallId(contact.number), unlockToRead(context, "Missed call", "Open Clairix to see who", contact.number.hashCode() xor 0x4D))
+            return
+        }
         val open = Intent(context, MainActivity::class.java)
             .setAction("app.clairix.OPEN_THREAD")
             .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
@@ -295,11 +303,68 @@ object CommsNotifications {
             NotificationManagerCompat.from(context).areNotificationsEnabled()
         }
 
+    /** Whether notifications must name no contact and quote nothing (the owner's choice; see [CommsConfig.hidePreviews]). */
+    fun hidePreviews(context: Context): Boolean =
+        CommsConfig(context).hidePreviews(passcodeSet = AppLock.isEnabled(context))
+
+    /** The one message notification shown while previews are hidden or the app is locked: it says only that there is something. */
+    private fun unlockToRead(context: Context, title: String, text: String, requestCode: Int): Notification {
+        val open = Intent(context, MainActivity::class.java)
+            .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val contentIntent = PendingIntent.getActivity(context, requestCode, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                    .setSmallIcon(android.R.drawable.stat_notify_chat)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .build()
+            )
+            .build()
+    }
+
+    /**
+     * The app has locked: every message and missed-call notification still
+     * showing is replaced by one that names nobody and quotes nothing, so
+     * whoever holds the unlocked phone learns only that something is waiting.
+     * SOS alerts and calls are left: they are meant to be seen.
+     */
+    fun redact(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        var any = false
+        runCatching {
+            for (n in manager.activeNotifications) {
+                val mine = n.notification.channelId == CHANNEL_MESSAGES || (n.id and 0x7F00_0000) == 0x5B00_0000
+                if (!mine || n.id == SUMMARY_NOTIFICATION_ID) continue
+                manager.cancel(n.tag, n.id)
+                any = true
+            }
+        }
+        if (any && canPost(context)) {
+            ensureChannels(context)
+            manager.notify(SUMMARY_NOTIFICATION_ID, unlockToRead(context, "Clairix", "Unlock to read", SUMMARY_NOTIFICATION_ID))
+        }
+    }
+
     /** Posts (or replaces) the notification for [contact] with the newest inbound messages. */
     fun notifyInbound(context: Context, contact: Contact, messages: List<ChatMessage>) {
         if (messages.isEmpty()) return
         if (!canPost(context)) return
         ensureChannels(context)
+        if (hidePreviews(context)) {
+            context.getSystemService(NotificationManager::class.java)
+                ?.notify(notificationId(contact.number), unlockToRead(context, "New message", "Open Clairix to read", contact.number.hashCode()))
+            return
+        }
 
         val open = Intent(context, MainActivity::class.java)
             .setAction("app.clairix.OPEN_THREAD")
@@ -351,6 +416,10 @@ object CommsNotifications {
         val id = notificationId(contact.number)
         if (!alert && runCatching { manager.activeNotifications.none { it.id == id } }.getOrDefault(true)) return
         ensureChannels(context)
+        if (hidePreviews(context)) {
+            manager.notify(id, unlockToRead(context, "Safety number changed", "Open Clairix to review", contact.number.hashCode()))
+            return
+        }
         val open = Intent(context, MainActivity::class.java)
             .setAction("app.clairix.OPEN_THREAD")
             .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
@@ -404,6 +473,11 @@ object CommsNotifications {
         if (messages.isEmpty()) return
         if (!canPost(context)) return
         ensureChannels(context)
+        if (hidePreviews(context)) {
+            context.getSystemService(NotificationManager::class.java)
+                ?.notify(notificationId(group.id), unlockToRead(context, "New group message", "Open Clairix to read", group.id.hashCode()))
+            return
+        }
         val newest = messages.maxBy { it.ts }
         fun line(m: ChatMessage) = (m.sender?.let { "${senderName(it)}: " } ?: "") + m.preview()
         val style = NotificationCompat.InboxStyle()
