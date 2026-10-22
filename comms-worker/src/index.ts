@@ -1,4 +1,4 @@
-import { parseSigned, verifyEd25519 } from "./auth";
+import { parseSigned, TS_WINDOW_MS, verifyEd25519 } from "./auth";
 import {
   checkPushEndpoint,
   dayFloor,
@@ -19,7 +19,8 @@ import {
   type IceServer,
   type TokenKind,
 } from "./comms-logic";
-import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, timingSafeEqual, type Env } from "./env";
+import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
+import { KNOWN_REGIONS } from "./regions";
 import { INVITE_TTL_MS, Mailbox, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
 import { INCIDENTS_NAME, IncidentCache } from "./incidents";
@@ -37,8 +38,10 @@ export { IncidentCache, Mailbox, Traffic };
  * relay hands out at registration, and it works only between Clairix apps
  * paired with this relay.
  *
- *   POST   /v1/register        {secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, listed}
- *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}
+ *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, listed}
+ *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}. ts is epoch millis within
+ *                              five minutes, and each key may belong to one account, so a captured body cannot be
+ *                              replayed into a second account.
  *   GET    /i                                              → invite page; the invite itself is in the URL fragment,
  *                                                            which browsers never send to the relay
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
@@ -130,7 +133,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers." });
   }
 
-  const bodyText = request.method === "GET" || request.method === "HEAD" ? "" : await request.text();
+  let bodyText = "";
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    // Bounded before anything else looks at it: nothing the relay accepts is
+    // near this big, and a body is read before the caller is authenticated.
+    const text = await readTextCapped(request.body, request.headers.get("content-length"), MAX_BODY_BYTES);
+    if (text === null) throw new HttpError(413, `Request body larger than ${MAX_BODY_BYTES} bytes`);
+    bodyText = text;
+  }
 
   if (request.method === "GET" && path === "/i") {
     return new Response(invitePage(), {
@@ -169,12 +179,18 @@ async function route(request: Request, env: Env): Promise<Response> {
   const me = env.MAILBOX.get(env.MAILBOX.idFromName(signed.number));
   const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts);
   if (!profile) throw new HttpError(401, "Signature rejected");
+  // An account from before keys were recorded as their owner's records them now.
+  if (!profile.keysClaimed) {
+    await claimKeys(env, profile, false);
+    await me.markKeysClaimed();
+  }
 
   if (path === "/v1/me" && request.method === "GET") {
     return json({ profile: publicProfile(profile), oneTimeKeys: await me.oneTimeKeyCount() });
   }
 
   if (path === "/v1/me" && request.method === "DELETE") {
+    await releaseKeys(env, profile);
     await me.wipe();
     return json({ ok: true });
   }
@@ -328,7 +344,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     const amount = coinAmount(body.amount);
     const note = coinNote(body.note);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
-    if (!(await them.profile())) throw new HttpError(404, "No such Clairix number on this relay");
+    // Whether a number exists is not told to anyone; a payment to one that does not is refused like any other.
+    if (!(await them.profile())) throw new HttpError(400, "Payment refused");
     const txid = crypto.randomUUID();
     const debited = await me.debit(to, amount, txid, note);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
@@ -358,7 +375,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/admin/coin/mint" && request.method === "POST") {
     const secret = requireSecret(env, "ADMIN_SECRET");
     const given = request.headers.get("x-admin-secret") ?? "";
-    if (!timingSafeEqual(given, secret)) throw new HttpError(403, "Admin secret rejected");
+    if (!(await secretEquals(given, secret))) throw new HttpError(403, "Admin secret rejected");
     const body = parseJson<{ to?: unknown; amount?: unknown }>(bodyText);
     const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
     if (!to) throw new HttpError(400, "to must be a Clairix number");
@@ -521,6 +538,7 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
 
 function trafficRegion(raw: unknown): string {
   if (typeof raw !== "string" || !REGION_RE.test(raw)) throw new HttpError(400, "region must be a map region slug, e.g. north-america-us-ohio");
+  if (!KNOWN_REGIONS.has(raw)) throw new HttpError(400, "region is not one Clairix has a map for");
   return raw;
 }
 
@@ -657,6 +675,7 @@ function coinNote(raw: unknown): string {
  */
 async function register(env: Env, request: Request, bodyText: string): Promise<Response> {
   const body = parseJson<{
+    ts?: unknown;
     secret?: unknown;
     invite?: unknown;
     ed25519?: unknown;
@@ -673,7 +692,13 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     if (!INVITE_CODE_RE.test(invite)) throw new HttpError(403, "That invite code is not valid");
   } else {
     const secret = requireSecret(env, "ENROLL_SECRET");
-    if (typeof body.secret !== "string" || !timingSafeEqual(body.secret, secret)) throw new HttpError(403, "Enrollment code rejected");
+    if (typeof body.secret !== "string" || !(await secretEquals(body.secret, secret))) throw new HttpError(403, "Enrollment code rejected");
+  }
+  // The body is signed by the new key, and this is what keeps a captured body
+  // (it carries the enrollment secret) from being replayed later: it must be
+  // recent, and below, each of its keys may be registered once.
+  if (typeof body.ts !== "number" || !Number.isFinite(body.ts) || Math.abs(Date.now() - body.ts) > TS_WINDOW_MS) {
+    throw new HttpError(401, "Registration timestamp missing or outside the allowed window");
   }
   for (const field of ["ed25519", "curve25519", "sealing", "signature"] as const) {
     if (typeof body[field] !== "string" || (body[field] as string).length === 0) throw new HttpError(400, `${field} required`);
@@ -702,8 +727,15 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(number));
     const now = Date.now();
     // Dated to the day: enough for anything that asks how old an account is.
-    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: dayFloor(now) };
+    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: dayFloor(now), keysClaimed: true };
     if (await mailbox.claim(profile, oneTimeKeys)) {
+      if (!(await claimKeys(env, profile, true))) {
+        // One of the keys is already another account's. The number just taken
+        // goes back, and so does the invite, if one was used.
+        await mailbox.wipe();
+        if (inviteBox) await inviteBox.releaseInvite();
+        throw new HttpError(409, "One of these keys is already registered to another Clairix number");
+      }
       // A new member of this relay's coin community starts with what the
       // operator set; nothing when they set nothing.
       const initial = parseInt(env.COIN_INITIAL_BALANCE ?? "0", 10);
@@ -760,6 +792,38 @@ function publicProfile(p: Profile) {
  */
 const API_VERSION = 4;
 
+/** The most a request body may be: nothing the relay accepts is near it (an envelope is 72 KiB sealed, 96 KiB in base64). */
+const MAX_BODY_BYTES = 256 * 1024;
+
+/**
+ * Records [profile]'s identity, Curve25519 and sealing keys as its own, each
+ * in an object named after the key. With [strict], a key another account
+ * holds is a failure and whatever this call claimed is released; without
+ * it (an account from before keys were recorded), a conflict is logged and
+ * the first holder keeps the key.
+ */
+async function claimKeys(env: Env, profile: Profile, strict: boolean): Promise<boolean> {
+  const claimed: string[] = [];
+  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
+    const name = `key:${await sha256Hex(key)}`;
+    if (await env.MAILBOX.get(env.MAILBOX.idFromName(name)).claimKey(profile.number)) {
+      claimed.push(name);
+    } else if (strict) {
+      for (const done of claimed) await env.MAILBOX.get(env.MAILBOX.idFromName(done)).releaseKey(profile.number);
+      return false;
+    } else {
+      console.error(`a key already registered to another number was found while recording ${profile.number}'s keys`);
+    }
+  }
+  return true;
+}
+
+async function releaseKeys(env: Env, profile: Profile): Promise<void> {
+  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
+    await env.MAILBOX.get(env.MAILBOX.idFromName(`key:${await sha256Hex(key)}`)).releaseKey(profile.number);
+  }
+}
+
 /**
  * Anonymous delivery. The request names a recipient and spends one delivery
  * token; it carries no identity. Abuse is bounded by the token supply (issued
@@ -780,7 +844,12 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
   }
   await spendToken(env, request, "delivery");
   const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(body.envelope, claim);
-  if (!result.ok) throw new HttpError(result.status, result.reason, result.retryAfter);
+  if (!result.ok) {
+    // Whether a number exists is not told to anyone, listed or not: a send to
+    // one that does not is accepted and dropped, its token spent like any other.
+    if (result.status === 404) return json({ id: `${Date.now().toString(36)}-${crypto.randomUUID()}` }, 202);
+    throw new HttpError(result.status, result.reason, result.retryAfter);
+  }
   return json({ id: result.id }, 202);
 }
 

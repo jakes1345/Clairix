@@ -5,6 +5,7 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { advance, makePhone, makeRelay, mockFetch, resetClock } from "./harness/fake-env.mjs";
 import { DAY_MS, HOUR_MS, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
+import { sha256Hex } from "../src/env.ts";
 
 afterEach(() => resetClock());
 
@@ -605,4 +606,95 @@ test("push endpoint changes are rate limited", async () => {
   } finally {
     fetches.restore();
   }
+});
+
+// ── Registration, replay and what a send reveals ──────────────────────────
+
+test("a registration must be recent, and a captured one cannot be replayed into a second account", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const headers = { "x-clairix-sig": await alice.sign(alice.registrationBody), "cf-connecting-ip": "203.0.113.9" };
+  // The same body again, at once: its keys are Alice's.
+  const again = await relay.call("POST", "/v1/register", { body: alice.registrationBody, headers });
+  assert.equal(again.status, 409);
+  // And six minutes on, it is stale before its keys are even looked at.
+  advance(6 * 60_000);
+  const stale = await relay.call("POST", "/v1/register", { body: alice.registrationBody, headers });
+  assert.equal(stale.status, 401);
+  // A body without a timestamp never registers.
+  const without = JSON.stringify({ ...JSON.parse(alice.registrationBody), ts: undefined });
+  const res = await relay.call("POST", "/v1/register", { body: without, headers: { ...headers, "x-clairix-sig": await alice.sign(without) } });
+  assert.equal(res.status, 401);
+});
+
+test("a key belongs to one account; deleting the account gives it back", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  // Mallory registers again with her own identity key but Alice's Curve25519 key.
+  const body = { ...JSON.parse(mallory.registrationBody), ts: Date.now(), curve25519: alice.curve25519 };
+  body.signature = await mallory.sign(`${alice.curve25519}|${body.sealing}`);
+  const text = JSON.stringify(body);
+  const res = await relay.call("POST", "/v1/register", { body: text, headers: { "x-clairix-sig": await mallory.sign(text), "cf-connecting-ip": "203.0.113.10" } });
+  assert.equal(res.status, 409);
+  assert.ok(!(await relay.call("GET", "/")).json.error);
+  // Alice deletes her account, and so does Mallory: Alice's Curve25519 key and
+  // Mallory's own keys are all free, and the same body now registers.
+  assert.equal((await alice.signed("DELETE", "/v1/me")).status, 200);
+  assert.equal((await mallory.signed("DELETE", "/v1/me")).status, 200);
+  const retry = JSON.stringify({ ...body, ts: Date.now() });
+  const after = await relay.call("POST", "/v1/register", { body: retry, headers: { "x-clairix-sig": await mallory.sign(retry), "cf-connecting-ip": "203.0.113.11" } });
+  assert.equal(after.status, 201);
+  // While Alice still held her account, Mallory's first account kept its own keys.
+  const stillMine = await relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(`key:${await sha256Hex(mallory.ed25519)}`)).claimKey("000000000");
+  assert.equal(stillMine, false);
+});
+
+test("an account from before keys were recorded has them recorded on its next request", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const box = relay.env.MAILBOX.storageOf(alice.number);
+  const profile = box.get("profile");
+  delete profile.keysClaimed;
+  box.set("profile", profile);
+  for (const [name] of relay.env.MAILBOX.objects) if (name.startsWith("key:")) relay.env.MAILBOX.objects.delete(name);
+  await alice.signed("GET", "/v1/me");
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).get("profile").keysClaimed, true);
+  assert.equal([...relay.env.MAILBOX.objects.keys()].filter((n) => n.startsWith("key:")).length, 3);
+});
+
+test("a send to a number that does not exist looks exactly like one that does", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [t1, t2] = await alice.tokens(2);
+  const res = await alice.send(t1, "987654321");
+  assert.equal(res.status, 202);
+  assert.match(res.json.id, /^[0-9a-z]+-[0-9a-f-]{36}$/);
+  // The token was spent all the same.
+  assert.equal((await alice.send(t1, "987654321")).status, 403);
+  assert.equal((await alice.send(t2, "987654321")).status, 202);
+  // And a payment to it is refused like any other refused payment.
+  const pay = await alice.signed("POST", "/v1/coin/pay", { to: "987654321", amount: 1 });
+  assert.equal(pay.status, 400);
+  assert.equal(pay.json.error, "Payment refused");
+});
+
+test("a body larger than the relay could ever want is refused before anything else", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [token] = await alice.tokens(1);
+  const huge = "A".repeat(300 * 1024);
+  const res = await relay.call("POST", "/v1/send", { body: { to: alice.number, envelope: huge }, headers: { "x-clairix-token": token } });
+  assert.equal(res.status, 413);
+  // Not spent: the request was refused before the token was looked at.
+  assert.equal((await alice.send(token, alice.number)).status, 202);
+});
+
+test("the secret comparison gives nothing away about the secret's length", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  const body = { ...JSON.parse(bob.registrationBody), ts: Date.now(), secret: "x".repeat(200) };
+  const text = JSON.stringify(body);
+  const res = await relay.call("POST", "/v1/register", { body: text, headers: { "x-clairix-sig": await bob.sign(text), "cf-connecting-ip": "203.0.113.12" } });
+  assert.equal(res.status, 403);
 });

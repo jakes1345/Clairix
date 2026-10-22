@@ -183,31 +183,54 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
     consumes the key, then `unpad` can fail before the session is pushed. Any
     sender drains a victim's keys with bad-padding first messages at the
     claim rate; the error is `Decrypt` with no sender named. *Verified.*
+    **Done:** the session is kept and the pre-key message remembered before
+    the padding is checked, so the sender's later messages still read and
+    the message cannot be replayed (`lib.rs`, with a test that forges an
+    unpadded first message).
 20. **Curve-key rebinding** (`index.ts:635`, `lib.rs:617`): the relay checks
     only that the curve/sealing binding is signed by the submitted ed key, so
     Mallory can register Alice's curve key under her own ed key;
     `start_session` then overwrites the peer binding unconditionally and
     Alice's real envelopes fail at `:708`. Targeted DoS. *Spot-checked.*
+    **Done, both ends:** the relay records every identity, Curve25519 and
+    sealing key as its account's (one object per key) and refuses a
+    registration that offers another account's key with 409, releasing them
+    when the account is deleted; accounts from before have their keys
+    recorded on their next request. The crate refuses to rebind a Curve25519
+    key it already knows as one identity's, in `start_session` and on an
+    inbound pre-key message alike (`BadKey`), with a test.
 21. **Register is signed over the body only** (`index.ts:633-634`): no
     timestamp, nonce or path, so a captured register (carrying
-    `ENROLL_SECRET` in JSON) replays forever. *Verified.*
+    `ENROLL_SECRET` in JSON) replays forever. *Verified.* **Done:** the body
+    carries `ts` and must arrive within five minutes; with each key
+    registrable once, a replay inside the window creates nothing either.
 22. **Body read with no size cap before auth** (`index.ts:122`), then a
     storage read and Ed25519 verify on the victim's single-threaded DO per
-    attempt; no failed-auth limiter. *Reported.*
+    attempt; no failed-auth limiter. *Reported.* **Body cap done** (256 KiB,
+    413 before anything is read). **A failed-auth limiter was considered and
+    not built:** any limiter that refuses requests to a mailbox after N bad
+    signatures is itself a way to lock the owner out with junk; Cloudflare's
+    own rate limiting is the right layer for a flood.
 23. **Tokens are not recipient-bound**; `MAX_QUEUE=2000` then 413 for all
     senders. One account fills any mailbox in about 25 minutes. *Reported.*
 24. **Existence oracle**: send and `coin/pay` return 404 for unknown numbers
     (`mailbox.ts:608`, `index.ts:335`), undoing what the bundle endpoint
-    hides. *Reported.*
+    hides. *Reported.* **Done:** a send to a number that does not exist is
+    accepted (202, a fresh id) and dropped, its token spent; a payment to one
+    is "Payment refused" like any other refused payment.
 25. **Coin**: every registration gets `COIN_INITIAL_BALANCE` with nothing
     binding a registration to a unique key; invites need no secret. Pay is
     debit-then-credit across two DOs with no idempotency key; a `DELETE
     /v1/me` between them leaves coins in a wiped box for the next holder of
-    that number. *Reported.*
+    that number. *Reported.* **Partly done:** a credit into a deleted mailbox
+    now fails and the payer is refunded. Farming and idempotency remain.
 26. **TURN**: 10/min, 2 h TTL, no daily cap, no call required. *Reported.*
 27. **Traffic DO sprawl**: any account can name any `traffic:<slug>`; objects
-    are never deleted. *Reported.*
+    are never deleted. *Reported.* **Done:** a region must be one the graph
+    builder publishes a map for (`src/regions.ts`, kept in step with
+    `us-regions.txt` by a test); nothing else creates an object.
 28. `timingSafeEqual` returns early on length mismatch (`env.ts:93-98`).
+    **Done:** secrets are compared as SHA-256 digests (`secretEquals`).
     `Cargo.lock` carries two full crypto stacks (dalek 4 and 5, chacha 0.10
     and 0.11) because the app pins older than vodozemac. Pickle nonce is 96-bit
     under a long-lived key. `Mutex::lock().expect` with `panic = "abort"`.

@@ -282,6 +282,7 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
   for (let i = 0; i < oneTimeKeys; i++) keys.push(await signedKey(`${tag}-otk-${i}`));
   const fallback = await signedKey(`${tag}-fallback`);
   const body = JSON.stringify({
+    ts: Date.now(),
     secret: ENROLL_SECRET,
     ed25519,
     curve25519,
@@ -317,6 +318,10 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
   return {
     number,
     ed25519,
+    curve25519,
+    sealing,
+    sign,
+    registrationBody: body,
     keyIds: keys.map((k) => k.id),
     fallbackId: fallback.id,
     signed,

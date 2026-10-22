@@ -87,7 +87,17 @@ export function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-/** Constant-time comparison of two strings of equal length. */
+/**
+ * Constant-time comparison of two secrets of any length: both are hashed
+ * first, so neither the length nor the content of the one the relay holds
+ * can be measured through the time a comparison takes.
+ */
+export async function secretEquals(a: string, b: string): Promise<boolean> {
+  const [ha, hb] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
+  return timingSafeEqual(ha, hb);
+}
+
+/** Constant-time comparison of two strings of equal length (digests, fingerprints). */
 export function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;

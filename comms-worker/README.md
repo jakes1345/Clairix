@@ -78,7 +78,10 @@ npm run deploy                  # prints the Worker URL
 
 In Clairix, open the COMMS tab, enter the Worker URL and the enrollment secret.
 The app generates its identity on the phone, registers it, and shows the Clairix
-number it was given. Two people pair by scanning each other's QR code in
+number it was given. A registration is dated and must reach the relay within
+five minutes, and each of its keys may belong to one account at a time, so a
+captured registration (it carries the secret) cannot be replayed into a second
+account, and nobody can register someone else's key as their own. Two people pair by scanning each other's QR code in
 person, or by typing a listed Clairix number and then comparing safety numbers.
 
 ### Inviting people
@@ -247,7 +250,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/register` | Body signed by the new identity's key, with `secret` or a one-time `invite`; allocates a Clairix number |
+| POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite`; allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile and one-time-key count |
@@ -258,7 +261,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/tokens` | `{count, kind?}` → `{tokens, expiresAt, kind}`: single-use tokens, `delivery` (default), `traffic` or `report` |
 | POST | `/v1/lookup` | `{number, pin?, claim}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
-| POST | `/v1/send` | `{to, envelope}` with a delivery token: queue a sealed envelope for a contact |
+| POST | `/v1/send` | `{to, envelope}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |
 | GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat every two minutes, and `pong` for a client's `{"type":"ping"}` |
@@ -275,7 +278,10 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | GET | `/v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon` | `{now, incidents, providers: {here, tomtom}}`: HERE / TomTom incidents in a box of at most 1° × 1°; a traffic token |
 
 Each Clairix number is a Durable Object holding the keys, the queue (up to 2000
-envelopes of 64 KiB, kept 30 days) and the live sockets. Incident times
+envelopes of 64 KiB, kept 30 days) and the live sockets. Request bodies are
+read up to 256 KiB and refused beyond it before anything else happens. A
+traffic region must be one the graph builder publishes a map for
+(`src/regions.ts`); nothing else makes the relay create an object. Incident times
 (`createdAt`, `expiresAt`) and probe times are epoch seconds.
 
 ## Development

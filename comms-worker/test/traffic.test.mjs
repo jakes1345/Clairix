@@ -154,3 +154,17 @@ test("provider incidents are served anonymously and count only the daily cap", a
     globalThis.fetch = original;
   }
 });
+
+test("only a region Clairix has a map for can be named, and the list is the graph builder's", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [t1, t2] = await alice.tokens(2, "traffic");
+  assert.equal((await alice.traffic(t1, "GET", "/v1/traffic/live?region=north-america-us-narnia")).status, 400);
+  assert.equal((await alice.traffic(t2, "GET", `/v1/traffic/live?region=${REGION}`)).status, 200);
+  assert.ok(!relay.env.TRAFFIC.objects.has("traffic:north-america-us-narnia"));
+  const { KNOWN_REGIONS } = await import("../src/regions.ts");
+  const { readFileSync } = await import("node:fs");
+  const listed = readFileSync(new URL("../../tools/graph-builder/us-regions.txt", import.meta.url), "utf8")
+    .split("\n").map((l) => l.trim()).filter(Boolean).map((l) => l.replaceAll("/", "-"));
+  assert.deepEqual([...KNOWN_REGIONS].sort(), listed.sort());
+});

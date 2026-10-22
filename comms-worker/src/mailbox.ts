@@ -63,6 +63,8 @@ export interface Profile {
   /** Whether the number can be looked up. Unlisted numbers are reached by QR only. */
   listed: boolean;
   createdAt: number;
+  /** Whether this account's keys are recorded as its own (see Mailbox.claimKey); accounts from before that are claimed on their next request. */
+  keysClaimed?: boolean;
 }
 
 export interface Envelope {
@@ -211,6 +213,33 @@ export class Mailbox extends DurableObject<Env> {
     await this.ctx.storage.put("cleanupAt", Date.now() + CLEANUP_INTERVAL_MS);
     await this.scheduleAlarm();
     return true;
+  }
+
+  // ── Key ownership (in objects of their own, named "key:<sha256 of the key>") ──
+
+  /**
+   * Records that [holder] registered this key. False when another number
+   * already did: one identity, Curve25519 or sealing key belongs to one
+   * account, so nobody can register a key that is someone else's and have
+   * their contacts' phones bind it to the wrong identity.
+   */
+  async claimKey(holder: string): Promise<boolean> {
+    const current = await this.ctx.storage.get<string>("keyHolder");
+    if (current !== undefined && current !== holder) return false;
+    if (current === undefined) await this.ctx.storage.put("keyHolder", holder);
+    return true;
+  }
+
+  /** Gives the key back when [holder]'s account is deleted. */
+  async releaseKey(holder: string): Promise<void> {
+    if ((await this.ctx.storage.get<string>("keyHolder")) === holder) await this.ctx.storage.deleteAll();
+  }
+
+  async markKeysClaimed(): Promise<void> {
+    const profile = await this.ctx.storage.get<Profile>("profile");
+    if (!profile || profile.keysClaimed) return;
+    profile.keysClaimed = true;
+    await this.ctx.storage.put("profile", profile);
   }
 
   // ── Invites (in an object of their own, named "invite:<code>") ────────
@@ -600,9 +629,12 @@ export class Mailbox extends DurableObject<Env> {
   /** Adds [amount] to the owner's balance, for a payment from [from]; returns the new balance. */
   async credit(from: string, amount: number, txid: string, note: string): Promise<number> {
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) throw new Error("Invalid amount");
-    const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
     const profile = await this.ctx.storage.get<Profile>("profile");
-    const to = profile?.number ?? "";
+    // A mailbox deleted between the payer's debit and this credit must not
+    // keep coins for whoever is given the number next; the payer is refunded.
+    if (!profile) throw new Error("no such number");
+    const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
+    const to = profile.number;
     const next = balance + amount;
     const history = await this.appendTx({ id: txid, from, to, amount, ts: Date.now(), direction: "in", note });
     await this.ctx.storage.put({ balance: next, txHistory: history });

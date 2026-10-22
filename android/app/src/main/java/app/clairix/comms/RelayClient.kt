@@ -143,6 +143,9 @@ class RelayClient(
     fun register(relayUrl: String, identity: Identity, secret: String?, listed: Boolean, invite: String? = null): Registered {
         val bundle = identity.publicBundle()
         val body = JSONObject()
+            // Dated, so a captured registration (it carries the secret) cannot be
+            // replayed later; the relay accepts it within five minutes of its clock.
+            .put("ts", relayNow())
             .apply { if (invite != null) put("invite", invite) else put("secret", secret ?: "") }
             .put("ed25519", bundle.ed25519)
             .put("curve25519", bundle.curve25519)
