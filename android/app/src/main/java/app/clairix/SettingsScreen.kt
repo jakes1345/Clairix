@@ -682,9 +682,12 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         if (BuildConfig.FULL_ACCESS)
                             "Detection data stays on this phone. Location history, device identifiers, cell tower " +
                                 "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
-                                " are stored locally and never uploaded. " +
-                                "The map downloads tiles from OpenStreetMap, which sees your IP address and the area " +
-                                "you're viewing. Evidence leaves the phone only when you export it."
+                                " are stored locally, sealed under a key in this phone's secure hardware, and never " +
+                                "uploaded. The map downloads tiles from OpenStreetMap and sends address searches to its " +
+                                "Nominatim service; both see your IP address and the area you're looking at. Offline maps " +
+                                "and work zones come signed from GitHub. Messages, calls and live traffic go through the " +
+                                "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
+                                "phone only when you export it."
                         else
                             "Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who " +
                                 "sent them. Your keys, contacts and history are stored on this phone only. Location is " +

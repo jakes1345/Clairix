@@ -11,18 +11,34 @@ Each item says whether it was **verified** (read end to end in this audit),
 **reported** (anchored to file:line by a reviewer but not independently
 re-read). Line numbers are as of commit `366aabb`.
 
-Fixed so far: observability off on the relay; `CommsLog` no longer writes
-to logcat; every data domain excluded from cloud backup and device transfer;
-release builds minified with `android.util.Log` stripped; system-only CA
-trust and no cleartext app-wide, with optional strict pinning of the relay's
-key on every comms handshake; the four `Store`
-documents (location log, timeline, cell baseline, trips) sealed on disk under
-a Keystore key, with plaintext files from earlier versions resealed on first
-load; lookups by signed body (`POST /v1/lookup`); no stored activity times on
-the relay (minute-scale limits in memory, slow allowances to the hour and
-deleted once refilled, no last-seen/fetched/woken, registration to the day,
-lapsed claims to the day); traffic made anonymous (token-spending requests,
-per-trip pseudonyms, no salted number hash, no per-caller incident quota).
+Fixed so far (PRs #12, #13 and #14): observability off on the relay;
+`CommsLog` no longer writes to logcat; every data domain excluded from cloud
+backup and device transfer; release builds minified with `android.util.Log`
+stripped; the four `Store` documents (location log, timeline, cell baseline,
+trips) sealed on disk under a Keystore key, with plaintext files from earlier
+versions resealed on first load; lookups by signed body (`POST /v1/lookup`);
+no stored activity times on the relay (minute-scale limits in memory, slow
+allowances to the hour and deleted once refilled, no last-seen/fetched/woken,
+registration to the day, lapsed claims to the day); traffic made anonymous
+(token-spending requests, per-trip pseudonyms, no salted number hash, no
+per-caller incident quota); system-only CA trust and no cleartext app-wide,
+with optional strict pinning of the relay's key on every handshake; the lock
+gates read receipts and `markRead`, redacts notifications into "Unlock to
+read", disarms HCE, and FLAG_SECURE is on for every screen; a reachable wipe
+("Wipe Clairix") that also cancels notifications, clears the clipboard,
+unregisters push and drops the device-admin role, with the relay call bounded
+to four seconds; a hide-previews setting; sensitive-marked clipboard copies;
+the duress phrase's no-group warning; releases, map graphs and work zones
+signed with a project Ed25519 key and verified in the app; every action
+commit-pinned, the release dispatch guarded, the Geofabrik extract checked
+against its MD5, pip pinned; the crate refuses to rebind a Curve25519 key to a
+second identity and keeps a session whose first message fails padding; the
+relay records which account each key belongs to, dates registrations, caps
+request bodies, compares secrets as digests, accepts-and-drops sends to
+unknown numbers, restricts traffic regions to published ones and refunds a
+credit into a deleted mailbox; the READMEs and the website's security and
+privacy pages rewritten around the threat model.
+
 
 ## Tier 1 — the relay is a single point of compulsion
 
@@ -251,24 +267,36 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
 
 ## README claims to correct
 
-- "Panic wipe — one tap": now the "Wipe Clairix" page (9).
-- "Quietly sends your location as an SOS": silent with no group (31).
-- "The relay knows as little as possible": true of content, not of metadata
-  (1, 2, 3). List what is kept, by whom, for how long.
-- Add: the app cannot protect you if the OS is compromised or the phone is
-  seized unlocked.
+All **done** in PR #14: the root README carries the threat model (who it is
+built against, what it protects, what it cannot do, what the relay keeps),
+names the "Wipe Clairix" page (9) and the duress phrase's no-group case (31),
+and lists what the relay stores and for how long (1, 2, 3); the website's
+security and privacy pages and the delete-account page say the same, with
+the live-capture caveat (addresses and token-batch fetches are visible in
+flight, never written down), and the privacy policy's effective date moved;
+the in-app privacy text names every network destination; the worker README's
+one-time-key limits match the code.
 
 ## Suggested order
 
-1. Encrypt scanner stores with an unlock-bound key (6, 7).
+1. Encrypt scanner stores with an unlock-bound key (6, 7). *Done for the
+   stores; the key is not unlock-bound (7), the unlock ledger and prefs are
+   still clear (6).*
 2. Target number out of lookup URLs; drop `lastFetchAt` and bucket
-   timestamps; unsign probes (1, 2, 3).
-3. Pin the relay certificate; system-only trust elsewhere (15).
+   timestamps; unsign probes (1, 2, 3). *Done.*
+3. Pin the relay certificate; system-only trust elsewhere (15). *Done.*
 4. Sign graphs, work zones and release sums; SHA-pin actions (16, 17, 18).
+   *Done; the operator still has to generate the key and set the secret.*
 5. One-tap wipe with notification, admin and push cleanup; disarm HCE on
-   lock; gate `openPeer`/`markRead` on the lock (8, 9, 10).
-6. OTK-burn ordering and curve-rebind refusal in the crate (19, 20).
-7. README with an explicit threat model.
+   lock; gate `openPeer`/`markRead` on the lock (8, 9, 10). *Done; HCE on
+   screen-off and vault lock (10) remains.*
+6. OTK-burn ordering and curve-rebind refusal in the crate (19, 20). *Done.*
+7. README with an explicit threat model. *Done.*
+
+Still open after PR #14: 4, 5, 7, 10 (screen-off), 11, 14, 23, 25 (coin
+farming), 26, 29, 30, and the phase-2 work (several relays, a mesh for no
+network, cover traffic, an on-device geocoder, reproducible builds, an
+audit).
 
 ## Not re-tested
 

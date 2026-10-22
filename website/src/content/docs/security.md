@@ -8,7 +8,7 @@ The following is created and stored only on your device. It is not uploaded, and
 - Vehicle trip records.
 - Spyware and phone-health results, including the list of apps installed on your phone.
 - The unlock ledger.
-- Your Comms encryption keys, contacts and message history. Message bodies are encrypted at rest with a key in your phone's hardware keystore.
+- Your Comms encryption keys, contacts and message history. Message bodies are encrypted at rest with a key in your phone's hardware keystore, and so are the location history, the timeline, the cell-tower baseline and vehicle trip records.
 - Your duress phrase, stored encrypted and compared only in memory.
 - Hidden-camera sweep frames. The camera feed is analysed live and no frame is saved.
 
@@ -22,14 +22,14 @@ This is the complete list of destinations the app connects to, taken from the co
 
 | Destination | When | What is sent | What they can see |
 |---|---|---|---|
-| **Clairix relay** (our server, run on Cloudflare) | When you register for Comms, then while Comms is online | Your public keys, your Clairix number, sealed message envelopes, and a UnifiedPush endpoint if you set one up | Your Clairix number, a pseudonymous ID. Envelope content is end-to-end encrypted and the relay cannot read it or see who sent it. |
+| **Clairix relay** (our server, run on Cloudflare) | When you register for Comms, then while Comms is online | Your public keys, your Clairix number, sealed message envelopes, and a UnifiedPush endpoint if you set one up | Your Clairix number, a pseudonymous ID. Envelope content is end-to-end encrypted and the relay cannot read it. A send names no account: it spends a single-use token your phone fetched earlier, so nothing the relay stores says who sent an envelope. It sees the recipient, the size and the time. |
 | **Clairix relay**, SOS or duress | Only when you press SOS or type your duress phrase | Your position, inside an end-to-end encrypted envelope to your chosen contacts | Precise location, encrypted so the relay cannot read it |
-| **Clairix relay**, traffic | Only during active turn-by-turn navigation, and only if you are registered for Comms | Anonymous speed samples: a road segment, its map position, a speed and a time. Never your GPS track. Nothing for the first 500 m of a trip or the final approach to your destination | Approximate location of road segments. The sender is stored only as a salted one-way hash of your Clairix number. Samples are deleted after two hours. |
-| **Clairix relay**, incident reports | When you report or confirm a traffic incident | Incident type and position | Approximate location, with a hashed reporter ID |
+| **Clairix relay**, traffic | Only during active turn-by-turn navigation, and only if you are registered for Comms | Anonymous speed samples: a road segment, its map position, a speed and a time. Never your GPS track. Nothing for the first 500 m of a trip or the final approach to your destination | Approximate location of road segments. Sent without any identity: each request spends a single-use token, and samples from one drive share a pseudonym your phone makes up and replaces every ten minutes. Samples are deleted after two hours. |
+| **Clairix relay**, incident reports | When you report or confirm a traffic incident | Incident type and position | Approximate location. Reports and confirmations carry the same per-drive pseudonym, never your number. |
 | **Cloudflare TURN/STUN** | During a call that cannot connect directly | Call audio, encrypted end to end with DTLS-SRTP | Your IP address. Not the audio. |
 | **OpenStreetMap Nominatim** | When you search for an address | The search text, or coordinates for a reverse lookup | Approximate location, your IP address |
 | **OpenStreetMap tile servers** | When you open the map | The coordinates of the map tiles you view | The area you are looking at, your IP address |
-| **GitHub Releases** | When you download an offline map region | The name of the region | Your IP address |
+| **GitHub Releases** | When you download an offline map region, or the work-zone list for it | The name of the region | Your IP address. The files are signed, and the app refuses one whose signature does not verify. |
 | **An app you pick** (Android share sheet) | When you export a report or share an invite | Whatever you chose to share | Up to that app |
 
 </div>
@@ -56,13 +56,17 @@ The relay checks that every key it stores is signed by the owner's identity key,
 The encrypted Olm message is then wrapped in an anonymous box addressed to the recipient's sealing key: an ephemeral X25519 key agreement, HKDF-SHA256 bound to both public keys, then ChaCha20-Poly1305. This is the `crypto_box_seal` construction. The envelope carries no sender. The relay stores and forwards envelopes it cannot open, and even if it could open the box, it would find another layer of ciphertext inside.
 
 ### Authentication without passwords
-Every request to the relay is signed with your Ed25519 identity key, with a timestamp and a single-use nonce. There are no passwords, tokens or session cookies to leak. The same key is what your contacts verify when they compare safety numbers with you.
+Every request that acts on your account (registering, collecting your envelopes, looking up a contact, fetching tokens) is signed with your Ed25519 identity key, with a timestamp and a single-use nonce. There are no passwords or session cookies to leak. The same key is what your contacts verify when they compare safety numbers with you.
+
+Sending an envelope and reporting traffic are deliberately not signed. Each spends a single-use token that your phone fetched earlier over the signed channel, so the relay cannot tie the send to an account. A key belongs to one account: the relay refuses to register a key another number already holds, so nobody can take over your keys by registering them as their own.
 
 ### Calls
 Signalling for a call travels inside the same encrypted envelopes as messages. The audio is WebRTC with DTLS-SRTP between the two phones. The fingerprints that key the audio are carried inside the encrypted envelopes and are therefore authenticated by your contact's pinned identity. Neither the relay nor a TURN server can read or replace them. A TURN server forwards packets it cannot decrypt.
 
 ### On your phone
-Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. Message bodies in the local database are encrypted the same way. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
+Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. Message bodies in the local database are encrypted the same way, and the scanner's records (location history, timeline, cell-tower baseline, trips) are sealed on disk under a keystore key as well. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
+
+Not yet: the unlock ledger and the app's settings files are stored in the clear, and the keys that seal the rest are not bound to the phone being unlocked, because the scanner has to write while the keyguard is up. Both are on the list in the project's security findings.
 
 ## What the relay stores, and for how long {#relay}
 
@@ -74,12 +78,19 @@ The relay is a small store-and-forward service. It is built to know as little as
 | Encrypted envelopes waiting for your phone | Deleted when your phone collects them, or after 30 days |
 | Your UnifiedPush endpoint, if you set one | Until you change or remove it, or delete your account |
 | Unused invite codes you created | 7 days |
+| Hashes of the single-use tokens your phone fetched and has not spent | 14 days, plus up to twelve hours |
+| A note that each of your keys belongs to your number | Until you delete your account |
+| Rate-limit allowances, as a count and the hour | Deleted once they have refilled |
+| The nonce of each signed request | 5 minutes |
 | Anonymous traffic samples (navigation only) | 2 hours |
 | Learned road-segment positions (navigation only) | 30 days |
+| Incident reports (navigation only) | Until they expire or are voted away |
 
 The relay never holds message content, a name, a phone number, an email address or your contact list. Group membership lives on the phones, not on the relay.
 
-What the relay can observe: the recipient of each envelope, its size and the time, and, at the moment a message is sent, the sender who signed the send request. The sender is not stored with the envelope. We say this plainly because a relay operator who logged every request could see who messaged whom and when. We do not keep such logs, and the design means that even the fullest log would contain no content.
+What the relay can observe: the recipient of each envelope, its size and the time. A send is not signed and names no account, and a lookup names its target in the signed body, never in the URL, so a request log holds neither senders nor who looked up whom. The relay's own logging is off. Nothing a mailbox stores says when its owner was last here: limits are kept to the hour, nonces to the minute, registrations to the day.
+
+We say the rest plainly too. A relay operator, or the platform under it, who captured live requests could see the network address each one came from and which account fetched a batch of tokens, because the tokens are random values the relay hands out rather than blind-signed ones. That is possible only while a request is in flight; none of it is written down. If your IP address matters to you, reach the relay through Tor or a VPN.
 
 You delete your relay account from inside the app with Panic Wipe or Unpair, or by email. [How to delete your account.](/delete-account)
 
@@ -103,8 +114,11 @@ There is no bug bounty at present. If you would like to encrypt your report, ask
 ## Where the limits are
 
 - **Detection is best-effort.** No app can find every camera, tracker or piece of spyware. Each feature page says what it will miss.
-- **A compromised phone cannot be trusted by anything running on it.** If your phone is rooted, has an unlocked bootloader or fails verified boot, Clairix tells you, and its own results should be treated with care.
+- **A compromised phone cannot be trusted by anything running on it.** Clairix is an ordinary app. If the operating system, the baseband or a system app is working against you, it can read what Clairix reads and see what you type. Clairix can notice some signs (root, an unlocked bootloader, failed verified boot, an added certificate, a proxy, USB debugging, a microphone or camera in use) and tell you. It cannot stop or remove an implant below it.
+- **A phone seized while unlocked**, or taken with Clairix open, shows its holder whatever it would show you. The wipe needs you to reach it, or the wrong-passcode limit to be hit.
+- **Your location from the network.** Your carrier always knows roughly where a phone is from the towers it talks to. Clairix can detect a fake tower; it cannot hide you from a real one.
 - **Traffic analysis is possible.** Anyone watching your network can see that your phone talks to the Clairix relay and roughly when. They cannot see what it says.
-- **The relay can see envelope metadata** as described above. This is a property of any store-and-forward design that does not have a mixing network behind it.
+- **The relay can see envelope metadata** as described above: the recipient, the size and the time of each envelope, though not the sender. There is no cover traffic and no mixing network, so someone watching both ends of the network can still pair a sender with a recipient by timing.
+- **There is one relay.** An order can shut it down or make it refuse you. It cannot make it read your messages.
 - **No independent audit yet.** vodozemac, the encryption library, has been audited. Clairix as a whole has not been independently reviewed. We will say so here until it has.
 - **We can only promise what the code does.** This page was written from the code, not from a marketing brief. If something here turns out not to match the app's behaviour, tell us and we will correct the page or the app.

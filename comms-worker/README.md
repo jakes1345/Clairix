@@ -59,8 +59,8 @@ the key; a key whose ticket does not come back within 15 minutes returns to the
 end of the pool, and a ticket that arrives later still takes its key back out,
 so no key is handed out twice. A caller may claim at most three keys an hour
 from any one number (counted in memory only, so the relay stores no record of
-who looked up whom) and thirty an hour in all, and a number hands out at most
-sixty an hour; past any limit the lookup offers the fallback key (rotated
+who looked up whom) and ten an hour in all, and a number hands out at most
+twenty an hour; past any limit the lookup offers the fallback key (rotated
 daily), so nobody can drain anyone's keys.
 
 Delivery tokens expire fourteen days after issue, plus up to twelve hours of
