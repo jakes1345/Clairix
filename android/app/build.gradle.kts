@@ -292,6 +292,10 @@ dependencies {
     // later demand compileSdk 36 and so a newer Android Gradle plugin; 4.17 is
     // the newest that builds against 35.
     implementation("net.zetetic:sqlcipher-android:4.17.0")
+    // SQLCipher's database and open-helper classes implement androidx.sqlite's
+    // support interfaces, which its POM lists at runtime scope only; the Kotlin
+    // compiler needs them on the compile classpath to resolve the supertypes.
+    implementation("androidx.sqlite:sqlite:2.6.2")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("com.google.zxing:core:3.5.4")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
