@@ -11,10 +11,12 @@ Each item says whether it was **verified** (read end to end in this audit),
 **reported** (anchored to file:line by a reviewer but not independently
 re-read). Line numbers are as of commit `366aabb`.
 
-Fixed in the PR that adds this file: observability off on the relay;
-`CommsLog` no longer writes to logcat; every data domain excluded from cloud
-backup and device transfer; release builds minified with `android.util.Log`
-stripped.
+Fixed so far: observability off on the relay; `CommsLog` no longer writes
+to logcat; every data domain excluded from cloud backup and device transfer;
+release builds minified with `android.util.Log` stripped; the four `Store`
+documents (location log, timeline, cell baseline, trips) sealed on disk under
+a Keystore key, with plaintext files from earlier versions resealed on first
+load.
 
 ## Tier 1 — the relay is a single point of compulsion
 
@@ -50,10 +52,12 @@ stripped.
    `DuressPhrase.kt:150-165`), `imsi_baseline.json`, `vehicle_trips.json`
    (`ScanService.kt:212,215`), `unlock_ledger.db` (`UnlockLedger.kt:60-101`)
    and about a dozen prefs files are written as-is by `Store.kt:185-199`.
-   `KeystoreBox` exists and is not used for any of them. *Verified.* Fix:
-   wrap `Store` in `KeystoreBox` under a key with
-   `setUnlockedDeviceRequired(true)`, and add a retention setting that
-   defaults short.
+   `KeystoreBox` exists and is not used for any of them. *Verified.*
+   **Done for the `Store` documents** (`StoreCipher.kt`): AES-256-GCM under
+   a hardware Keystore key. Not unlock-bound, because the scanner writes
+   the baseline with the keyguard up; see the class comment for what that
+   does and does not protect against. Still open: `unlock_ledger.db`, the
+   prefs files, and a retention setting that defaults short.
 7. **`KeystoreBox` key is not user-auth bound and not StrongBox**
    (`KeystoreBox.kt:48-55`). A logical extraction with the device unlocked
    reads everything it protects. *Reported.*
