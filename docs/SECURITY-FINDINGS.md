@@ -151,14 +151,31 @@ per-trip pseudonyms, no salted number hash, no per-caller incident quota).
     `GraphStore.kt:166-168` fetches the `.sha256` from the same release URL;
     `WorkZoneFeed.kt:233-260` has no checksum. `RoadGraph.open` parses that
     binary into a mapped buffer in a location-permissioned service. *Reported.*
-    Fix: Ed25519-sign the assets with a key embedded in the app.
+    **Done:** `tools/signing` (Ed25519; secret in the `ASSET_SIGNING_KEY`
+    secret, public key committed and built into the app as
+    `BuildConfig.ASSET_PUBKEY`). The maps workflow signs each graph's checksum
+    file and the app verifies that signature before holding the graph to the
+    checksum; the work-zones workflow signs every per-region file and the app
+    verifies before parsing, and drops a cached copy an earlier version kept
+    unverified. A release build fails without the public key; the workflows
+    fail without the secret. **Operator action:** run `keygen.py`, commit
+    the two public files, set the secret, before the next release.
 17. **Release `SHA256SUMS.txt` is unsigned** (`release.yml:208`). *Reported.*
+    **Done:** signed by the same key into `SHA256SUMS.txt.sig`, published
+    with the release; the notes say how to check it with `openssl` against
+    `android/asset-signing.pem`.
 18. **Actions are tag-pinned** (`@v4`, `@stable`) including in `release.yml`,
     which runs with `contents: write` and the decoded keystore on disk. A
     hijacked tag signs a trojaned APK with the real key. `maps.yml` and
     `workzones.yml` run on a schedule with `contents: write` against
-    unchecksummed Geofabrik data and unpinned pip. *Spot-checked.* Fix:
-    SHA-pin; move signing out of CI.
+    unchecksummed Geofabrik data and unpinned pip. *Spot-checked.* **Done:**
+    every action pinned to a commit (the Rust toolchain action names its
+    toolchain explicitly); the Geofabrik extract is checked against the MD5
+    Geofabrik publishes; the builder's and the signing tool's Python
+    dependencies are pinned; `pip install --upgrade pip` is gone; a manual
+    release run must start from `main`, a `release/v*` branch or a `v*` tag;
+    `maps.yml` now triggers on `main` (it named a `master` branch that does
+    not exist). Still open: moving release signing off the CI runner.
 
 ## Crypto crate and relay logic
 

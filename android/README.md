@@ -118,6 +118,13 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 
 ## Cutting a release
 
+Before the first release, make the asset signing key (`tools/signing/README.md`):
+`python3 tools/signing/keygen.py` writes `android/asset-signing.pub` and
+`android/asset-signing.pem` (commit both) and prints the secret for the
+`ASSET_SIGNING_KEY` repository secret. The maps, work zones and the release
+checksums are signed with it, and the app refuses downloads it cannot verify;
+a release build fails without the public key file.
+
 1. Set `versionName` and raise `versionCode` in `app/build.gradle.kts`
    (3.0.0-beta.1 is versionCode 21). The workflow refuses a tag that does not
    match `versionName`.
@@ -126,9 +133,11 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
    created at its head); or Actions → Release → Run workflow with the tag.
 3. The workflow tests the crypto crate, builds and signs `fullSuite` and
    `fullComms` APKs and the `playSuite` bundle, checks the Play manifest has no
-   card emulation, and publishes a GitHub Release with the three files and
-   `SHA256SUMS.txt`. A tag ending in `-alpha.N`, `-beta.N` or `-rc.N` is marked
-   as a pre-release.
+   card emulation, and publishes a GitHub Release with the three files,
+   `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed by the
+   asset signing key). A tag ending in `-alpha.N`, `-beta.N` or `-rc.N` is
+   marked as a pre-release. A run started by hand must start from `main`, a
+   `release/v*` branch or a `v*` tag.
 4. Check the certificate digest the "Collect and verify artifacts" step prints:
    it must be the same as the previous release's, or phones will refuse the update.
 5. Upload `clairix-play-<tag>.aab` in the Play Console (a beta goes to a testing

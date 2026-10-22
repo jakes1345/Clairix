@@ -105,6 +105,12 @@ tasks.withType<Test>().configureEach {
     testLogging { events("passed", "skipped", "failed"); showStandardStreams = true; exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }
 
+/**
+ * The asset signing public key, committed as android/asset-signing.pub by
+ * tools/signing/keygen.py. See tools/signing/README.md.
+ */
+val assetPublicKey: String = rootProject.file("asset-signing.pub").takeIf { it.isFile }?.readText()?.trim().orEmpty()
+
 android {
     namespace = "app.clairix"
     compileSdk = 35
@@ -113,6 +119,10 @@ android {
         applicationId = "app.clairix"
         minSdk = 31
         targetSdk = 35
+        // The asset signing public key (tools/signing): what the app checks
+        // downloaded maps, work zones and release checksums against. Empty in
+        // a checkout that has not run keygen; a release build refuses that below.
+        buildConfigField("String", "ASSET_PUBKEY", "\"$assetPublicKey\"")
         versionCode = 22
         versionName = "3.0.0-beta.2"
     }
@@ -297,5 +307,16 @@ dependencies {
 androidComponents {
     beforeVariants(selector().withFlavor("edition" to "play").withFlavor("tier" to "comms")) { variant ->
         variant.enable = false
+    }
+}
+
+// A release that cannot verify what it downloads must not be built.
+tasks.configureEach {
+    if (name.matches(Regex("(assemble|bundle)\\w*Release"))) {
+        doFirst {
+            if (assetPublicKey.isEmpty()) {
+                throw GradleException("android/asset-signing.pub is missing: a release build needs the asset signing public key (see tools/signing/README.md)")
+            }
+        }
     }
 }

@@ -61,6 +61,8 @@ class GraphStore(context: Context) {
         private const val PROGRESS_STEP_BYTES = 256 * 1024L
         /** RoadGraph maps the whole file into one buffer, so nothing larger can ever open. */
         private const val MAX_GRAPH_BYTES = Int.MAX_VALUE.toLong()
+        /** A checksum or signature file is a line; anything bigger is not one. */
+        private const val SMALL_FILE_MAX = 1024L
         private val SLUG_RE = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
 
         fun slugOf(path: String): String = path.trim('/').replace('/', '-')
@@ -204,17 +206,33 @@ class GraphStore(context: Context) {
         }
     }
 
+    /**
+     * The published checksum, once its signature by the Clairix asset signing
+     * key has checked: the checksum file's exact bytes are what was signed,
+     * and the graph is then held to the signed checksum. A graph without a
+     * signature, or with one by another key, is never installed.
+     */
     private suspend fun fetchChecksum(url: String): String {
+        val checksum = fetchSmall(url, "The map checksum")
+        val signature = fetchSmall("$url.sig", "The map signature")
+        if (!AssetSignature.verify(checksum, String(signature, Charsets.US_ASCII))) {
+            throw IOException("The published map is not signed by the Clairix release key")
+        }
+        val hex = String(checksum, Charsets.UTF_8).trim().substringBefore(' ')
+        if (!SHA256_RE.matches(hex)) throw IOException("The published map checksum is malformed")
+        return hex
+    }
+
+    /** A small published file (a checksum, a signature), whole, or an error naming [what]. */
+    private suspend fun fetchSmall(url: String, what: String): ByteArray {
         execute(url).use { res ->
-            if (res.code == 404) throw IOException("No map has been published for this region yet")
-            if (!res.isSuccessful) throw IOException("Map checksum download failed: HTTP ${res.code}")
-            val body = res.body ?: throw IOException("Map checksum download returned no data")
+            if (res.code == 404) throw IOException("$what has not been published for this region yet")
+            if (!res.isSuccessful) throw IOException("$what download failed: HTTP ${res.code}")
+            val body = res.body ?: throw IOException("$what download returned no data")
             val source = body.source()
-            source.request(256)
-            val text = source.buffer.readUtf8(minOf(256L, source.buffer.size))
-            val hex = text.trim().substringBefore(' ')
-            if (!SHA256_RE.matches(hex)) throw IOException("The published map checksum is malformed")
-            return hex
+            source.request(SMALL_FILE_MAX + 1)
+            if (source.buffer.size > SMALL_FILE_MAX) throw IOException("$what is larger than it can be")
+            return source.buffer.readByteArray()
         }
     }
 

@@ -1,2 +1,2 @@
-osmium>=4.0,<5
-numpy>=1.26
+osmium==4.3.2
+numpy==2.5.4
