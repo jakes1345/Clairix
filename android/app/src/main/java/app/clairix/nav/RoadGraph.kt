@@ -44,7 +44,8 @@ class RoadGraph private constructor(
     companion object {
         private const val HEADER_BYTES = 128
         private const val EDGE_BYTES = 32
-        private const val NO_NAME = -1 // 0xFFFFFFFF read as a signed Int
+        /** An edge's name index when it has no name: 0xFFFFFFFF read as a signed Int. */
+        const val NO_NAME = -1
         private const val TARGET_CELL_M = 250.0
         private const val MAX_CELLS = 4_000_000
 
@@ -146,14 +147,21 @@ class RoadGraph private constructor(
     fun edgeLengthM(e: Int): Double = (buf.getInt(edgesOff + e * EDGE_BYTES + 4).toLong() and 0xFFFFFFFFL) / 10.0
     fun edgeWayId(e: Int): Long = buf.getLong(edgesOff + e * EDGE_BYTES + 8)
 
-    fun edgeName(e: Int): String? {
-        val idx = buf.getInt(edgesOff + e * EDGE_BYTES + 16)
-        if (idx == NO_NAME) return null
+    /** The index of edge [e]'s name in the name table, or [NO_NAME]. */
+    fun edgeNameIndex(e: Int): Int = buf.getInt(edgesOff + e * EDGE_BYTES + 16)
+
+    /** Entry [idx] of the name table. */
+    fun name(idx: Int): String {
         val off = nameOffsets[idx]
         val len = buf.getShort(off).toInt() and 0xFFFF
         val bytes = ByteArray(len)
         for (i in 0 until len) bytes[i] = buf.get(off + 2 + i)
         return String(bytes, Charsets.UTF_8)
+    }
+
+    fun edgeName(e: Int): String? {
+        val idx = edgeNameIndex(e)
+        return if (idx == NO_NAME) null else name(idx)
     }
 
     private fun edgeShapeStart(e: Int): Int = buf.getInt(edgesOff + e * EDGE_BYTES + 20)

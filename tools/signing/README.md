@@ -48,7 +48,7 @@ A `.sig` is one line: the 64-byte Ed25519 signature, base64 without padding.
 ## Checking a release by hand
 
 ```sh
-base64 -d SHA256SUMS.txt.sig > sums.sig   # add trailing '=' padding first if base64 complains
+sed 's/$/==/' SHA256SUMS.txt.sig | base64 -d > sums.sig   # the .sig is unpadded; base64 -d wants the '=='
 openssl pkeyutl -verify -pubin -inkey android/asset-signing.pem -rawin -in SHA256SUMS.txt -sigfile sums.sig
 sha256sum -c --ignore-missing SHA256SUMS.txt
 ```

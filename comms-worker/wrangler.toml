@@ -12,6 +12,10 @@
 #
 # Plain variables (may go in [vars] below):
 #   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with, e.g. "100"; unset: none
+#   RELAY_ALTERNATES     Optional: comma-separated https addresses this same relay also answers at
+#                        (a second domain, its workers.dev name). Phones keep them and fall back
+#                        to them when the address they registered at stops answering; a phone that
+#                        has pinned the relay's key stays on the pinned address.
 #   PUSH_HOSTS           Optional: comma-separated push hosts (a self-hosted ntfy, say) trusted like
 #                        ntfy.sh and up.conversations.im; an endpoint on any other host is used only
 #                        after the phone echoes a one-time code pushed through it

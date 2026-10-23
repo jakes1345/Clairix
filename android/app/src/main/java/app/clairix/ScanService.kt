@@ -54,6 +54,7 @@ import app.clairix.detect.DultInterrogator
 import app.clairix.detect.KarmaCanary
 import app.clairix.detect.Signatures
 import app.clairix.detect.VehicleTrips
+import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,6 +78,9 @@ class ScanService : LifecycleService() {
     /** Links address rotations the payload cannot prove, by the rhythm of the radio. */
     private val cadence = CadenceFingerprinter()
     private lateinit var vehicleTrips: VehicleTrips
+    /** When history older than the owner's retention was last deleted; see [HistoryRetention]. */
+    private var lastRetentionAt = 0L
+    private val retentionEveryMs = 15 * 60_000L
 
     /** Logical devices already asked over DULT — one exchange each, answered or refused. */
     private val dultAsked = HashSet<String>()
@@ -212,7 +216,8 @@ class ScanService : LifecycleService() {
         cellStore = Store(this, "imsi_baseline.json")
         cellMonitor = CellMonitor(this)
         imsiCatcher = IMSICatcher(cellStore)
-        vehicleTrips = VehicleTrips(Store(this, "vehicle_trips.json"))
+        vehicleTrips = VehicleTrips(Store(this, TRIPS_FILE))
+        liveTrips = vehicleTrips
         // Shared with the activity, which records NFC scans into the same log.
         eventLog = TimelineLog.get(this)
         Registry.publishTimeline(eventLog.snapshot())
@@ -453,6 +458,10 @@ class ScanService : LifecycleService() {
             while (isActive) {
                 val now = System.currentTimeMillis()
                 tracker.prune(now)
+                if (now - lastRetentionAt > retentionEveryMs) {
+                    lastRetentionAt = now
+                    withContext(Dispatchers.IO) { runCatching { HistoryRetention.apply(this@ScanService) } }
+                }
                 // Fused location goes quiet once the car is parked (25 m minimum
                 // displacement), so the end of a trip is noticed here, not in the
                 // location callback.
@@ -902,6 +911,7 @@ class ScanService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        liveTrips = null
         stopScanning()
         if (running) {
             try { unregisterReceiver(systemReceiver) } catch (_: IllegalArgumentException) {}
@@ -935,6 +945,17 @@ class ScanService : LifecycleService() {
     companion object {
         const val ACTION_STOP = "app.clairix.STOP"
         const val ACTION_CLEAR = "app.clairix.CLEAR"
+        private const val TRIPS_FILE = "vehicle_trips.json"
+
+        /**
+         * The live service's trips, so [HistoryRetention] can prune them in
+         * place; null while no service is alive, when the file is opened fresh.
+         */
+        @Volatile private var liveTrips: VehicleTrips? = null
+
+        /** Forgets vehicle trips that ended before [cutoff]; returns how many. File I/O; call off the main thread. */
+        fun pruneTripsOlderThan(context: Context, cutoff: Long): Int =
+            (liveTrips ?: VehicleTrips(Store(context.applicationContext, TRIPS_FILE))).pruneOlderThan(cutoff)
         private const val CHANNEL_ONGOING = "scanning"
         private const val CHANNEL_ALERT = "alerts"
         private const val CHANNEL_CELL = "cell_alerts"

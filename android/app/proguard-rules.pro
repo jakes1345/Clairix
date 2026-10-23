@@ -22,6 +22,10 @@
 # osmdroid tile providers are looked up reflectively.
 -keep class org.osmdroid.** { *; }
 
+# SQLCipher: JNI callbacks into these classes.
+-keep class net.zetetic.** { *; }
+-dontwarn net.zetetic.**
+
 # WebRTC native bridge.
 -keep class org.webrtc.** { *; }
 -dontwarn org.webrtc.**

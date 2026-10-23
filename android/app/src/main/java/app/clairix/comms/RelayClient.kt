@@ -19,6 +19,7 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** A relay call that did not succeed, with the relay's message when it gave one. */
@@ -51,7 +52,47 @@ class RelayClient(
      * [RelayTls].
      */
     private val pin: () -> String? = { null },
+    /**
+     * The other addresses the relay answers at, as it last said (see [info]).
+     * When the address in use stops answering, a request is tried at each of
+     * these, and the one that answers is kept for the requests after it.
+     */
+    private val alternates: () -> List<String> = { emptyList() },
 ) {
+
+    /** The alternate address requests go to since the registered one stopped answering, if any. */
+    @Volatile private var reachable: String? = null
+
+    /**
+     * The address requests go to: the alternate that last answered, else the
+     * one registered at. With the relay's key pinned, always the registered
+     * one: the pin is that host's key, and another host has another.
+     */
+    private fun base(): String? {
+        val primary = relayUrl()?.trimEnd('/') ?: return null
+        val current = reachable
+        return if (current != null && pin() == null && current in alternates().map { it.trimEnd('/') }) current else primary
+    }
+
+    /** The addresses to try after [current] failed to answer, in order. */
+    private fun otherBases(current: String): List<String> {
+        if (pin() != null) return emptyList()
+        val primary = relayUrl()?.trimEnd('/') ?: return emptyList()
+        return (listOf(primary) + alternates().map { it.trimEnd('/') }).distinct().filter { it != current }
+    }
+
+    data class Info(val version: Int, val alternates: List<String>)
+
+    /** The relay's description of itself: its API version and the other addresses it answers at. Unauthenticated. */
+    fun info(): Info {
+        val relay = base() ?: throw RelayException("Not registered with a relay")
+        val json = execute(Request.Builder().url("$relay/").header("Accept", "application/json").get(), quick)
+        return parsed {
+            val arr = json.optJSONArray("alternates")
+            val urls = arr?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.startsWith("https://") } } } ?: emptyList()
+            Info(json.optInt("version", 0), urls)
+        }
+    }
 
     private fun pool(kind: TokenKind): TokenPool = when (kind) {
         TokenKind.DELIVERY -> tokens
@@ -270,7 +311,7 @@ class RelayClient(
      * this throws [NO_TOKENS], and the caller tops up apart from the request.
      */
     private fun anonymous(kind: TokenKind, method: String, pathAndQuery: String, body: JSONObject?): JSONObject {
-        val relay = relayUrl() ?: throw RelayException("Not registered with a relay")
+        val relay = base() ?: throw RelayException("Not registered with a relay")
         val text = body?.toString()
         var refused: RelayException? = null
         repeat(2) {
@@ -424,11 +465,20 @@ class RelayClient(
      * the payer wrote travels to the recipient inside an encrypted envelope
      * (see CommsWire.payment), never here.
      */
-    fun pay(to: String, amount: Long, note: String?): PayResult {
+    fun pay(to: String, amount: Long, note: String?, txid: String = UUID.randomUUID().toString()): PayResult {
         requireCoin()
-        val body = JSONObject().put("to", to).put("amount", amount)
+        val body = JSONObject().put("to", to).put("amount", amount).put("txid", txid)
         if (!note.isNullOrBlank()) body.put("note", note)
-        val json = signed("POST", "/v1/coin/pay", body)
+        // The payment is named here, and the relay makes it once per name: a
+        // request whose answer was lost on the network is repeated under the
+        // same name, and cannot move the coins twice. An answer the relay gave
+        // (any HTTP status) is final either way.
+        val json = try {
+            signed("POST", "/v1/coin/pay", body)
+        } catch (e: RelayException) {
+            if (e.code != 0) throw e
+            signed("POST", "/v1/coin/pay", body)
+        }
         return parsed { PayResult(json.getString("txid"), json.getLong("balance")) }
     }
 
@@ -548,7 +598,7 @@ class RelayClient(
         execute(signedRequest(method, pathAndQuery, body))
 
     private fun signedRequest(method: String, pathAndQuery: String, body: JSONObject?): Request.Builder {
-        val relay = relayUrl() ?: throw RelayException("Not registered with a relay")
+        val relay = base() ?: throw RelayException("Not registered with a relay")
         val number = number() ?: throw RelayException("Not registered with a relay")
         if (identity() == null) throw RelayException("No identity on this device")
         val bodyText = body?.toString() ?: ""
@@ -583,7 +633,35 @@ class RelayClient(
             .header("X-Clairix-Sig", identity.sign(payload.toByteArray(Charsets.UTF_8)))
     }
 
+    /**
+     * Runs the request at the address it was built for; if that address does
+     * not answer at all (a network failure, never a refusal), tries it at each
+     * other address the relay answers at and keeps the one that does.
+     */
     private fun execute(builder: Request.Builder, client: OkHttpClient = rest): JSONObject {
+        val url = builder.build().url.toString()
+        val current = base()
+        try {
+            return executeOnce(builder, client)
+        } catch (e: RelayException) {
+            if (e.code != 0 || current == null || !url.startsWith(current)) throw e
+            var last = e
+            for (other in otherBases(current)) {
+                try {
+                    val json = executeOnce(builder.url(other + url.removePrefix(current)), client)
+                    reachable = other
+                    return json
+                } catch (again: RelayException) {
+                    // An answer from the relay, whatever it says, stands; only silence moves on.
+                    if (again.code != 0) throw again
+                    last = again
+                }
+            }
+            throw last
+        }
+    }
+
+    private fun executeOnce(builder: Request.Builder, client: OkHttpClient): JSONObject {
         // Every network failure, including one while reading the response body
         // (a network switch mid-request), surfaces as a RelayException with code
         // 0, which callers treat as "offline, retry later".

@@ -698,3 +698,61 @@ test("the secret comparison gives nothing away about the secret's length", async
   const res = await relay.call("POST", "/v1/register", { body: text, headers: { "x-clairix-sig": await bob.sign(text), "cf-connecting-ip": "203.0.113.12" } });
   assert.equal(res.status, 403);
 });
+
+test("TURN credentials stop at thirty an hour per account and come back with the hour", async () => {
+  const relay = makeRelay({ TURN_KEY_ID: "key-id", TURN_KEY_API_TOKEN: "api-token" });
+  const fetches = mockFetch((call, n) => Response.json({
+    iceServers: { urls: ["turn:turn.cloudflare.com:3478?transport=udp"], username: `user-${n}`, credential: `secret-${n}` },
+  }));
+  // The minute limit is the older brake; step past it so the hourly one is what is measured.
+  async function turn(phone) {
+    for (;;) {
+      const res = await phone.signed("GET", "/v1/turn");
+      if (res.status === 429 && /minute/.test(res.json.error)) { advance(61_000); continue; }
+      return res;
+    }
+  }
+  try {
+    const alice = await makePhone(relay);
+    for (let i = 0; i < 30; i++) assert.equal((await turn(alice)).status, 200, `call ${i + 1}`);
+    const refused = await turn(alice);
+    assert.equal(refused.status, 429);
+    assert.match(refused.json.error, /hour/);
+    advance(60 * 60_000);
+    assert.equal((await turn(alice)).status, 200);
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a payment repeated under the same txid moves the coins once", async () => {
+  const relay = makeRelay({ COIN_INITIAL_BALANCE: "100" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const txid = "0f0e0d0c-0b0a-4908-8706-050403020100";
+  const first = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 5, txid });
+  assert.equal(first.status, 200);
+  assert.equal(first.json.txid, txid);
+  assert.equal(first.json.balance, 95);
+  // The same request again, as a phone repeats one whose answer was lost.
+  const again = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 5, txid });
+  assert.equal(again.status, 200);
+  assert.equal(again.json.balance, 95);
+  assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 95);
+  assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 105);
+  assert.equal((await bob.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === txid).length, 1);
+  assert.equal((await alice.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === txid).length, 1);
+  // Another id is another payment; an id that is not a UUID is replaced with one the relay mints.
+  assert.equal((await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 5, txid: "1f0e0d0c-0b0a-4908-8706-050403020100" })).json.balance, 90);
+  const minted = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 1, txid: "not-a-uuid" });
+  assert.equal(minted.status, 200);
+  assert.match(minted.json.txid, /^[0-9a-f-]{36}$/);
+  assert.equal(minted.json.balance, 89);
+});
+
+test("the relay names its alternate addresses: https origins only, trimmed, in order", async () => {
+  const relay = makeRelay({ RELAY_ALTERNATES: " https://door-two.example/, https://clairix-relay.example.workers.dev ,http://plain.example, https://bad.example/path, " });
+  const info = (await relay.call("GET", "/")).json;
+  assert.deepEqual(info.alternates, ["https://door-two.example", "https://clairix-relay.example.workers.dev"]);
+  assert.deepEqual((await makeRelay().call("GET", "/")).json.alternates, []);
+});

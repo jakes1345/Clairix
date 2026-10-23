@@ -5,11 +5,13 @@ on:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -41,7 +43,9 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
-          toolchain: stable
+          # The same version comms-crypto/rust-toolchain.toml names, so the
+          # crate is built with one compiler everywhere; bump both together.
+          toolchain: 1.97.0
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       - name: Cache Rust
@@ -52,12 +56,16 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      # No wrapper jar is committed, so Gradle is installed by the action and
-      # put on PATH. Keeps a binary out of the repo.
+      # The committed wrapper jar is checked against Gradle's published
+      # checksums before anything runs it, and the build goes through the
+      # wrapper, so the Gradle version and the distribution's checksum come
+      # from android/gradle/wrapper/gradle-wrapper.properties here and on a
+      # developer's machine alike.
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
-        with:
-          gradle-version: '8.10.2'
 
       - name: Test the crypto crate
         working-directory: comms-crypto
@@ -70,7 +78,7 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
           echo "NDK: $ANDROID_NDK_HOME"
-          gradle assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       # Every debug variant: the full edition's whole app (app-full-suite-debug.apk)
       # and comms-only build (app-full-comms-debug.apk), and the Play edition
@@ -81,3 +89,105 @@ jobs:
           name: clairix-debug-apk
           path: android/app/build/outputs/apk/*/debug/*.apk
           if-no-files-found: error
+
+  # Two builds of one commit on two machines must come out the same, or a
+  # published APK can never be checked against the source. Each copy builds
+  # the full edition's release APK with no keystore in the environment, so
+  # Gradle leaves the signing config off and writes it unsigned; compare-builds
+  # then requires the two files to be identical byte for byte. No Rust cache
+  # here: a restored target directory would hide a difference, not show it.
+  reproducible-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        copy: [first, second]
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: 1.97.0
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Build the full edition's release APK, unsigned
+        working-directory: android
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
+          echo "NDK: $ANDROID_NDK_HOME"
+          ./gradlew assembleFullSuiteRelease --no-daemon --stacktrace
+          APK=app/build/outputs/apk/fullSuite/release/app-full-suite-release-unsigned.apk
+          if [ ! -f "$APK" ]; then
+            echo "::error::$APK was not written; is a keystore set in this environment?"; exit 1
+          fi
+          sha256sum "$APK"
+
+      # The library must carry no path from this machine, or a build from any
+      # other directory differs for no reason (see cargoNdkBuild in
+      # android/app/build.gradle.kts). The unstripped libraries are checked:
+      # their debug info is where such a path would survive.
+      - name: Check the crypto library for build-machine paths
+        run: |
+          shopt -s nullglob
+          found=0; checked=0
+          for so in android/app/build/rust/jniLibs/*/libclairix_comms_crypto.so; do
+            checked=$((checked + 1))
+            if strings "$so" | grep -E -m 5 "$GITHUB_WORKSPACE|/home/runner|\.cargo/registry"; then
+              echo "::error file=$so::carries a path from the build machine"; found=1
+            fi
+          done
+          if [ "$checked" = 0 ]; then
+            echo "::error::No library found under android/app/build/rust/jniLibs; the check proved nothing"; exit 1
+          fi
+          if [ "$found" = 0 ]; then echo "No build-machine path in $checked libraries."; fi
+          exit $found
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducible-${{ matrix.copy }}
+          path: android/app/build/outputs/apk/fullSuite/release/app-full-suite-release-unsigned.apk
+          if-no-files-found: error
+
+  compare-builds:
+    needs: reproducible-build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: reproducible-*
+          path: builds
+
+      - name: Require the two builds to be the same file
+        run: |
+          A=builds/reproducible-first/app-full-suite-release-unsigned.apk
+          B=builds/reproducible-second/app-full-suite-release-unsigned.apk
+          sha256sum "$A" "$B"
+          if cmp -s "$A" "$B"; then
+            echo "Reproducible: two builds of $GITHUB_SHA on two machines are the same file, $(sha256sum "$A" | cut -c1-64)." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Two builds of $GITHUB_SHA differ"
+            # Which entries differ, by content, and then by anything at all.
+            tools/reproducible/compare-apk.sh "$A" "$B" || true
+            diff <(unzip -l "$A") <(unzip -l "$B") || true
+            exit 1
+          fi

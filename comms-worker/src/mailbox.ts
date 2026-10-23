@@ -612,21 +612,33 @@ export class Mailbox extends DurableObject<Env> {
    * balance, so two payments racing each other cannot both spend the same
    * coins.
    */
-  async debit(to: string, amount: number, txid: string, note: string): Promise<{ ok: boolean; balance: number; reason?: string }> {
+  async debit(to: string, amount: number, txid: string, note: string): Promise<{ ok: boolean; balance: number; reason?: string; repeat?: boolean }> {
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) {
       return { ok: false, balance, reason: "Invalid amount" };
+    }
+    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+    // A payment already made under this id is not made again. One that was
+    // made and then refunded (the recipient vanished before the credit) is
+    // over; a new payment needs a new id, so nothing is paid twice for one.
+    if (history.some((t) => t.id === txid && t.direction === "out")) {
+      if (history.some((t) => t.id === `${txid}:refund`)) return { ok: false, balance, reason: "Payment refused" };
+      return { ok: true, balance, repeat: true };
     }
     if (balance < amount) return { ok: false, balance, reason: "Insufficient balance" };
     const profile = await this.ctx.storage.get<Profile>("profile");
     const from = profile?.number ?? "";
     const next = balance - amount;
-    const history = await this.appendTx({ id: txid, from, to, amount, ts: Date.now(), direction: "out", note });
-    await this.ctx.storage.put({ balance: next, txHistory: history });
+    const entries = this.appendTx(history, { id: txid, from, to, amount, ts: Date.now(), direction: "out", note });
+    await this.ctx.storage.put({ balance: next, txHistory: entries });
     return { ok: true, balance: next };
   }
 
-  /** Adds [amount] to the owner's balance, for a payment from [from]; returns the new balance. */
+  /**
+   * Adds [amount] to the owner's balance, for a payment from [from]; returns
+   * the balance afterwards. A credit already made under [txid] is not made
+   * again, so a payment the relay had to repeat lands once.
+   */
   async credit(from: string, amount: number, txid: string, note: string): Promise<number> {
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) throw new Error("Invalid amount");
     const profile = await this.ctx.storage.get<Profile>("profile");
@@ -634,10 +646,12 @@ export class Mailbox extends DurableObject<Env> {
     // keep coins for whoever is given the number next; the payer is refunded.
     if (!profile) throw new Error("no such number");
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
+    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+    if (history.some((t) => t.id === txid && t.direction === "in")) return balance;
     const to = profile.number;
     const next = balance + amount;
-    const history = await this.appendTx({ id: txid, from, to, amount, ts: Date.now(), direction: "in", note });
-    await this.ctx.storage.put({ balance: next, txHistory: history });
+    const entries = this.appendTx(history, { id: txid, from, to, amount, ts: Date.now(), direction: "in", note });
+    await this.ctx.storage.put({ balance: next, txHistory: entries });
     return next;
   }
 
@@ -648,13 +662,11 @@ export class Mailbox extends DurableObject<Env> {
     return history.slice(0, n);
   }
 
-  /** The history with [tx] at the front, trimmed to MAX_TX_HISTORY; not yet written. */
-  private async appendTx(tx: CoinTx): Promise<CoinTx[]> {
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+  /** [history] with [tx] at the front, trimmed to MAX_TX_HISTORY; not yet written. */
+  private appendTx(history: CoinTx[], tx: CoinTx): CoinTx[] {
     const entry: CoinTx = { id: tx.id, from: tx.from, to: tx.to, amount: tx.amount, ts: tx.ts, direction: tx.direction };
     if (tx.note) entry.note = tx.note;
-    history.unshift(entry);
-    return history.slice(0, MAX_TX_HISTORY);
+    return [entry, ...history].slice(0, MAX_TX_HISTORY);
   }
 
   /** Deletes everything about this number. */

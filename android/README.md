@@ -79,10 +79,52 @@ gradle test                         # unit tests for every variant
   relay's key rotates with its certificate.
 - **Comms → "Hide names and previews in notifications"**, on by default once a
   passcode is set.
+- **Comms → "Relay-only calls"**: audio only through the relay's TURN server,
+  so no contact learns this phone's address from a call. Off by default.
+- **Comms → "Cover traffic"**: sealed envelopes nobody reads, to random
+  contacts at random intervals, so real messages are not the only traffic.
+  Off by default.
 - **Settings → App lock → wipe after N wrong passcodes** (1, 3, 5, 10 or never)
   and the duress passcode.
 - **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists
   what it takes with it, in order.
+- **Settings → "Keep history for"**: 7, 30 or 90 days, or forever (30 by
+  default). The location log, the timeline, vehicle trips and the unlock
+  ledger older than that are deleted every quarter hour while scanning and
+  at each start (`security/HistoryRetention.kt`).
+
+## Reproducing a build
+
+Two builds of one commit should come out the same, so a published APK can
+be checked against the source. For every change, CI builds the full
+edition's release APK twice, on two machines, unsigned, and fails unless the
+two files are identical byte for byte (`reproducible-build` and
+`compare-builds` in `.github/workflows/android.yml`). What makes that hold:
+
+- The Rust compiler, `1.97.0`, named in `comms-crypto/rust-toolchain.toml`
+  and in both workflows; bump both together. The absolute paths of the
+  crate and of Cargo's registry are mapped to fixed names when the library
+  is compiled (`RUSTFLAGS`, set by `cargoNdkBuild`), and CI checks the
+  unstripped library for any path from the build machine.
+- Gradle `8.14.3`, through the wrapper on a developer's machine and in CI
+  alike: `gradle/wrapper/gradle-wrapper.properties` names the version and
+  the distribution's SHA-256, and CI checks the committed wrapper jar
+  against Gradle's published checksums before running it. The Android
+  Gradle plugin, Kotlin and every library are at an exact version in the
+  Gradle files; every GitHub action at a commit.
+- No Google dependency-metadata block in the APK or bundle: it is encrypted
+  for Google at signing time, so it can be neither reproduced nor read.
+
+To check a published release, build the same tag with no keystore in the
+environment, which leaves the APK unsigned, and compare the two entry by
+entry with `tools/reproducible/compare-apk.sh`: signing adds the signature
+files and the signing block and changes nothing else.
+`tools/reproducible/README.md` has the steps.
+
+Not pinned yet: the NDK (the runner's latest at build time) and `cargo-ndk`
+(the latest release at build time); a rebuild with a different NDK can
+differ in the native library. No published release has yet been rebuilt
+and matched; until one has, the check is a check, not a promise.
 
 ## Release signing
 

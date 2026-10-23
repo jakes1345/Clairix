@@ -25,6 +25,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,7 +45,9 @@ import uniffi.clairix_comms_crypto.PeerKeys
 import uniffi.clairix_comms_crypto.fingerprint
 import uniffi.clairix_comms_crypto.verify
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.UUID
+import kotlin.math.ln
 
 /**
  * The comms module's single entry point: registration with the relay, the
@@ -78,6 +81,11 @@ object CommsRepository {
     private const val TAG = "CommsRepository"
     /** How long an unpair waits for the relay to delete the account before moving on. */
     private const val RELAY_WIPE_BUDGET_MS = 4_000L
+    /** Cover traffic: the mean, floor and ceiling of the random interval between envelopes. */
+    private const val COVER_MEAN_MS = 20 * 60_000L
+    private const val COVER_MIN_MS = 60_000L
+    private const val COVER_MAX_MS = 90 * 60_000L
+    private const val COVER_ALPHABET = "abcdefghijklmnopqrstuvwxyz      "
     /**
      * One-time keys on the relay: topped up by a batch whenever fewer than
      * [ONE_TIME_KEYS_LOW] are left, so a few hundred stay published and
@@ -231,6 +239,7 @@ object CommsRepository {
             trafficTokens = StoredTokenPool(appContext, "traffic"),
             reportTokens = StoredTokenPool(appContext, "report"),
             // The canary's pin, enforced on every handshake when the owner asked for it.
+            alternates = { config.relayAlternates },
             pin = { TlsCanary.enforcedPin(appContext, config.relayUrl?.let { runCatching { java.net.URI(it).host }.getOrNull() }) },
         )
         claims = StoredPendingClaims(appContext)
@@ -248,6 +257,8 @@ object CommsRepository {
             CommsLog.add("Background connection switched on (calls ring while Clairix is closed)")
         }
         initialised = true
+        syncCoverTraffic()
+        refreshAlternates()
         // Every entry point that initialises comms also arms the duress phrase.
         DuressPhrase.install(appContext)
         publishConfig()
@@ -387,6 +398,7 @@ object CommsRepository {
                     identity.markKeysPublished()
                     identities.persist()
                     config.saveRegistration(url, registered.number, name.trim().take(40), listed)
+                    refreshAlternates()
                     // Reachable from the start: the background connection is on until
                     // the owner switches it off, so calls ring with the app closed.
                     config.setOnline(true)
@@ -449,12 +461,18 @@ object CommsRepository {
             deleteVoicemailFiles()
             identities.destroy()
             config.clear()
+            syncCoverTraffic()
             // What else this phone kept about its comms: the duress phrase (it is
             // typed into comms), the comms log (it names contacts' numbers) and
             // every comms notification still on screen.
             DuressPhrase.clear(appContext)
             CommsNotifications.cancelAll(appContext)
             KeystoreBox.destroy()
+            // The database key was wrapped by the key just destroyed; the database
+            // goes with it, and the next one starts clean under a new key.
+            runCatching { store.close() }
+            CommsDb.reset(appContext)
+            store = CommsStore(appContext)
             CommsLog.clear()
             publishConfig()
             _state.update { it.copy(connected = false, lastSync = 0L, relayOneTimeKeys = -1, balance = -1L) }
@@ -487,6 +505,78 @@ object CommsRepository {
         config.setOnline(online)
         publishConfig()
         if (online) CommsService.start(appContext) else CommsService.stop(appContext)
+        syncCoverTraffic()
+    }
+
+    // ── Cover traffic ─────────────────────────────────────────────────────
+
+    private var coverJob: Job? = null
+
+    fun coverTraffic(): Boolean = initialised && config.coverTraffic
+
+    fun setCoverTraffic(on: Boolean) {
+        config.setCoverTraffic(on)
+        syncCoverTraffic()
+    }
+
+    /**
+     * Starts or stops the cover-traffic sender to match the owner's choice and
+     * the background connection. While it runs, a sealed envelope of random
+     * size goes to a random contact at random intervals (exponential, mean
+     * [COVER_MEAN_MS]); the contact's phone drops it unread and sends no
+     * receipt. What it buys: to the relay, and to anyone at the network's edge,
+     * this phone messages its contacts at a steady rate whether or not it has
+     * anything to say, so the real messages are not the only traffic there is.
+     * What it does not buy: each envelope's recipient is still visible to the
+     * relay, one among many, and a contact with no session yet gets no cover
+     * (starting one would be a lookup the relay could see).
+     */
+    @Synchronized
+    private fun syncCoverTraffic() {
+        val wanted = initialised && config.isRegistered && config.online && config.coverTraffic
+        if (!wanted) {
+            coverJob?.cancel()
+            coverJob = null
+            return
+        }
+        if (coverJob?.isActive == true) return
+        coverJob = scope.launch {
+            while (isActive) {
+                delay(nextCoverDelay())
+                if (!(config.online && config.coverTraffic && config.isRegistered)) break
+                runCatching { sendCover() }.onFailure { CommsLog.add("Cover envelope not sent: ${it.message}") }
+            }
+        }
+    }
+
+    private fun nextCoverDelay(): Long {
+        val u = SecureRandom().nextDouble().coerceIn(1e-9, 1.0)
+        return (-ln(u) * COVER_MEAN_MS).toLong().coerceIn(COVER_MIN_MS, COVER_MAX_MS)
+    }
+
+    private suspend fun sendCover() {
+        val contact = lock.withLock {
+            val identity = identities.get() ?: return
+            val eligible = store.contacts().filter { !it.keyChanged && identity.hasSession(it.curve25519) }
+            if (eligible.isEmpty()) null else eligible[SecureRandom().nextInt(eligible.size)]
+        } ?: return
+        // Sized like a message, not like a receipt: a random length of filler,
+        // padded by the crate to the same buckets a text would be.
+        val rnd = SecureRandom()
+        val fill = CharArray(40 + rnd.nextInt(1400)) { COVER_ALPHABET[rnd.nextInt(COVER_ALPHABET.length)] }.concatToString()
+        deliver(contact, CommsWire.noise(fill))
+    }
+
+    // ── Alternate addresses ───────────────────────────────────────────────
+
+    /** Asks the relay which other addresses it answers at, and keeps them for when this one stops. */
+    private fun refreshAlternates() {
+        if (!initialised || !config.isRegistered) return
+        scope.launch {
+            runCatching { relay.info() }.onSuccess { info ->
+                if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
+            }
+        }
     }
 
     // ── Push ──────────────────────────────────────────────────────────────
@@ -1218,6 +1308,11 @@ object CommsRepository {
 
     /** The owner's choice about what notifications say; see [CommsConfig.hidePreviews]. */
     fun setHidePreviews(hide: Boolean) = config.setHidePreviews(hide)
+
+    /** See [CommsConfig.relayOnlyCalls]. */
+    fun relayOnlyCalls(): Boolean = initialised && config.relayOnlyCalls
+
+    fun setRelayOnlyCalls(on: Boolean) = config.setRelayOnlyCalls(on)
 
     fun group(gid: String): Group? = store.group(gid)?.let { it.copy(memberCount = store.groupMembers(gid).size) }
 
@@ -2131,6 +2226,8 @@ object CommsRepository {
             }
             CommsWire.T_GROUP_MSG, CommsWire.T_GROUP_CTRL, CommsWire.T_THREAT, CommsWire.T_PANIC ->
                 processGroupPayload(contact, envelopeTs, json)
+            // Cover traffic: nothing is kept, shown or acknowledged.
+            CommsWire.T_NOISE -> Unit
             else -> CommsLog.add("Payload of type \"${CommsWire.type(json)}\" from ${formatClairixNumber(contact.number)} not understood; ignored")
         }
     }

@@ -12,7 +12,7 @@ The following is created and stored only on your device. It is not uploaded, and
 - Your duress phrase, stored encrypted and compared only in memory.
 - Hidden-camera sweep frames. The camera feed is analysed live and no frame is saved.
 
-Android backups are turned off for Clairix, so none of this is copied to a cloud backup. You can delete all of it at any time with Panic Wipe, or by uninstalling the app.
+Android backups are turned off for Clairix, so none of this is copied to a cloud backup. You can delete all of it at any time with Panic Wipe, or by uninstalling the app. History (the location log, the timeline, vehicle trips and the unlock ledger) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings.
 
 ## What leaves your phone, and where it goes {#egress}
 
@@ -27,7 +27,7 @@ This is the complete list of destinations the app connects to, taken from the co
 | **Clairix relay**, traffic | Only during active turn-by-turn navigation, and only if you are registered for Comms | Anonymous speed samples: a road segment, its map position, a speed and a time. Never your GPS track. Nothing for the first 500 m of a trip or the final approach to your destination | Approximate location of road segments. Sent without any identity: each request spends a single-use token, and samples from one drive share a pseudonym your phone makes up and replaces every ten minutes. Samples are deleted after two hours. |
 | **Clairix relay**, incident reports | When you report or confirm a traffic incident | Incident type and position | Approximate location. Reports and confirmations carry the same per-drive pseudonym, never your number. |
 | **Cloudflare TURN/STUN** | During a call that cannot connect directly | Call audio, encrypted end to end with DTLS-SRTP | Your IP address. Not the audio. |
-| **OpenStreetMap Nominatim** | When you search for an address | The search text, or coordinates for a reverse lookup | Approximate location, your IP address |
+| **OpenStreetMap Nominatim** | Only when you choose "Search online instead". Road names on the offline map are searched on the phone, and a dropped pin is named after the nearest road on it, with nothing sent | The search text | Approximate location, your IP address |
 | **OpenStreetMap tile servers** | When you open the map | The coordinates of the map tiles you view | The area you are looking at, your IP address |
 | **GitHub Releases** | When you download an offline map region, or the work-zone list for it | The name of the region | Your IP address. The files are signed, and the app refuses one whose signature does not verify. |
 | **An app you pick** (Android share sheet) | When you export a report or share an invite | Whatever you chose to share | Up to that app |
@@ -63,10 +63,12 @@ Sending an envelope and reporting traffic are deliberately not signed. Each spen
 ### Calls
 Signalling for a call travels inside the same encrypted envelopes as messages. The audio is WebRTC with DTLS-SRTP between the two phones. The fingerprints that key the audio are carried inside the encrypted envelopes and are therefore authenticated by your contact's pinned identity. Neither the relay nor a TURN server can read or replace them. A TURN server forwards packets it cannot decrypt.
 
-### On your phone
-Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. Message bodies in the local database are encrypted the same way, and the scanner's records (location history, timeline, cell-tower baseline, trips) are sealed on disk under a keystore key as well. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
+To connect directly, the two phones exchange their network addresses, as WebRTC does; a contact you call learns yours whether or not they answer. "Relay-only calls" in Comms settings sends the audio through the TURN server always, so your contact's phone learns only the server's address.
 
-Not yet: the unlock ledger and the app's settings files are stored in the clear, and the keys that seal the rest are not bound to the phone being unlocked, because the scanner has to write while the keyguard is up. Both are on the list in the project's security findings.
+### On your phone
+Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. The Comms database (contacts, messages, groups, receipts) is SQLCipher, every page encrypted under a random key wrapped by the keystore, and message bodies inside it are encrypted once more; the Comms settings (your relay, number, name and push endpoint) are sealed the same way, and so are the scanner's records (location history, timeline, cell-tower baseline, trips) and the unlock ledger. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
+
+Two limits. The keys that seal these are not bound to the phone being unlocked, because the scanner has to write while the keyguard is up, so code running as the app on an unlocked phone can read what the app can. And the remaining settings files (detection thresholds, the sleep window, the passcode's verifier, TLS pins) are not encrypted; they hold settings, not records of your life.
 
 ## What the relay stores, and for how long {#relay}
 
@@ -118,7 +120,7 @@ There is no bug bounty at present. If you would like to encrypt your report, ask
 - **A phone seized while unlocked**, or taken with Clairix open, shows its holder whatever it would show you. The wipe needs you to reach it, or the wrong-passcode limit to be hit.
 - **Your location from the network.** Your carrier always knows roughly where a phone is from the towers it talks to. Clairix can detect a fake tower; it cannot hide you from a real one.
 - **Traffic analysis is possible.** Anyone watching your network can see that your phone talks to the Clairix relay and roughly when. They cannot see what it says.
-- **The relay can see envelope metadata** as described above: the recipient, the size and the time of each envelope, though not the sender. There is no cover traffic and no mixing network, so someone watching both ends of the network can still pair a sender with a recipient by timing.
-- **There is one relay.** An order can shut it down or make it refuse you. It cannot make it read your messages.
+- **The relay can see envelope metadata** as described above: the recipient, the size and the time of each envelope, though not the sender. "Cover traffic" in Comms settings sends envelopes nobody reads to random contacts at random intervals, so your real messages are not the only traffic; there is still no mixing network, so someone watching both ends of the network can pair a sender with a recipient by timing.
+- **There is one relay.** An order can shut it down or make it refuse you. It cannot make it read your messages. The relay can publish other addresses it answers at, and the app falls back to them when the first is blocked; with the relay's key pinned, only the pinned address is used.
 - **No independent audit yet.** vodozemac, the encryption library, has been audited. Clairix as a whole has not been independently reviewed. We will say so here until it has.
 - **We can only promise what the code does.** This page was written from the code, not from a marketing brief. If something here turns out not to match the app's behaviour, tell us and we will correct the page or the app.

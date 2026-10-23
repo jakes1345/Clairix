@@ -13,12 +13,12 @@ The following is created and stored only on your phone. We never upload it and c
 - The event timeline, the location history used for pattern-of-life and following detection, and vehicle trip records.
 - The results of the spyware and phone-health checks, including the list of apps installed on your phone.
 - The unlock ledger, which records lock-screen unlock successes and failures.
-- Your Comms encryption keys, contacts and message history.
+- Your Comms encryption keys, contacts and message history, in a database that is encrypted as a whole.
 - Your duress phrase and app-lock settings.
 - Hidden-camera sweep images. The camera feed is analysed live and is not saved.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
 
-You can delete all of this at any time with Panic Wipe in the app, or by uninstalling Clairix. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
+You can delete all of this at any time with Panic Wipe in the app, or by uninstalling Clairix. History (the location log, the timeline, vehicle trip records and the unlock ledger) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
 
 ## 2. Information that leaves your device
 
@@ -52,7 +52,7 @@ Live traffic is used only when you are actively navigating and are registered wi
 ### 2.5 Maps and search
 
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's servers. Those servers see your IP address and the area being viewed.
-- **Address search.** When you search for an address, the search text is sent to OpenStreetMap's Nominatim service. When you look up the address of a point, its coordinates are sent there too.
+- **Address search.** A search runs on your phone over the road names of the offline map you downloaded, and a dropped pin is named after the nearest road on that map; nothing is sent. Only when you choose "Search online instead" is the search text sent to OpenStreetMap's Nominatim service.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
 - **Offline road maps and work-zone lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify.
 
@@ -100,7 +100,7 @@ Clairix is not directed to children under 13, and we do not knowingly collect in
 
 ## 8. Security
 
-Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, messages, saved cards, location history, timeline, cell-tower baseline and trip records on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
+Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, contacts, messages, groups, Comms settings, saved cards, location history, timeline, cell-tower baseline, trip records and unlock ledger on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
 
 ## 9. Legal basis and your rights
 

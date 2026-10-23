@@ -59,6 +59,19 @@ val cargoNdkBuild by tasks.registering(Exec::class) {
             ?: throw GradleException("No Android NDK found: set ANDROID_NDK_HOME or install one under \$ANDROID_HOME/ndk")
         environment("ANDROID_NDK_HOME", ndk.absolutePath)
         logger.lifecycle("cargo-ndk using NDK at ${ndk.absolutePath}")
+        // rustc writes the absolute paths of the crate and of Cargo's registry
+        // into the library (panic locations, debug info), so a build from any
+        // other directory would differ for no reason. Mapped to fixed names;
+        // .github/workflows/android.yml checks that none is left. cargo-ndk
+        // passes its own flags through a linker wrapper, not RUSTFLAGS, so
+        // these are not trampled.
+        fun fixed(f: File): String = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+        val cargoHome = System.getenv("CARGO_HOME")?.takeIf { it.isNotBlank() }?.let { File(it) }
+            ?: File(System.getProperty("user.home"), ".cargo")
+        val remap = "--remap-path-prefix=${fixed(rustCrate)}=/comms-crypto " +
+            "--remap-path-prefix=${fixed(cargoHome)}=/cargo"
+        val flags = System.getenv("RUSTFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $remap" } ?: remap
+        environment("RUSTFLAGS", flags)
     }
     commandLine(
         listOf("cargo", "ndk") + rustAbis.flatMap { listOf("-t", it) } +
@@ -114,6 +127,14 @@ val assetPublicKey: String = rootProject.file("asset-signing.pub").takeIf { it.i
 android {
     namespace = "app.clairix"
     compileSdk = 35
+
+    // No dependency-metadata block in the APK or bundle: it is a Google-signed
+    // blob nobody but Google can read, and a build that is to be reproduced
+    // should carry nothing that cannot be accounted for.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
 
     defaultConfig {
         applicationId = "app.clairix"
@@ -288,6 +309,14 @@ dependencies {
     // a distributor of the owner's choosing (for example the ntfy app). No Google
     // service is involved anywhere.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18 and
+    // later demand compileSdk 36 and so a newer Android Gradle plugin; 4.17 is
+    // the newest that builds against 35.
+    implementation("net.zetetic:sqlcipher-android:4.17.0")
+    // SQLCipher's database and open-helper classes implement androidx.sqlite's
+    // support interfaces, which its POM lists at runtime scope only; the Kotlin
+    // compiler needs them on the compile classpath to resolve the supertypes.
+    implementation("androidx.sqlite:sqlite:2.6.2")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("com.google.zxing:core:3.5.4")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
