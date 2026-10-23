@@ -8,6 +8,9 @@
  *
  * - While `apkUrl` or `sha256` is empty, /download shows "Coming with the first
  *   beta" instead of a download button and checksum.
+ * - While `sumsUrl` is empty, /download leaves out the checksum-list check; while
+ *   `sigUrl` is empty, it says the list is not signed yet rather than how to
+ *   check a signature.
  * - While `openCollectiveUrl` is empty, the "Support Clairix" link is hidden in
  *   the footer and on /support.
  */
@@ -20,6 +23,13 @@ export const release = {
   sha256: '3db841d39aeddfe14fb07caa661a7f518ada0f4d84b234931433c21a7d82b5d3',
   /** Optional: absolute URL of the release notes for this version. */
   releaseNotesUrl: 'https://github.com/jakes1345/Clairix/releases/tag/v3.0.0-beta.2',
+  /** Absolute URL of the release's `SHA256SUMS.txt`, the checksums of every file in it; empty when it has none. */
+  sumsUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.2/SHA256SUMS.txt',
+  /**
+   * Absolute URL of `SHA256SUMS.txt.sig`, the signature over that list from the
+   * release key (tools/signing). Empty until the first release signed with it.
+   */
+  sigUrl: '',
 } as const;
 
 export const funding = {
@@ -40,3 +50,10 @@ export const openCollectiveUrl: string | null = isHttps(funding.openCollectiveUr
 export const releaseNotesUrl: string | null = isHttps(release.releaseNotesUrl)
   ? release.releaseNotesUrl
   : null;
+
+export const sumsUrl: string | null = isHttps(release.sumsUrl) ? release.sumsUrl : null;
+
+export const sigUrl: string | null = isHttps(release.sigUrl) ? release.sigUrl : null;
+
+/** True when the release's checksum list is published together with its signature. */
+export const releaseSigned: boolean = sumsUrl !== null && sigUrl !== null;

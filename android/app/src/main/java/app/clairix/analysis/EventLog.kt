@@ -67,6 +67,16 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
         persist()
     }
 
+    /** Deletes events before [cutoff]; returns how many. */
+    @Synchronized
+    fun pruneOlderThan(cutoff: Long): Int {
+        val before = events.size
+        events.removeAll { it.ts < cutoff }
+        val removed = before - events.size
+        if (removed > 0) persist()
+        return removed
+    }
+
     private fun persist() {
         val arr = JSONArray()
         for (e in events) arr.put(toJson(e))

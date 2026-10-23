@@ -115,6 +115,14 @@ android {
     namespace = "app.clairix"
     compileSdk = 35
 
+    // No dependency-metadata block in the APK or bundle: it is a Google-signed
+    // blob nobody but Google can read, and a build that is to be reproduced
+    // should carry nothing that cannot be accounted for.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     defaultConfig {
         applicationId = "app.clairix"
         minSdk = 31

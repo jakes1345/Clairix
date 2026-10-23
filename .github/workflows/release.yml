@@ -98,7 +98,9 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
-          toolchain: stable
+          # The same version comms-crypto/rust-toolchain.toml names, so the
+          # crate is built with one compiler everywhere; bump both together.
+          toolchain: 1.97.0
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       - name: Cache Rust
@@ -109,10 +111,13 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      # The wrapper jar is checked against Gradle's published checksums and
+      # the build goes through the wrapper, as in android.yml.
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
-        with:
-          gradle-version: '8.10.2'
 
       - name: Test the crypto crate
         working-directory: comms-crypto
@@ -180,7 +185,7 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
           echo "NDK: $ANDROID_NDK_HOME"
-          gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease \
+          ./gradlew assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease \
             --no-daemon --stacktrace
 
       # The Play edition must not declare card emulation. This reads every
@@ -338,10 +343,11 @@ jobs:
             echo
             echo "To check that the checksums themselves came from the Clairix release key, fetch"
             echo "[\`android/asset-signing.pem\`](https://github.com/jakes1345/Clairix/blob/main/android/asset-signing.pem)"
-            echo "from the repository and run:"
+            echo "from the repository and run (the signature is base64 without its trailing"
+            echo "padding, which the first line puts back):"
             echo
             echo '```'
-            echo "base64 -d SHA256SUMS.txt.sig > sums.sig"
+            echo "sed 's/\$/==/' SHA256SUMS.txt.sig | base64 -d > sums.sig"
             echo "openssl pkeyutl -verify -pubin -inkey asset-signing.pem -rawin -in SHA256SUMS.txt -sigfile sums.sig"
             echo '```'
             echo

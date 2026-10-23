@@ -48,7 +48,9 @@ Keystore-wrapped key, with the plain database converted once; the comms
 preferences sealed; optional cover traffic; alternate relay addresses with
 failover; destination search on the phone over the map's road names, with
 the online search a separate, labelled choice and a dropped pin named from
-the map rather than looked up.
+the map rather than looked up; a history retention setting, 30 days by
+default; the Rust compiler and the Gradle distribution pinned, and the
+dependency-metadata block left out of the APK.
 
 
 ## Tier 1 — the relay is a single point of compulsion
@@ -123,8 +125,10 @@ the map rather than looked up.
    preferences (relay, number, name, push endpoint) are a `SealedPrefs`
    document, migrated from the plain file once. The remaining preference
    files hold settings (thresholds, the sleep window, the passcode's HMAC
-   verifier, TLS pins), not records of the owner's life. Still open: a
-   retention setting that defaults short.
+   verifier, TLS pins), not records of the owner's life. **Retention done**
+   (PR #15): `HistoryRetention`, 30 days by default (7, 90 or forever),
+   deletes the location log, the timeline, the vehicle trips and the unlock
+   ledger past it, every quarter hour while scanning and at each start.
 7. **`KeystoreBox` key is not user-auth bound and not StrongBox**
    (`KeystoreBox.kt:48-55`). A logical extraction with the device unlocked
    reads everything it protects. *Reported.* **Considered, not done:** a
@@ -357,9 +361,10 @@ one-time-key limits match the code.
 7. README with an explicit threat model. *Done.*
 
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
-30, a retention setting (6), and the phase-2 work still ahead: independent
-relays, a mesh for no network, a mixing layer (cover traffic exists; mixing
-does not), place search beyond road names on the phone, reproducible builds,
+30, and the phase-2 work still ahead: independent relays, a mesh for no
+network, a mixing layer (cover traffic exists; mixing does not), place
+search beyond road names on the phone, a release rebuilt and compared byte
+for byte (the toolchains are pinned; `android/README.md` says what is not),
 an audit.
 
 ## Not re-tested

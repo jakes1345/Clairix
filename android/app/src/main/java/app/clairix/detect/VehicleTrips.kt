@@ -219,6 +219,15 @@ class VehicleTrips(private val store: Store) {
         }
     }
 
+    /** Forgets trips that ended before [cutoff]; returns how many. */
+    fun pruneOlderThan(cutoff: Long): Int = synchronized(lock) {
+        val before = history.size
+        history.removeAll { it.end < cutoff }
+        val removed = before - history.size
+        if (removed > 0) saveHistory()
+        removed
+    }
+
     fun clear() {
         synchronized(lock) {
             tripStart = 0L

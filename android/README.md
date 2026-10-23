@@ -88,6 +88,30 @@ gradle test                         # unit tests for every variant
   and the duress passcode.
 - **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists
   what it takes with it, in order.
+- **Settings → "Keep history for"**: 7, 30 or 90 days, or forever (30 by
+  default). The location log, the timeline, vehicle trips and the unlock
+  ledger older than that are deleted every quarter hour while scanning and
+  at each start (`security/HistoryRetention.kt`).
+
+## Reproducing a build
+
+Two builds of one commit should come out the same, so a published APK can be
+checked against the source. What is pinned today:
+
+- The Rust compiler, `1.97.0`, named in `comms-crypto/rust-toolchain.toml`
+  and in both workflows; bump both together.
+- Gradle `8.14.3`, through the wrapper on a developer's machine and in CI
+  alike: `gradle/wrapper/gradle-wrapper.properties` names the version and
+  the distribution's SHA-256, and CI checks the committed wrapper jar
+  against Gradle's published checksums before running it. The Android
+  Gradle plugin, Kotlin and every library are at an exact version in the
+  Gradle files; every GitHub action at a commit.
+- No Google dependency-metadata block in the APK or bundle.
+
+Not pinned yet: the NDK (the runner's latest) and `cargo-ndk` (the latest
+release at build time). No release has yet been rebuilt and compared
+byte for byte; until one has, "reproducible" is a goal this repository is
+set up for, not a property it has shown.
 
 ## Release signing
 

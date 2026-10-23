@@ -41,7 +41,9 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
-          toolchain: stable
+          # The same version comms-crypto/rust-toolchain.toml names, so the
+          # crate is built with one compiler everywhere; bump both together.
+          toolchain: 1.97.0
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       - name: Cache Rust
@@ -52,12 +54,16 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      # No wrapper jar is committed, so Gradle is installed by the action and
-      # put on PATH. Keeps a binary out of the repo.
+      # The committed wrapper jar is checked against Gradle's published
+      # checksums before anything runs it, and the build goes through the
+      # wrapper, so the Gradle version and the distribution's checksum come
+      # from android/gradle/wrapper/gradle-wrapper.properties here and on a
+      # developer's machine alike.
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
-        with:
-          gradle-version: '8.10.2'
 
       - name: Test the crypto crate
         working-directory: comms-crypto
@@ -70,7 +76,7 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
           echo "NDK: $ANDROID_NDK_HOME"
-          gradle assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       # Every debug variant: the full edition's whole app (app-full-suite-debug.apk)
       # and comms-only build (app-full-comms-debug.apk), and the Play edition

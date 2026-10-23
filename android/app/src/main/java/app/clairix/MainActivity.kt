@@ -80,6 +80,7 @@ import app.clairix.security.LockScreen
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
+import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import app.clairix.analysis.Report
 import app.clairix.detect.BleNames
@@ -250,6 +251,8 @@ class MainActivity : AppCompatActivity() {
             }
             ScreenRecordingMonitor.start(this, windowManager)
             lifecycleScope.launch(Dispatchers.IO) { runCatching { BiometricTripwire.check(applicationContext) } }
+            // History past the owner's retention goes at each start too, scanning or not.
+            lifecycleScope.launch(Dispatchers.IO) { runCatching { HistoryRetention.apply(applicationContext) } }
 
             // The comms-only build declares no NFC permission or HCE service, so its
             // adapter stays null and every NFC path below is a no-op. The Play

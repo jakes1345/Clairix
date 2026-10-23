@@ -70,7 +70,9 @@ passcodes (three by default; you can choose the number, or none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
 Clairix" page wipes on demand. Locking collapses every notification into
 "Unlock to read", stops read receipts, disarms a card armed for NFC readers,
-and every screen is kept out of screenshots and the recents thumbnail.
+and every screen is kept out of screenshots and the recents thumbnail. History
+older than the retention you choose (30 days by default) is deleted, so there
+is less to give up in the first place.
 
 **What you install and download.** Releases, offline map graphs and work-zone
 files are signed with the project's Ed25519 key, and the app refuses a map or
@@ -197,6 +199,10 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   new certificate without checking.
 - **Wipe after N wrong passcodes** (Settings → App lock): 1, 3, 5, 10 or
   never.
+- **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
+  or forever. 30 by default. The location log, the timeline, vehicle trips
+  and the unlock ledger older than that are deleted; the cell-tower baseline
+  is kept.
 - **Resume scanning after reboot** needs "Allow all the time" location;
   without it, scanning waits until you open the app.
 

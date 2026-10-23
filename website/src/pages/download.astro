@@ -3,8 +3,11 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Icon from '../components/Icon.astro';
 import PlayButton from '../components/PlayButton.astro';
 import type { IconName } from '../lib/icons';
-import { pages, PACKAGE_NAME, SECURITY_EMAIL, PLAY_LIVE, GITHUB_ISSUES_URL } from '../config/site';
-import { release, fullReleaseReady, releaseNotesUrl } from '../config/release';
+import { pages, PACKAGE_NAME, SECURITY_EMAIL, PLAY_LIVE, GITHUB_ISSUES_URL, GITHUB_URL } from '../config/site';
+import { release, fullReleaseReady, releaseNotesUrl, sumsUrl, sigUrl, releaseSigned } from '../config/release';
+
+// The public half of the key that signs each release's checksum list (tools/signing in the repository).
+const PUBLIC_KEY_URL = `${GITHUB_URL}/blob/main/android/asset-signing.pem`;
 import { softwareApplication } from '../lib/schema';
 
 // The file name the browser saves, taken from the published URL so the hash commands match the download.
@@ -209,6 +212,37 @@ Get-FileHash {apkName} -Algorithm SHA256</code></pre>
             Compare the result with the SHA-256 above, character for character. If it differs, delete the file and download it
             again. If it differs again, write to <a class="text-link" href={`mailto:${SECURITY_EMAIL}`}>{SECURITY_EMAIL}</a>.
           </p>
+          {
+            sumsUrl && (
+              <>
+                <p class="muted">
+                  The release also carries <a class="text-link" href={sumsUrl} rel="noopener">SHA256SUMS.txt</a>, the checksums of
+                  every file in it. With it in the same folder as the download:
+                </p>
+                <pre class="code"><code>sha256sum -c --ignore-missing SHA256SUMS.txt</code></pre>
+              </>
+            )
+          }
+          {
+            releaseSigned ? (
+              <>
+                <p class="muted">
+                  A hash published next to a file can be replaced along with it, so the checksum list is signed with the project's
+                  release key: <a class="text-link" href={sigUrl} rel="noopener">SHA256SUMS.txt.sig</a> is the signature, and the
+                  public half of the key is <a class="text-link" href={PUBLIC_KEY_URL} rel="noopener">android/asset-signing.pem</a>{' '}
+                  in the repository. The signature is base64 without its trailing padding, which the first line puts back:
+                </p>
+                <pre class="code"><code>sed 's/$/==/' SHA256SUMS.txt.sig | base64 -d &gt; sums.sig
+openssl pkeyutl -verify -pubin -inkey asset-signing.pem -rawin -in SHA256SUMS.txt -sigfile sums.sig</code></pre>
+              </>
+            ) : (
+              <p class="muted">
+                A hash published next to a file can be replaced along with it. This release's checksum list is not signed; releases
+                after it carry a signature over the list from the project's release key, and this section will then say how to
+                check it.
+              </p>
+            )
+          }
         </div>
       </div>
 

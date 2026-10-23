@@ -18,7 +18,7 @@ The following is created and stored only on your phone. We never upload it and c
 - Hidden-camera sweep images. The camera feed is analysed live and is not saved.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
 
-You can delete all of this at any time with Panic Wipe in the app, or by uninstalling Clairix. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
+You can delete all of this at any time with Panic Wipe in the app, or by uninstalling Clairix. History (the location log, the timeline, vehicle trip records and the unlock ledger) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
 
 ## 2. Information that leaves your device
 

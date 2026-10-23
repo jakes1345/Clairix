@@ -83,6 +83,27 @@ object LocationHistory {
 
     fun size(context: Context): Int = store(context).json.optJSONArray(KEY)?.length() ?: 0
 
+    /** Deletes fixes before [cutoff] and writes the log; returns how many. File I/O; call off the main thread. */
+    fun pruneOlderThan(context: Context, cutoff: Long): Int {
+        synchronized(lock) {
+            val s = store(context)
+            val root = s.json
+            val arr = root.optJSONArray(KEY) ?: return 0
+            val kept = JSONArray()
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONArray(i) ?: continue
+                if (row.optLong(0) >= cutoff) kept.put(row)
+            }
+            val removed = arr.length() - kept.length()
+            if (removed > 0) {
+                root.put(KEY, kept)
+                s.markDirty()
+                s.flush()
+            }
+            return removed
+        }
+    }
+
     fun clear(context: Context) {
         synchronized(lock) {
             last = null

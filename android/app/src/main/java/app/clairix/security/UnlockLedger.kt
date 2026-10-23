@@ -211,6 +211,25 @@ object UnlockLedger {
         return UnlockEvent(id, ts, kind, extra)
     }
 
+    /** Deletes rows before [cutoff] and writes the ledger; returns how many. Blocking; call off the main thread. */
+    fun pruneOlderThan(cutoff: Long): Int = synchronized(lock) {
+        val (s, arr) = ledgerLocked() ?: return 0
+        val kept = JSONArray()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONArray(i) ?: continue
+            if (row.optLong(1) >= cutoff) kept.put(row)
+        }
+        val removed = arr.length() - kept.length()
+        if (removed > 0) {
+            s.json.put(KEY_ROWS, kept)
+            held.clear()
+            for (i in 0 until kept.length()) kept.optJSONArray(i)?.let { held += key(it.optLong(1), it.optString(2)) }
+            s.markDirty()
+            s.flush()
+        }
+        removed
+    }
+
     private fun publish(event: UnlockEvent) {
         // Rows arrive from the receiver and from a backfill in either order; only a newer one moves the pointer.
         val current = _recent.value

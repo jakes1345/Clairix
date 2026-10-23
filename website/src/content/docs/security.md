@@ -12,7 +12,7 @@ The following is created and stored only on your device. It is not uploaded, and
 - Your duress phrase, stored encrypted and compared only in memory.
 - Hidden-camera sweep frames. The camera feed is analysed live and no frame is saved.
 
-Android backups are turned off for Clairix, so none of this is copied to a cloud backup. You can delete all of it at any time with Panic Wipe, or by uninstalling the app.
+Android backups are turned off for Clairix, so none of this is copied to a cloud backup. You can delete all of it at any time with Panic Wipe, or by uninstalling the app. History (the location log, the timeline, vehicle trips and the unlock ledger) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings.
 
 ## What leaves your phone, and where it goes {#egress}
 

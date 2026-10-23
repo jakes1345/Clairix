@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.Report
 import app.clairix.security.AppLock
+import app.clairix.security.HistoryRetention
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -633,6 +634,21 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
+                    var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
+                    SChoiceRow(
+                        title = "Keep history for",
+                        subtitle = "The location log, the timeline, vehicle trips and the unlock ledger older than this are deleted: now, at each start, and every quarter hour while scanning. What is gone cannot be taken from the phone. The cell-tower baseline is kept: it is what normal is measured against.",
+                        choices = HistoryRetention.CHOICES,
+                        selected = retentionDays,
+                        label = ::retentionLabel,
+                        onSelect = { choice ->
+                            retentionDays = choice
+                            scope.launch(Dispatchers.IO) {
+                                HistoryRetention.setDays(context, choice)
+                                HistoryRetention.apply(context)
+                            }
+                        }
+                    )
                     PrimaryButton(
                         "Export evidence",
                         onClick = {
@@ -723,6 +739,11 @@ private fun ThresholdCard(
             scale.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = c.textSubtle) }
         }
     }
+}
+
+private fun retentionLabel(days: Int): String = when (days) {
+    HistoryRetention.FOREVER -> "Forever"
+    else -> "$days days"
 }
 
 private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
