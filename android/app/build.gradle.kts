@@ -59,6 +59,19 @@ val cargoNdkBuild by tasks.registering(Exec::class) {
             ?: throw GradleException("No Android NDK found: set ANDROID_NDK_HOME or install one under \$ANDROID_HOME/ndk")
         environment("ANDROID_NDK_HOME", ndk.absolutePath)
         logger.lifecycle("cargo-ndk using NDK at ${ndk.absolutePath}")
+        // rustc writes the absolute paths of the crate and of Cargo's registry
+        // into the library (panic locations, debug info), so a build from any
+        // other directory would differ for no reason. Mapped to fixed names;
+        // .github/workflows/android.yml checks that none is left. cargo-ndk
+        // passes its own flags through a linker wrapper, not RUSTFLAGS, so
+        // these are not trampled.
+        fun fixed(f: File): String = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+        val cargoHome = System.getenv("CARGO_HOME")?.takeIf { it.isNotBlank() }?.let { File(it) }
+            ?: File(System.getProperty("user.home"), ".cargo")
+        val remap = "--remap-path-prefix=${fixed(rustCrate)}=/comms-crypto " +
+            "--remap-path-prefix=${fixed(cargoHome)}=/cargo"
+        val flags = System.getenv("RUSTFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $remap" } ?: remap
+        environment("RUSTFLAGS", flags)
     }
     commandLine(
         listOf("cargo", "ndk") + rustAbis.flatMap { listOf("-t", it) } +

@@ -49,8 +49,10 @@ preferences sealed; optional cover traffic; alternate relay addresses with
 failover; destination search on the phone over the map's road names, with
 the online search a separate, labelled choice and a dropped pin named from
 the map rather than looked up; a history retention setting, 30 days by
-default; the Rust compiler and the Gradle distribution pinned, and the
-dependency-metadata block left out of the APK.
+default; the Rust compiler and the Gradle distribution pinned, the
+dependency-metadata block left out of the APK, build-machine paths kept
+out of the crypto library, and every change built twice on two machines in
+CI, which fails unless the two APKs are the same file.
 
 
 ## Tier 1 — the relay is a single point of compulsion
@@ -363,9 +365,10 @@ one-time-key limits match the code.
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: independent relays, a mesh for no
 network, a mixing layer (cover traffic exists; mixing does not), place
-search beyond road names on the phone, a release rebuilt and compared byte
-for byte (the toolchains are pinned; `android/README.md` says what is not),
-an audit.
+search beyond road names on the phone, a published release rebuilt and
+matched (CI now requires two builds of every change to agree; the NDK and
+cargo-ndk are not pinned; `tools/reproducible/` says how to compare a
+release), an audit.
 
 ## Not re-tested
 

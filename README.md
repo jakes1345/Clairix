@@ -222,8 +222,11 @@ cd Clairix/android
 ```
 
 Every push also builds the debug APKs in CI (Actions → Android APK →
-`clairix-debug-apk`). Editions, variants, release signing and how to cut a
-release are in [`android/README.md`](android/README.md); the relay is in
+`clairix-debug-apk`), and builds the release APK twice on two machines,
+failing unless both come out the same file. Editions, variants, release
+signing and how to cut a release are in
+[`android/README.md`](android/README.md), which also says how to check a
+published release against the source; the relay is in
 [`comms-worker/README.md`](comms-worker/README.md); the crypto crate in
 [`comms-crypto`](comms-crypto).
 
