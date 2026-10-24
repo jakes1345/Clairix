@@ -46,6 +46,9 @@ import kotlin.math.sqrt
 /** An incident on the route ahead, [distanceM] along the route from the car. */
 data class IncidentAhead(val incident: Incident, val distanceM: Double)
 
+/** A known plate reader on the route ahead, [distanceM] along the route from the car. */
+data class CameraAhead(val camera: KnownCamera, val distanceM: Double)
+
 /** What turn-by-turn navigation is doing. */
 sealed interface NavState {
     /** Not navigating; [error] says why the last attempt ended, if it failed. */
@@ -74,6 +77,8 @@ sealed interface NavState {
         val rerouting: Boolean,
         /** Incidents on the route within 5 km ahead, nearest first. */
         val incidentsAhead: List<IncidentAhead>,
+        /** Known plate readers on the route within 3 km ahead, nearest first. */
+        val camerasAhead: List<CameraAhead>,
         /** The car's position snapped to the route (or the raw fix while off it). */
         val position: LatLon?,
         val bearingDeg: Float?,
@@ -113,6 +118,11 @@ class Navigator(
         const val INCIDENTS_AHEAD_M = 5_000.0
         const val INCIDENT_ALERT_M = 2_000.0
         const val INCIDENT_OFF_ROUTE_M = 30.0
+        const val CAMERAS_AHEAD_M = 3_000.0
+        /** Spoken this far before a reader: time to take the next turn off if there is one. */
+        const val CAMERA_ALERT_M = 600.0
+        /** A reader this far from the route line is on another road. */
+        const val CAMERA_OFF_ROUTE_M = CameraPenalties.MATCH_RADIUS_M
         const val MANEUVER_PASSED_M = 3.0
         val ANNOUNCE_AT_M = doubleArrayOf(100.0, 500.0, 2_000.0)
         const val MIN_KPH = 2.0
@@ -214,6 +224,14 @@ class Navigator(
     private val alertedIncidents = HashSet<String>()
     private var incidentsSeen: List<Incident>? = null
     private var incidentPos: Map<String, Double> = emptyMap()
+
+    /** The region's known plate readers; set by the view model as the list arrives or changes. */
+    @Volatile var cameras: List<KnownCamera> = emptyList()
+    /** Whether a reader ahead is spoken; it is always shown. */
+    @Volatile var cameraWarnings = true
+    private val alertedCameras = HashSet<String>()
+    private var camerasSeen: List<KnownCamera>? = null
+    private var cameraPos: Map<String, Double> = emptyMap()
 
     // ── Voice ───────────────────────────────────────────────────────────
 
@@ -559,6 +577,7 @@ class Navigator(
             offRoute = off,
             rerouting = rerouting,
             incidentsAhead = incidentsAhead(t),
+            camerasAhead = camerasAhead(t),
             position = LatLon(lat, lon),
             bearingDeg = if (loc.hasBearing()) loc.bearing else null,
             speedMps = if (loc.hasSpeed()) loc.speed else null,
@@ -591,6 +610,50 @@ class Navigator(
             }
             if (alertedIncidents.add(a.incident.id)) speak(text)
         }
+        if (cameraWarnings) {
+            for (c in camerasAhead(t)) {
+                if (c.distanceM > CAMERA_ALERT_M) break
+                if (alertedCameras.add(c.camera.id)) speak("Plate reader ahead")
+            }
+        }
+    }
+
+    private fun camerasAhead(t: Track): List<CameraAhead> {
+        val list = cameras
+        if (list !== camerasSeen) {
+            camerasSeen = list
+            cameraPos = placeCameras(t, list)
+        }
+        if (cameraPos.isEmpty()) return emptyList()
+        val out = ArrayList<CameraAhead>()
+        for (c in list) {
+            val along = cameraPos[c.id] ?: continue
+            val ahead = along - progressM
+            if (ahead > 0 && ahead <= CAMERAS_AHEAD_M) out.add(CameraAhead(c, ahead))
+        }
+        out.sortBy { it.distanceM }
+        return out
+    }
+
+    /** Where each known reader lies along the route; one farther from the line than [CAMERA_OFF_ROUTE_M] is not on it. */
+    private fun placeCameras(t: Track, list: List<KnownCamera>): Map<String, Double> {
+        if (list.isEmpty() || t.geometry.size < 2) return emptyMap()
+        val out = HashMap<String, Double>()
+        // Only readers inside the route's box, widened by the match radius, can lie on it.
+        var minLat = Double.MAX_VALUE; var maxLat = -Double.MAX_VALUE
+        var minLon = Double.MAX_VALUE; var maxLon = -Double.MAX_VALUE
+        for (p in t.geometry) {
+            if (p.lat < minLat) minLat = p.lat; if (p.lat > maxLat) maxLat = p.lat
+            if (p.lon < minLon) minLon = p.lon; if (p.lon > maxLon) maxLon = p.lon
+        }
+        val dLat = CAMERA_OFF_ROUTE_M / RoadGeo.M_PER_DEG_LAT
+        val dLon = CAMERA_OFF_ROUTE_M / (RoadGeo.M_PER_DEG_LAT * maxOf(0.01, cos(((minLat + maxLat) / 2) * PI / 180)))
+        for (c in list) {
+            if (c.lat < minLat - dLat || c.lat > maxLat + dLat || c.lon < minLon - dLon || c.lon > maxLon + dLon) continue
+            val p = project(t, c.lat, c.lon, 0, t.geometry.size - 1)
+            if (p.offM <= CAMERA_OFF_ROUTE_M) out[c.id] = p.alongM
+        }
+        return out
     }
 
     private fun key(maneuver: Int, stage: Double): Long = (maneuver.toLong() shl 20) or stage.toLong()
@@ -645,6 +708,9 @@ class Navigator(
         announced.clear()
         incidentsSeen = null
         incidentPos = emptyMap()
+        alertedCameras.clear()
+        camerasSeen = null
+        cameraPos = emptyMap()
     }
 
     // ── Time estimates ──────────────────────────────────────────────────

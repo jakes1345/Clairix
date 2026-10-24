@@ -54,7 +54,7 @@ Live traffic is used only when you are actively navigating and are registered wi
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's servers. Those servers see your IP address and the area being viewed.
 - **Address search.** A search runs on your phone over the road names of the offline map you downloaded, and a dropped pin is named after the nearest road on that map; nothing is sent. Only when you choose "Search online instead" is the search text sent to OpenStreetMap's Nominatim service.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
-- **Offline road maps and work-zone lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify.
+- **Offline road maps, work-zone lists and plate-reader lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify. The plate-reader list is the licence-plate cameras mapped in OpenStreetMap for that region; the app shows them, warns you before one and routes around them, all on the phone.
 
 ### 2.6 Things you choose to share
 

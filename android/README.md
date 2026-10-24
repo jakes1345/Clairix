@@ -225,8 +225,8 @@ Detection data stays on the phone, sealed on disk under a key in the phone's
 secure hardware. The app's network connections are: the Clairix relay (Comms,
 and anonymous live traffic while navigating), OpenStreetMap's tile servers and
 its Nominatim address search (the Map tab), GitHub Releases (signed offline map
-graphs and work-zone files) and Cloudflare TURN (a call that cannot connect
-directly). What each one sees, and what the app can and cannot protect against,
+graphs, work-zone files and the plate-reader list for each map) and Cloudflare
+TURN (a call that cannot connect directly). What each one sees, and what the app can and cannot protect against,
 is in the root [`README.md`](../README.md) and at clairix.app/security.
 
 ## Screen on versus screen off

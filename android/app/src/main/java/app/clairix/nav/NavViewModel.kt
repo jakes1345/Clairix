@@ -78,8 +78,13 @@ data class RouteOptions(
     val routes: List<Route> = emptyList(),
     val selected: Int = 0,
     val error: String? = null,
+    /** Known plate readers each of [routes] passes, by index; empty until the region's list is known. */
+    val cameraCounts: List<Int> = emptyList(),
 ) {
     val selectedRoute: Route? get() = routes.getOrNull(selected)
+
+    /** How many known readers route [index] passes, or null when the list is not known for this map. */
+    fun camerasOn(index: Int): Int? = cameraCounts.getOrNull(index)
 }
 
 /**
@@ -94,6 +99,8 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_REGION = "region"
         const val KEY_FUEL_PRICE = "fuel_price_per_gal"
         const val KEY_MUTED = "muted"
+        const val KEY_AVOID_CAMERAS = "avoid_cameras"
+        const val KEY_WARN_CAMERAS = "warn_cameras"
         const val DEFAULT_FUEL_PRICE = 3.50f
         const val RECOLOR_INTERVAL_MS = 30_000L
         const val IDLE_TRAFFIC_INTERVAL_MS = 60_000L
@@ -122,6 +129,8 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         val navigator: Navigator,
         val workZones: WorkZoneFeed,
         val closures: RoadClosures,
+        val cameras: CameraFeed,
+        val cameraPenalties: CameraPenalties,
     )
 
     private val ctx: Context get() = getApplication()
@@ -167,6 +176,23 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _muted = MutableStateFlow(prefs.getBoolean(KEY_MUTED, false))
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
+
+    private val _avoidCameras = MutableStateFlow(prefs.getBoolean(KEY_AVOID_CAMERAS, true))
+    /** Route around known plate readers: each one on a route costs a detour of up to [CameraPenalties.PENALTY_SEC]. */
+    val avoidCameras: StateFlow<Boolean> = _avoidCameras.asStateFlow()
+
+    private val _warnCameras = MutableStateFlow(prefs.getBoolean(KEY_WARN_CAMERAS, true))
+    /** Say "plate reader ahead" while driving; the reader is shown on the map and in the banner either way. */
+    val warnCameras: StateFlow<Boolean> = _warnCameras.asStateFlow()
+
+    /** The loaded region's known plate readers, for the map. */
+    val knownCameras: StateFlow<List<KnownCamera>> = session
+        .flatMapLatest { it?.cameras?.cameras ?: flowOf(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val cameraStatus: StateFlow<CameraFeed.Status> = session
+        .flatMapLatest { it?.cameras?.status ?: flowOf(CameraFeed.Status.Unknown) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CameraFeed.Status.Unknown)
 
     private val _fuelPrice = MutableStateFlow(prefs.getFloat(KEY_FUEL_PRICE, DEFAULT_FUEL_PRICE).toDouble())
     /** US dollars per gallon, for the fuel cost shown on each route. */
@@ -240,6 +266,20 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                     }
             }
         }
+        // Known plate readers feed the map, the router's penalties and the navigator's warnings.
+        viewModelScope.launch {
+            session.collectLatest { s ->
+                if (s == null) return@collectLatest
+                combine(s.cameras.cameras, _avoidCameras) { c, a -> c to a }.collect { (cams, avoid) ->
+                    // Matches every reader to the graph's edges; not on the main thread.
+                    withContext(Dispatchers.Default) { s.cameraPenalties.update(cams, avoid) }
+                    s.navigator.cameras = cams
+                    _options.value?.let { cur ->
+                        if (cur.routes.isNotEmpty()) _options.value = cur.copy(cameraCounts = countCameras(s, cur.routes))
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             navState.collect { st ->
                 if (st is NavState.Idle && st.error != null) messageChannel.trySend(st.error)
@@ -295,11 +335,13 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                     val traffic = TrafficClient(ctx, slug, trip)
                     traffic.focus = ::providerFocus
                     val closures = RoadClosures(graph)
-                    val router = Router(graph, traffic, restrictions = closures)
+                    val cameraPenalties = CameraPenalties(graph)
+                    val router = Router(graph, traffic, restrictions = closures, penalties = cameraPenalties)
                     val probe = ProbeReporter(ctx, slug, trip)
                     val navigator = Navigator(ctx, graph, router, traffic, probe)
                     navigator.muted = _muted.value
-                    Session(slug, graph, traffic, router, navigator, WorkZoneFeed(ctx, slug), closures)
+                    navigator.cameraWarnings = _warnCameras.value
+                    Session(slug, graph, traffic, router, navigator, WorkZoneFeed(ctx, slug), closures, CameraFeed(ctx, slug), cameraPenalties)
                 }
                 session.value = s
                 _graph.value = GraphState.Ready(slug, name, s.graph)
@@ -310,6 +352,7 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                     if (locationActive) s.traffic.refreshLive()
                 }
                 launch { s.workZones.refresh() }
+                launch { s.cameras.refresh() }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -607,6 +650,7 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
             val liveRefresh = launch { s.traffic.refreshLive() }
             launch { s.traffic.refreshProviders(PROVIDER_PREVIEW_INTERVAL_MS) }
             launch { s.workZones.refreshIfStale() }
+            launch { s.cameras.refreshIfStale() }
             withTimeoutOrNull(LIVE_TRAFFIC_WAIT_MS) { liveRefresh.join() }
             val now = System.currentTimeMillis() / 1000
             var routes = withContext(Dispatchers.Default) { s.router.alternatives(from.first, from.second, dest.lat, dest.lon, now) }
@@ -633,8 +677,13 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         val cur = _options.value
         // Keep a name the reverse lookup filled in meanwhile.
         val d = if (cur != null && cur.dest.lat == dest.lat && cur.dest.lon == dest.lon) cur.dest else dest
-        _options.value = RouteOptions(d, loading = false, routes = routes, selected = idx)
+        val counts = session.value?.let { countCameras(it, routes) } ?: emptyList()
+        _options.value = RouteOptions(d, loading = false, routes = routes, selected = idx, cameraCounts = counts)
     }
+
+    /** Known readers each route passes, or an empty list while the region has no list to count against. */
+    private fun countCameras(s: Session, routes: List<Route>): List<Int> =
+        if (s.cameraPenalties.cameras.isEmpty()) emptyList() else routes.map { s.cameraPenalties.camerasAlong(it.edges).size }
 
     fun selectRoute(index: Int) {
         val cur = _options.value ?: return
@@ -670,10 +719,10 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
             if (same >= 0) {
                 // Same roads as an existing option: show it under the requested profile so GO navigates with it.
                 val list = latest.routes.toMutableList().also { it[same] = r }
-                _options.value = latest.copy(loading = false, routes = list, selected = same)
+                _options.value = latest.copy(loading = false, routes = list, selected = same, cameraCounts = countCameras(s, list))
             } else {
                 val list = (latest.routes + r).sortedBy { it.durationSec }
-                _options.value = latest.copy(loading = false, routes = list, selected = list.indexOf(r))
+                _options.value = latest.copy(loading = false, routes = list, selected = list.indexOf(r), cameraCounts = countCameras(s, list))
             }
         }
     }
@@ -700,6 +749,24 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         _muted.value = m
         prefs.edit().putBoolean(KEY_MUTED, m).apply()
         session.value?.navigator?.muted = m
+    }
+
+    /** Turns routing around known plate readers on or off; routes on show are planned again. */
+    fun setAvoidCameras(on: Boolean) {
+        if (_avoidCameras.value == on) return
+        _avoidCameras.value = on
+        prefs.edit().putBoolean(KEY_AVOID_CAMERAS, on).apply()
+        // The penalties read the flag at once (the list is unchanged, so nothing is re-matched).
+        session.value?.let { it.cameraPenalties.update(it.cameraPenalties.cameras, on) }
+        _options.value?.let { cur ->
+            if (cur.routes.isNotEmpty() || cur.loading) computeRoutes(cur.dest, cur.selectedRoute?.profile ?: RouteProfile.FASTEST)
+        }
+    }
+
+    fun setWarnCameras(on: Boolean) {
+        _warnCameras.value = on
+        prefs.edit().putBoolean(KEY_WARN_CAMERAS, on).apply()
+        session.value?.navigator?.cameraWarnings = on
     }
 
     fun setFuelPrice(dollarsPerGal: Double) {

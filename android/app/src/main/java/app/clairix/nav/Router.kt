@@ -17,6 +17,8 @@ class Router(
     private val vehicle: VehicleModel = VehicleModel.DEFAULT,
     /** Closures and work-zone speed caps; read on every query, so updates apply to the next search. */
     val restrictions: EdgeRestrictions = EdgeRestrictions.NONE,
+    /** Extra seconds an edge costs to drive (known plate readers); read on every query like [restrictions]. */
+    val penalties: EdgePenalties = EdgePenalties.NONE,
 ) {
     companion object {
         private const val MAX_KPH = 130.0
@@ -188,12 +190,17 @@ class Router(
         val delay = if (arrives) nodeDelaySec(flags) else 0.0
         val t = len / (v / 3.6) + delay
         outTime = t
+        // A penalised edge costs as if it took longer to drive, in the profile's own unit (time,
+        // metres at this speed, fuel for those metres). The time estimate is left honest.
+        val pen = penalties.penaltySec(e)
+        val tc = t + pen
+        val penM = pen * (v / 3.6)
         outCost = when (profile) {
-            RouteProfile.SHORTEST -> len
-            RouteProfile.FASTEST -> t
-            RouteProfile.NO_TOLLS -> if (flags and EdgeFlags.TOLL != 0) t * TOLL_FACTOR else t
-            RouteProfile.NO_HIGHWAYS -> if (graph.edgeRoadClass(e) <= 1) t * HIGHWAY_FACTOR else t
-            RouteProfile.ECO -> vehicle.litersFor(len, v) + (if (arrives) nodeFuel(flags) else 0.0)
+            RouteProfile.SHORTEST -> len + penM
+            RouteProfile.FASTEST -> tc
+            RouteProfile.NO_TOLLS -> if (flags and EdgeFlags.TOLL != 0) tc * TOLL_FACTOR else tc
+            RouteProfile.NO_HIGHWAYS -> if (graph.edgeRoadClass(e) <= 1) tc * HIGHWAY_FACTOR else tc
+            RouteProfile.ECO -> vehicle.litersFor(len + penM, v) + (if (arrives) nodeFuel(flags) else 0.0)
         }
     }
 

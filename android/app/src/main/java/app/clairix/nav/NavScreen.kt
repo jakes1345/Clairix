@@ -55,6 +55,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -135,6 +136,8 @@ private val ROUTE_ALT = MapPalette.RouteAlternative
 private val ROUTE_CASING = MapPalette.RouteCasing
 private val WORK_ZONE_LINE = MapPalette.WorkZone
 private val CLOSURE_LINE = MapPalette.Closure
+/** A known plate reader closer than this on the route ahead is named in the guidance banner. */
+private const val CAMERA_BANNER_M = 1_500.0
 /** Incident types that cover a stretch of road and are drawn along it. */
 private val LINE_TYPES = setOf(
     Incident.CLOSURE, Incident.LANE_CLOSURE, Incident.WORK_ZONE, Incident.DETOUR, Incident.RESTRICTION,
@@ -295,6 +298,10 @@ private fun NavMapLayer(
     val muted by vm.muted.collectAsStateWithLifecycle()
     val fuelPrice by vm.fuelPricePerGal.collectAsStateWithLifecycle()
     val answered by vm.answeredIncidents.collectAsStateWithLifecycle()
+    val knownCameras by vm.knownCameras.collectAsStateWithLifecycle()
+    val avoidCameras by vm.avoidCameras.collectAsStateWithLifecycle()
+    val warnCameras by vm.warnCameras.collectAsStateWithLifecycle()
+    val cameraStatus by vm.cameraStatus.collectAsStateWithLifecycle()
 
     val nav = navState as? NavState.Navigating
     var following by remember { mutableStateOf(true) }
@@ -376,6 +383,11 @@ private fun NavMapLayer(
                     RouteOptionsSheet(
                         options = opts,
                         fuelPricePerGal = fuelPrice,
+                        avoidCameras = avoidCameras,
+                        warnCameras = warnCameras,
+                        cameraStatus = cameraStatus,
+                        onAvoidCameras = vm::setAvoidCameras,
+                        onWarnCameras = vm::setWarnCameras,
                         onProfile = vm::selectProfile,
                         onSelect = vm::selectRoute,
                         onGo = { idx -> vm.selectRoute(idx); vm.startNavigation() },
@@ -449,6 +461,7 @@ private fun NavMap(
     val selectRoute by rememberUpdatedState(onSelectRoute)
 
     val routeLayer = remember { FolderOverlay() }
+    val cameraLayer = remember { FolderOverlay() }
     val incidentLayer = remember { FolderOverlay() }
     val markerLayer = remember { FolderOverlay() }
 
@@ -471,6 +484,7 @@ private fun NavMap(
                 }
             }))
             overlays.add(routeLayer)
+            overlays.add(cameraLayer)
             overlays.add(incidentLayer)
             overlays.add(markerLayer)
             val slop = ViewConfiguration.get(context).scaledTouchSlop
@@ -590,6 +604,22 @@ private fun NavMap(
                 snippet = incidentSnippet(context, inc, now)
             }
             incidentLayer.add(m)
+        }
+        mapView.invalidate()
+    }
+
+    // Known plate readers, from the region's signed list; tapping one says what the map knows of it.
+    LaunchedEffect(knownCameras) {
+        cameraLayer.items.clear()
+        for (c in knownCameras) {
+            val m = Marker(mapView).apply {
+                position = GeoPoint(c.lat, c.lon)
+                icon = ContextCompat.getDrawable(context, R.drawable.ic_camera_alpr)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                title = "Known plate reader"
+                snippet = cameraSnippet(c)
+            }
+            cameraLayer.add(m)
         }
         mapView.invalidate()
     }
@@ -799,6 +829,11 @@ private val PROFILE_CHIPS = listOf(
 private fun RouteOptionsSheet(
     options: RouteOptions,
     fuelPricePerGal: Double,
+    avoidCameras: Boolean,
+    warnCameras: Boolean,
+    cameraStatus: CameraFeed.Status,
+    onAvoidCameras: (Boolean) -> Unit,
+    onWarnCameras: (Boolean) -> Unit,
     onProfile: (RouteProfile) -> Unit,
     onSelect: (Int) -> Unit,
     onGo: (Int) -> Unit,
@@ -852,6 +887,8 @@ private fun RouteOptionsSheet(
                             route = r,
                             selected = i == options.selected,
                             fuelPricePerGal = fuelPricePerGal,
+                            cameras = options.camerasOn(i),
+                            cameraStatus = cameraStatus,
                             onSelect = { onSelect(i) },
                             onGo = { onGo(i) },
                         )
@@ -869,8 +906,52 @@ private fun RouteOptionsSheet(
                 )
                 GhostButton("Change", onClick = onEditFuel)
             }
+            CameraToggleRow(
+                title = "Route around known plate readers",
+                checked = avoidCameras,
+                onChange = onAvoidCameras,
+            )
+            CameraToggleRow(
+                title = "Say when one is ahead",
+                checked = warnCameras,
+                onChange = onWarnCameras,
+            )
+            Text(
+                when (val st = cameraStatus) {
+                    is CameraFeed.Status.Loaded -> "${st.count} plate readers known in this map, from OpenStreetMap. Only what has been mapped: an unmapped camera is not avoided."
+                    CameraFeed.Status.NotPublished -> "No plate-reader list has been published for this map yet."
+                    CameraFeed.Status.Unknown -> "The plate-reader list for this map has not been fetched yet."
+                },
+                Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
+}
+
+@Composable
+private fun CameraToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 2.dp, end = SOS_CLEARANCE),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** What the map knows about a reader, for its marker. */
+private fun cameraSnippet(c: KnownCamera): String = buildString {
+    append(c.summary)
+    c.directionDeg?.let { append(" · faces ").append(compassName(it)) }
+    c.zone?.let { append(" · watches ").append(it) }
+    append(" · mapped in OpenStreetMap")
+}
+
+private fun compassName(deg: Int): String {
+    val names = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    return names[(((deg % 360) + 360) % 360 + 22) / 45 % 8]
 }
 
 @Composable
@@ -878,6 +959,8 @@ private fun RouteCard(
     route: Route,
     selected: Boolean,
     fuelPricePerGal: Double,
+    cameras: Int?,
+    cameraStatus: CameraFeed.Status,
     onSelect: () -> Unit,
     onGo: () -> Unit,
 ) {
@@ -931,6 +1014,18 @@ private fun RouteCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (cameraStatus is CameraFeed.Status.Loaded) {
+                    Text(
+                        when {
+                            cameras == null -> "Plate readers not counted yet"
+                            cameras == 0 -> "Passes no known plate reader"
+                            cameras == 1 -> "Passes 1 known plate reader"
+                            else -> "Passes $cameras known plate readers"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (cameras != null && cameras > 0) ClairixTheme.colors.danger else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Spacer(Modifier.width(8.dp))
             PrimaryButton("Go", onClick = onGo, tone = Tone.Safe, modifier = Modifier.heightIn(min = 56.dp))
@@ -992,9 +1087,11 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
                     )
                 }
             }
+            val camera = nav.camerasAhead.firstOrNull()?.takeIf { it.distanceM <= CAMERA_BANNER_M }
             when {
                 nav.rerouting -> BannerNote("Rerouting…")
                 nav.offRoute -> BannerNote("Off route")
+                camera != null -> BannerNote("Plate reader in ${fmtDistance(camera.distanceM)}")
                 nav.currentStreet != null -> BannerNote("On ${nav.currentStreet}")
             }
         }
