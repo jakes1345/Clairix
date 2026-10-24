@@ -288,6 +288,10 @@ jobs:
             echo "  change is built twice on two machines in CI and must come out the same."
             echo "- **Smaller download.** Native libraries are stripped; earlier builds shipped"
             echo "  them with debug information."
+            echo "- **Known plate readers.** Flock Safety and other licence-plate cameras mapped"
+            echo "  in OpenStreetMap are shown on the map, spoken 600 m before you reach one,"
+            echo "  counted on every route and routed around by default (Drive → route options)."
+            echo "  Only what has been mapped: an unmapped camera is not avoided."
             echo
             echo "### What was new in Beta 2: stronger COMMS"
             echo
