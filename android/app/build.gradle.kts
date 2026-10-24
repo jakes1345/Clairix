@@ -135,7 +135,16 @@ android {
     // same from one build to the next: LLVM numbers the functions it outlines
     // for size in an order that varies, and only the local symbol names
     // differ, which the strip removes.
-    resolveNdkDir()?.let { ndkPath = it.absolutePath }
+    resolveNdkDir()?.let { ndk ->
+        ndkPath = ndk.absolutePath
+        // The plugin checks the path against its own default ndkVersion and
+        // refuses a mismatch ("[CXX1100] android.ndkVersion is [27.0.x] but
+        // android.ndkPath refers to a different version"), so it is told the
+        // version that is actually there.
+        val props = Properties()
+        ndk.resolve("source.properties").takeIf { it.isFile }?.inputStream()?.use { props.load(it) }
+        props.getProperty("Pkg.Revision")?.trim()?.takeIf { it.isNotEmpty() }?.let { ndkVersion = it }
+    }
 
     // No dependency-metadata block in the APK or bundle: it is a Google-signed
     // blob nobody but Google can read, and a build that is to be reproduced
