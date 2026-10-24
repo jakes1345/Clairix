@@ -3,6 +3,8 @@ package app.clairix
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -121,12 +123,14 @@ internal enum class ScanCategory(val title: String, val description: String, val
 /** The on-demand actions inside Trackers, each opened as its own screen. */
 internal enum class TrackerAction(val title: String) {
     LOCATE("Find a tracker"),
-    SELF_TEST("Self-test beacon");
+    SELF_TEST("Self-test beacon"),
+    BLUETOOTH("Bluetooth exposure");
 
     val icon: ImageVector
         get() = when (this) {
             LOCATE -> ClairixIcons.TrackChanges
             SELF_TEST -> ClairixIcons.BluetoothSearching
+            BLUETOOTH -> ClairixIcons.Bluetooth
         }
 }
 
@@ -506,16 +510,17 @@ private fun HubTile(category: ScanCategory, status: CategoryStatus, onClick: () 
 /** The Trackers category's action buttons, above its sub-tab content. */
 @Composable
 internal fun TrackerActionsRow(onAction: (TrackerAction) -> Unit) {
+    // Scrolls sideways rather than squeezing: three buttons sharing a phone's width
+    // would cut every label to its first word.
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         TrackerAction.entries.forEach { action ->
             SecondaryButton(
                 action.title,
                 onClick = { onAction(action) },
-                icon = action.icon,
-                modifier = Modifier.weight(1f)
+                icon = action.icon
             )
         }
     }

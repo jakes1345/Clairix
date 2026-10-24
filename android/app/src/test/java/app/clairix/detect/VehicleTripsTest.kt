@@ -84,4 +84,50 @@ class VehicleTripsTest {
         assertNotNull(finding)
         assertNull(vt.sight(tracker, tracker, "Tag", null, null, now))
     }
+
+    @Test
+    fun accessoriesAreRememberedPerTripAndCountedAcrossThem() {
+        val dir = Files.createTempDirectory("trips").toFile().apply { deleteOnExit() }
+        val file = File(dir, "vehicle_trips.json")
+        val car = "00:1A:2B:3C:4D:5E"
+        val buds = "F0:E1:D2:C3:B4:A5"
+
+        // Nothing is recorded outside a trip.
+        val first = VehicleTrips(Store(file))
+        first.noteAccessory(car, "Civic")
+        first.beginTrip(now, home.first, home.second)
+        first.noteAccessory(car, "Civic")
+        first.noteAccessory(buds, "Buds")
+        // A later name for the same address wins.
+        first.noteAccessory(buds, "Pixel Buds")
+        now += 20 * 60_000L
+        first.endTrip(now)
+        now += 3600_000L
+        first.beginTrip(now, work.first, work.second)
+        first.noteAccessory(car, "Civic")
+        now += 20 * 60_000L
+        first.endTrip(now)
+        now += 3600_000L
+
+        // A false start is discarded with its accessories.
+        first.beginTrip(now, home.first, home.second)
+        first.noteAccessory(buds, "Pixel Buds")
+        now += 30_000L
+        first.endTrip(now)
+
+        // Survives a restart, since the trips file holds it.
+        val reopened = VehicleTrips(Store(file))
+        val use = reopened.accessoryUse()
+        assertEquals(use.toString(), 2, use.size)
+        assertEquals(car, use[0].address)
+        assertEquals("Civic", use[0].name)
+        assertEquals(2, use[0].trips)
+        assertEquals(buds, use[1].address)
+        assertEquals("Pixel Buds", use[1].name)
+        assertEquals(1, use[1].trips)
+        assertEquals(mapOf(car to "Civic"), reopened.trips().last().accessories)
+
+        reopened.clear()
+        assertTrue(reopened.accessoryUse().isEmpty())
+    }
 }

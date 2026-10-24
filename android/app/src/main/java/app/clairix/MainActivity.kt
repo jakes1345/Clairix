@@ -1355,6 +1355,7 @@ private fun MainApp(
             HomeTab.SCAN -> when {
                 trackerAction == TrackerAction.LOCATE -> FindTrackerPage()
                 trackerAction == TrackerAction.SELF_TEST -> SelfTestPage()
+                trackerAction == TrackerAction.BLUETOOTH -> BluetoothExposurePage()
                 category == null -> ScanHub(
                     scanning = status.scanning,
                     statuses = statuses,

@@ -228,9 +228,33 @@ enum class EventKind {
     AUDIO_ROUTE,
     /** The phone's clock is off the relay's, or automatic time is switched off. */
     CLOCK_DRIFT,
+    /** Fixed surveillance hardware heard over radio: a plate reader's battery, a gunshot detector, a Flock hotspot. */
+    INFRASTRUCTURE,
     /** Any other platform-hardening alert. */
     PLATFORM
 }
+
+/**
+ * One piece of surveillance infrastructure the radios have heard, kept while the
+ * scanner runs so the Bluetooth page can list it; the timeline keeps the record.
+ * [nearestKnownM] is the distance to the closest plate reader on the map list when
+ * a fix was in hand and the list is on the phone, so the row can say whether this
+ * is a mapped camera confirming itself or one the map does not have.
+ */
+data class InfrastructureSighting(
+    val address: String,
+    val kind: app.clairix.detect.SurveillanceHardware.Kind,
+    val confidence: app.clairix.detect.SurveillanceHardware.Confidence,
+    val rssi: Int,
+    val firstSeen: Long,
+    val lastSeen: Long,
+    val sightings: Int,
+    val evidence: List<String>,
+    val lat: Double? = null,
+    val lon: Double? = null,
+    val nearestKnownM: Double? = null,
+    val nearestKnownLabel: String? = null
+)
 
 // --- Platform hardening alerts ------------------------------------------------
 
@@ -249,7 +273,10 @@ data class Alert(
     val title: String,
     val detail: String,
     val kind: EventKind = EventKind.PLATFORM,
-    val dedupeKey: String? = null
+    val dedupeKey: String? = null,
+    /** Where the phone was, for alerts about a place rather than about the phone; shown on the map. */
+    val lat: Double? = null,
+    val lon: Double? = null
 )
 
 /**

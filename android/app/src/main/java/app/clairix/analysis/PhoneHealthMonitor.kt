@@ -33,6 +33,7 @@ import app.clairix.HealthFact
 import app.clairix.PhoneHealthFinding
 import app.clairix.Registry
 import app.clairix.Severity
+import app.clairix.security.BluetoothExposure
 import app.clairix.security.RelayClock
 import java.io.File
 import java.text.SimpleDateFormat
@@ -551,20 +552,8 @@ class PhoneHealthMonitor(private val context: Context) {
         return out
     }
 
-    /**
-     * A name that contains a space is treated as a person's unless it is clearly
-     * the phone's own model or brand ("Galaxy S26 Ultra", "SM-S948B"), which is
-     * what Samsung ships. A possessive ("Jacob's S26") is a name regardless.
-     */
-    private fun looksLikePersonalName(name: String): Boolean {
-        val n = name.trim()
-        val lower = n.lowercase(Locale.US)
-        if (lower.contains("'s ") || lower.endsWith("'s") || lower.contains("’s")) return true
-        if (!n.contains(' ')) return false
-        val defaults = listOfNotNull(Build.MODEL, Build.DEVICE, Build.PRODUCT, Build.MANUFACTURER, Build.BRAND)
-            .map { it.lowercase(Locale.US) }.filter { it.length >= 3 } + listOf("galaxy", "pixel", "phone")
-        return defaults.none { lower.contains(it) }
-    }
+    /** The one judgement of a personal-looking name, shared with the Bluetooth exposure page. */
+    private fun looksLikePersonalName(name: String): Boolean = BluetoothExposure.looksLikePersonalName(name)
 
     /**
      * Whether the MAC the phone is using on the current Wi-Fi network is a

@@ -371,6 +371,23 @@ shown on the map, spoken 600 m ahead, counted per route and routed around by
 default (a detour worth 150 s per reader). The list is as complete as the
 map: an unmapped reader is not avoided, and the app says so.
 
+Done since (Bluetooth exposure): the radio side of the plate-reader layer.
+Flock Safety hardware is recognised by the signatures the field work
+published (the XUNTONG battery pack's manufacturer data and serial, the
+battery names before and after the March 2025 firmware, the Raven's
+0x31xx–0x35xx GATT services, the Flock accessory service, the `Flock-XXXX`
+setup hotspot, and Flock's own IEEE block B4:1E:52), matched against the
+map list on the phone and recorded with position; a certain match notifies,
+a likely one goes to the timeline, a bare "flock" in a name goes nowhere.
+Honest limits: the cameras upload over LTE, the beacon is off on many
+units since 2025, and a phone cannot see the Wi-Fi probe requests the
+newest detectors use. The Bluetooth exposure page shows what the phone's
+Bluetooth gives a roadside or in-store sensor: name (one-tap rename to the
+model), discoverable state (an alert after three minutes of it), and each
+paired accessory's address kind, with which were connected on the owner's
+drives. What Android withholds from apps is said rather than faked:
+switching Bluetooth off, unpairing, and the address type below Android 15.
+
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: independent relays, a mesh for no
 network, a mixing layer (cover traffic exists; mixing does not), place

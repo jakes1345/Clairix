@@ -25,7 +25,8 @@ just as plainly, what it cannot do.
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online |
-| Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default |
+| Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default; a Flock camera battery, Raven gunshot detector or Flock hotspot heard over radio is reported too, matched against the map or flagged as unmapped |
+| Know what your Bluetooth gives away | Shows what a roadside or in-store sensor can log: the phone's name (renamed to the model in one tap if it is yours), whether it is discoverable, and which paired accessories keep one address for life and were connected on your drives |
 | See your car's health | Connects to the car over Bluetooth OBD and shows live engine data and trip history |
 | Track aircraft nearby | Plug in an SDR stick and see real aircraft on the map from their ADS-B broadcasts |
 
@@ -210,6 +211,18 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   so a route the app calls clear may not be. Avoiding one is worth a detour
   of up to two and a half minutes to the router; the route card says how
   many each route still passes.
+- **Alert on surveillance hardware** (Settings → Scanning): on by default.
+  A notification when a Flock Safety camera battery pack, a Raven gunshot
+  detector or a Flock setup hotspot is heard; off, the sighting still goes
+  to the timeline. The signatures are the ones the DeFlock and flock-you
+  projects published; Flock has been turning these radios down since 2025,
+  so silence next to a camera is normal and the map list is the better guide.
+- **Bluetooth exposure** (Scan → Trackers): what the phone's Bluetooth tells
+  a sensor it passes. The phone's own advertising address rotates; a
+  personal-looking name can be replaced with the model name from the page;
+  Classic accessories (a car's hands-free, most earbuds) keep one address for
+  life, and the page lists which were connected on your drives. Android lets
+  no app switch Bluetooth off or unpair a device, so those stay in Settings.
 - **Resume scanning after reboot** needs "Allow all the time" location;
   without it, scanning waits until you open the app.
 
