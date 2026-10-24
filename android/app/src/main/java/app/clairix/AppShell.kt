@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
@@ -116,7 +117,7 @@ internal enum class ScanCategory(val title: String, val description: String, val
             TRACKERS -> ClairixIcons.BluetoothSearching
             CAMERAS -> ClairixIcons.Videocam
             CELL -> ClairixIcons.CellTower
-            GPS -> androidx.compose.material.icons.Icons.Filled.LocationOn
+            GPS -> Icons.Filled.LocationOn
             ULTRASOUND -> ClairixIcons.Mic
             WIFI -> ClairixIcons.Wifi
             NFC -> ClairixIcons.Nfc

@@ -99,6 +99,7 @@ class StoreTest {
     fun nothingOnDiskIsPlaintext() {
         synchronized(owner) {
             store.load { JSONObject() }.put("secret", "home is at 51.5,-0.12")
+            store.markDirty()
             store.flush()
         }
         val raw = String(file.readBytes(), Charsets.ISO_8859_1)

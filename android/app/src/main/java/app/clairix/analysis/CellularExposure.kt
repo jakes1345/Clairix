@@ -70,7 +70,10 @@ object CellularExposure {
         if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_RADIO_ACCESS)) return null
         val tm = context.getSystemService(TelephonyManager::class.java) ?: return null
         return runCatching {
-            tm.isRadioInterfaceCapabilitySupported(TelephonyManager.CAPABILITY_USES_ALLOWED_NETWORK_TYPES_BITMASK)
+            // TelephonyManager.CAPABILITY_USES_ALLOWED_NETWORK_TYPES_BITMASK is a @SystemApi constant; the
+            // method is public. It is what the Settings app checks before it shows "Allow 2G" (a carrier
+            // can still hide the switch).
+            tm.isRadioInterfaceCapabilitySupported("CAPABILITY_USES_ALLOWED_NETWORK_TYPES_BITMASK")
         }.getOrNull()
     }
 

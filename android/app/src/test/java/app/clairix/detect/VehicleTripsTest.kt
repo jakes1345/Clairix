@@ -2,6 +2,7 @@ package app.clairix.detect
 
 import app.clairix.Severity
 import app.clairix.Store
+import app.clairix.TestStoreCipher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -22,7 +23,7 @@ class VehicleTripsTest {
 
     private fun trips(): VehicleTrips {
         val dir = Files.createTempDirectory("trips").toFile().apply { deleteOnExit() }
-        return VehicleTrips(Store(File(dir, "vehicle_trips.json")))
+        return VehicleTrips(Store(File(dir, "vehicle_trips.json"), cipher = TestStoreCipher))
     }
 
     /**
@@ -71,9 +72,9 @@ class VehicleTripsTest {
     fun theCountSurvivesARestartBetweenDrives() {
         val dir = Files.createTempDirectory("trips").toFile().apply { deleteOnExit() }
         val file = File(dir, "vehicle_trips.json")
-        drive(VehicleTrips(Store(file)), home, listOf(tracker))
-        drive(VehicleTrips(Store(file)), work, listOf(tracker))
-        val vt = VehicleTrips(Store(file))
+        drive(VehicleTrips(Store(file, cipher = TestStoreCipher)), home, listOf(tracker))
+        drive(VehicleTrips(Store(file, cipher = TestStoreCipher)), work, listOf(tracker))
+        val vt = VehicleTrips(Store(file, cipher = TestStoreCipher))
         assertEquals(2, vt.trips().size)
         vt.beginTrip(now, home.first, home.second)
         var finding: VehicleTrips.Finding? = null
@@ -93,7 +94,7 @@ class VehicleTripsTest {
         val buds = "F0:E1:D2:C3:B4:A5"
 
         // Nothing is recorded outside a trip.
-        val first = VehicleTrips(Store(file))
+        val first = VehicleTrips(Store(file, cipher = TestStoreCipher))
         first.noteAccessory(car, "Civic")
         first.beginTrip(now, home.first, home.second)
         first.noteAccessory(car, "Civic")
@@ -116,7 +117,7 @@ class VehicleTripsTest {
         first.endTrip(now)
 
         // Survives a restart, since the trips file holds it.
-        val reopened = VehicleTrips(Store(file))
+        val reopened = VehicleTrips(Store(file, cipher = TestStoreCipher))
         val use = reopened.accessoryUse()
         assertEquals(use.toString(), 2, use.size)
         assertEquals(car, use[0].address)
