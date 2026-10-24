@@ -6,10 +6,14 @@ checked against the source rather than trusted.
 ## What CI does
 
 For every change to the app or the crate, `.github/workflows/android.yml`
-builds the full edition's release APK twice, on two machines, with no keystore
-in the environment (so Gradle leaves the signing config off and the APK comes
-out unsigned), and fails unless the two files are identical byte for byte. The
-unstripped crypto library is also checked for any path from the build machine.
+builds the full edition twice, on two machines, with no keystore in the
+environment, and `compare-builds.sh` fails unless the two builds agree: the
+debug APK entry for entry (each machine signs it with a debug key it makes for
+itself, so the signature differs by design), and the release APK, which Gradle
+writes unsigned without a keystore, byte for byte. A release build refuses to
+run until `android/asset-signing.pub` is committed, so until then the debug
+build alone is compared. The unstripped crypto library is also checked for any
+path from the build machine.
 
 ## Checking a published release
 

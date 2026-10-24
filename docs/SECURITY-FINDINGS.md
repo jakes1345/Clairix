@@ -52,7 +52,7 @@ the map rather than looked up; a history retention setting, 30 days by
 default; the Rust compiler and the Gradle distribution pinned, the
 dependency-metadata block left out of the APK, build-machine paths kept
 out of the crypto library, and every change built twice on two machines in
-CI, which fails unless the two APKs are the same file.
+CI, which fails unless the two builds agree.
 
 
 ## Tier 1 — the relay is a single point of compulsion

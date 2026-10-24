@@ -97,9 +97,13 @@ gradle test                         # unit tests for every variant
 
 Two builds of one commit should come out the same, so a published APK can
 be checked against the source. For every change, CI builds the full
-edition's release APK twice, on two machines, unsigned, and fails unless the
-two files are identical byte for byte (`reproducible-build` and
-`compare-builds` in `.github/workflows/android.yml`). What makes that hold:
+edition twice, on two machines, and fails unless the two builds agree
+(`reproducible-build` and `compare-builds` in
+`.github/workflows/android.yml`): the debug APK entry for entry, since each
+machine signs it with a debug key it makes for itself, and the release APK,
+built unsigned, byte for byte. A release build refuses to run until
+`asset-signing.pub` is committed, so until then the debug build alone is
+compared. What makes the builds agree:
 
 - The Rust compiler, `1.97.0`, named in `comms-crypto/rust-toolchain.toml`
   and in both workflows; bump both together. The absolute paths of the

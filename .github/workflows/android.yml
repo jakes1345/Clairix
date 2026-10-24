@@ -92,10 +92,12 @@ jobs:
 
   # Two builds of one commit on two machines must come out the same, or a
   # published APK can never be checked against the source. Each copy builds
-  # the full edition's release APK with no keystore in the environment, so
-  # Gradle leaves the signing config off and writes it unsigned; compare-builds
-  # then requires the two files to be identical byte for byte. No Rust cache
-  # here: a restored target directory would hide a difference, not show it.
+  # the full edition with no keystore in the environment, and compare-builds
+  # requires the two to agree: the release APK, which Gradle writes unsigned
+  # without a keystore, byte for byte, and the debug APK entry for entry
+  # (each machine signs it with a debug key it makes for itself). No Rust
+  # cache here: a restored target directory would hide a difference, not
+  # show it.
   reproducible-build:
     runs-on: ubuntu-latest
     strategy:
@@ -126,17 +128,29 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
-      - name: Build the full edition's release APK, unsigned
+      # The debug APK always; the release APK, unsigned, once the asset signing
+      # public key is committed. A release build refuses to run without it (see
+      # android/app/build.gradle.kts), so the check grows to cover releases the
+      # moment releases become possible.
+      - name: Build the full edition
         working-directory: android
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
           echo "NDK: $ANDROID_NDK_HOME"
-          ./gradlew assembleFullSuiteRelease --no-daemon --stacktrace
-          APK=app/build/outputs/apk/fullSuite/release/app-full-suite-release-unsigned.apk
-          if [ ! -f "$APK" ]; then
-            echo "::error::$APK was not written; is a keystore set in this environment?"; exit 1
+          TASKS="assembleFullSuiteDebug"
+          if [ -f asset-signing.pub ]; then
+            TASKS="$TASKS assembleFullSuiteRelease"
+          else
+            echo "::notice::android/asset-signing.pub is not committed yet, so no release build is possible; the debug build alone is compared"
           fi
-          sha256sum "$APK"
+          ./gradlew $TASKS --no-daemon --stacktrace
+          OUT=app/build/outputs/reproducible
+          mkdir -p "$OUT"
+          cp app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk "$OUT/"
+          if [ -f asset-signing.pub ]; then
+            cp app/build/outputs/apk/fullSuite/release/app-full-suite-release-unsigned.apk "$OUT/"
+          fi
+          sha256sum "$OUT"/*.apk
 
       # The library must carry no path from this machine, or a build from any
       # other directory differs for no reason (see cargoNdkBuild in
@@ -158,11 +172,11 @@ jobs:
           if [ "$found" = 0 ]; then echo "No build-machine path in $checked libraries."; fi
           exit $found
 
-      - name: Upload the APK
+      - name: Upload the APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: reproducible-${{ matrix.copy }}
-          path: android/app/build/outputs/apk/fullSuite/release/app-full-suite-release-unsigned.apk
+          path: android/app/build/outputs/reproducible/*.apk
           if-no-files-found: error
 
   compare-builds:
@@ -177,17 +191,5 @@ jobs:
           pattern: reproducible-*
           path: builds
 
-      - name: Require the two builds to be the same file
-        run: |
-          A=builds/reproducible-first/app-full-suite-release-unsigned.apk
-          B=builds/reproducible-second/app-full-suite-release-unsigned.apk
-          sha256sum "$A" "$B"
-          if cmp -s "$A" "$B"; then
-            echo "Reproducible: two builds of $GITHUB_SHA on two machines are the same file, $(sha256sum "$A" | cut -c1-64)." | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::Two builds of $GITHUB_SHA differ"
-            # Which entries differ, by content, and then by anything at all.
-            tools/reproducible/compare-apk.sh "$A" "$B" || true
-            diff <(unzip -l "$A") <(unzip -l "$B") || true
-            exit 1
-          fi
+      - name: Require the two builds to agree
+        run: tools/reproducible/compare-builds.sh builds/reproducible-first builds/reproducible-second
