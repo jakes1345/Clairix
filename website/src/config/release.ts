@@ -16,20 +16,20 @@
  */
 export const release = {
   /** Clairix Full version shown next to the download, e.g. "2.7.0". */
-  version: '3.0.0 Beta 2',
+  version: '3.0.0 Beta 3',
   /** Absolute HTTPS URL of the signed Clairix Full APK. */
-  apkUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.2/clairix-v3.0.0-beta.2.apk',
+  apkUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.3/clairix-v3.0.0-beta.3.apk',
   /** Lower-case hex SHA-256 of that exact APK (64 characters). */
-  sha256: '3db841d39aeddfe14fb07caa661a7f518ada0f4d84b234931433c21a7d82b5d3',
+  sha256: '2c303e50a9eae91394c8019581a179f5d44549102c6f9204200395530e0a5dc2',
   /** Optional: absolute URL of the release notes for this version. */
-  releaseNotesUrl: 'https://github.com/jakes1345/Clairix/releases/tag/v3.0.0-beta.2',
+  releaseNotesUrl: 'https://github.com/jakes1345/Clairix/releases/tag/v3.0.0-beta.3',
   /** Absolute URL of the release's `SHA256SUMS.txt`, the checksums of every file in it; empty when it has none. */
-  sumsUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.2/SHA256SUMS.txt',
+  sumsUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.3/SHA256SUMS.txt',
   /**
    * Absolute URL of `SHA256SUMS.txt.sig`, the signature over that list from the
    * release key (tools/signing). Empty until the first release signed with it.
    */
-  sigUrl: '',
+  sigUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.3/SHA256SUMS.txt.sig',
 } as const;
 
 export const funding = {
