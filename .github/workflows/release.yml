@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.2'
+        default: 'v3.0.0-beta.3'
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -266,7 +266,30 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 2: stronger COMMS"
+            echo "### What's new in Beta 3: built for a seized phone and a watched network"
+            echo
+            echo "- **Everything at rest is sealed.** The location log, timeline, cell baseline,"
+            echo "  trips, unlock ledger and comms log are encrypted under a key in the phone's"
+            echo "  Keystore; the COMMS database runs under SQLCipher. Files from earlier versions"
+            echo "  are converted once, on first start."
+            echo "- **History is kept 30 days by default** (7, 90 or forever in Settings → Data):"
+            echo "  what was deleted cannot be taken from the phone."
+            echo "- **App lock that means it.** Wrong passcodes wipe (3 by default), a duress"
+            echo "  passcode wipes silently, \"Wipe Clairix\" wipes on demand, and a locked app"
+            echo "  shows \"Unlock to read\" in place of every notification."
+            echo "- **The relay keeps less.** No activity times, no last-seen, sends spent through"
+            echo "  anonymous tokens, allowances kept only to the hour; an optional TLS pin on the"
+            echo "  relay's key; optional cover traffic and relay-only calls; alternate relay"
+            echo "  addresses with failover."
+            echo "- **Navigation searches on the phone.** Destinations are found in the downloaded"
+            echo "  map's road names; the online search is a separate, labelled choice."
+            echo "- **Signed releases.** \`SHA256SUMS.txt.sig\` is the checksum list signed with"
+            echo "  the project key, maps and work zones are signed the same way, and every"
+            echo "  change is built twice on two machines in CI and must come out the same."
+            echo "- **Smaller download.** Native libraries are stripped; earlier builds shipped"
+            echo "  them with debug information."
+            echo
+            echo "### What was new in Beta 2: stronger COMMS"
             echo
             echo "- **The relay no longer learns who is writing to whom.** Messages are delivered"
             echo "  with single-use anonymous tokens instead of your number, and the sender's"

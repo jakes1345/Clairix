@@ -153,8 +153,8 @@ android {
         // downloaded maps, work zones and release checksums against. Empty in
         // a checkout that has not run keygen; a release build refuses that below.
         buildConfigField("String", "ASSET_PUBKEY", "\"$assetPublicKey\"")
-        versionCode = 22
-        versionName = "3.0.0-beta.2"
+        versionCode = 23
+        versionName = "3.0.0-beta.3"
     }
 
     // Two flavour dimensions, edition first, so variants read <edition><Tier>:
