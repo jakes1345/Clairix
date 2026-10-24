@@ -302,6 +302,8 @@ private fun NavMapLayer(
     val avoidCameras by vm.avoidCameras.collectAsStateWithLifecycle()
     val warnCameras by vm.warnCameras.collectAsStateWithLifecycle()
     val cameraStatus by vm.cameraStatus.collectAsStateWithLifecycle()
+    // A spoofed or jammed receiver makes every turn instruction wrong; say so over the map.
+    val gnss by app.clairix.Registry.gnss.collectAsStateWithLifecycle()
 
     val nav = navState as? NavState.Navigating
     var following by remember { mutableStateOf(true) }
@@ -330,6 +332,19 @@ private fun NavMapLayer(
             Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            when (gnss.verdict) {
+                app.clairix.analysis.GnssVerdict.SPOOFED -> app.clairix.ui.components.Notice(
+                    app.clairix.ui.components.Tone.Danger,
+                    "The satellite signals are not coming from satellites. The position on this map, and the directions, may be false. Navigate by road signs until this clears.",
+                    title = "GPS looks spoofed"
+                )
+                app.clairix.analysis.GnssVerdict.JAMMED -> app.clairix.ui.components.Notice(
+                    app.clairix.ui.components.Tone.Danger,
+                    "Something is drowning out the satellites here. The position will not update until you are clear of it.",
+                    title = "GPS looks jammed"
+                )
+                else -> {}
+            }
             when {
                 nav != null -> ManeuverBanner(nav)
                 navState is NavState.Routing -> StatusCard("Finding your route…", busy = true, onCancel = vm::stopNavigation)

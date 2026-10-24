@@ -26,6 +26,9 @@ just as plainly, what it cannot do.
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online |
 | Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default; a Flock camera battery, Raven gunshot detector or Flock hotspot heard over radio is reported too, matched against the map or flagged as unmapped |
+| Know if your GPS is lying | Checks that the satellite signals are from satellites: strengths too even or too strong, satellite time against network time, the GPS position against Wi-Fi and cell towers, impossible jumps, mock-location apps, and jamming; navigation warns on the map |
+| Hear the inaudible | Listens for the ultrasonic beacons ad-tracking kits play from TVs, shops and web pages to tie your phone to them, after a self-test that proves the microphone can hear that band |
+| Know where everything is | A guided tour of every screen and tool on first launch, from Settings any time after |
 | Know what your Bluetooth gives away | Shows what a roadside or in-store sensor can log: the phone's name (renamed to the model in one tap if it is yours), whether it is discoverable, and which paired accessories keep one address for life and were connected on your drives |
 | See your car's health | Connects to the car over Bluetooth OBD and shows live engine data and trip history |
 | Track aircraft nearby | Plug in an SDR stick and see real aircraft on the map from their ADS-B broadcasts |
@@ -172,7 +175,8 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   written; underneath, an SOS with your last known position goes to every
   group you are in. In no group it sends nothing, and the Duress phrase page
   says so in red until you join one.
-- **SOS.** One tap sends your position, end-to-end encrypted, to your groups.
+- **SOS.** Hold the red octagon until it fills and confirm: your position goes,
+  end-to-end encrypted, to your groups.
   Location is read at that moment and at no other time.
 - **Fake call.** Rings the phone with its real ringtone and a real-looking
   call screen, so you can walk away.
@@ -223,6 +227,22 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   Classic accessories (a car's hands-free, most earbuds) keep one address for
   life, and the page lists which were connected on your drives. Android lets
   no app switch Bluetooth off or unpair a device, so those stay in Settings.
+- **GPS** (Scan → GPS): runs while the page is open, and in the background
+  with the scanner whenever something else has the GPS on (navigation does).
+  It catches the spoofers that are cheap to build; one that simulates a full
+  sky at the right time passes the signal checks, and the Wi-Fi and cell
+  comparison is the one it cannot pass while a tower or access point is in
+  range.
+- **2G** (Phone check → Health): Android keeps the "Allow 2G" switch's state
+  from apps, so the row says whether the phone has the switch, marks it red if
+  the phone is ever seen on a 2G tower, and opens the page where it is turned off.
+- **VPN coverage** (Phone check → Health): with a VPN up, flags DNS still going
+  to the router or carrier, IPv6 the VPN does not carry, Clairix itself left
+  outside the VPN, "Block connections without VPN" off, and a proxy on the
+  network.
+- **Ultrasound** (Scan → Ultrasound): on demand only, never in the background.
+  Nothing is recorded; the microphone feeds a spectrum and the spectrum is
+  thrown away.
 - **Resume scanning after reboot** needs "Allow all the time" location;
   without it, scanning waits until you open the app.
 

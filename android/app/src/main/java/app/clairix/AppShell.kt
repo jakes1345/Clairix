@@ -105,6 +105,8 @@ internal enum class ScanCategory(val title: String, val description: String, val
     TRACKERS("Trackers", "Bluetooth trackers travelling with you", listOf("Nearby", "Map")),
     CAMERAS("Hidden cameras", "Sweep a room for cameras", emptyList()),
     CELL("Cell towers", "Fake towers and forced downgrades", emptyList()),
+    GPS("GPS", "Spoofed or jammed satellite signals", emptyList()),
+    ULTRASOUND("Ultrasound", "Inaudible beacons that link your devices", emptyList()),
     WIFI("Wi-Fi", "Rogue hotspots and unsafe networks", emptyList()),
     NFC("NFC", "Tags, cards and skimmers", emptyList()),
     PHONE("Phone check", "Spyware, risky settings and certificates", listOf("Health", "Stalkerware", "Certificates"));
@@ -114,6 +116,8 @@ internal enum class ScanCategory(val title: String, val description: String, val
             TRACKERS -> ClairixIcons.BluetoothSearching
             CAMERAS -> ClairixIcons.Videocam
             CELL -> ClairixIcons.CellTower
+            GPS -> androidx.compose.material.icons.Icons.Filled.LocationOn
+            ULTRASOUND -> ClairixIcons.Mic
             WIFI -> ClairixIcons.Wifi
             NFC -> ClairixIcons.Nfc
             PHONE -> ClairixIcons.PhoneAndroid
@@ -200,6 +204,17 @@ internal fun cellStatus(cell: CellStatus): CategoryStatus = when {
     else -> CategoryStatus("No suspicious towers", StatusTone.CLEAR)
 }
 
+internal fun gnssStatus(a: app.clairix.analysis.GnssAssessment, scanning: Boolean): CategoryStatus {
+    val v = a.verdict
+    return when (v) {
+        app.clairix.analysis.GnssVerdict.SPOOFED, app.clairix.analysis.GnssVerdict.JAMMED -> CategoryStatus(v.label, StatusTone.ALERT)
+        app.clairix.analysis.GnssVerdict.SUSPECT -> CategoryStatus(v.label, StatusTone.CAUTION)
+        app.clairix.analysis.GnssVerdict.GENUINE -> CategoryStatus("${count(a.usedCount, "satellite")} in the fix, signals look genuine", StatusTone.CLEAR)
+        app.clairix.analysis.GnssVerdict.NO_FIX -> CategoryStatus(v.label, StatusTone.NEUTRAL)
+        app.clairix.analysis.GnssVerdict.NO_DATA -> CategoryStatus(if (scanning) "Waiting for the GPS to run" else "Scanner off", StatusTone.NEUTRAL)
+    }
+}
+
 internal fun wifiStatus(anomalies: List<WifiAnomaly>, wifi: WifiStatus, scanning: Boolean): CategoryStatus {
     val risky = anomalies.count { it.threat.ordinal >= Threat.HIGH.ordinal }
     return when {
@@ -245,10 +260,13 @@ internal fun rememberCategoryStatuses(): Map<ScanCategory, CategoryStatus> {
     val nfc by Registry.nfc.collectAsStateWithLifecycle()
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val cameras by HiddenCameraScanner.findings.collectAsStateWithLifecycle()
+    val gnss by Registry.gnss.collectAsStateWithLifecycle()
     return mapOf(
         ScanCategory.TRACKERS to trackerStatus(status, detections, trusted),
         ScanCategory.CAMERAS to cameraStatus(cameras),
         ScanCategory.CELL to cellStatus(cell),
+        ScanCategory.GPS to gnssStatus(gnss, status.scanning),
+        ScanCategory.ULTRASOUND to CategoryStatus("Listen on demand", StatusTone.NEUTRAL),
         ScanCategory.WIFI to wifiStatus(wifi, wifiNow, status.scanning),
         ScanCategory.NFC to nfcStatus(nfc),
         ScanCategory.PHONE to phoneStatus(health)

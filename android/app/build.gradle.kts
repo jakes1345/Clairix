@@ -164,6 +164,8 @@ android {
         buildConfigField("String", "ASSET_PUBKEY", "\"$assetPublicKey\"")
         versionCode = 24
         versionName = "3.0.0-beta.4"
+        // The emulator smoke test (src/androidTest, run by .github/workflows/emulator.yml).
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // Two flavour dimensions, edition first, so variants read <edition><Tier>:
@@ -341,6 +343,13 @@ dependencies {
     implementation("org.unifiedpush.android:connector:3.3.5")
     // Calls: prebuilt libwebrtc (audio over DTLS-SRTP, signalled through the encrypted envelopes).
     implementation("io.getstream:stream-webrtc-android:1.3.10")
+
+    // The emulator smoke test: black-box, through UI Automator, so it drives the app
+    // the way a person does and needs nothing inside it.
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 
     testImplementation("junit:junit:4.13.2")
     // The real org.json: android.jar only carries stubs of it.

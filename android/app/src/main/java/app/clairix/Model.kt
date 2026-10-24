@@ -230,6 +230,10 @@ enum class EventKind {
     CLOCK_DRIFT,
     /** Fixed surveillance hardware heard over radio: a plate reader's battery, a gunshot detector, a Flock hotspot. */
     INFRASTRUCTURE,
+    /** Satellite positioning spoofed, jammed or behaving unlike satellites. */
+    GNSS,
+    /** An inaudible beacon tone heard on the ultrasound page. */
+    ULTRASOUND,
     /** Any other platform-hardening alert. */
     PLATFORM
 }

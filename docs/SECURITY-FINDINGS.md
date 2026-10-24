@@ -388,6 +388,19 @@ paired accessory's address kind, with which were connected on the owner's
 drives. What Android withholds from apps is said rather than faked:
 switching Bluetooth off, unpairing, and the address type below Android 15.
 
+Done since (GPS, 2G, VPN coverage, ultrasound, tour): satellite spoofing and
+jamming checks (signal spread and strength, satellite against network time,
+GPS against Wi-Fi/cell position, impossible jumps, mock-location apps, clock
+drift, front-end gain, constellations), a warning over the navigation map; a
+2G row that proves 2G is allowed when the phone is seen on it (the switch
+itself is unreadable to apps: `getAllowedNetworkTypesForReason` needs
+READ_PRIVILEGED_PHONE_STATE and the null-cipher preference is @hide); VPN
+coverage checks (DNS, IPv6, per-app exclusion, lockdown, proxy); an
+ultrasonic beacon listener with a speaker-to-microphone self-test; and a tour
+of every screen whose pages are built from the app's own lists, so a feature
+without tour text does not compile. The Kotlin unit tests now run in CI, and
+an emulator job drives every screen.
+
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: independent relays, a mesh for no
 network, a mixing layer (cover traffic exists; mixing does not), place

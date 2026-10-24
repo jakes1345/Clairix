@@ -39,6 +39,7 @@ import app.clairix.analysis.AudioRouteMonitor
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.EventLog
 import app.clairix.analysis.Fingerprint
+import app.clairix.analysis.GnssMonitor
 import app.clairix.analysis.Fix
 import app.clairix.analysis.IMSICatcher
 import app.clairix.analysis.IdentityResolver
@@ -133,6 +134,9 @@ class ScanService : LifecycleService() {
 
     /** Running while the phone is discoverable; fires an alert if it stays so. */
     private var discoverableJob: Job? = null
+
+    /** The satellite spoofing and jamming checks, held for as long as the scanner runs. */
+    private var gnssHandle: GnssMonitor.Handle? = null
 
     /** When each piece of surveillance hardware was last written up, by address; a battery advertises several times a second. */
     private val infrastructureAlertedAt = HashMap<String, Long>()
@@ -370,6 +374,7 @@ class ScanService : LifecycleService() {
 
         startScanning()
         startLocation()
+        if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) gnssHandle = GnssMonitor.acquire(this, foreground = false)
         startCellPolling()
         startPublishing()
 
@@ -493,6 +498,7 @@ class ScanService : LifecycleService() {
                         )
                     } else {
                         val cell = snapshot.cell
+                        runCatching { app.clairix.analysis.CellularExposure.noteServing(this@ScanService, cell) }
                         val fix = track.current
                         val findings = imsiCatcher.recordAndAnalyze(cell, fix)
                         val (score, level) = imsiCatcher.scoreAndLevel(findings)
@@ -949,6 +955,8 @@ class ScanService : LifecycleService() {
         vehicleTrips.clear()
         synchronized(dultAsked) { dultAsked.clear() }
         synchronized(infrastructureAlertedAt) { infrastructureAlertedAt.clear() }
+        GnssMonitor.clear()
+        runCatching { app.clairix.analysis.CellularExposure.clear(this) }
         LocationHistory.clear(this)
         alerted.clear()
         synchronized(gpsTrail) { gpsTrail.clear() }
@@ -1105,6 +1113,8 @@ class ScanService : LifecycleService() {
         if (running) {
             try { unregisterReceiver(systemReceiver) } catch (_: IllegalArgumentException) {}
             location.removeLocationUpdates(locationCallback)
+            gnssHandle?.let { GnssMonitor.release(it) }
+            gnssHandle = null
             // A drive still under way is closed and stored, or the trip count loses it.
             if (vehicleTrips.inTrip) vehicleTrips.endTrip(System.currentTimeMillis()).forEach(::publishVehicleFinding)
             // Recorded synchronously: the process may not outlive this callback.
