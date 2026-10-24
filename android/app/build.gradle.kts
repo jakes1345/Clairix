@@ -128,6 +128,15 @@ android {
     namespace = "app.clairix"
     compileSdk = 35
 
+    // The NDK cargo-ndk builds with, so the Android Gradle plugin has a strip
+    // tool. Without one it packages every native library as it is, debug info
+    // and symbol tables included ("Unable to strip the following libraries");
+    // 3.0.0 beta 2 shipped that way. Stripping also makes the libraries the
+    // same from one build to the next: LLVM numbers the functions it outlines
+    // for size in an order that varies, and only the local symbol names
+    // differ, which the strip removes.
+    resolveNdkDir()?.let { ndkPath = it.absolutePath }
+
     // No dependency-metadata block in the APK or bundle: it is a Google-signed
     // blob nobody but Google can read, and a build that is to be reproduced
     // should carry nothing that cannot be accounted for.

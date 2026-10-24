@@ -118,6 +118,12 @@ compared. What makes the builds agree:
   Gradle files; every GitHub action at a commit.
 - No Google dependency-metadata block in the APK or bundle: it is encrypted
   for Google at signing time, so it can be neither reproduced nor read.
+- Native libraries stripped. The Android Gradle plugin is pointed at the NDK
+  cargo-ndk builds with; without it, it packaged every library unstripped,
+  debug info and symbol tables included, and the first two-machine
+  comparison showed that the symbol tables differ from one build to the next
+  (LLVM numbers the functions it outlines for size in a varying order) while
+  the code does not.
 
 To check a published release, build the same tag with no keystore in the
 environment, which leaves the APK unsigned, and compare the two entry by

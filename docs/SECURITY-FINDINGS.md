@@ -51,8 +51,10 @@ the online search a separate, labelled choice and a dropped pin named from
 the map rather than looked up; a history retention setting, 30 days by
 default; the Rust compiler and the Gradle distribution pinned, the
 dependency-metadata block left out of the APK, build-machine paths kept
-out of the crypto library, and every change built twice on two machines in
-CI, which fails unless the two builds agree.
+out of the crypto library, native libraries stripped (the Android Gradle
+plugin had no NDK to strip with, so 3.0.0 beta 2 shipped every native
+library with its debug info and symbol tables), and every change built
+twice on two machines in CI, which fails unless the two builds agree.
 
 
 ## Tier 1 — the relay is a single point of compulsion
