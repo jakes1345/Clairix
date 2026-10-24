@@ -90,6 +90,28 @@ class CameraFeed(context: Context, val slug: String) {
 
         fun url(slug: String): String = "$RELEASE_BASE/maps-$slug/cameras-$slug.json.gz"
 
+        /**
+         * Every plate reader in every region's list on this phone, from the signed
+         * caches alone, so the scanner can say whether hardware it hears is a mapped
+         * camera. File I/O; call off the main thread. Empty until a region has loaded.
+         */
+        fun loadCached(context: Context): List<KnownCamera> {
+            val dir = File(context.applicationContext.filesDir, "nav")
+            val files = dir.listFiles { f -> f.isFile && f.name.startsWith("cameras-") && f.name.endsWith(".json.gz") }
+                ?: return emptyList()
+            val out = ArrayList<KnownCamera>()
+            for (f in files) {
+                val meta = File(dir, f.name.removeSuffix(".json.gz") + ".meta.json")
+                val signed = runCatching { JSONObject(meta.readText()).optBoolean("signed") }.getOrDefault(false)
+                if (!signed) continue
+                runCatching {
+                    val raw = f.inputStream().use { WorkZoneFeed.readCapped(it, MAX_BYTES) }
+                    out += parse(String(WorkZoneFeed.gunzipCapped(raw, MAX_BYTES), Charsets.UTF_8))
+                }.onFailure { Log.w(TAG, "Camera cache ${f.name} unreadable: ${it.message}") }
+            }
+            return out.distinctBy { it.id }
+        }
+
         /** Parses an extractor file; throws [JSONException] when it is not one, or is for another region. */
         fun parse(text: String, expectSlug: String? = null): List<KnownCamera> {
             val root = JSONObject(text)

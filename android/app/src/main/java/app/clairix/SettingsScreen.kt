@@ -57,6 +57,7 @@ object AppSettings {
     private const val KEY_SCAN_ENABLED = "scan_enabled"
     private const val KEY_RESUME_AFTER_REBOOT = "resume_after_reboot"
     private const val KEY_THEME = "theme"
+    private const val KEY_INFRASTRUCTURE_ALERTS = "infrastructure_alerts"
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
     const val DEFAULT_PERSISTENCE_THRESHOLD_MIN = 10f
@@ -69,7 +70,15 @@ object AppSettings {
     @Volatile private var _persistenceThresholdMin = DEFAULT_PERSISTENCE_THRESHOLD_MIN
     @Volatile private var _scanEnabled = false
     @Volatile private var _resumeAfterReboot = false
+    @Volatile private var _infrastructureAlerts = true
     private val _theme = MutableStateFlow(ClairixThemeName.ACID)
+
+    /**
+     * Whether hearing surveillance hardware (a Flock Safety camera battery, a Raven
+     * gunshot detector, a Flock setup hotspot) raises an alert as well as a timeline
+     * row. On by default: it is the one radio signal of a plate reader the phone can hear.
+     */
+    val infrastructureAlerts: Boolean get() = _infrastructureAlerts
 
     /**
      * The colour theme the user picked in Settings > Appearance. Acid, the brand's
@@ -110,6 +119,7 @@ object AppSettings {
             .coerceIn(MIN_PERSISTENCE_THRESHOLD_MIN, MAX_PERSISTENCE_THRESHOLD_MIN)
         _scanEnabled = p.getBoolean(KEY_SCAN_ENABLED, false)
         _resumeAfterReboot = p.getBoolean(KEY_RESUME_AFTER_REBOOT, false)
+        _infrastructureAlerts = p.getBoolean(KEY_INFRASTRUCTURE_ALERTS, true)
         // A name from a later version that this one does not know reads as the default.
         val savedTheme = p.getString(KEY_THEME, null)
         _theme.value = ClairixThemeName.entries.firstOrNull { it.name == savedTheme } ?: ClairixThemeName.ACID
@@ -131,6 +141,12 @@ object AppSettings {
         _scanEnabled = value
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_SCAN_ENABLED, value).apply()
+    }
+
+    fun setInfrastructureAlerts(context: Context, value: Boolean) {
+        _infrastructureAlerts = value
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_INFRASTRUCTURE_ALERTS, value).apply()
     }
 
     fun setAggressiveScan(context: Context, value: Boolean) {
@@ -166,6 +182,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
     val nfc by Registry.nfc.collectAsStateWithLifecycle()
 
     var aggressiveScan by remember { mutableStateOf(AppSettings.aggressiveScan) }
+    var infrastructureAlerts by remember { mutableStateOf(AppSettings.infrastructureAlerts) }
     var followThreshold by remember { mutableFloatStateOf(AppSettings.followThresholdM) }
     var persistenceThreshold by remember { mutableFloatStateOf(AppSettings.persistenceThresholdMin) }
     var showClearDialog by remember { mutableStateOf(false) }
@@ -354,6 +371,17 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             onCheckedChange = { v ->
                                 aggressiveScan = v
                                 AppSettings.setAggressiveScan(context, v)
+                            }
+                        )
+                        Hairline()
+                        ToggleRow(
+                            title = "Alert on surveillance hardware",
+                            subtitle = "A notification when a Flock Safety camera battery, Raven gunshot detector or " +
+                                "Flock hotspot is heard nearby. Off, it is still written to the timeline.",
+                            checked = infrastructureAlerts,
+                            onCheckedChange = { v ->
+                                infrastructureAlerts = v
+                                AppSettings.setInfrastructureAlerts(context, v)
                             }
                         )
                         Hairline()

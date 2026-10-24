@@ -130,6 +130,44 @@ object Registry {
             ?.apply()
     }
 
+    // --- Bluetooth exposure ----------------------------------------------------
+
+    /**
+     * Formatted addresses of the Bluetooth devices connected to this phone right now,
+     * from the ACL connect/disconnect broadcasts the scanner service watches, seeded
+     * from the profile proxies when it starts. What a roadside sensor can log along
+     * with the phone is exactly this set.
+     */
+    private val _connectedBluetooth = MutableStateFlow<Set<String>>(emptySet())
+    val connectedBluetooth: StateFlow<Set<String>> = _connectedBluetooth.asStateFlow()
+    fun setBluetoothConnected(address: String, connected: Boolean) {
+        _connectedBluetooth.update { if (connected) it + address else it - address }
+    }
+    fun replaceBluetoothConnected(addresses: Set<String>) { _connectedBluetooth.value = addresses }
+
+    private const val INFRASTRUCTURE_CAP = 50
+
+    /** Surveillance hardware the radios have heard this run, most recent first, one row per address. */
+    private val _infrastructure = MutableStateFlow<List<InfrastructureSighting>>(emptyList())
+    val infrastructure: StateFlow<List<InfrastructureSighting>> = _infrastructure.asStateFlow()
+
+    /** Adds or refreshes a sighting; returns the row as kept, with its running count. */
+    fun publishInfrastructure(sighting: InfrastructureSighting): InfrastructureSighting {
+        var kept = sighting
+        _infrastructure.update { current ->
+            val previous = current.firstOrNull { it.address == sighting.address }
+            kept = if (previous == null) sighting else sighting.copy(
+                firstSeen = previous.firstSeen, sightings = previous.sightings + 1,
+                // Keep the better of the two fixes: a sighting with no position does not erase one with.
+                lat = sighting.lat ?: previous.lat, lon = sighting.lon ?: previous.lon,
+                nearestKnownM = sighting.nearestKnownM ?: previous.nearestKnownM,
+                nearestKnownLabel = sighting.nearestKnownLabel ?: previous.nearestKnownLabel
+            )
+            (listOf(kept) + current.filter { it.address != sighting.address }).take(INFRASTRUCTURE_CAP)
+        }
+        return kept
+    }
+
     private val _phoneHealth = MutableStateFlow(PhoneHealth())
     val phoneHealth: StateFlow<PhoneHealth> = _phoneHealth.asStateFlow()
     fun publishPhoneHealth(h: PhoneHealth) { _phoneHealth.value = h }
@@ -245,7 +283,8 @@ object Registry {
             val event = TimelineEvent(
                 id = "${alert.dedupeKey ?: alert.kind.name.lowercase()}@${alert.ts}",
                 kind = alert.kind, ts = alert.ts, title = alert.title,
-                detail = alert.detail, severity = alert.severity
+                detail = alert.detail, severity = alert.severity,
+                lat = alert.lat, lon = alert.lon
             )
             val recorded = runCatching {
                 val log = TimelineLog.get(ctx)
@@ -302,5 +341,6 @@ object Registry {
         _alerts.value = emptyList()
         _screenRecordings.value = emptyList()
         _audioRoutes.value = emptyList()
+        _infrastructure.value = emptyList()
     }
 }

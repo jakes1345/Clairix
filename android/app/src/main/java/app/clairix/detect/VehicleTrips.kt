@@ -37,8 +37,18 @@ class VehicleTrips(private val store: Store) {
      */
     data class Trip(
         val start: Long, val end: Long, val addresses: Set<String>, val signatures: Set<String>,
-        val startLat: Double? = null, val startLon: Double? = null
+        val startLat: Double? = null, val startLon: Double? = null,
+        /**
+         * The owner's own Bluetooth accessories connected to the phone at some point
+         * during the trip, address to name: the car's hands-free, a watch, earbuds.
+         * Not detections; what rode along *by the owner's choice*, so the Bluetooth
+         * page can say which fixed address announces the car on every drive.
+         */
+        val accessories: Map<String, String> = emptyMap()
     )
+
+    /** One accessory and how many remembered trips it was connected on. */
+    data class AccessoryUse(val address: String, val name: String, val trips: Int)
 
     /** A device that has now qualified on [TRIPS_TO_ALERT] trips. */
     data class Finding(
@@ -65,6 +75,7 @@ class VehicleTrips(private val store: Store) {
     private var tripStartLat: Double? = null
     private var tripStartLon: Double? = null
     private val seen = HashMap<String, Seen>()
+    private val tripAccessories = HashMap<String, String>()
     private val history = ArrayList<Trip>()
 
     init {
@@ -83,7 +94,31 @@ class VehicleTrips(private val store: Store) {
             tripStartLat = startLat
             tripStartLon = startLon
             seen.clear()
+            tripAccessories.clear()
         }
+    }
+
+    /**
+     * Records one of the owner's connected accessories as riding along on the current
+     * trip. Nothing is recorded outside a trip. A later name for the same address wins.
+     */
+    fun noteAccessory(address: String, name: String) {
+        synchronized(lock) {
+            if (tripStart == 0L) return
+            if (tripAccessories.size >= MAX_ACCESSORIES && address !in tripAccessories) return
+            tripAccessories[address] = name
+        }
+    }
+
+    /** Each accessory remembered on any trip, most-used first, with the latest name it had. */
+    fun accessoryUse(): List<AccessoryUse> = synchronized(lock) {
+        val counts = LinkedHashMap<String, Pair<String, Int>>()
+        for (t in history) for ((address, name) in t.accessories) {
+            val prev = counts[address]
+            counts[address] = name to ((prev?.second ?: 0) + 1)
+        }
+        counts.map { (address, v) -> AccessoryUse(address, v.first, v.second) }
+            .sortedWith(compareByDescending<AccessoryUse> { it.trips }.thenBy { it.name })
     }
 
     /**
@@ -189,7 +224,10 @@ class VehicleTrips(private val store: Store) {
             tripStart = 0L
             val startLat = tripStartLat
             val startLon = tripStartLon
-            if (now - start < MIN_TRIP_MS) { seen.clear(); tripStartLat = null; tripStartLon = null; return emptyList() }
+            if (now - start < MIN_TRIP_MS) {
+                seen.clear(); tripAccessories.clear(); tripStartLat = null; tripStartLon = null
+                return emptyList()
+            }
 
             val addresses = HashSet<String>()
             val signatures = HashSet<String>()
@@ -209,9 +247,10 @@ class VehicleTrips(private val store: Store) {
                     ))
                 }
             }
-            history.add(Trip(start, now, addresses, signatures, startLat, startLon))
+            history.add(Trip(start, now, addresses, signatures, startLat, startLon, HashMap(tripAccessories)))
             while (history.size > MAX_TRIPS) history.removeAt(0)
             seen.clear()
+            tripAccessories.clear()
             tripStartLat = null
             tripStartLon = null
             saveHistory()
@@ -234,6 +273,7 @@ class VehicleTrips(private val store: Store) {
             tripStartLat = null
             tripStartLon = null
             seen.clear()
+            tripAccessories.clear()
             history.clear()
             store.replace(JSONObject())
         }
@@ -257,7 +297,8 @@ class VehicleTrips(private val store: Store) {
                 addresses = strings(t.optJSONArray("addresses")),
                 signatures = strings(t.optJSONArray("signatures")),
                 startLat = if (t.has("startLat")) t.optDouble("startLat") else null,
-                startLon = if (t.has("startLon")) t.optDouble("startLon") else null
+                startLon = if (t.has("startLon")) t.optDouble("startLon") else null,
+                accessories = accessories(t.optJSONObject("accessories"))
             ))
         }
         return out
@@ -273,9 +314,23 @@ class VehicleTrips(private val store: Store) {
                 put("signatures", JSONArray(t.signatures.toList()))
                 t.startLat?.let { put("startLat", it) }
                 t.startLon?.let { put("startLon", it) }
+                if (t.accessories.isNotEmpty()) {
+                    put("accessories", JSONObject().also { o -> for ((a, n) in t.accessories) o.put(a, n) })
+                }
             })
         }
         store.replace(JSONObject().put("trips", trips))
+    }
+
+    private fun accessories(o: JSONObject?): Map<String, String> {
+        if (o == null) return emptyMap()
+        val out = HashMap<String, String>(o.length())
+        val keys = o.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            out[k] = o.optString(k, "")
+        }
+        return out
     }
 
     private fun strings(array: JSONArray?): Set<String> {
@@ -299,5 +354,7 @@ class VehicleTrips(private val store: Store) {
         /** Trips setting off closer together than this count as the same start point. */
         const val DISTINCT_START_M = 500.0
         private const val MAX_SEEN = 2000
+        /** Accessories remembered per trip; nobody has more paired devices than this connected at once. */
+        private const val MAX_ACCESSORIES = 16
     }
 }

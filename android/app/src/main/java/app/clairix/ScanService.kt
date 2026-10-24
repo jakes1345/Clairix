@@ -26,6 +26,7 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -46,6 +47,7 @@ import app.clairix.analysis.LocationTrack
 import app.clairix.analysis.Tracker
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.analysis.WifiScanner
+import app.clairix.analysis.haversine
 import app.clairix.analysis.toFix
 import app.clairix.detect.BleCanary
 import app.clairix.detect.BleNames
@@ -53,7 +55,11 @@ import app.clairix.detect.CadenceFingerprinter
 import app.clairix.detect.DultInterrogator
 import app.clairix.detect.KarmaCanary
 import app.clairix.detect.Signatures
+import app.clairix.detect.SurveillanceHardware
 import app.clairix.detect.VehicleTrips
+import app.clairix.nav.CameraFeed
+import app.clairix.nav.KnownCamera
+import app.clairix.security.BluetoothExposure
 import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.Dispatchers
@@ -116,6 +122,20 @@ class ScanService : LifecycleService() {
 
     /** Last ongoing-notification text, so it is only re-posted when it actually changes. */
     private var lastOngoingText: String? = null
+
+    /**
+     * The plate readers on the map lists this phone holds, so hardware heard over radio
+     * can be matched to a mapped camera or reported as one the map lacks. Reloaded
+     * from the signed caches every [KNOWN_CAMERAS_REFRESH_MS].
+     */
+    @Volatile private var knownCameras: List<KnownCamera> = emptyList()
+    private var knownCamerasAt = 0L
+
+    /** Running while the phone is discoverable; fires an alert if it stays so. */
+    private var discoverableJob: Job? = null
+
+    /** When each piece of surveillance hardware was last written up, by address; a battery advertises several times a second. */
+    private val infrastructureAlertedAt = HashMap<String, Long>()
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) { handle(result) }
@@ -186,13 +206,64 @@ class ScanService : LifecycleService() {
                         BluetoothAdapter.STATE_ON -> restartScan()
                         BluetoothAdapter.STATE_OFF -> {
                             scanActive = false
+                            Registry.replaceBluetoothConnected(emptySet())
                             Registry.update {
                                 it.copy(scanning = false, bluetoothOn = false, error = "Bluetooth is off")
                             }
                         }
                     }
                 }
+                BluetoothAdapter.ACTION_SCAN_MODE_CHANGED -> onScanModeChanged(
+                    intent.getIntExtra(BluetoothAdapter.EXTRA_SCAN_MODE, BluetoothAdapter.ERROR)
+                )
+                BluetoothDevice.ACTION_ACL_CONNECTED, BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                        ?: return
+                    val raw = device.address ?: return
+                    val connected = intent.action == BluetoothDevice.ACTION_ACL_CONNECTED
+                    val address = BleNames.formatMac(raw)
+                    Registry.setBluetoothConnected(address, connected)
+                    // A connection made mid-drive rides along too; the name is read off the
+                    // bonded record, which needs the Nearby devices permission.
+                    if (connected && vehicleTrips.inTrip && granted(Manifest.permission.BLUETOOTH_CONNECT)) {
+                        BluetoothExposure.accessory(this@ScanService, device, setOf(address))
+                            ?.let { vehicleTrips.noteAccessory(it.address, it.name) }
+                    }
+                }
             }
+        }
+    }
+
+    /**
+     * Discoverable is the one state in which the phone answers any scanner with its
+     * fixed address and its name. Android enters it only while the Bluetooth settings
+     * page is open, so a phone that stays discoverable has been left on that page: say
+     * so once, after [DISCOVERABLE_ALERT_MS], rather than on every poll.
+     */
+    private fun onScanModeChanged(mode: Int) {
+        if (mode == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
+            if (discoverableJob?.isActive == true) return
+            discoverableJob = lifecycleScope.launch {
+                delay(DISCOVERABLE_ALERT_MS)
+                val adapter = getSystemService(BluetoothManager::class.java)?.adapter ?: return@launch
+                val still = granted(Manifest.permission.BLUETOOTH_SCAN) &&
+                    runCatching { adapter.scanMode }.getOrNull() == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE
+                if (!still) return@launch
+                val now = System.currentTimeMillis()
+                Registry.publishAlert(
+                    Alert(
+                        id = "bt_discoverable@$now", ts = now, severity = Severity.MEDIUM,
+                        title = "Phone has been discoverable for ${DISCOVERABLE_ALERT_MS / 60_000} minutes",
+                        detail = "The phone is answering Bluetooth discovery with its fixed address and its name, so any " +
+                            "scanner nearby can list it. Android does this only while the Bluetooth settings page is open: " +
+                            "leave that page, or turn Bluetooth off and on.",
+                        kind = EventKind.PLATFORM, dedupeKey = "bt_discoverable"
+                    )
+                )
+            }
+        } else {
+            discoverableJob?.cancel()
+            discoverableJob = null
         }
     }
 
@@ -287,6 +358,12 @@ class ScanService : LifecycleService() {
 
         AppSettings.setScanEnabled(this, true)
         registerSystemReceiver()
+        // What is connected at this moment, before the ACL broadcasts take over; the
+        // profile proxies answer asynchronously, so this runs off the main thread.
+        lifecycleScope.launch(Dispatchers.IO) {
+            val live = runCatching { BluetoothExposure.connectedDevices(this@ScanService) }.getOrDefault(emptySet())
+            Registry.replaceBluetoothConnected(live)
+        }
         // The Karma canary is a hidden network suggestion the platform probes for;
         // registering it is idempotent, and a refusal only means no canary this run.
         runCatching { KarmaCanary.ensure(this) }
@@ -312,6 +389,9 @@ class ScanService : LifecycleService() {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            addAction(BluetoothAdapter.ACTION_SCAN_MODE_CHANGED)
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }
         ContextCompat.registerReceiver(
             this, systemReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED
@@ -462,6 +542,12 @@ class ScanService : LifecycleService() {
                     lastRetentionAt = now
                     withContext(Dispatchers.IO) { runCatching { HistoryRetention.apply(this@ScanService) } }
                 }
+                if (now - knownCamerasAt > KNOWN_CAMERAS_REFRESH_MS) {
+                    knownCamerasAt = now
+                    withContext(Dispatchers.IO) {
+                        knownCameras = runCatching { CameraFeed.loadCached(this@ScanService) }.getOrDefault(emptyList())
+                    }
+                }
                 // Fused location goes quiet once the car is parked (25 m minimum
                 // displacement), so the end of a trip is noticed here, not in the
                 // location callback.
@@ -526,7 +612,15 @@ class ScanService : LifecycleService() {
                     // snapshot requests a fresh scan and waits for its results, so both
                     // it and the anomaly scan below read this cycle's beacons rather than
                     // whatever the platform cached last time.
-                    runCatching { WifiScanner.snapshot(this@ScanService) }.getOrNull()?.let { Registry.publishWifiStatus(it) }
+                    val wifiStatus = runCatching { WifiScanner.snapshot(this@ScanService) }.getOrNull()
+                    wifiStatus?.let { Registry.publishWifiStatus(it) }
+                    // A Flock unit's own Wi-Fi, when it is running it: the setup hotspot or
+                    // an address in Flock's own hardware block.
+                    wifiStatus?.nearby?.forEach { n ->
+                        SurveillanceHardware.matchWifi(n.ssid, n.bssid)?.let { hit ->
+                            onInfrastructure(hit, BleNames.formatMac(n.bssid), n.rssi, System.currentTimeMillis())
+                        }
+                    }
                     val wifiAnomalies = WifiScanner.scan(this@ScanService)
                     // The same scan cache, checked for the one network name that exists
                     // nowhere but inside this phone. An answer has no benign explanation.
@@ -602,6 +696,11 @@ class ScanService : LifecycleService() {
         val now = System.currentTimeMillis()
         val device = result.device
         val address = device.address?.let { BleNames.formatMac(it) } ?: return
+        // Fixed surveillance hardware announcing itself: a plate reader's battery, a
+        // gunshot detector. Reported in its own right, before the trust check (marking
+        // it "mine" makes no sense) and without leaving the tracker pipeline: a camera
+        // on a trailer that keeps turning up is still a device following the car.
+        SurveillanceHardware.match(record, device, address)?.let { onInfrastructure(it, address, result.rssi, now) }
         if (Registry.trusted.value.contains(address)) return
         val fingerprint = Fingerprint.of(record)
         val resolution = identities.resolve(address, result.rssi, fingerprint, now)
@@ -665,6 +764,73 @@ class ScanService : LifecycleService() {
     }
 
     /**
+     * Surveillance hardware heard over Bluetooth or Wi-Fi. Kept on the Bluetooth page
+     * for this run, written to the timeline with the phone's position, and raised as a
+     * notification for a certain match when the owner wants one. One record per
+     * address per [INFRASTRUCTURE_DEDUPE_MS]: a commute passes the same camera twice a
+     * day, and twice a day is enough. A possible match is remembered nowhere.
+     */
+    private fun onInfrastructure(hit: SurveillanceHardware.Hit, address: String, rssi: Int, now: Long) {
+        if (hit.confidence == SurveillanceHardware.Confidence.POSSIBLE) return
+        val fix = track.current
+        var nearestM: Double? = null
+        var nearestLabel: String? = null
+        if (fix != null) {
+            val cameras = knownCameras
+            if (cameras.isNotEmpty()) {
+                val here = Fix(fix.lat, fix.lon, null, now)
+                var best: KnownCamera? = null
+                var bestM = Double.MAX_VALUE
+                for (c in cameras) {
+                    // Cheap bounding box before the trigonometry: tens of thousands of cameras.
+                    if (Math.abs(c.lat - fix.lat) > 0.5 || Math.abs(c.lon - fix.lon) > 0.5) continue
+                    val d = haversine(here, Fix(c.lat, c.lon, null, now))
+                    if (d < bestM) { bestM = d; best = c }
+                }
+                if (best != null) { nearestM = bestM; nearestLabel = best.summary }
+            }
+        }
+        val kept = Registry.publishInfrastructure(
+            InfrastructureSighting(
+                address = address, kind = hit.kind, confidence = hit.confidence, rssi = rssi,
+                firstSeen = now, lastSeen = now, sightings = 1, evidence = hit.evidence,
+                lat = fix?.lat, lon = fix?.lon, nearestKnownM = nearestM, nearestKnownLabel = nearestLabel
+            )
+        )
+        val mapNote = when {
+            nearestM != null && nearestM <= KNOWN_CAMERA_MATCH_M ->
+                "It matches the plate reader mapped ${nearestM.toInt()} m away" + (nearestLabel?.let { " ($it)" } ?: "") + "."
+            nearestM != null ->
+                "No plate reader is mapped within ${KNOWN_CAMERA_MATCH_M.toInt()} m of here (nearest ${"%.1f".format(nearestM / 1000)} km): " +
+                    "this may be one OpenStreetMap does not have yet."
+            fix == null -> "No position fix, so it cannot be compared with the map."
+            else -> "No plate-reader list is on this phone to compare it with."
+        }
+        // The page row above is refreshed on every packet; the timeline and the shade
+        // hear about each address once per window, judged here rather than left to the
+        // timeline's dedupe, which runs after the alert list has already grown by one.
+        synchronized(infrastructureAlertedAt) {
+            val last = infrastructureAlertedAt[address] ?: 0L
+            if (now - last < INFRASTRUCTURE_DEDUPE_MS) return
+            infrastructureAlertedAt[address] = now
+        }
+        val certain = hit.confidence == SurveillanceHardware.Confidence.CERTAIN
+        val severity = if (certain && AppSettings.infrastructureAlerts) Severity.MEDIUM else Severity.LOW
+        Registry.publishAlert(
+            Alert(
+                id = "infra@$address@$now", ts = now, severity = severity,
+                title = if (certain) hit.kind.headline else "Possible ${hit.kind.label.lowercase()} nearby",
+                detail = "${hit.kind.label} heard at ${BleNames.signalLabel(rssi)} signal ($rssi dBm): " +
+                    hit.evidence.joinToString("; ") + ". " + mapNote +
+                    (if (kept.sightings > 1) " Heard ${kept.sightings} times since ${android.text.format.DateFormat.format("HH:mm", kept.firstSeen)}." else ""),
+                kind = EventKind.INFRASTRUCTURE, dedupeKey = "infra@$address",
+                lat = fix?.lat, lon = fix?.lon
+            ),
+            dedupeWindowMs = INFRASTRUCTURE_DEDUPE_MS
+        )
+    }
+
+    /**
      * Asks a tracker who it is over DULT, once per logical device, the first time it is
      * recognised as a type whose maker ships the protocol or is confirmed as following.
      * Runs on the service scope, never on the scan callback; the exchange has its own
@@ -708,6 +874,7 @@ class ScanService : LifecycleService() {
      */
     private fun beginTrip(fix: Fix) {
         vehicleTrips.beginTrip(fix.time, fix.lat, fix.lon)
+        noteConnectedAccessories()
         intensiveUntil = fix.time + INTENSIVE_SWEEP_MS
         restartScan()
         intensiveJob?.cancel()
@@ -716,6 +883,23 @@ class ScanService : LifecycleService() {
             intensiveJob = null
             intensiveUntil = 0L
             if (running) restartScan()
+        }
+    }
+
+    /**
+     * The owner's accessories connected as a drive begins, remembered on the trip so
+     * the Bluetooth page can say which fixed address announces the car. Bonded records
+     * need the Nearby devices permission; without it the trip simply records none.
+     */
+    private fun noteConnectedAccessories() {
+        if (!vehicleTrips.inTrip || !granted(Manifest.permission.BLUETOOTH_CONNECT)) return
+        val connected = Registry.connectedBluetooth.value
+        if (connected.isEmpty()) return
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter ?: return
+        val bonded = runCatching { adapter.bondedDevices }.getOrNull() ?: return
+        for (d in bonded) {
+            val a = BluetoothExposure.accessory(this, d, connected) ?: continue
+            if (a.connected) vehicleTrips.noteAccessory(a.address, a.name)
         }
     }
 
@@ -764,6 +948,7 @@ class ScanService : LifecycleService() {
         cadence.clear()
         vehicleTrips.clear()
         synchronized(dultAsked) { dultAsked.clear() }
+        synchronized(infrastructureAlertedAt) { infrastructureAlertedAt.clear() }
         LocationHistory.clear(this)
         alerted.clear()
         synchronized(gpsTrail) { gpsTrail.clear() }
@@ -791,6 +976,7 @@ class ScanService : LifecycleService() {
             0x0075, // Samsung — SmartTag
             0x00D7, // Tile
             0x005E, // Tile (legacy)
+            SurveillanceHardware.COMPANY_XUNTONG, // Flock Safety camera battery packs
         )
         val serviceUuids = listOf(
             // Tile 0xFEED, Samsung SmartTag 0xFD5A/0xFD70, Chipolo 0xFEBE/0xFE2B,
@@ -808,6 +994,9 @@ class ScanService : LifecycleService() {
             "0000fe9f-0000-1000-8000-00805f9b34fb",
             "0000ffe0-0000-1000-8000-00805f9b34fb",
             "0000fff3-0000-1000-8000-00805f9b34fb",
+            // Flock Safety accessory service, so a camera's hardware is heard with the
+            // screen off — which is how a phone rides in a car.
+            SurveillanceHardware.ACCESSORY_SERVICE,
         )
         val filters = ArrayList<ScanFilter>()
         manufacturerIds.forEach { id ->
@@ -956,6 +1145,19 @@ class ScanService : LifecycleService() {
         /** Forgets vehicle trips that ended before [cutoff]; returns how many. File I/O; call off the main thread. */
         fun pruneTripsOlderThan(context: Context, cutoff: Long): Int =
             (liveTrips ?: VehicleTrips(Store(context.applicationContext, TRIPS_FILE))).pruneOlderThan(cutoff)
+
+        /** Which of the owner's accessories rode along on the remembered drives. File I/O when no service is alive. */
+        fun accessoryUse(context: Context): List<VehicleTrips.AccessoryUse> =
+            (liveTrips ?: VehicleTrips(Store(context.applicationContext, TRIPS_FILE))).accessoryUse()
+
+        /** A mapped plate reader within this of where hardware was heard is taken to be that hardware. */
+        const val KNOWN_CAMERA_MATCH_M = 400.0
+        /** How often the signed camera caches are re-read for the match above. */
+        private const val KNOWN_CAMERAS_REFRESH_MS = 30 * 60_000L
+        /** One timeline row and one notification per piece of hardware in this window. */
+        private const val INFRASTRUCTURE_DEDUPE_MS = 12 * 3_600_000L
+        /** Discoverable for this long and the owner is told the settings page is still open. */
+        private const val DISCOVERABLE_ALERT_MS = 3 * 60_000L
         private const val CHANNEL_ONGOING = "scanning"
         private const val CHANNEL_ALERT = "alerts"
         private const val CHANNEL_CELL = "cell_alerts"
