@@ -143,12 +143,14 @@ internal enum class TrackerAction(val title: String) {
 internal enum class CommsAction(val title: String) {
     FAKE_CALL("Fake call"),
     DURESS("Duress phrase"),
+    MESH("Offline mesh"),
     WIPE("Wipe Clairix");
 
     val icon: ImageVector
         get() = when (this) {
             FAKE_CALL -> ClairixIcons.PhoneInTalk
             DURESS -> ClairixIcons.Shield
+            MESH -> ClairixIcons.Bluetooth
             WIPE -> ClairixIcons.Remove
         }
 }

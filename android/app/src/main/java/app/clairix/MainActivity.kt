@@ -244,6 +244,8 @@ class MainActivity : AppCompatActivity() {
             // enrolment tripwire is tested once per launch — Keystore work, off the
             // main thread. Each publishes straight into the Registry.
             UnlockLedger.init(this)
+            // The offline mesh comes back on if the owner left it on.
+            app.clairix.comms.mesh.Mesh.resume(this)
             lifecycleScope.launch {
                 // A card the guard disarmed (screen off, time up) while this screen
                 // is up: back to reader mode, as STOP would have done.
@@ -1442,6 +1444,7 @@ private fun MainApp(
                 when (commsAction) {
                     CommsAction.FAKE_CALL -> FakeCallPage()
                     CommsAction.DURESS -> DuressPage()
+                    CommsAction.MESH -> MeshPage()
                     CommsAction.WIPE -> WipePage()
                     null -> CommsScreen(
                         openPeer = threadRequest,

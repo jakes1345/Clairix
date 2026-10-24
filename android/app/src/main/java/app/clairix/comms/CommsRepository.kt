@@ -1,6 +1,8 @@
 package app.clairix.comms
 
 import android.app.Activity
+import app.clairix.comms.mesh.Mesh
+import app.clairix.comms.mesh.MeshProtocol
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -82,6 +84,8 @@ object CommsRepository {
     /** How long an unpair waits for the relay to delete the account before moving on. */
     private const val RELAY_WIPE_BUDGET_MS = 4_000L
     /** Cover traffic: the mean, floor and ceiling of the random interval between envelopes. */
+    /** What the offline mesh carries when the relay is out of reach: texts, group texts and SOS. */
+    private val MESH_TYPES = setOf(CommsWire.T_MSG, CommsWire.T_GROUP_MSG, CommsWire.T_PANIC)
     private const val COVER_MEAN_MS = 20 * 60_000L
     private const val COVER_MIN_MS = 60_000L
     private const val COVER_MAX_MS = 90 * 60_000L
@@ -946,6 +950,10 @@ object CommsRepository {
                     is Deliver.Offline -> {
                         _state.update { it.copy(error = outcome.reason) }
                         scheduleRetry()
+                        // With the offline mesh on, everything still queued also travels
+                        // phone to phone; the relay retry carries on regardless, and the
+                        // recipient drops whichever copy arrives second.
+                        meshQueueOutbox()
                         break
                     }
                 }
@@ -1393,7 +1401,15 @@ object CommsRepository {
                 Deliver.Sent -> sent++
                 is Deliver.Failed -> CommsLog.add("$what to ${memberLabel(m)} failed: ${d.reason}")
                 is Deliver.TooLarge -> CommsLog.add("$what to ${memberLabel(m)} failed: ${d.reason}")
-                is Deliver.Offline -> CommsLog.add("$what to ${memberLabel(m)} not sent: ${d.reason}")
+                is Deliver.Offline -> {
+                    val id = payload.optString(CommsWire.F_ID)
+                    val type = payload.optString(CommsWire.F_TYPE)
+                    if (type in MESH_TYPES && id.isNotEmpty() && meshQueue(contact, payload, id)) {
+                        CommsLog.add("$what to ${memberLabel(m)} is in the offline mesh: the relay is not reachable (${d.reason})")
+                    } else {
+                        CommsLog.add("$what to ${memberLabel(m)} not sent: ${d.reason}")
+                    }
+                }
             }
         }
         return sent
@@ -1839,6 +1855,72 @@ object CommsRepository {
                     }
                 }
             }
+        }
+    }
+
+    // ── Offline mesh ──────────────────────────────────────────────────────
+
+    /** This phone's public sealing key, read once: the mesh tags are made from it. */
+    @Volatile private var ownSealing: String? = null
+
+    /** The routing tags this phone answers to on the mesh (yesterday, today, tomorrow). */
+    fun meshTags(): Set<String> {
+        val sealing = ownSealing ?: runCatching { identities.get()?.publicBundle()?.sealing }.getOrNull()?.also { ownSealing = it }
+            ?: return emptySet()
+        return MeshProtocol.tagsFor(sealing, System.currentTimeMillis())
+    }
+
+    /**
+     * An envelope the mesh carried here: into the same path the relay's take, with the
+     * time it arrived (the relay's timestamp is not there to use). Duplicates of one the
+     * relay also delivered are dropped there, by content and by message id.
+     */
+    fun receiveFromMesh(data: ByteArray) {
+        scope.launch {
+            runCatching {
+                handleEnvelope(RelayClient.Envelope("mesh-" + MeshProtocol.hex(MeshProtocol.idOf(data)), System.currentTimeMillis(), data))
+            }.onFailure { CommsLog.add("A message from the offline mesh could not be opened: ${it.message}") }
+        }
+    }
+
+    /** Every queued text, sealed once into the mesh. Media is too big for Bluetooth hops and stays for the relay. */
+    private suspend fun meshQueueOutbox() {
+        if (!::appContext.isInitialized || !Mesh.enabled(appContext)) return
+        for (m in store.queued()) {
+            if (m.isMedia) continue
+            val contact = store.contact(m.peer) ?: continue
+            meshQueue(contact, CommsWire.message(m.id, m.ts, m.body), m.id)
+        }
+    }
+
+    /**
+     * Seals [payload] for [contact] into a mesh bundle, once per message [id]. Needs a
+     * session with them already: starting one takes a key from the relay, which is
+     * exactly what is not reachable. Returns true when the message is in the mesh.
+     */
+    private suspend fun meshQueue(contact: Contact, payload: JSONObject, id: String): Boolean {
+        if (!::appContext.isInitialized || !Mesh.enabled(appContext)) return false
+        val mesh = Mesh.store(appContext)
+        if (mesh.isQueued(contact.number, id)) return true
+        val now = System.currentTimeMillis()
+        val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
+        return when (val p = lock.withLock { prepareLocked(contact, JSONObject(payload.toString()), null) }) {
+            is Prepared.Ready -> {
+                val b = MeshProtocol.newBundle(p.envelope, contact.sealing, now)
+                if (b == null) {
+                    CommsLog.add("A message to $label is too long for the offline mesh; it waits for the relay")
+                    false
+                } else {
+                    mesh.addOwn(contact.number, id, b, now)
+                    CommsLog.add("A message to $label is in the offline mesh: it travels phone to phone until it reaches them")
+                    true
+                }
+            }
+            Prepared.NeedBundle -> {
+                CommsLog.add("No session with $label yet, so the offline mesh cannot reach them until one message has gone through the relay")
+                false
+            }
+            else -> false
         }
     }
 

@@ -134,9 +134,17 @@ class SmokeTest {
             back(c)
         }
 
-        // The other tabs.
+        // The other tabs, and the Comms menu's pages (opened and left; nothing is sent or wiped).
         for (tab in listOf("Comms", "Drive", "Activity")) {
             tap(tab, "tab $tab"); device.waitForIdle(3_000); shot("tab-$tab")
+            if (tab == "Comms") {
+                for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
+                    val more = device.wait(Until.findObject(By.desc("More options")), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
+                    more.click(); alive("comms menu")
+                    tap(page, "comms $page"); device.waitForIdle(2_000); shot("comms-$page")
+                    back(page)
+                }
+            }
         }
         for (sub in listOf("Patterns", "Unlocks", "Timeline")) { tap(sub, "activity $sub"); shot("activity-$sub") }
         tap("Drive", "tab Drive again")

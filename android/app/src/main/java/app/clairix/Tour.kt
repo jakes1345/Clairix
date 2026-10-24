@@ -127,6 +127,10 @@ internal fun commsPageTour(a: CommsAction): Pair<String, String> = when (a) {
     CommsAction.DURESS -> "A sentence that quietly calls for help." to
         "Type it into any chat: it is sent as written, and underneath an SOS with your last position goes to every group you " +
         "are in. In no group it sends nothing, and the page says so."
+    CommsAction.MESH -> "Messages with no network: phone to phone over Bluetooth." to
+        "Turn it on when the network is down or not to be trusted. Texts, group texts and SOS that cannot reach the relay " +
+        "travel from phone to phone, sealed, until one reaches the person they are for. Every phone on the way needs the mesh " +
+        "on. Off by default, because a phone running it can be seen to be running Clairix."
     CommsAction.WIPE -> "Erase everything Clairix holds, now." to
         "Type WIPE and press the button: notifications, keys in the secure hardware, the account on the relay and every file " +
         "go. The same wipe runs on the duress passcode or after too many wrong passcodes, if you turn those on in Settings."

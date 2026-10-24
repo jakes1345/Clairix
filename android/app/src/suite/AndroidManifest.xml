@@ -11,8 +11,9 @@
 
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- Detector self-test: the phone briefly advertises a fake AirTag payload that
-         the scanner must pick up. Nothing is advertised outside that test. -->
+    <!-- Advertising: the detector self-test (a fake AirTag payload for a few
+         seconds) and the offline mesh while the owner has it on. Nothing is
+         advertised otherwise. -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
@@ -160,6 +161,15 @@
             android:name=".nav.NavigationService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!--
+            Offline mesh: carries sealed COMMS envelopes phone to phone over Bluetooth
+            while the owner has it on (Comms menu, Offline mesh). Off by default.
+        -->
+        <service
+            android:name=".comms.mesh.MeshService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <service
             android:name=".ScanService"
