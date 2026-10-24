@@ -62,14 +62,17 @@ relay's storage shows public keys, queued envelopes with their recipient, size
 and time, and nothing about senders, lookups or activity.
 
 **What is on the phone when it is seized locked.** The location log, the
-timeline, the cell-tower baseline, vehicle trips, message bodies, keys and
-saved cards are sealed on disk under keys in the phone's secure hardware, so a
+timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the
+whole Comms database (contacts, messages, groups), the Comms settings, keys
+and saved cards are sealed on disk under keys in the phone's secure hardware, so a
 copy of the app's files is ciphertext. The app lock wipes after a run of wrong
 passcodes (three by default; you can choose the number, or none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
 Clairix" page wipes on demand. Locking collapses every notification into
 "Unlock to read", stops read receipts, disarms a card armed for NFC readers,
-and every screen is kept out of screenshots and the recents thumbnail.
+and every screen is kept out of screenshots and the recents thumbnail. History
+older than the retention you choose (30 days by default) is deleted, so there
+is less to give up in the first place.
 
 **What you install and download.** Releases, offline map graphs and work-zone
 files are signed with the project's Ed25519 key, and the app refuses a map or
@@ -80,10 +83,14 @@ Certificates page can pin the relay's key so that a certificate from a
 compelled authority is refused too.
 
 **Where you go.** Routing runs from map files on the phone, so directions
-keep working with no connection. The map's background tiles and address search
-come from OpenStreetMap's servers when you are online, which see your IP
-address and the area you are looking at; the GPS track never leaves the phone,
-and a trip's first 500 m and final approach are never reported to traffic.
+keep working with no connection, and so does searching for a road: the map's
+road names are indexed on the phone, and a dropped pin is named after the
+nearest road from the same map, so a destination is never sent anywhere to be
+found or named. Searching online for an address or a place is a separate tap
+that says it sends the text to OpenStreetMap. The map's background tiles come
+from OpenStreetMap's servers when you are online, which see your IP address and
+the area you are looking at; the GPS track never leaves the phone, and a trip's
+first 500 m and final approach are never reported to traffic.
 
 ### What it cannot do
 
@@ -105,26 +112,35 @@ Read this part twice.
   tower; it cannot hide you from a real one. Nothing an app can do changes
   this. Airplane mode, or leaving the phone behind, is the only answer.
 - **Traffic analysis.** Anyone watching the network sees that your phone
-  talks to the relay and when. Envelopes are padded to a few fixed sizes, but
-  there is no cover traffic and no mixing network yet, so timing can still
-  pair a sender with a recipient for someone watching both ends. The relay's
+  talks to the relay and when. Envelopes are padded to a few fixed sizes, and
+  "Cover traffic" (Comms settings, off by default) sends envelopes nobody
+  reads to random contacts at random intervals, so the real ones are not the
+  only traffic there is. There is no mixing network, so someone watching both
+  ends can still pair a sender with a recipient by timing. The relay's
   operator, or the platform under it, could capture live requests and see the
   address each one came from and which account fetched a batch of tokens.
   None of this is written down, but it is possible while a request is in
-  flight. If your IP address matters, use Tor or a VPN.
+  flight. If your IP address matters, use Tor or a VPN. A call hands your
+  address to the contact's phone, answered or not, unless "Relay-only calls"
+  is on.
 - **One relay.** There is one relay, on one platform. An order can shut it
-  down or make it refuse you; it cannot make it read your messages. Several
-  independent relays and a mesh for when there is no network are the next
-  phase, not this one.
+  down or make it refuse you; it cannot make it read your messages. The
+  operator can publish other addresses the same relay answers at, and the
+  app falls back to them when the first is blocked (unless you have pinned
+  the relay's key, in which case only the pinned address is used); those are
+  doors to one relay, not several relays. Independent relays and a mesh for
+  when there is no network are the next phase, not this one.
 - **Your contacts' phones.** A delivered message is theirs. A contact whose
   phone is compromised or seized unlocked gives up every conversation with
   them.
 - **Detection is best-effort.** No app finds every camera, tracker or piece
   of spyware. A finding is a reason to look, not proof.
-- **Not yet encrypted at rest:** the unlock ledger and the app's settings
-  files. The keys that seal the rest are not bound to the phone being
-  unlocked, because the scanner has to write while the keyguard is up; code
-  running as the app on an unlocked phone can read what the app can.
+- **The keys are not bound to the phone being unlocked.** The scanner has
+  to write while the keyguard is up, so the keys that seal the records work
+  while the phone is locked; code running as the app on an unlocked phone
+  can read what the app can. The settings files (thresholds, the sleep
+  window, the passcode's verifier, TLS pins) are not encrypted; they hold
+  settings, not records.
 - **No independent audit.** vodozemac has been audited. Clairix has not.
   `docs/SECURITY-FINDINGS.md` is the running list of what has been found,
   what is fixed and what is still open.
@@ -170,12 +186,23 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
 - **Hide names and previews in notifications** (Comms settings, on by
   default once a passcode is set): notifications name nobody and quote
   nothing.
+- **Relay-only calls** (Comms settings): call audio always goes through the
+  relay's TURN server, so a contact never learns your IP address from a
+  call. Off by default; a call cannot connect while the relay has no call
+  servers.
+- **Cover traffic** (Comms settings): envelopes nobody reads, to random
+  contacts at random intervals while the background connection is on. Off by
+  default; costs a little data and battery.
 - **Refuse the relay if its key changes** (Phone check → Certificates): pins
   the relay's TLS key. Off by default because the relay's key rotates with its
   certificate; turn it on if you would rather lose the relay than trust a
   new certificate without checking.
 - **Wipe after N wrong passcodes** (Settings → App lock): 1, 3, 5, 10 or
   never.
+- **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
+  or forever. 30 by default. The location log, the timeline, vehicle trips
+  and the unlock ledger older than that are deleted; the cell-tower baseline
+  is kept.
 - **Resume scanning after reboot** needs "Allow all the time" location;
   without it, scanning waits until you open the app.
 
@@ -195,8 +222,11 @@ cd Clairix/android
 ```
 
 Every push also builds the debug APKs in CI (Actions → Android APK →
-`clairix-debug-apk`). Editions, variants, release signing and how to cut a
-release are in [`android/README.md`](android/README.md); the relay is in
+`clairix-debug-apk`), and builds the app twice on two machines, failing
+unless the two builds agree. Editions, variants, release
+signing and how to cut a release are in
+[`android/README.md`](android/README.md), which also says how to check a
+published release against the source; the relay is in
 [`comms-worker/README.md`](comms-worker/README.md); the crypto crate in
 [`comms-crypto`](comms-crypto).
 

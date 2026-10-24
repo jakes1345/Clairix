@@ -3,15 +3,21 @@ package app.clairix.comms
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
+import net.zetetic.database.sqlcipher.SQLiteDatabase
+import net.zetetic.database.sqlcipher.SQLiteOpenHelper
 
 /**
- * Contacts, conversations and the outbox, in the app's private SQLite database.
- * Message bodies are encrypted under the Keystore key; contact keys, numbers,
- * timestamps and status are plain so the lists can be queried.
+ * Contacts, conversations and the outbox, in the app's private database.
+ *
+ * The database is SQLCipher, every page encrypted under a key [CommsDb] makes
+ * and keeps wrapped by the Keystore, so contact keys, numbers, timestamps and
+ * status can be queried as plain columns while the file itself is ciphertext.
+ * Message bodies are encrypted once more under the Keystore key, as they were
+ * before the file was.
  */
-class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext, DB_NAME, null, DB_VERSION) {
+class CommsStore(context: Context) : SQLiteOpenHelper(
+    context.applicationContext, CommsDb.NAME, CommsDb.password(context, DB_VERSION), null, DB_VERSION, 0, null, null, false
+) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -1024,7 +1030,6 @@ class CommsStore(context: Context) : SQLiteOpenHelper(context.applicationContext
     }
 
     private companion object {
-        const val DB_NAME = "comms_e2ee.db"
         const val DB_VERSION = 6
     }
 }

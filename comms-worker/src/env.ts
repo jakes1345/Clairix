@@ -33,6 +33,12 @@ export interface Env {
    * other host is used only once the phone has echoed a code sent through it.
    */
   PUSH_HOSTS?: string;
+  /**
+   * Other addresses this same relay answers at (a second domain, the
+   * workers.dev name), comma-separated https origins. Phones keep them and
+   * try them when the address they registered at stops answering.
+   */
+  RELAY_ALTERNATES?: string;
 }
 
 /** A JSON response with the headers every API reply carries. */

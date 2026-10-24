@@ -342,6 +342,13 @@ export interface IceServer {
 export const STUN_ONLY: IceServer[] = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 /** TURN credentials are minted for each request and live this long: long enough for a long call, no more. */
 export const TURN_TTL_S = 2 * 60 * 60;
+/**
+ * TURN credentials an account may mint an hour: one per call attempt, so a
+ * person never meets it, kept to the hour like every slow allowance so the
+ * mailbox records no moment at which a call was placed.
+ */
+export const TURN_PER_HOUR = 30;
+export const TURN_BURST = 30;
 
 /** The ICE servers in a Cloudflare Realtime generate-ice-servers response. */
 export function parseIceServers(body: unknown): IceServer[] {

@@ -80,6 +80,7 @@ import app.clairix.security.LockScreen
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
+import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import app.clairix.analysis.Report
 import app.clairix.detect.BleNames
@@ -243,8 +244,15 @@ class MainActivity : AppCompatActivity() {
             // enrolment tripwire is tested once per launch — Keystore work, off the
             // main thread. Each publishes straight into the Registry.
             UnlockLedger.init(this)
+            lifecycleScope.launch {
+                // A card the guard disarmed (screen off, time up) while this screen
+                // is up: back to reader mode, as STOP would have done.
+                Registry.emulating.collect { if (it == null) applyNfcMode() }
+            }
             ScreenRecordingMonitor.start(this, windowManager)
             lifecycleScope.launch(Dispatchers.IO) { runCatching { BiometricTripwire.check(applicationContext) } }
+            // History past the owner's retention goes at each start too, scanning or not.
+            lifecycleScope.launch(Dispatchers.IO) { runCatching { HistoryRetention.apply(applicationContext) } }
 
             // The comms-only build declares no NFC permission or HCE service, so its
             // adapter stays null and every NFC path below is a no-op. The Play
@@ -673,10 +681,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Registry.setEmulating(ArmedCard(card.id, card.label))
+        EmulationGuard.watch(this)
         applyNfcMode()
     }
 
     private fun stopEmulation() {
+        EmulationGuard.unwatch(this)
         CardEmulationBridge.clear()
         clearHceAids()
         Registry.setEmulating(null)

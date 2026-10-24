@@ -1,0 +1,6 @@
+# The toolchain every build of the crate uses, on a developer's machine and in
+# CI alike, so two builds of one commit come out the same. Bump deliberately.
+[toolchain]
+channel = "1.97.0"
+targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
+profile = "minimal"

@@ -16,6 +16,8 @@ import {
   tokenBatchExpiry,
   TRIP_RE,
   TURN_TTL_S,
+  TURN_PER_HOUR,
+  TURN_BURST,
   type IceServer,
   type TokenKind,
 } from "./comms-logic";
@@ -88,7 +90,7 @@ export { IncidentCache, Mailbox, Traffic };
  *                                                            for this request alone
  * ClairixCoin (each relay is its own coin community; balances live in the mailboxes):
  *   GET    /v1/coin/balance                                → {balance, symbol: "AC"}
- *   POST   /v1/coin/pay        {to, amount, note?}         → {txid, balance, ok}: moves coins to a contact
+ *   POST   /v1/coin/pay        {to, amount, note?, txid?}  → {txid, balance, ok}: moves coins to a contact; a repeat with the same txid moves nothing twice
  *   GET    /v1/coin/history                                → {txs: [...]}, newest first
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
@@ -130,7 +132,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, "") || "/";
 
   if (request.method === "GET" && path === "/") {
-    return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers." });
+    return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers.", alternates: alternates(env) });
   }
 
   let bodyText = "";
@@ -322,6 +324,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/turn" && request.method === "GET") {
     const allowed = await me.rateOk("turn", Mailbox.TURN_LIMIT);
     if (!allowed.ok) throw new HttpError(429, "Too many requests; try again in a minute", allowed.retryAfter);
+    const hourly = await me.allowanceOk("turn", TURN_PER_HOUR, TURN_BURST);
+    if (!hourly.ok) throw new HttpError(429, "Too many call setups this hour; try again later", hourly.retryAfter);
     // Minted for this request and handed to this caller only: no two phones, and
     // no two calls, ever share TURN credentials.
     const servers = await iceServers(env);
@@ -337,7 +341,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/coin/pay" && request.method === "POST") {
     const allowed = await me.rateOk("pay", Mailbox.PAY_LIMIT);
     if (!allowed.ok) throw new HttpError(429, "Too many payments; try again in a minute", allowed.retryAfter);
-    const body = parseJson<{ to?: unknown; amount?: unknown; note?: unknown }>(bodyText);
+    const body = parseJson<{ to?: unknown; amount?: unknown; note?: unknown; txid?: unknown }>(bodyText);
     const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
     if (!to) throw new HttpError(400, "to must be a Clairix number");
     if (to === profile.number) throw new HttpError(400, "You cannot pay yourself");
@@ -346,7 +350,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
     // Whether a number exists is not told to anyone; a payment to one that does not is refused like any other.
     if (!(await them.profile())) throw new HttpError(400, "Payment refused");
-    const txid = crypto.randomUUID();
+    // The phone names the payment, so a request it had to repeat (the answer
+    // lost on the network) is the same payment: the debit and the credit are
+    // each made once per txid, and a repeat gets the balance as it stands.
+    const txid = typeof body.txid === "string" && TXID_RE.test(body.txid) ? body.txid.toLowerCase() : crypto.randomUUID();
     const debited = await me.debit(to, amount, txid, note);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
     try {
@@ -649,6 +656,23 @@ async function refreshWzdx(env: Env, now: number): Promise<void> {
 
 const COIN_SYMBOL = "AC";
 const COIN_NOTE_MAX = 140;
+
+/**
+ * The other addresses this relay answers at, from RELAY_ALTERNATES: https
+ * origins only, trimmed, at most eight. A phone that registered at one address
+ * keeps these and tries them when that address stops answering (a block, a
+ * domain seizure); with the relay's key pinned it stays on the pinned one.
+ */
+function alternates(env: Env): string[] {
+  return (env.RELAY_ALTERNATES ?? "")
+    .split(",")
+    .map((s) => s.trim().replace(/\/+$/, ""))
+    .filter((s) => /^https:\/\/[^\s/]+$/.test(s))
+    .slice(0, 8);
+}
+
+/** A payment id the phone chose: a UUID, so nothing else names two payments alike. */
+const TXID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A whole number of coins between 1 and the single-transfer cap, or a 400. */
 function coinAmount(raw: unknown): number {

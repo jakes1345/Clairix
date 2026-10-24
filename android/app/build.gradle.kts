@@ -59,6 +59,19 @@ val cargoNdkBuild by tasks.registering(Exec::class) {
             ?: throw GradleException("No Android NDK found: set ANDROID_NDK_HOME or install one under \$ANDROID_HOME/ndk")
         environment("ANDROID_NDK_HOME", ndk.absolutePath)
         logger.lifecycle("cargo-ndk using NDK at ${ndk.absolutePath}")
+        // rustc writes the absolute paths of the crate and of Cargo's registry
+        // into the library (panic locations, debug info), so a build from any
+        // other directory would differ for no reason. Mapped to fixed names;
+        // .github/workflows/android.yml checks that none is left. cargo-ndk
+        // passes its own flags through a linker wrapper, not RUSTFLAGS, so
+        // these are not trampled.
+        fun fixed(f: File): String = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+        val cargoHome = System.getenv("CARGO_HOME")?.takeIf { it.isNotBlank() }?.let { File(it) }
+            ?: File(System.getProperty("user.home"), ".cargo")
+        val remap = "--remap-path-prefix=${fixed(rustCrate)}=/comms-crypto " +
+            "--remap-path-prefix=${fixed(cargoHome)}=/cargo"
+        val flags = System.getenv("RUSTFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $remap" } ?: remap
+        environment("RUSTFLAGS", flags)
     }
     commandLine(
         listOf("cargo", "ndk") + rustAbis.flatMap { listOf("-t", it) } +
@@ -115,6 +128,32 @@ android {
     namespace = "app.clairix"
     compileSdk = 35
 
+    // The NDK cargo-ndk builds with, so the Android Gradle plugin has a strip
+    // tool. Without one it packages every native library as it is, debug info
+    // and symbol tables included ("Unable to strip the following libraries");
+    // 3.0.0 beta 2 shipped that way. Stripping also makes the libraries the
+    // same from one build to the next: LLVM numbers the functions it outlines
+    // for size in an order that varies, and only the local symbol names
+    // differ, which the strip removes.
+    resolveNdkDir()?.let { ndk ->
+        ndkPath = ndk.absolutePath
+        // The plugin checks the path against its own default ndkVersion and
+        // refuses a mismatch ("[CXX1100] android.ndkVersion is [27.0.x] but
+        // android.ndkPath refers to a different version"), so it is told the
+        // version that is actually there.
+        val props = Properties()
+        ndk.resolve("source.properties").takeIf { it.isFile }?.inputStream()?.use { props.load(it) }
+        props.getProperty("Pkg.Revision")?.trim()?.takeIf { it.isNotEmpty() }?.let { ndkVersion = it }
+    }
+
+    // No dependency-metadata block in the APK or bundle: it is a Google-signed
+    // blob nobody but Google can read, and a build that is to be reproduced
+    // should carry nothing that cannot be accounted for.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     defaultConfig {
         applicationId = "app.clairix"
         minSdk = 31
@@ -123,8 +162,8 @@ android {
         // downloaded maps, work zones and release checksums against. Empty in
         // a checkout that has not run keygen; a release build refuses that below.
         buildConfigField("String", "ASSET_PUBKEY", "\"$assetPublicKey\"")
-        versionCode = 22
-        versionName = "3.0.0-beta.2"
+        versionCode = 23
+        versionName = "3.0.0-beta.3"
     }
 
     // Two flavour dimensions, edition first, so variants read <edition><Tier>:
@@ -288,6 +327,14 @@ dependencies {
     // a distributor of the owner's choosing (for example the ntfy app). No Google
     // service is involved anywhere.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18 and
+    // later demand compileSdk 36 and so a newer Android Gradle plugin; 4.17 is
+    // the newest that builds against 35.
+    implementation("net.zetetic:sqlcipher-android:4.17.0")
+    // SQLCipher's database and open-helper classes implement androidx.sqlite's
+    // support interfaces, which its POM lists at runtime scope only; the Kotlin
+    // compiler needs them on the compile classpath to resolve the supertypes.
+    implementation("androidx.sqlite:sqlite:2.6.2")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("com.google.zxing:core:3.5.4")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

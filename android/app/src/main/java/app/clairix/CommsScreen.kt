@@ -2190,6 +2190,20 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 onCheckedChange = { on -> hidePreviews = on; CommsRepository.setHidePreviews(on) },
                 subtitle = "Notifications say only that a message, a changed safety number or a missed call is waiting, naming nobody and quoting nothing, for a phone that is sometimes in other hands while unlocked. On by default once a passcode is set. Whenever the app locks, the notifications already showing collapse to one \"unlock to read\" either way."
             )
+            var relayOnlyCalls by remember { mutableStateOf(CommsRepository.relayOnlyCalls()) }
+            ToggleRow(
+                title = "Relay-only calls",
+                checked = relayOnlyCalls,
+                onCheckedChange = { on -> relayOnlyCalls = on; CommsRepository.setRelayOnlyCalls(on) },
+                subtitle = "Call audio always goes through the relay's TURN server, so a contact you call, or who calls you, never learns this phone's network address, and neither does anyone holding their phone. Adds a little delay, and a call cannot connect while the relay has no call servers."
+            )
+            var coverTraffic by remember { mutableStateOf(CommsRepository.coverTraffic()) }
+            ToggleRow(
+                title = "Cover traffic",
+                checked = coverTraffic,
+                onCheckedChange = { on -> coverTraffic = on; CommsRepository.setCoverTraffic(on) },
+                subtitle = "While the background connection is on, sends a sealed envelope of random size to a random contact every twenty minutes or so; their phone drops it unread. To the relay and to anyone watching the network, this phone then messages its contacts at a steady rate whether or not it has anything to say. Uses a little data and battery; off by default."
+            )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Push wake-ups", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)

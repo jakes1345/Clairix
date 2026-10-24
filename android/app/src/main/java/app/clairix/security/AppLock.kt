@@ -7,7 +7,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import app.clairix.CardEmulationBridge
+import app.clairix.EmulationGuard
 import app.clairix.Registry
 import app.clairix.comms.CommsNotifications
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -295,8 +295,7 @@ object AppLock {
         _locked.value = true
         Registry.lockVault()
         appContext?.let { app ->
-            runCatching { CardEmulationBridge.disarm(app) }
-            Registry.setEmulating(null)
+            EmulationGuard.disarm(app)
             runCatching { CommsNotifications.redact(app) }
         }
     }

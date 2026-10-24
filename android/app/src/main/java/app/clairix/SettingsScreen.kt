@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.Report
 import app.clairix.security.AppLock
+import app.clairix.security.HistoryRetention
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -633,6 +634,21 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
+                    var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
+                    SChoiceRow(
+                        title = "Keep history for",
+                        subtitle = "The location log, the timeline, vehicle trips and the unlock ledger older than this are deleted: now, at each start, and every quarter hour while scanning. What is gone cannot be taken from the phone. The cell-tower baseline is kept: it is what normal is measured against.",
+                        choices = HistoryRetention.CHOICES,
+                        selected = retentionDays,
+                        label = ::retentionLabel,
+                        onSelect = { choice ->
+                            retentionDays = choice
+                            scope.launch(Dispatchers.IO) {
+                                HistoryRetention.setDays(context, choice)
+                                HistoryRetention.apply(context)
+                            }
+                        }
+                    )
                     PrimaryButton(
                         "Export evidence",
                         onClick = {
@@ -683,8 +699,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                             "Detection data stays on this phone. Location history, device identifiers, cell tower " +
                                 "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
                                 " are stored locally, sealed under a key in this phone's secure hardware, and never " +
-                                "uploaded. The map downloads tiles from OpenStreetMap and sends address searches to its " +
-                                "Nominatim service; both see your IP address and the area you're looking at. Offline maps " +
+                                "uploaded. The map downloads tiles from OpenStreetMap, which sees your IP address and the " +
+                                "area you're looking at; a place search runs on the phone over the offline map's road names " +
+                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps " +
                                 "and work zones come signed from GitHub. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
                                 "phone only when you export it."
@@ -722,6 +739,11 @@ private fun ThresholdCard(
             scale.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = c.textSubtle) }
         }
     }
+}
+
+private fun retentionLabel(days: Int): String = when (days) {
+    HistoryRetention.FOREVER -> "Forever"
+    else -> "$days days"
 }
 
 private fun wipeAfterLabel(attempts: Int): String = when (attempts) {

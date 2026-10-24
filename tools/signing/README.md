@@ -21,15 +21,30 @@ checking a download can see it:
 
 ```sh
 python3 -m pip install -r tools/signing/requirements.txt
-python3 tools/signing/keygen.py
+python3 tools/signing/keygen.py --gh-secret jakes1345/Clairix
 ```
 
-`keygen.py` writes the two public files above (commit them) and prints the
-secret seed once, base64. Put it in the repository secret `ASSET_SIGNING_KEY`
-(Settings → Secrets and variables → Actions) and nowhere else. Keep a copy
-somewhere safe: a phone built with one public key accepts nothing signed by
-another, so losing the key means a new app release before maps can update
-again. Rotating it is the same procedure, followed by an app release.
+Run this yourself, in your own terminal, signed in to the GitHub CLI (`gh
+auth login`) as an administrator of the repository. `keygen.py` writes the
+two public files above (commit them) and hands the secret seed to `gh secret
+set` on its standard input, so it is never printed, never on a command line,
+never in a clipboard. Without `--gh-secret` it prints the seed once instead,
+for pasting into Settings → Secrets and variables → Actions by hand.
+
+The seed must not pass through a browser extension, a chat, an AI session or
+anything else that keeps a transcript: whatever sees it can sign releases and
+map files as you, and a copy in a log is a copy you cannot take back. The
+public files are safe anywhere; the seed is safe in the GitHub secret, which
+Actions can use but nobody can read back, and in one offline copy of your
+own if you want to survive losing the secret. A phone built with one public
+key accepts nothing signed by another, so a lost key means a new key
+(`--force`) and a new app release before maps can update again. Rotating it
+is the same procedure, followed by an app release.
+
+Who can get at the secret afterwards: anyone who can change a workflow in
+this repository, since a workflow runs with the secrets it is given. That is
+the repository's administrators, so keep that list short and under two-factor
+authentication.
 
 Without the secret, the Maps, Work zones and Release workflows fail rather
 than publish unsigned files. Without the public key file, a release build of
@@ -48,7 +63,7 @@ A `.sig` is one line: the 64-byte Ed25519 signature, base64 without padding.
 ## Checking a release by hand
 
 ```sh
-base64 -d SHA256SUMS.txt.sig > sums.sig   # add trailing '=' padding first if base64 complains
+sed 's/$/==/' SHA256SUMS.txt.sig | base64 -d > sums.sig   # the .sig is unpadded; base64 -d wants the '=='
 openssl pkeyutl -verify -pubin -inkey android/asset-signing.pem -rawin -in SHA256SUMS.txt -sigfile sums.sig
 sha256sum -c --ignore-missing SHA256SUMS.txt
 ```

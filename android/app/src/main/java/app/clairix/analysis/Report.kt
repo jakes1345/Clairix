@@ -47,10 +47,16 @@ object Report {
         // mail client reads the attachment when it actually sends, which offline can
         // be well after the share, and deleting the file underneath it lost the report.
         val now = System.currentTimeMillis()
-        context.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("clairix_") && f.name.endsWith(".txt") }
+        // Reports live in a folder of their own, the only cache folder the file
+        // provider exposes besides the camera's; earlier versions wrote them at
+        // the cache root, where a share target could reach everything else too.
+        val dir = File(context.cacheDir, "reports").also { it.mkdirs() }
+        val isReport = java.io.FileFilter { f -> f.isFile && f.name.startsWith("clairix_") && f.name.endsWith(".txt") }
+        context.cacheDir.listFiles(isReport)?.forEach { it.delete() }
+        dir.listFiles(isReport)
             ?.filter { now - it.lastModified() > EXPORT_RETENTION_MS }
             ?.forEach { it.delete() }
-        val file = File(context.cacheDir, "clairix_${now}.txt")
+        val file = File(dir, "clairix_${now}.txt")
         file.writeText(text)
         val uri: Uri = FileProvider.getUriForFile(
             context, "${context.packageName}.fileprovider", file

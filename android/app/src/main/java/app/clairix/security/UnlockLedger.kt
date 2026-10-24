@@ -6,7 +6,6 @@ import android.app.admin.DevicePolicyManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.ComponentName
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -19,11 +18,14 @@ import app.clairix.Alert
 import app.clairix.EventKind
 import app.clairix.Registry
 import app.clairix.Severity
+import app.clairix.Store
 import app.clairix.UnlockEvent
 import app.clairix.UnlockKind
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -35,7 +37,7 @@ import java.util.concurrent.TimeUnit
  * A durable record of every time the phone was unlocked, failed to unlock, or had
  * its lock changed, and the "used while you slept" judgement on top of it.
  *
- * Two sources write the same table:
+ * Two sources write the same ledger:
  *
  * - [UnlockAdminReceiver], a device admin with only the watch-login policy. The
  *   platform calls it on every lock-screen success, failure and credential
@@ -49,17 +51,30 @@ import java.util.concurrent.TimeUnit
  *   unlocks it would have caught out of the usage log. Needs the owner to grant
  *   usage access ([usageAccessIntent]).
  *
- * Rows are unique on (ts, event): a backfill never duplicates what it has read
+ * Rows are unique on (ts, kind): a backfill never duplicates what it has read
  * before, and the two sources do not describe the same moment twice.
  *
- * Writes go through a single-thread executor so the admin receiver — which is
- * called on the main thread — never blocks on the disk.
+ * The ledger is a [Store] document, sealed on disk under a hardware key like the
+ * scanner's other records: when the phone was unlocked, night after night, is a
+ * pattern of the owner's life, and a copy of the app's files must not give it
+ * up. Versions before this one kept it in a plain SQLite database; that file is
+ * read once into the store on first use and then deleted.
+ *
+ * Writes go through a single-thread executor so the admin receiver, which is
+ * called on the main thread, never blocks on the disk.
  */
 object UnlockLedger {
 
-    internal const val DB_NAME = "unlock_ledger.db"
-    private const val DB_VERSION = 1
-    private const val TABLE = "unlock_events"
+    /** The sealed document. Rows are `[id, ts, kind, extra]`, oldest first. */
+    internal const val FILE = "unlock_ledger.json"
+    private const val KEY_ROWS = "rows"
+    private const val KEY_NEXT_ID = "next_id"
+    /** Rows kept: a year or more of a busy phone. Past it, the oldest go. */
+    const val CAP = 50_000
+
+    /** The plain database versions before this one kept; migrated on first use. */
+    internal const val LEGACY_DB_NAME = "unlock_ledger.db"
+    private const val LEGACY_TABLE = "unlock_events"
 
     internal const val PREFS_NAME = "unlock_ledger"
     private const val K_SLEEP_START = "sleep_start_min"
@@ -83,44 +98,73 @@ object UnlockLedger {
     val latest: UnlockEvent? get() = _recent.value
 
     @Volatile private var appContext: Context? = null
-    @Volatile private var helper: Db? = null
 
-    private class Db(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
-        override fun onCreate(db: SQLiteDatabase) {
-            // The CHECK is built from the enum so the two cannot drift apart.
-            val kinds = UnlockKind.values().joinToString(",") { "'${it.name}'" }
-            db.execSQL(
-                "CREATE TABLE $TABLE (" +
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "ts INTEGER NOT NULL, " +
-                    "event TEXT NOT NULL CHECK(event IN ($kinds)), " +
-                    "extra TEXT, " +
-                    "UNIQUE(ts, event) ON CONFLICT IGNORE)"
-            )
-            db.execSQL("CREATE INDEX idx_${TABLE}_ts ON $TABLE(ts)")
-        }
+    /** Guards [store], [held] and the document's contents; the lock [Store] is told about. */
+    private val lock = Any()
+    @Volatile private var store: Store? = null
+    /** "ts:kind" of every row held, so neither source writes a moment already written. */
+    private val held = HashSet<String>()
 
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            db.execSQL("DROP TABLE IF EXISTS $TABLE")
-            onCreate(db)
-        }
+    /** The legacy database, opened only to read it into the store. */
+    private class LegacyDb(context: Context) : SQLiteOpenHelper(context, LEGACY_DB_NAME, null, 1) {
+        override fun onCreate(db: SQLiteDatabase) = Unit
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
-    /** Opens the ledger and publishes its newest row. Idempotent; cheap after the first call. */
+    /** Remembers the app and publishes the newest row, off the calling thread. Idempotent; cheap. */
     fun init(context: Context) {
-        if (helper != null) return
-        synchronized(this) {
-            if (helper != null) return
-            val app = context.applicationContext
-            appContext = app
-            helper = Db(app)
-        }
+        if (appContext == null) appContext = context.applicationContext
+        if (store != null) return
         io.execute { runCatching { newest()?.let { publish(it) } } }
     }
 
-    private fun db(): SQLiteDatabase? = helper?.writableDatabase
+    private fun key(ts: Long, kind: String) = "$ts:$kind"
+
+    /**
+     * The open store and its rows, opening (and migrating) on first use. Caller
+     * holds [lock]. Null before [init]. File I/O and a Keystore decrypt the
+     * first time; the document stays in memory after that.
+     */
+    private fun ledgerLocked(): Pair<Store, JSONArray>? {
+        val app = appContext ?: return null
+        val s = store ?: Store(app, FILE).also { fresh ->
+            val root = fresh.json
+            val arr = root.optJSONArray(KEY_ROWS) ?: JSONArray().also { root.put(KEY_ROWS, it) }
+            held.clear()
+            for (i in 0 until arr.length()) arr.optJSONArray(i)?.let { held += key(it.optLong(1), it.optString(2)) }
+            store = fresh
+            migrateLocked(app, fresh)
+        }
+        val root = s.json
+        val arr = root.optJSONArray(KEY_ROWS) ?: JSONArray().also { root.put(KEY_ROWS, it) }
+        return s to arr
+    }
+
+    /**
+     * Reads the rows a version before this one kept in a plain SQLite database
+     * into the sealed store, writes the store, and deletes the database. Caller
+     * holds [lock]; [store] is set.
+     */
+    private fun migrateLocked(app: Context, s: Store) {
+        if (!app.getDatabasePath(LEGACY_DB_NAME).exists()) return
+        runCatching {
+            val helper = LegacyDb(app)
+            try {
+                helper.readableDatabase.query(LEGACY_TABLE, arrayOf("ts", "event", "extra"), null, null, null, null, "ts ASC").use { c ->
+                    while (c.moveToNext()) {
+                        val kind = runCatching { UnlockKind.valueOf(c.getString(1)) }.getOrNull() ?: continue
+                        insertLocked(c.getLong(0), kind, if (c.isNull(2)) null else c.getString(2))
+                    }
+                }
+            } finally {
+                helper.close()
+            }
+            s.flush()
+        }
+        runCatching { app.deleteDatabase(LEGACY_DB_NAME) }
+    }
 
     // ── Writing ─────────────────────────────────────────────────────────────
 
@@ -138,17 +182,53 @@ object UnlockLedger {
         }
     }
 
-    /** Inserts one row; null when it was a duplicate or the database is unavailable. */
-    private fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = runCatching {
-        val db = db() ?: return null
-        val values = ContentValues(3).apply {
-            put("ts", ts)
-            put("event", kind.name)
-            put("extra", extra)
+    /** Inserts one row and schedules the write; null when it was a duplicate or the store is unavailable. */
+    private fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = synchronized(lock) {
+        val (s, _) = ledgerLocked() ?: return null
+        val event = insertLocked(ts, kind, extra) ?: return null
+        // The row is in memory; the sealed file follows within seconds, one
+        // write for a burst of rows, serialised under [lock] on the IO dispatcher.
+        s.touch(5_000L, guard = lock)
+        event
+    }
+
+    /** Appends a row, keeping (ts, kind) unique and the cap. Caller holds [lock]; the store is open. */
+    private fun insertLocked(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? {
+        val (s, arr) = ledgerLocked() ?: return null
+        if (!held.add(key(ts, kind.name))) return null
+        val root = s.json
+        val id = root.optLong(KEY_NEXT_ID, 1L)
+        root.put(KEY_NEXT_ID, id + 1)
+        arr.put(JSONArray().put(id).put(ts).put(kind.name).put(extra ?: JSONObject.NULL))
+        if (arr.length() > CAP + CAP / 10) {
+            // Trim in one go rather than removing the head row by row on every event.
+            val trimmed = JSONArray()
+            for (i in arr.length() - CAP until arr.length()) trimmed.put(arr.get(i))
+            root.put(KEY_ROWS, trimmed)
+            held.clear()
+            for (i in 0 until trimmed.length()) trimmed.optJSONArray(i)?.let { held += key(it.optLong(1), it.optString(2)) }
         }
-        val id = db.insert(TABLE, null, values)
-        if (id < 0) null else UnlockEvent(id, ts, kind, extra)
-    }.getOrNull()
+        return UnlockEvent(id, ts, kind, extra)
+    }
+
+    /** Deletes rows before [cutoff] and writes the ledger; returns how many. Blocking; call off the main thread. */
+    fun pruneOlderThan(cutoff: Long): Int = synchronized(lock) {
+        val (s, arr) = ledgerLocked() ?: return 0
+        val kept = JSONArray()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONArray(i) ?: continue
+            if (row.optLong(1) >= cutoff) kept.put(row)
+        }
+        val removed = arr.length() - kept.length()
+        if (removed > 0) {
+            s.json.put(KEY_ROWS, kept)
+            held.clear()
+            for (i in 0 until kept.length()) kept.optJSONArray(i)?.let { held += key(it.optLong(1), it.optString(2)) }
+            s.markDirty()
+            s.flush()
+        }
+        removed
+    }
 
     private fun publish(event: UnlockEvent) {
         // Rows arrive from the receiver and from a backfill in either order; only a newer one moves the pointer.
@@ -159,27 +239,34 @@ object UnlockLedger {
 
     // ── Reading ─────────────────────────────────────────────────────────────
 
-    /** Rows at or after [since], newest first. Blocking; empty before [init] or without a database. */
-    fun events(since: Long): List<UnlockEvent> = runCatching {
-        val db = db() ?: return emptyList()
-        val out = ArrayList<UnlockEvent>()
-        db.query(TABLE, arrayOf("id", "ts", "event", "extra"), "ts >= ?", arrayOf(since.toString()), null, null, "ts DESC").use { c ->
-            while (c.moveToNext()) {
-                val kind = runCatching { UnlockKind.valueOf(c.getString(2)) }.getOrNull() ?: continue
-                out += UnlockEvent(c.getLong(0), c.getLong(1), kind, if (c.isNull(3)) null else c.getString(3))
-            }
-        }
-        out
-    }.getOrDefault(emptyList())
+    private fun row(arr: JSONArray, i: Int): UnlockEvent? {
+        val row = arr.optJSONArray(i) ?: return null
+        val kind = runCatching { UnlockKind.valueOf(row.optString(2)) }.getOrNull() ?: return null
+        return UnlockEvent(row.optLong(0), row.optLong(1), kind, if (row.isNull(3)) null else row.optString(3))
+    }
 
-    private fun newest(): UnlockEvent? = runCatching {
-        val db = db() ?: return null
-        db.query(TABLE, arrayOf("id", "ts", "event", "extra"), null, null, null, null, "ts DESC", "1").use { c ->
-            if (!c.moveToFirst()) return null
-            val kind = runCatching { UnlockKind.valueOf(c.getString(2)) }.getOrNull() ?: return null
-            UnlockEvent(c.getLong(0), c.getLong(1), kind, if (c.isNull(3)) null else c.getString(3))
+    /** Rows at or after [since], newest first. Blocking; empty before [init]. Call off the main thread. */
+    fun events(since: Long): List<UnlockEvent> = synchronized(lock) {
+        val (_, arr) = ledgerLocked() ?: return emptyList()
+        val out = ArrayList<UnlockEvent>()
+        for (i in 0 until arr.length()) {
+            val e = row(arr, i) ?: continue
+            if (e.ts >= since) out += e
         }
-    }.getOrNull()
+        out.sortByDescending { it.ts }
+        out
+    }
+
+    private fun newest(): UnlockEvent? = synchronized(lock) {
+        val (_, arr) = ledgerLocked() ?: return null
+        var best: UnlockEvent? = null
+        for (i in 0 until arr.length()) {
+            val e = row(arr, i) ?: continue
+            val b = best
+            if (b == null || e.ts > b.ts) best = e
+        }
+        best
+    }
 
     /** Unlocks since [since] that fell inside the sleep window, newest first. */
     fun sleepAnomalies(since: Long): List<UnlockEvent> =
@@ -227,15 +314,14 @@ object UnlockLedger {
         val p = prefs(app)
         val now = System.currentTimeMillis()
         // Overlap the previous read by a minute: the platform's event stream is
-        // written a little behind real time, and UNIQUE(ts, event) absorbs repeats.
+        // written a little behind real time, and the (ts, kind) rule absorbs repeats.
         val from = p.getLong(K_BACKFILL_TS, 0L).let { if (it == 0L) now - BACKFILL_HORIZON_MS else it - 60_000L }
         val events = runCatching { usm.queryEvents(from, now) }.getOrNull() ?: return 0
         val e = UsageEvents.Event()
         var written = 0
         var newest: UnlockEvent? = null
-        val db = db() ?: return 0
-        db.beginTransaction()
-        try {
+        synchronized(lock) {
+            val (s, _) = ledgerLocked() ?: return 0
             while (events.hasNextEvent()) {
                 events.getNextEvent(e)
                 val kind = when (e.eventType) {
@@ -245,13 +331,13 @@ object UnlockLedger {
                     UsageEvents.Event.SCREEN_NON_INTERACTIVE -> UnlockKind.SCREEN_NON_INTERACTIVE
                     else -> continue
                 }
-                val row = insert(e.timeStamp, kind, "usage_stats") ?: continue
+                val added = insertLocked(e.timeStamp, kind, "usage_stats") ?: continue
                 written++
-                if (newest == null || row.ts > newest.ts) newest = row
+                val n = newest
+                if (n == null || added.ts > n.ts) newest = added
             }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
+            // One write for the whole batch, now, rather than a touch per row.
+            if (written > 0) s.flush()
         }
         p.edit().putLong(K_BACKFILL_TS, now).apply()
         newest?.let { publish(it) }
