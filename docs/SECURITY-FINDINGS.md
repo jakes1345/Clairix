@@ -364,6 +364,13 @@ one-time-key limits match the code.
 6. OTK-burn ordering and curve-rebind refusal in the crate (19, 20). *Done.*
 7. README with an explicit threat model. *Done.*
 
+Done since (PR #16): the known plate readers (Flock Safety and others, as
+mapped in OpenStreetMap by the DeFlock project and whoever else) extracted
+from each region's extract beside the road graph, signed with the same key,
+shown on the map, spoken 600 m ahead, counted per route and routed around by
+default (a detour worth 150 s per reader). The list is as complete as the
+map: an unmapped reader is not avoided, and the app says so.
+
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: independent relays, a mesh for no
 network, a mixing layer (cover traffic exists; mixing does not), place

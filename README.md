@@ -25,6 +25,7 @@ just as plainly, what it cannot do.
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online |
+| Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default |
 | See your car's health | Connects to the car over Bluetooth OBD and shows live engine data and trip history |
 | Track aircraft nearby | Plug in an SDR stick and see real aircraft on the map from their ADS-B broadcasts |
 
@@ -203,6 +204,12 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   or forever. 30 by default. The location log, the timeline, vehicle trips
   and the unlock ledger older than that are deleted; the cell-tower baseline
   is kept.
+- **Route around known plate readers** and **Say when one is ahead** (Drive,
+  route options): both on by default. The list is what OpenStreetMap has,
+  largely from the DeFlock project; a camera nobody has mapped is not on it,
+  so a route the app calls clear may not be. Avoiding one is worth a detour
+  of up to two and a half minutes to the router; the route card says how
+  many each route still passes.
 - **Resume scanning after reboot** needs "Allow all the time" location;
   without it, scanning waits until you open the app.
 

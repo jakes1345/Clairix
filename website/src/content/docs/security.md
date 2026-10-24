@@ -29,7 +29,7 @@ This is the complete list of destinations the app connects to, taken from the co
 | **Cloudflare TURN/STUN** | During a call that cannot connect directly | Call audio, encrypted end to end with DTLS-SRTP | Your IP address. Not the audio. |
 | **OpenStreetMap Nominatim** | Only when you choose "Search online instead". Road names on the offline map are searched on the phone, and a dropped pin is named after the nearest road on it, with nothing sent | The search text | Approximate location, your IP address |
 | **OpenStreetMap tile servers** | When you open the map | The coordinates of the map tiles you view | The area you are looking at, your IP address |
-| **GitHub Releases** | When you download an offline map region, or the work-zone list for it | The name of the region | Your IP address. The files are signed, and the app refuses one whose signature does not verify. |
+| **GitHub Releases** | When you download an offline map region, or the work-zone or plate-reader list for it | The name of the region | Your IP address. The files are signed, and the app refuses one whose signature does not verify. |
 | **An app you pick** (Android share sheet) | When you export a report or share an invite | Whatever you chose to share | Up to that app |
 
 </div>

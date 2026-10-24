@@ -46,7 +46,7 @@ jobs:
         run: python -m pip install -r tools/graph-builder/requirements.txt -r tools/signing/requirements.txt pytest==9.1.1
 
       - name: Test graph builder and signing tool
-        run: python -m pytest -q tools/graph-builder/test_build_graph.py tools/signing/test_sign.py
+        run: python -m pytest -q tools/graph-builder/test_build_graph.py tools/graph-builder/test_extract_cameras.py tools/signing/test_sign.py
 
       - name: Choose regions
         id: list
@@ -114,6 +114,15 @@ jobs:
           (cd "$RUNNER_TEMP" && sed 's#  .*#  region.osm.pbf#' region.osm.pbf.md5 | md5sum -c -)
           ls -l "$RUNNER_TEMP/region.osm.pbf"
 
+      # The plate readers (Flock and others) mapped in the same extract, as a small
+      # file beside the graph; the app shows them, warns of them and routes around them.
+      - name: Extract plate readers
+        env:
+          SLUG: ${{ steps.region.outputs.slug }}
+        run: |
+          mkdir -p dist
+          python3 tools/graph-builder/extract_cameras.py "$RUNNER_TEMP/region.osm.pbf" "dist/cameras-$SLUG.json.gz" --region "$SLUG"
+
       - name: Build graph
         env:
           SLUG: ${{ steps.region.outputs.slug }}
@@ -144,8 +153,8 @@ jobs:
           SLUG: ${{ steps.region.outputs.slug }}
           ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
         run: |
-          python tools/signing/sign.py "dist/graph-$SLUG.agr.gz.sha256"
-          python tools/signing/sign.py --verify android/asset-signing.pub "dist/graph-$SLUG.agr.gz.sha256"
+          python tools/signing/sign.py "dist/graph-$SLUG.agr.gz.sha256" "dist/cameras-$SLUG.json.gz"
+          python tools/signing/sign.py --verify android/asset-signing.pub "dist/graph-$SLUG.agr.gz.sha256" "dist/cameras-$SLUG.json.gz"
 
       - name: Report
         env:
@@ -177,11 +186,14 @@ jobs:
           name: Road graph ${{ steps.region.outputs.region }}
           body: |
             Road graph (format v2) for `${{ steps.region.outputs.region }}`, built from the Geofabrik extract
-            by run ${{ github.run_id }} of ${{ github.sha }}. Rebuilt daily. Map data (c) OpenStreetMap contributors, ODbL.
+            by run ${{ github.run_id }} of ${{ github.sha }}, with the plate readers (ALPR) mapped in the same
+            extract as cameras-<slug>.json.gz. Rebuilt daily. Map data (c) OpenStreetMap contributors, ODbL.
           files: |
             dist/graph-${{ steps.region.outputs.slug }}.agr.gz
             dist/graph-${{ steps.region.outputs.slug }}.agr.gz.sha256
             dist/graph-${{ steps.region.outputs.slug }}.agr.gz.sha256.sig
+            dist/cameras-${{ steps.region.outputs.slug }}.json.gz
+            dist/cameras-${{ steps.region.outputs.slug }}.json.gz.sig
           overwrite_files: true
           prerelease: true
           make_latest: false
