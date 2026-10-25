@@ -169,6 +169,21 @@ class RelayRoundTripTest {
             throw AssertionError("$label: the envelope decrypted")
         }
 
+        /** Polls the inbox (no socket) for the next envelope, decrypts and acks it. */
+        fun inboxOnce(): JSONObject {
+            val deadline = System.currentTimeMillis() + RECEIVE_S * 1000
+            while (System.currentTimeMillis() < deadline) {
+                val envs = relay.inbox()
+                if (envs.isNotEmpty()) {
+                    relay.ack(envs.map { it.id })
+                    val d = identity.decrypt(envs.first().data)
+                    return CommsWire.parse(String(d.plaintext, Charsets.UTF_8)) ?: throw AssertionError("$label: payload did not parse")
+                }
+                Thread.sleep(500)
+            }
+            throw AssertionError("$label: nothing arrived within $RECEIVE_S s")
+        }
+
         fun close() {
             socket?.close(1000, "test over")
             runCatching { relay.wipe() }
@@ -389,6 +404,88 @@ class RelayRoundTripTest {
         assertEquals(0, empty.tokenCount())
         empty.topUpTokens()
         assertTrue(empty.tokenCount() > 0)
+    }
+
+    /**
+     * The tokens the app fetches are blind: made on this phone, signed by the
+     * relay without seeing them, and checked against the key GET / publishes.
+     */
+    @Test
+    fun tokensAreBlindAndProvedAgainstThePublishedKey() {
+        val pool = MemoryTokenPool()
+        val pins = MemoryTokenKeyPins()
+        val client = RelayClient({ alice.identity }, { relayUrl }, { alice.number }, tokens = pool, tokenKeys = pins)
+        val info = client.info()
+        assertNotNull("the relay publishes blind-token keys", info.tokens)
+        val keys = info.tokens!!
+        assertEquals(setOf("delivery", "traffic", "report"), keys.keys.keys)
+        assertEquals(keys.keys, pins.get(relayUrl!!, keys.epoch))
+        patiently { client.topUpTokens() }
+        val held = pool.encode()
+        val tokens = org.json.JSONArray(held).let { a -> (0 until a.length()).map { a.getJSONObject(it).getString("t") } }
+        assertEquals(RelayClient.BLIND_TOKENS_BATCH, tokens.size)
+        assertTrue("blind tokens: ${tokens.first()}", tokens.all { it.startsWith("2.${keys.epoch}.") })
+        // They buy sends, once each.
+        patiently { client.send(bob.number!!, alice.encryptFor(bob, msg("blind"))) }
+        assertEquals("blind", bob.receive().payload.getString(CommsWire.F_BODY))
+        val http = OkHttpClient()
+        val spent = tokens.first { t -> pool.encode().let { !it.contains(t) } }
+        val again = http.newCall(
+            Request.Builder().url("$relayUrl/v1/send").header("X-Clairix-Token", spent)
+                .post(JSONObject().put("to", bob.number).put("envelope", "AAAA").toString().toRequestBody("application/json".toMediaType())).build()
+        ).execute().use { it.code }
+        assertEquals("a spent blind token is refused", 403, again)
+    }
+
+    /** A relay that issues under a key other than the one it publishes is refused, and nothing is added to the pool. */
+    @Test
+    fun tokensUnderAnotherKeyAreRefused() {
+        val pool = MemoryTokenPool()
+        val pins = MemoryTokenKeyPins()
+        val client = RelayClient({ alice.identity }, { relayUrl }, { alice.number }, tokens = pool, tokenKeys = pins)
+        val epoch = client.info().tokens!!.epoch
+        // As if the key first seen this epoch had been another one.
+        pins.put(relayUrl!!, epoch, mapOf("delivery" to "A".repeat(43), "traffic" to "B".repeat(43), "report" to "C".repeat(43)))
+        try {
+            client.topUpTokens()
+            fail("tokens under an unpinned key were accepted")
+        } catch (e: RelayException) {
+            assertEquals(RelayClient.TOKEN_KEY_MISMATCH, e.code)
+        }
+        assertEquals(0, client.tokenCount())
+    }
+
+    /**
+     * A contact on another relay, end to end over two real relays: set
+     * CLAIRIX_RELAY_B_URL to a second relay (two `wrangler dev` side by side on
+     * loopback admit each other; deployed relays need https addresses).
+     */
+    @Test
+    fun aContactOnAnotherRelayIsReachedThroughThisOne() {
+        val other = System.getenv("CLAIRIX_RELAY_B_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        assumeTrue("set CLAIRIX_RELAY_B_URL to a second relay", other != null)
+        val carol = Phone(other!!, secret!!, "Carol")
+        try {
+            val carolOrigin = RelayClient.originOf(other)!!
+            val aliceOrigin = RelayClient.originOf(relayUrl)!!
+            // Alice reaches Carol through her own relay, which forwards to Carol's.
+            val keys = carol.keys
+            val bundle = alice.relay.bundle(carol.number!!, fingerprint(keys.ed25519), carolOrigin)
+            assertEquals(keys.curve25519, bundle.curve25519)
+            alice.identity.startSession(keys, bundle.sessionKey)
+            val payload = CommsWire.withSender(msg("across relays"), CommsWire.Sender(alice.number!!, "Alice", alice.keys.ed25519, alice.keys.curve25519, alice.keys.sealing, alice.keys.signature))
+            alice.relay.topUpTokens()
+            alice.relay.send(carol.number!!, alice.identity.encrypt(keys, payload.toString().toByteArray()), bundle.claim, relay = carolOrigin)
+            val got = carol.inboxOnce()
+            assertEquals("across relays", got.getString(CommsWire.F_BODY))
+            // And back, through Carol's relay to Alice's.
+            carol.relay.topUpTokens()
+            val back = CommsWire.withSender(msg("and back"), CommsWire.Sender(carol.number!!, "Carol", keys.ed25519, keys.curve25519, keys.sealing, keys.signature)).put(CommsWire.F_RELAY, carolOrigin)
+            carol.relay.send(alice.number!!, carol.identity.encrypt(alice.keys, back.toString().toByteArray()), relay = aliceOrigin)
+            assertEquals("and back", alice.receive().payload.getString(CommsWire.F_BODY))
+        } finally {
+            carol.close()
+        }
     }
 
     @Test

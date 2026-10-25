@@ -128,9 +128,11 @@ Read this part twice.
   envelope arrive and leave, on a quiet relay there is little to mix with,
   and someone watching both ends for weeks can still correlate by volume. The relay's
   operator, or the platform under it, could capture live requests and see the
-  address each one came from and which account fetched a batch of tokens.
-  None of this is written down, but it is possible while a request is in
-  flight. If your IP address matters, use Tor or a VPN. A call hands your
+  address each one came from. None of this is written down, but it is
+  possible while a request is in flight. From 3.0.0 Beta 6 the tokens a send
+  spends are blind (RFC 9497, as Privacy Pass): the phone makes each one and
+  the relay signs it without seeing it, so not even a relay that recorded
+  every request can tell which account a send's token came from. If your IP address matters, use Tor or a VPN. A call hands your
   address to the contact's phone, answered or not, unless "Relay-only calls"
   is on.
 - **Relays.** Anyone can run a relay (comms-worker), and a contact on

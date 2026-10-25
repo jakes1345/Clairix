@@ -17,9 +17,11 @@ giving them your real number or your identity key.
   padded to a few fixed sizes, so a receipt, a call signal and a short text look
   alike) and a timestamp. Not the sender: a send is not signed. It spends a
   single-use delivery token that the sender's phone fetched earlier, in a
-  batch, over its signed channel. The relay keeps only each token's hash, in a
-  shard object that never learns which account it went to, so nothing stored
-  links an envelope to its sender. Never the content: envelopes are sealed to
+  batch, over its signed channel. Tokens are blind (see "Blind tokens" below):
+  the phone makes each one and the relay signs it without seeing it, so the
+  relay cannot tell which account a spent token was issued to, even while it
+  runs. All it keeps is a hash of each spent token, until its key is retired,
+  in a shard object that never learns an account. Never the content: envelopes are sealed to
   the recipient's sealing key with an anonymous box, and inside that sits an
   Olm double-ratchet message the relay could not read even if it opened the box.
 - Not when you were last here. A signed request leaves behind its nonce, kept
@@ -36,9 +38,10 @@ giving them your real number or your identity key.
   with no requester.
 - What it can still learn while running, if its operator (or the platform it
   runs on) captures live requests: the address a request comes from (the same
-  phone fetches tokens and sends, so use Tor or a VPN if that matters), and
-  which account fetched a batch of tokens, since the tokens are random values
-  the relay itself hands out rather than blind-signed ones. The first envelope
+  phone fetches tokens and sends, so use Tor or a VPN if that matters). Apps
+  from before 3.0.0 Beta 6 still fetch the old kind of token, random values the
+  relay makes, which a relay that recorded its own answers could match to the
+  account they went to. The first envelope
   of a new session also carries the claim ticket of the one-time key it was
   built on, which the relay handed to the sender's account with the key; that
   envelope is linkable to that lookup, as the lookup itself already showed who
@@ -67,8 +70,44 @@ TURN credentials are minted per call attempt, ten a minute and thirty an hour
 per account (the hour recorded as an hour, never the moment). A payment carries
 an id the phone chose, and a repeat under the same id moves nothing twice.
 
-Delivery tokens expire fourteen days after issue, plus up to twelve hours of
-random jitter, rounded to the hour. Each account may draw 1,000 an hour.
+Each account may draw 1,000 delivery tokens an hour.
+
+## Blind tokens
+
+From 3.0.0 Beta 6 every token is a blind token: RFC 9497 VOPRF over
+ristretto255 with SHA-512, the construction Privacy Pass uses for privately
+verifiable tokens (`src/tokens.ts`).
+
+1. The phone picks a random 32-byte input, blinds it, and sends only the
+   blinded element in `POST /v1/tokens {kind, blinded: [...]}` (signed, so the
+   hourly allowance applies to its account).
+2. The relay multiplies each element by its secret key for that kind of token
+   and returns the results with one DLEQ proof that it used the public key it
+   publishes at `GET /` (`tokens.keys`). It stores nothing.
+3. The phone checks the proof against that published key, the same for every
+   caller, and against the first key it saw that epoch; a relay that gave one
+   phone a key of its own (and so could recognise its tokens) is refused.
+4. Spending a token shows `2.<epoch>.<input>.<output>` in `X-Clairix-Token`.
+   The relay checks the output is what its key makes of the input and records
+   the token as spent; it never saw the input before, so it cannot tell whose
+   it was.
+
+Each kind (`delivery`, `traffic`, `report`) has its own key, so one kind cannot
+be spent as another. Keys live 14 days (an epoch) and tokens of the epoch
+before are still accepted, so a token is good for 14 to 28 days. Every key is
+derived from one secret: `TOKEN_KEY` if set (base64 of 32 random bytes), or
+one the relay makes on first use and keeps in its "relay-identity" object.
+Do not change it: phones refuse tokens under a key other than the first they
+saw in an epoch, so a changed key stops sends until the next epoch.
+
+The arithmetic is `voprf/`, a small Rust crate using the same `voprf` crate
+the app does, compiled to `src/voprf.wasm` and committed so the relay deploys
+without a Rust toolchain. `sh scripts/build-voprf.sh` rebuilds it (Rust 1.97.0
+with the wasm32 target), and CI fails if the committed file is not exactly
+what the source builds. Issuing 50 tokens costs the relay about 14 ms of CPU, checking one about 0.3 ms.
+
+Tokens from apps before Beta 6 (32 random bytes the relay made and stored by
+hash) are still accepted.
 
 ## One-time setup
 
@@ -344,7 +383,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
-| POST | `/v1/tokens` | `{count, kind?}` → `{tokens, expiresAt, kind}`: single-use tokens, `delivery` (default), `traffic` or `report` |
+| POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
 | POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there |
@@ -378,3 +417,18 @@ traffic and incident tests end to end over in-memory storage and Node's own
 SQLite (Node 22.18 or later, which runs TypeScript directly); `npx wrangler
 deploy --dry-run` bundles the Worker. `npm run dev` runs it locally with a
 local Durable Object.
+
+Two relays can run side by side to try relays reaching each other, each with
+storage of its own:
+
+```sh
+npx wrangler dev --ip 127.0.0.1 --port 8787 --persist-to .wrangler/relay-a
+npx wrangler dev --ip 127.0.0.1 --port 8788 --inspector-port 9230 --persist-to .wrangler/relay-b
+```
+
+A relay reached over plain http on 127.0.0.1 or localhost accepts
+`http://127.0.0.1:<port>` and `http://localhost:<port>` as relay addresses
+(`isLoopbackDev` in `src/federation.ts`). A deployed relay is always reached
+over https, so this never applies to one. Debug builds of the app accept such
+an address too, and the emulator job in CI runs the app's end-to-end tests
+against two relays this way, through `adb reverse`.

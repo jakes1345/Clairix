@@ -160,6 +160,28 @@ class StoredTokenPool(context: Context, private val key: String = "tokens") : Me
 }
 
 /**
+ * The blind-token keys seen per relay and epoch ([MemoryTokenKeyPins]), kept
+ * across restarts so a key first seen days ago is still the one checked. Not
+ * secret: they are public keys every caller of the relay sees.
+ */
+class StoredTokenKeyPins(context: Context) : MemoryTokenKeyPins() {
+
+    private val prefs = context.applicationContext.getSharedPreferences("comms_tokens", Context.MODE_PRIVATE)
+
+    init {
+        prefs.getString(KEY, null)?.let { load(it) }
+    }
+
+    override fun changed() {
+        prefs.edit().putString(KEY, encode()).apply()
+    }
+
+    private companion object {
+        const val KEY = "token_keys"
+    }
+}
+
+/**
  * [PendingClaims] kept across restarts, encrypted under the Keystore key like
  * the delivery tokens: a process that dies between starting a session and
  * sending its first envelope still presents the claim ticket afterwards.

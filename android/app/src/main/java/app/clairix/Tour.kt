@@ -189,8 +189,9 @@ internal fun tourStops(fullAccess: Boolean): List<TourStop> {
         "comms", "Comms", "Messages and calls",
         "End-to-end encrypted messages, calls, voicemail and groups. The relay that carries them cannot read them and is not told who sent them.",
         "Add someone with an invite link or by scanning their QR code. If a contact's security key changes, their messages wait " +
-            "in a review box until you check. Screenshots are blocked on these screens." +
-            if (fullAccess) " The menu (⋮) at the top holds Fake call, Duress phrase and Wipe Clairix." else "",
+            "in a review box until you check. In any conversation or group, Disappearing sets how long after they are read " +
+            "messages are deleted, on both phones. Screenshots are blocked on these screens." +
+            if (fullAccess) " The menu (⋮) at the top holds Fake call, Duress phrase, Offline mesh and Wipe Clairix." else "",
         ClairixIcons.Forum, TourTarget.Tab(HomeTab.COMMS)
     )
     if (fullAccess) {

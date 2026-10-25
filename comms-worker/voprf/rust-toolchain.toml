@@ -1,0 +1,6 @@
+# The same compiler as comms-crypto, so the committed src/voprf.wasm can be
+# rebuilt byte for byte (scripts/build-voprf.sh; CI checks it). Bump together.
+[toolchain]
+channel = "1.97.0"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

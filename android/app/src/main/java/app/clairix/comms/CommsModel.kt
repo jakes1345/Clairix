@@ -112,7 +112,14 @@ data class ChatMessage(
      * member who sent an inbound message; null in a 1:1 conversation, where
      * [peer] is the sender.
      */
-    val sender: String? = null
+    val sender: String? = null,
+    /**
+     * Seconds this message lasts once read (inbound) or sent (outbound), when its
+     * conversation has disappearing messages on; 0 for one that stays.
+     */
+    val ttl: Int = 0,
+    /** When this phone deletes it; null while it stays, or until an inbound one is read. */
+    val expiresAt: Long? = null
 ) {
     val failed: Boolean get() = status == "failed"
     val isMedia: Boolean get() = kind == KIND_MEDIA
@@ -122,6 +129,8 @@ data class ChatMessage(
 const val KIND_TEXT = "text"
 /** [ChatMessage.kind] of a photo or video; see [MediaBody]. */
 const val KIND_MEDIA = "media"
+/** [ChatMessage.kind] of a [STATUS_SYSTEM] line that is information, not a warning: a disappearing-messages timer change. */
+const val KIND_NOTE = "note"
 /** Status of an inbound media message whose chunks are still arriving. */
 const val STATUS_RECEIVING = "receiving"
 
@@ -363,5 +372,21 @@ data class PairingCode(
             }
             return null
         }
+    }
+}
+
+/** The disappearing-messages timers offered, in seconds; 0 is off. */
+val TIMER_CHOICES: List<Int> = listOf(0, 5 * 60, 3600, 8 * 3600, 24 * 3600, 7 * 24 * 3600, 28 * 24 * 3600)
+
+/** A disappearing-messages timer in words: "5 minutes", "1 day", "4 weeks"; "off" for 0. */
+fun ttlLabel(seconds: Int): String {
+    fun n(count: Int, unit: String) = "$count $unit" + if (count == 1) "" else "s"
+    return when {
+        seconds <= 0 -> "off"
+        seconds % (7 * 86_400) == 0 -> n(seconds / (7 * 86_400), "week")
+        seconds % 86_400 == 0 -> n(seconds / 86_400, "day")
+        seconds % 3600 == 0 -> n(seconds / 3600, "hour")
+        seconds % 60 == 0 -> n(seconds / 60, "minute")
+        else -> n(seconds, "second")
     }
 }

@@ -94,6 +94,10 @@ import app.clairix.comms.STATUS_CALL
 import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
 import app.clairix.comms.STATUS_SYSTEM
+import app.clairix.comms.KIND_NOTE
+import app.clairix.comms.ttlLabel
+import app.clairix.comms.TIMER_CHOICES
+import androidx.compose.material3.RadioButton
 import app.clairix.comms.STATUS_VOICEMAIL
 import app.clairix.comms.VoicemailBody
 import app.clairix.comms.VoicemailPlayer
@@ -726,6 +730,76 @@ private fun NoContactsCard() {
 }
 
 /** Names a new group; the phone that makes it is its first member and admin. */
+/**
+ * The conversation's disappearing-messages timer, and the button that changes it.
+ * [peer] is a contact's number or a group id.
+ */
+@Composable
+private fun DisappearingRow(peer: String, version: Long, enabled: Boolean) {
+    val timer by produceState(initialValue = 0, version, peer) {
+        value = withContext(Dispatchers.IO) { CommsRepository.timer(peer) }
+    }
+    var choosing by remember(peer) { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (timer > 0) "Messages disappear ${ttlLabel(timer)} after they are read" else "Disappearing messages are off",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (timer > 0) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle,
+            modifier = Modifier.weight(1f)
+        )
+        GhostButton("Disappearing", onClick = { choosing = true }, tone = Tone.Neutral, enabled = enabled)
+    }
+    if (choosing) DisappearingDialog(peer, timer, onDismiss = { choosing = false })
+}
+
+@Composable
+private fun DisappearingDialog(peer: String, current: Int, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Disappearing messages", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Each message is deleted from this phone that long after it is read (yours, after they are sent), " +
+                        "photos and voice notes with it. The other side is told and their Clairix does the same; " +
+                        "a screenshot or another app on their phone can still keep a copy.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                for (choice in TIMER_CHOICES) {
+                    val label = if (choice == 0) "Off" else ttlLabel(choice).replaceFirstChar { it.uppercase() }
+                    Row(
+                        Modifier.fillMaxWidth().clip(ClairixShapes.Tag)
+                            .clickable(enabled = !busy, onClickLabel = "Set disappearing messages to $label") {
+                                if (choice == current) { onDismiss(); return@clickable }
+                                busy = true
+                                error = null
+                                scope.launch {
+                                    CommsRepository.setTimer(peer, choice)
+                                        .onSuccess { onDismiss() }
+                                        .onFailure { busy = false; error = it.message ?: "Could not change it" }
+                                }
+                            }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = choice == current, onClick = null, enabled = !busy)
+                        Spacer(Modifier.width(8.dp))
+                        Text(label, style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text)
+                    }
+                }
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+            }
+        },
+        confirmButton = { GhostButton("Close", onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
+    )
+}
+
 @Composable
 private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit) {
     val scope = rememberCoroutineScope()
@@ -1150,6 +1224,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             style = MaterialTheme.typography.monoSmall,
             color = ClairixTheme.colors.textSubtle
         )
+        DisappearingRow(peer, version, enabled = c != null)
         if (c?.keyChanged == true) {
             Spacer(Modifier.height(6.dp))
             Notice(
@@ -1327,12 +1402,13 @@ private fun MessageBubble(
         return
     }
     if (m.status == STATUS_SYSTEM) {
-        // Something this phone noted in the conversation, such as a key change.
+        // Something this phone noted in the conversation: a key change (a warning), or a timer change (a note).
+        val warning = m.kind != KIND_NOTE
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "⚠ " + m.body + " · " + timeFmt.format(Date(m.ts)),
+                (if (warning) "⚠ " else "") + m.body + " · " + timeFmt.format(Date(m.ts)),
                 style = MaterialTheme.typography.monoSmall,
-                color = ClairixTheme.colors.caution,
+                color = if (warning) ClairixTheme.colors.caution else ClairixTheme.colors.textSubtle,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.background(ClairixTheme.colors.surface, ClairixShapes.Tag).padding(horizontal = 12.dp, vertical = 6.dp)
             )
@@ -2467,6 +2543,7 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle
         )
+        DisappearingRow(groupId, version, enabled = group != null)
         Spacer(Modifier.height(8.dp))
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2483,6 +2560,17 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                 }
             }
             items(messages, key = { it.id }) { msg ->
+                if (msg.status == STATUS_SYSTEM) {
+                    // A line this phone wrote itself, such as a timer change: not a member's message.
+                    Text(
+                        msg.body,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClairixTheme.colors.textSubtle,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    )
+                    return@items
+                }
                 val isOut = msg.direction == Direction.OUT
                 Column(
                     Modifier.fillMaxWidth(),

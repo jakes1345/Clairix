@@ -23,16 +23,35 @@ val rustBindings = layout.buildDirectory.dir("rust/kotlin")
 val rustAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 
 /**
- * The NDK cargo-ndk should use: ANDROID_NDK_HOME if set, else the runner's
- * ANDROID_NDK_LATEST_HOME, else the newest NDK installed under the SDK.
- * cargo-ndk fails with "Error detecting NDK version for path" when it is
- * handed nothing, which is what an unset variable looks like in CI.
+ * The NDK and cargo-ndk every build uses. A release can only be rebuilt
+ * byte for byte with the same tools, so both are pinned here and the build
+ * stops on any other version instead of quietly producing different native
+ * libraries. Install the NDK with
+ *   sdkmanager "ndk;27.2.12479018"
+ * and cargo-ndk with
+ *   cargo install cargo-ndk --version 4.1.2 --locked
+ * The CI workflows install exactly these. Bump all three places together.
+ */
+val pinnedNdkVersion = "27.2.12479018"
+val pinnedCargoNdkVersion = "4.1.2"
+
+fun ndkRevision(dir: File): String? {
+    val props = Properties()
+    dir.resolve("source.properties").takeIf { it.isFile }?.inputStream()?.use { props.load(it) } ?: return null
+    return props.getProperty("Pkg.Revision")?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+/**
+ * The pinned NDK: ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) if it names it, else
+ * ndk/<pinned> under the SDK. cargo-ndk fails with "Error detecting NDK
+ * version for path" when it is handed nothing, which is what an unset
+ * variable looks like in CI.
  */
 fun resolveNdkDir(): File? {
-    listOf("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "ANDROID_NDK_LATEST_HOME")
+    listOf("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT")
         .mapNotNull { System.getenv(it)?.takeIf { v -> v.isNotBlank() } }
         .map { File(it) }
-        .firstOrNull { it.isDirectory }
+        .firstOrNull { it.isDirectory && ndkRevision(it) == pinnedNdkVersion }
         ?.let { return it }
     val sdk = listOf("ANDROID_HOME", "ANDROID_SDK_ROOT")
         .mapNotNull { System.getenv(it)?.takeIf { v -> v.isNotBlank() } }
@@ -43,8 +62,7 @@ fun resolveNdkDir(): File? {
             propsFile.inputStream().use { stream -> props.load(stream) }
             props.getProperty("sdk.dir")?.let { dir -> File(dir) }
         }
-    return sdk?.resolve("ndk")?.listFiles { f -> f.isDirectory && f.resolve("source.properties").isFile }
-        ?.maxByOrNull { it.name }
+    return sdk?.resolve("ndk/$pinnedNdkVersion")?.takeIf { ndkRevision(it) == pinnedNdkVersion }
 }
 
 val cargoNdkBuild by tasks.registering(Exec::class) {
@@ -56,9 +74,16 @@ val cargoNdkBuild by tasks.registering(Exec::class) {
     outputs.dir(rustJniLibs)
     doFirst {
         val ndk = resolveNdkDir()
-            ?: throw GradleException("No Android NDK found: set ANDROID_NDK_HOME or install one under \$ANDROID_HOME/ndk")
+            ?: throw GradleException("Android NDK $pinnedNdkVersion not found: run sdkmanager \"ndk;$pinnedNdkVersion\" (or point ANDROID_NDK_HOME at it)")
+        val cargoNdk = runCatching {
+            ProcessBuilder("cargo", "ndk", "--version").redirectErrorStream(true).start()
+                .let { p -> p.inputStream.bufferedReader().readText().also { p.waitFor() } }
+        }.getOrDefault("")
+        if (!Regex("""\bcargo-ndk $pinnedCargoNdkVersion\b""").containsMatchIn(cargoNdk)) {
+            throw GradleException("cargo-ndk $pinnedCargoNdkVersion is required, found \"${cargoNdk.trim()}\": run cargo install cargo-ndk --version $pinnedCargoNdkVersion --locked")
+        }
         environment("ANDROID_NDK_HOME", ndk.absolutePath)
-        logger.lifecycle("cargo-ndk using NDK at ${ndk.absolutePath}")
+        logger.lifecycle("cargo-ndk $pinnedCargoNdkVersion using NDK $pinnedNdkVersion at ${ndk.absolutePath}")
         // rustc writes the absolute paths of the crate and of Cargo's registry
         // into the library (panic locations, debug info), so a build from any
         // other directory would differ for no reason. Mapped to fixed names;
@@ -140,10 +165,8 @@ android {
         // The plugin checks the path against its own default ndkVersion and
         // refuses a mismatch ("[CXX1100] android.ndkVersion is [27.0.x] but
         // android.ndkPath refers to a different version"), so it is told the
-        // version that is actually there.
-        val props = Properties()
-        ndk.resolve("source.properties").takeIf { it.isFile }?.inputStream()?.use { props.load(it) }
-        props.getProperty("Pkg.Revision")?.trim()?.takeIf { it.isNotEmpty() }?.let { ndkVersion = it }
+        // pinned version, which resolveNdkDir has already checked is there.
+        ndkVersion = pinnedNdkVersion
     }
 
     // No dependency-metadata block in the APK or bundle: it is a Google-signed

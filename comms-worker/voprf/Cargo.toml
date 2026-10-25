@@ -1,0 +1,23 @@
+[package]
+name = "clairix_relay_voprf"
+version = "1.0.0"
+edition = "2021"
+description = "The relay's half of Clairix's blind send tokens: RFC 9497 VOPRF (ristretto255-SHA512) key derivation, batch evaluation with a DLEQ proof, and redemption checks, compiled to WebAssembly for the Worker."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+voprf = { version = "=0.5.0", default-features = false, features = ["ristretto255-ciphersuite", "alloc"] }
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+subtle = { version = "2", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

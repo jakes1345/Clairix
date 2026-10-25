@@ -6,6 +6,13 @@ name: Emulator smoke test
 # screen that never appears fails the job; screenshots of every screen and the
 # device log are uploaded either way.
 #
+# Then the end-to-end run (src/androidTest/.../comms/EndToEndTest.kt): two real relays
+# (the Worker under wrangler dev, on this runner) reached from the emulator through
+# adb reverse, the app registered on one through its own code, and scripted peers on
+# both. Texts both ways with receipts, a voice note, a three-chunk photo, a group,
+# disappearing messages, a call that rings, and a contact on the other relay, every
+# envelope spending a blind token and going through the relay's mixing.
+#
 # The emulator is started with the SDK's own tools rather than a third-party action:
 # every action here is pinned to a commit, and this needs none beyond the usual four.
 on:
@@ -13,12 +20,14 @@ on:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'comms-worker/**'
       - '.github/workflows/emulator.yml'
   push:
     branches: [main]
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'comms-worker/**'
       - '.github/workflows/emulator.yml'
   workflow_dispatch:
 
@@ -52,8 +61,13 @@ jobs:
         with:
           workspaces: comms-crypto
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+      # The NDK and cargo-ndk versions android/app/build.gradle.kts pins; the
+      # build refuses any other, so a release can be rebuilt with the same tools.
+      - name: Install the pinned NDK and cargo-ndk
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          cargo install cargo-ndk --version 4.1.2 --locked
 
       - name: Validate the Gradle wrapper
         uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
@@ -61,10 +75,36 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+
+      # Two relays side by side, each with storage of its own. A relay reached
+      # over plain http on 127.0.0.1 admits other loopback relays as addresses
+      # (federation.ts isLoopbackDev), which a deployed relay never does.
+      - name: Start two local relays
+        working-directory: comms-worker
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          npm ci --no-audit --no-fund
+          for r in a:8787:9229 b:8788:9230; do
+            name=${r%%:*}; rest=${r#*:}; port=${rest%%:*}; inspector=${rest#*:}
+            nohup npx wrangler dev --ip 127.0.0.1 --port "$port" --inspector-port "$inspector" \
+              --persist-to "$RUNNER_TEMP/relay-$name" \
+              --var ENROLL_SECRET:e2e-enrollment-secret-0123456789 --var MIX_MAX_MS:2000 \
+              > "../relay-$name.log" 2>&1 &
+          done
+          for port in 8787 8788; do
+            for i in $(seq 1 60); do curl -sf "http://127.0.0.1:$port/" > /dev/null && break; sleep 2; done
+            curl -sf "http://127.0.0.1:$port/" || { echo "::error::The relay on $port did not start"; cat ../relay-*.log; exit 1; }
+            echo
+          done
+
       - name: Build the app and the smoke test
         working-directory: android
         run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
           ./gradlew assembleFullSuiteDebug assembleFullSuiteDebugAndroidTest --no-daemon --stacktrace
 
       # Hosted Linux runners have KVM; the runner user needs access to it.
@@ -149,6 +189,32 @@ jobs:
           fi
           grep -q "^OK (" ../instrument.txt || { echo "::error::The smoke test failed; see instrument.txt"; exit 1; }
 
+      - name: Run the end-to-end tests against the two relays
+        working-directory: android
+        timeout-minutes: 20
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" reverse tcp:8787 tcp:8787
+          "$ADB" reverse tcp:8788 tcp:8788
+          "$ADB" logcat -c
+          set +e
+          timeout 1100 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.EndToEndTest \
+            -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
+            -e secret e2e-enrollment-secret-0123456789 \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../e2e.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-e2e.txt
+          if grep -q "FATAL EXCEPTION" ../logcat-e2e.txt; then
+            echo "::error::Clairix crashed during the end-to-end tests; see logcat-e2e.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-e2e.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (8 tests)" ../e2e.txt || { echo "::error::The end-to-end tests failed; see e2e.txt"; exit 1; }
+          # Every test must have run: a skipped one (status -4 for an unmet assumption,
+          # -3 for an ignored test) means the relays were not passed through.
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
+
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -158,5 +224,9 @@ jobs:
             screens/
             instrument.txt
             logcat.txt
+            e2e.txt
+            logcat-e2e.txt
+            relay-a.log
+            relay-b.log
             emulator.log
           if-no-files-found: warn

@@ -444,22 +444,53 @@ code found two real holes, both fixed with tests.
   (IME_FLAG_NO_PERSONALIZED_LEARNING), and Phone check names the keyboard in
   use and whether it can reach the internet.
 
+Done since (Beta 6):
+
+- **Blind tokens.** The tokens every send and traffic request spends were
+  random values the relay made, so a relay that recorded its own answers to
+  `POST /v1/tokens` could match each spent token to the account it went to.
+  They are now RFC 9497 VOPRF tokens (ristretto255-SHA512, as Privacy Pass):
+  the phone makes each input, the relay evaluates only its blinded form with a
+  DLEQ proof that it used the key it publishes at `GET /`, and the phone keeps
+  the first key it saw each epoch and refuses any other. The relay keeps
+  nothing at issuance and a hash of each spent token afterwards. One Rust
+  implementation (`voprf` 0.5.0) runs on both ends, the relay's compiled to
+  WebAssembly and rebuilt byte for byte in CI; it derives the same keys and
+  proofs as an independent RFC 9497 implementation (@noble/curves), which the
+  relay's tests use as the phone. Limit: key consistency rests on GET /
+  answering every caller alike; a relay that served one phone its own key on
+  every request from the start of an epoch, anonymous ones included, would
+  not be caught by that phone alone.
+- **Mesh tag.** The routing tag was a hash of the recipient's public sealing
+  key and the day, which any contact of the recipient (and the relay) could
+  compute. It is now HKDF over the X25519 secret the sender's and recipient's
+  sealing keys share, computed inside the crypto crate; only the two ends can
+  tell whose a bundle is. Bundles between the same two people on one day
+  still share a tag. Beta 5's tag is still recognised on arrival, which
+  reveals nothing, since a phone never announces the tags it answers to.
+- **Existence through other relays.** Several relays together could fill a
+  mailbox or its allowance for other relays and learn from a 413 or 429 that
+  the number exists. An envelope from another relay that would go over those
+  limits is now dropped and answered exactly as one for a number that does not
+  exist. This relay's own senders are still told when a mailbox is full; they
+  are bounded by the tokens their accounts may draw.
+- **Disappearing messages.** A per-conversation timer (5 minutes to 4 weeks),
+  told to the other side and carried on every message; each copy is deleted
+  that long after it is read (sent, for one's own), with its photo or voice
+  note, and the database overwrites deleted rows (`secure_delete`).
+- **Pinned NDK and cargo-ndk** (27.2.12479018, 4.1.2): the build refuses any
+  other version, so a release can be rebuilt with the same tools.
+
 Known and not fixed:
 
-- The mesh routing tag is derived from the recipient's public sealing key and
-  the day. Anyone who holds that public key (every contact, and the relay)
-  and listens over Bluetooth can tell that a bundle being carried is for that
-  person. A tag from a secret shared only by the two ends would fix it.
-- Several other relays acting together can still reach a mailbox's allowance
-  for other relays, and a 429 or "mailbox full" then shows the number exists.
-- The review was cut short after two findings; the mixing code and the mesh
-  have not had an outside review. Nothing here has had an independent audit.
+- The mixing code, the mesh and the blind tokens have had no outside review.
+  Nothing here has had an independent audit.
 
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
-matched (CI now requires two builds of every change to agree; the NDK and
-cargo-ndk are not pinned; `tools/reproducible/` says how to compare a
-release), an audit.
+matched (CI now requires two builds of every change to agree, and from
+Beta 6 the NDK and cargo-ndk are pinned; `tools/reproducible/` says how to
+compare a release), an audit.
 
 ## Not re-tested
 

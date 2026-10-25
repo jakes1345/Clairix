@@ -328,6 +328,10 @@ fn unseal(secret: &StaticSecret, envelope: &[u8]) -> Result<([u8; 32], Zeroizing
     Ok((eph_bytes, Zeroizing::new(plain)))
 }
 
+/// HKDF info prefix for the mesh routing tag; the day follows it.
+const MESH_TAG_INFO: &[u8] = b"clairix-mesh-tag-v2";
+const MESH_TAG_LEN: usize = 16;
+
 fn seal_key(shared: &[u8], eph_pub: &[u8], recipient_pub: &[u8]) -> Zeroizing<[u8; 32]> {
     let mut salt = Vec::with_capacity(64);
     salt.extend_from_slice(eph_pub);
@@ -850,6 +854,33 @@ impl Identity {
         let peer = ed25519_from(&peer_ed25519)?.to_base64();
         Ok(safety_number_for(&mine, &peer))
     }
+
+    /// The offline mesh's routing tag for bundles between this device and the
+    /// owner of `peer_sealing` on `day` (days since the Unix epoch, UTC): 16
+    /// bytes from HKDF-SHA256 over the X25519 secret the two sealing keys
+    /// share, with both public keys in sorted order as salt and the day in
+    /// the info. Both ends compute the same tag and nobody else can: not the
+    /// relay, not a carrier, and not another contact who holds either public
+    /// key. The secret never leaves this crate.
+    pub fn mesh_tag(&self, peer_sealing: String, day: i64) -> Result<Vec<u8>> {
+        let peer = x25519_from(&peer_sealing)?;
+        let inner = self.inner.lock().expect("identity mutex poisoned");
+        let mine = XPublicKey::from(&inner.sealing_secret);
+        let shared = inner.sealing_secret.diffie_hellman(&peer);
+        if !shared.was_contributory() {
+            return Err(CryptoError::BadKey { reason: "low-order sealing key".into() });
+        }
+        let (a, b) = if mine.as_bytes() <= peer.as_bytes() { (mine, peer) } else { (peer, mine) };
+        let mut salt = Vec::with_capacity(64);
+        salt.extend_from_slice(a.as_bytes());
+        salt.extend_from_slice(b.as_bytes());
+        let hk = Hkdf::<Sha256>::new(Some(&salt), shared.as_bytes());
+        let mut info = MESH_TAG_INFO.to_vec();
+        info.extend_from_slice(&day.to_be_bytes());
+        let mut tag = vec![0u8; MESH_TAG_LEN];
+        hk.expand(&info, &mut tag).expect("16 bytes is a valid HKDF output length");
+        Ok(tag)
+    }
 }
 
 /// True when `list` already holds [`SESSION_HARD_LIMIT`] protected sessions:
@@ -889,6 +920,63 @@ fn push_session(sessions: &mut HashMap<String, Vec<SessionEntry>>, peer: String,
 }
 
 // ── Free functions ─────────────────────────────────────────────────────────
+
+/// One blind token in the making: the random input the token will show when
+/// it is spent, the blinded element the relay is sent, and the client state
+/// (the blind and the blinded element) needed to unblind its answer. Kept in
+/// memory between the request and its answer, never stored.
+#[derive(Clone, uniffi::Record)]
+pub struct BlindedToken {
+    pub input: Vec<u8>,
+    pub blinded: Vec<u8>,
+    pub state: Vec<u8>,
+}
+
+/// Starts a blind send token (RFC 9497 VOPRF, ristretto255-SHA512): a fresh
+/// 32-byte input, blinded. The relay sees only `blinded`.
+#[uniffi::export]
+pub fn token_blind() -> BlindedToken {
+    let mut input = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut input);
+    let result = voprf::VoprfClient::<voprf::Ristretto255>::blind(&input, &mut rand::thread_rng())
+        .expect("a 32-byte input is always accepted");
+    BlindedToken {
+        input,
+        blinded: result.message.serialize().to_vec(),
+        state: result.state.serialize().to_vec(),
+    }
+}
+
+/// Unblinds the relay's answer to [`token_blind`] requests into token outputs.
+/// `evaluated` answers the first `evaluated.len()` of `tokens` (a relay grants
+/// fewer when the allowance runs low), and `proof` must show that all of them
+/// were made with `public_key`, the key the relay publishes for the kind: a
+/// relay that used another key, which could tell whose tokens they were, is
+/// refused here with [`CryptoError::BadSignature`].
+#[uniffi::export]
+pub fn token_finalize(tokens: Vec<BlindedToken>, evaluated: Vec<Vec<u8>>, proof: Vec<u8>, public_key: Vec<u8>) -> Result<Vec<Vec<u8>>> {
+    use voprf::{EvaluationElement, Group, Proof, Ristretto255, VoprfClient};
+    if evaluated.is_empty() || evaluated.len() > tokens.len() {
+        return Err(CryptoError::Decrypt { reason: "token answer does not match the request".into() });
+    }
+    let bad = |what: &str| CryptoError::BadKey { reason: format!("token {what}") };
+    let pk = Ristretto255::deserialize_elem(&public_key).map_err(|_| bad("public key"))?;
+    let proof = Proof::<Ristretto255>::deserialize(&proof).map_err(|_| bad("proof"))?;
+    let used = &tokens[..evaluated.len()];
+    let clients = used
+        .iter()
+        .map(|t| VoprfClient::<Ristretto255>::deserialize(&t.state).map_err(|_| bad("state")))
+        .collect::<Result<Vec<_>>>()?;
+    let messages = evaluated
+        .iter()
+        .map(|e| EvaluationElement::<Ristretto255>::deserialize(e).map_err(|_| bad("element")))
+        .collect::<Result<Vec<_>>>()?;
+    let inputs: Vec<&[u8]> = used.iter().map(|t| t.input.as_slice()).collect();
+    let outputs = VoprfClient::batch_finalize(&inputs, &clients, &messages, &proof, pk).map_err(|_| CryptoError::BadSignature)?;
+    outputs
+        .map(|o| o.map(|o| o.to_vec()).map_err(|_| CryptoError::Decrypt { reason: "token output".into() }))
+        .collect()
+}
 
 /// Verifies an Ed25519 signature (base64) over `message` with `ed25519` (base64).
 #[uniffi::export]
@@ -1024,6 +1112,74 @@ mod tests {
 
     fn signer(id: &Identity) -> impl FnOnce(&[u8]) -> [u8; 64] + '_ {
         move |claim| id.inner.lock().unwrap().account.sign(claim).to_bytes()
+    }
+
+    /// The phone's half of the blind tokens against the relay's own module.
+    #[test]
+    fn blind_tokens_round_trip_with_the_relay_module() {
+        use clairix_relay_voprf as relay;
+        let secret = [3u8; 32];
+        let info = b"clairix-token-v2|delivery|1500";
+        let put = |parts: &[&[u8]]| {
+            let buf = unsafe { std::slice::from_raw_parts_mut(relay::buffer(), relay::buffer_len()) };
+            let mut at = 0;
+            for p in parts {
+                buf[at..at + p.len()].copy_from_slice(p);
+                at += p.len();
+            }
+            buf
+        };
+        put(&[&secret, info]);
+        assert_eq!(relay::public_key(info.len()), 0);
+        let pk = put(&[])[..32].to_vec();
+
+        let tokens: Vec<BlindedToken> = (0..4).map(|_| token_blind()).collect();
+        let mut req = vec![];
+        req.extend_from_slice(&secret);
+        req.extend_from_slice(&[5u8; 32]);
+        req.extend_from_slice(info);
+        // The relay grants three of the four.
+        for t in &tokens[..3] {
+            req.extend_from_slice(&t.blinded);
+        }
+        put(&[&req]);
+        assert_eq!(relay::evaluate_batch(info.len(), 3), 0);
+        let out = put(&[]).to_vec();
+        let evaluated: Vec<Vec<u8>> = (0..3).map(|i| out[i * 32..(i + 1) * 32].to_vec()).collect();
+        let proof = out[96..160].to_vec();
+
+        let outputs = token_finalize(tokens.clone(), evaluated.clone(), proof.clone(), pk.clone()).unwrap();
+        assert_eq!(outputs.len(), 3);
+        for (t, o) in tokens.iter().zip(&outputs) {
+            put(&[&secret, info, &t.input, o]);
+            assert_eq!(relay::verify(info.len(), 32), 0, "the relay accepts what the phone unblinded");
+        }
+        // Checked against a key the relay does not publish: refused.
+        let mut other = pk.clone();
+        put(&[&[4u8; 32], info]);
+        assert_eq!(relay::public_key(info.len()), 0);
+        other.copy_from_slice(&put(&[])[..32]);
+        assert!(matches!(token_finalize(tokens.clone(), evaluated.clone(), proof.clone(), other), Err(CryptoError::BadSignature)));
+        // An answer that does not fit the request.
+        assert!(token_finalize(tokens[..2].to_vec(), evaluated, proof, pk).is_err());
+    }
+
+    #[test]
+    fn mesh_tags_are_shared_by_the_two_ends_only() {
+        let alice = Identity::create();
+        let bob = Identity::create();
+        let carol = Identity::create();
+        let a = alice.public_bundle().sealing;
+        let b = bob.public_bundle().sealing;
+        let c = carol.public_bundle().sealing;
+        let ab = alice.mesh_tag(b.clone(), 20_000).unwrap();
+        assert_eq!(ab.len(), 16);
+        assert_eq!(ab, bob.mesh_tag(a.clone(), 20_000).unwrap(), "both ends compute the same tag");
+        assert_ne!(ab, alice.mesh_tag(b.clone(), 20_001).unwrap(), "the tag changes every day");
+        assert_ne!(ab, carol.mesh_tag(b.clone(), 20_000).unwrap(), "another contact of Bob's gets another tag");
+        assert_ne!(ab, carol.mesh_tag(a, 20_000).unwrap());
+        assert_ne!(ab, bob.mesh_tag(c, 20_000).unwrap());
+        assert!(alice.mesh_tag(B64.encode([0u8; 32]), 20_000).is_err(), "a low-order key is refused");
     }
 
     #[test]

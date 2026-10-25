@@ -45,6 +45,8 @@ End-to-end encrypted messages, voice notes, photos, videos and voice calls betwe
 
 **Your keyboard.** *New in Beta 5.* Clairix asks the keyboard not to learn from anything typed in it, and Gboard and Samsung's keyboard honour that.
 
+**Disappearing messages.** *New in Beta 6.* Set a timer on any conversation or group, from 5 minutes to 4 weeks. Each message is deleted from your phone that long after you read it, and your own messages that long after they are sent, photos and voice notes with them. The other side is told and their Clairix does the same, and every message carries the timer so a phone that missed the change still deletes it. Deleted messages are overwritten in the database, not just unlinked.
+
 **On your phone.** Your identity keys are stored under a key held in Android's hardware keystore. Message bodies in the local database are encrypted with the same keystore. A copy of the app's files taken off the phone is unreadable.
 
 </div>
@@ -55,11 +57,12 @@ End-to-end encrypted messages, voice notes, photos, videos and voice calls betwe
 
 - It cannot reach people who do not use Clairix. A Clairix number talks only to other Clairix numbers, on your relay or on another relay yours can reach.
 - It cannot hide that you use Clairix from your network operator or Wi-Fi provider. They can see that your phone connects to the relay, not what it carries.
-- The relay knows the recipient of each envelope, its size and the time. A send names no account: it spends a single-use token your phone fetched earlier. A relay operator who captured live requests could still see the network address each came from, and which account fetched a batch of tokens. Use Tor or a VPN if your address matters. The relay never sees content.
+- The relay knows the recipient of each envelope, its size and the time. A send names no account: it spends a single-use token your phone fetched earlier. From Beta 6 those tokens are blind, so not even a relay operator who captured every request can tell which account a send's token came from; up to Beta 5 they could. Such an operator could still see the network address each request came from. Use Tor or a VPN if your address matters. The relay never sees content.
 - Mixing is one relay holding messages for a few seconds, not a network of independent mixes. The relay's own operator still sees every envelope arrive and leave. On a quiet relay there is little to mix with, and someone watching both ends for weeks can still match people by how much they send.
 - A contact on another relay needs a version of Clairix that knows about other relays. Two relays can give out the same number, and the app will not keep two contacts with one number.
-- While the offline mesh is on, anyone scanning Bluetooth nearby can see that a Clairix phone is there, never whose. Anyone who already has a person's public keys, such as their contacts, can tell when a bundle being carried is for that person. Photos, videos and calls do not go over the mesh.
+- While the offline mesh is on, anyone scanning Bluetooth nearby can see that a Clairix phone is there, never whose. Up to Beta 5, anyone who already had a person's public keys, such as their contacts, could tell when a bundle being carried was for that person; from Beta 6 only its sender and recipient can. Bundles between the same two people on one day carry the same tag. Photos, videos and calls do not go over the mesh.
 - Calls need both phones online at the same time. If the other phone is asleep and Android has restricted Clairix in the background, the call may not ring. Clairix asks you to exempt it from battery optimisation for this reason.
 - Clairix does not back up messages anywhere. If you wipe or lose the phone, the history is gone. That is deliberate.
+- Disappearing messages delete Clairix's copies. They cannot stop the other person taking a screenshot, photographing the screen or copying the text into another app.
 
 </div>

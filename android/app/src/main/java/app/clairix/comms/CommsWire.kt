@@ -32,6 +32,10 @@ import org.json.JSONObject
  *            "cap" (caption, optional), "thumb" (small JPEG, base64, optional)
  *            — announces a photo or video; its bytes follow in "n" mchunk payloads
  *   mchunk   "id" (the media's), "i" (0-based index), "data" (base64 of at most [MEDIA_CHUNK_BYTES] bytes)
+ *   timer    "id", "ts", "ttl" (seconds, 0 for off), "gid" (for a group) — the conversation's
+ *            disappearing-messages timer was changed
+ * msg, voicemail, media and gmsg also carry "ttl" (seconds) when their conversation has
+ * disappearing messages on: the recipient deletes its copy that long after reading it.
  *
  * The relay takes envelopes of at most 72 KiB. Every payload is padded to a
  * fixed bucket before encryption (160-byte steps up to 2.5 KiB, then 4, 8, 16,
@@ -89,6 +93,12 @@ object CommsWire {
     const val T_PANIC = "panic"
     /** Cover traffic: an envelope sized like a message that the recipient drops unread, with no receipt. */
     const val T_NOISE = "noise"
+    /** The disappearing-messages timer of a conversation changed. */
+    const val T_TIMER = "timer"
+    /** Seconds a message lasts once read; on a timer payload, the conversation's new timer. */
+    const val F_TTL = "ttl"
+    /** The longest a disappearing-messages timer can be: four weeks. */
+    const val MAX_TTL = 28 * 24 * 3600
 
     // group
     const val F_GID = "gid"
@@ -198,8 +208,20 @@ object CommsWire {
 
     private fun base(type: String) = JSONObject().put(F_VERSION, VERSION).put(F_TYPE, type)
 
-    fun message(id: String, ts: Long, body: String): JSONObject =
-        base(T_MSG).put(F_ID, id).put(F_TS, ts).put(F_BODY, body)
+    fun message(id: String, ts: Long, body: String, ttl: Int = 0): JSONObject =
+        withTtl(base(T_MSG).put(F_ID, id).put(F_TS, ts).put(F_BODY, body), ttl)
+
+    /** A conversation's disappearing-messages timer, changed at [ts]; [gid] for a group's. */
+    fun timer(id: String, ts: Long, ttl: Int, gid: String? = null): JSONObject {
+        val o = base(T_TIMER).put(F_ID, id).put(F_TS, ts).put(F_TTL, ttl.coerceIn(0, MAX_TTL))
+        if (gid != null) o.put(F_GID, gid)
+        return o
+    }
+
+    /** The "ttl" a payload carries, within 0 and [MAX_TTL]; 0 when it has none. */
+    fun ttlOf(json: JSONObject): Int = json.optLong(F_TTL, 0L).coerceIn(0L, MAX_TTL.toLong()).toInt()
+
+    private fun withTtl(o: JSONObject, ttl: Int): JSONObject = if (ttl > 0) o.put(F_TTL, ttl.coerceAtMost(MAX_TTL)) else o
 
     fun receipt(ids: List<String>, status: String): JSONObject =
         base(T_RECEIPT).put(F_STATUS, status).put(F_IDS, JSONArray(ids))
@@ -234,19 +256,19 @@ object CommsWire {
         return o
     }
 
-    fun voicemail(id: String, ts: Long, audioB64: String, durationMs: Long): JSONObject =
-        base(T_VOICEMAIL).put(F_ID, id).put(F_TS, ts).put(F_AUDIO, audioB64).put(F_DURATION, durationMs)
+    fun voicemail(id: String, ts: Long, audioB64: String, durationMs: Long, ttl: Int = 0): JSONObject =
+        withTtl(base(T_VOICEMAIL).put(F_ID, id).put(F_TS, ts).put(F_AUDIO, audioB64).put(F_DURATION, durationMs), ttl)
 
     /** Announces a photo or video whose bytes follow in [chunks] mchunk payloads. */
     fun mediaHeader(
         id: String, ts: Long, mime: String, width: Int, height: Int, durationMs: Long,
-        size: Long, chunks: Int, caption: String?, thumbB64: String?
+        size: Long, chunks: Int, caption: String?, thumbB64: String?, ttl: Int = 0
     ): JSONObject {
         val o = base(T_MEDIA).put(F_ID, id).put(F_TS, ts).put(F_MIME, mime).put(F_WIDTH, width).put(F_HEIGHT, height)
             .put(F_DURATION, durationMs).put(F_SIZE, size).put(F_CHUNKS, chunks)
         if (!caption.isNullOrBlank()) o.put(F_CAPTION, caption)
         if (!thumbB64.isNullOrBlank()) o.put(F_THUMB, thumbB64)
-        return o
+        return withTtl(o, ttl)
     }
 
     /** Chunk [index] of media [id]; [dataB64] is base64 of at most [MEDIA_CHUNK_BYTES] bytes. */
@@ -254,8 +276,8 @@ object CommsWire {
         base(T_MEDIA_CHUNK).put(F_ID, id).put(F_INDEX, index).put(F_DATA, dataB64)
 
     /** A text message to group [gid]; the same payload goes to every member. */
-    fun groupMsg(gid: String, body: String, msgId: String, ts: Long): JSONObject =
-        base(T_GROUP_MSG).put(F_GID, gid).put(F_ID, msgId).put(F_TS, ts).put(F_BODY, body)
+    fun groupMsg(gid: String, body: String, msgId: String, ts: Long, ttl: Int = 0): JSONObject =
+        withTtl(base(T_GROUP_MSG).put(F_GID, gid).put(F_ID, msgId).put(F_TS, ts).put(F_BODY, body), ttl)
 
     /**
      * A roster change in group [gid]: [op] is [OP_ADD], [OP_REMOVE] or

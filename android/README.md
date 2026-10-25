@@ -59,8 +59,9 @@ builds, signed with the standard debug key.
 
 ## Building locally instead
 
-Requires JDK 17, the Android SDK and NDK, Rust with `cargo-ndk` (for the COMMS
-crypto crate in `../comms-crypto`).
+Requires JDK 17, the Android SDK, NDK `27.2.12479018` and Rust with `cargo-ndk`
+`4.1.2` (for the COMMS crypto crate in `../comms-crypto`); the build stops on
+any other NDK or cargo-ndk version.
 
 ```bash
 cd android
@@ -131,10 +132,11 @@ entry with `tools/reproducible/compare-apk.sh`: signing adds the signature
 files and the signing block and changes nothing else.
 `tools/reproducible/README.md` has the steps.
 
-Not pinned yet: the NDK (the runner's latest at build time) and `cargo-ndk`
-(the latest release at build time); a rebuild with a different NDK can
-differ in the native library. No published release has yet been rebuilt
-and matched; until one has, the check is a check, not a promise.
+The NDK (`27.2.12479018`) and `cargo-ndk` (`4.1.2`) are pinned from 3.0.0
+Beta 6; the build checks both. Releases up to Beta 5 used the runner's latest
+NDK, so a rebuild of one may differ in the native library. No published
+release has yet been rebuilt and matched; until one has, the check is a
+check, not a promise.
 
 ## Release signing
 

@@ -27,4 +27,17 @@ class RelayOriginTest {
             assertNull(bad, RelayClient.originOf(bad))
         }
     }
+
+    /** A relay on the attached computer, as the end-to-end tests use: debug builds only, and only loopback. */
+    @Test
+    fun aLoopbackRelayIsAnAddressInDebugBuildsOnly() {
+        val expected = if (app.clairix.BuildConfig.DEBUG) "http://127.0.0.1:8788" else null
+        assertEquals(expected, RelayClient.originOf("http://127.0.0.1:8788"))
+        assertEquals(app.clairix.BuildConfig.DEBUG, RelayClient.acceptableRelayUrl("http://localhost:8787"))
+        for (bad in listOf("http://127.0.0.1", "http://10.0.2.2:8788", "http://relay.example.org:8788", "http://127.0.0.1:8788/v1")) {
+            assertNull(bad, RelayClient.originOf(bad))
+            assertEquals(bad, false, RelayClient.acceptableRelayUrl(bad))
+        }
+        assertEquals(true, RelayClient.acceptableRelayUrl("https://relay.example.org"))
+    }
 }

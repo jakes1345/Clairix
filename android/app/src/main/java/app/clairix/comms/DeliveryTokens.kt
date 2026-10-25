@@ -13,9 +13,9 @@ import java.security.SecureRandom
  */
 enum class TokenKind(val wire: String, val low: Int, val batch: Int) {
     /** One per envelope sent. */
-    DELIVERY("delivery", low = 40, batch = 100),
+    DELIVERY("delivery", low = 40, batch = 50),
     /** One per traffic request while navigating: a probe batch, a live poll, a provider poll, a vote. */
-    TRAFFIC("traffic", low = 60, batch = 100),
+    TRAFFIC("traffic", low = 40, batch = 50),
     /** One per new incident report; the relay issues only a few an hour. */
     REPORT("report", low = 5, batch = 10),
 }
@@ -25,7 +25,9 @@ enum class TokenKind(val wire: String, val low: Int, val batch: Int) {
  *
  * The relay hands them out in batches over the signed channel and takes one,
  * with no identity, for every envelope sent and every traffic request
- * (comms-worker/src/comms-logic.ts). They are spent in random order, never in
+ * (comms-worker/src/comms-logic.ts). From Beta 6 they are blind (RFC 9497
+ * VOPRF, comms-worker/src/tokens.ts): the phone makes each one and the relay
+ * signs it without seeing it, so it cannot tell whose a spent token was. They are spent in random order, never in
  * the order they were issued, and fetched when the pool runs low rather than
  * when a request is about to go, so the relay cannot match a request to the
  * batch fetch that came just before it.
@@ -105,10 +107,65 @@ open class MemoryTokenPool(private val random: java.util.Random = SecureRandom()
     }
 
     companion object {
-        /** 32 random bytes, base64url, as the relay issues them. */
-        val TOKEN = Regex("^[A-Za-z0-9_-]{43}$")
+        /**
+         * A blind token, "2.<epoch>.<input>.<output>" (RelayClient's fetch makes
+         * them), or 32 random bytes in base64url as relays before Beta 6 issue.
+         */
+        val TOKEN = Regex("^(2\\.\\d{1,9}\\.[A-Za-z0-9_-]{43}\\.[A-Za-z0-9_-]{86}|[A-Za-z0-9_-]{43})$")
         /** A token about to expire is not worth a request that would then be refused. */
         const val EXPIRY_MARGIN_MS = 10 * 60_000L
         const val MAX_TOKENS = 1000
+    }
+}
+
+/**
+ * The blind-token keys a phone has seen for each relay and epoch: the first it
+ * saw is kept, and tokens issued under any other are refused. A relay that
+ * gave one phone keys of its own could tell that phone's tokens apart; this is
+ * the check that it gives everyone the keys it publishes at GET /.
+ */
+interface TokenKeyPins {
+    /** The keys (kind to base64url) pinned for [relay] in [epoch], or null if none yet. */
+    fun get(relay: String, epoch: Long): Map<String, String>?
+    fun put(relay: String, epoch: Long, keys: Map<String, String>)
+}
+
+/** [TokenKeyPins] in memory, with an encoding for a store that keeps it. Only the last few epochs are kept. */
+open class MemoryTokenKeyPins : TokenKeyPins {
+    protected val pins = LinkedHashMap<String, Map<String, String>>()
+
+    protected open fun changed() {}
+
+    @Synchronized
+    override fun get(relay: String, epoch: Long): Map<String, String>? = pins["$relay|$epoch"]
+
+    @Synchronized
+    override fun put(relay: String, epoch: Long, keys: Map<String, String>) {
+        pins["$relay|$epoch"] = keys.toMap()
+        while (pins.size > MAX_PINS) pins.remove(pins.keys.first())
+        changed()
+    }
+
+    @Synchronized
+    fun encode(): String {
+        val o = JSONObject()
+        for ((k, v) in pins) o.put(k, JSONObject(v))
+        return o.toString()
+    }
+
+    @Synchronized
+    fun load(json: String) {
+        pins.clear()
+        runCatching {
+            val o = JSONObject(json)
+            for (k in o.keys()) {
+                val inner = o.getJSONObject(k)
+                pins[k] = inner.keys().asSequence().associateWith { inner.getString(it) }
+            }
+        }
+    }
+
+    companion object {
+        const val MAX_PINS = 12
     }
 }

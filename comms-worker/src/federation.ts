@@ -82,14 +82,22 @@ export function policyName(p: FederationPolicy): string {
  * The canonical origin of a relay address: `https://host[:port]`, no path,
  * query, fragment or credentials, and a host name rather than an IP literal.
  * Null when [value] is not one.
+ *
+ * [loopback] (see [isLoopbackDev]) also admits `http://127.0.0.1:port` and
+ * `http://localhost:port`: relays a developer runs side by side on one
+ * computer, which is how relays reaching each other is tested end to end.
  */
-export function relayOrigin(value: unknown): string | null {
+export function relayOrigin(value: unknown, loopback = false): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 256) return null;
   let url: URL;
   try {
     url = new URL(value.trim());
   } catch {
     return null;
+  }
+  if (loopback && url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost") && url.port !== "" &&
+    url.username === "" && url.password === "" && (url.pathname === "/" || url.pathname === "") && url.search === "" && url.hash === "") {
+    return url.origin.toLowerCase();
   }
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return null;
   if ((url.pathname !== "/" && url.pathname !== "") || url.search !== "" || url.hash !== "") return null;
@@ -99,9 +107,20 @@ export function relayOrigin(value: unknown): string | null {
   return url.origin.toLowerCase();
 }
 
+/**
+ * Whether [request] reached a relay running on a developer's own computer:
+ * plain http to 127.0.0.1 or localhost. A deployed relay never sees that
+ * (Cloudflare hands the Worker the https address it was reached at), so the
+ * loopback relay addresses [relayOrigin] admits with it exist only there.
+ */
+export function isLoopbackDev(request: Request): boolean {
+  const url = new URL(request.url);
+  return url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+}
+
 /** The address this relay is reached at, as other relays should fetch its key from. */
 export function ownOrigin(env: Pick<Env, "RELAY_ORIGIN">, request: Request): string {
-  return relayOrigin(env.RELAY_ORIGIN) ?? new URL(request.url).origin.toLowerCase();
+  return relayOrigin(env.RELAY_ORIGIN, isLoopbackDev(request)) ?? new URL(request.url).origin.toLowerCase();
 }
 
 /** Every address this relay answers at: a send "to" any of them is a local send. */
@@ -109,7 +128,7 @@ export function isOwnOrigin(env: Pick<Env, "RELAY_ORIGIN" | "RELAY_ALTERNATES">,
   if (origin === ownOrigin(env, request) || origin === new URL(request.url).origin.toLowerCase()) return true;
   return (env.RELAY_ALTERNATES ?? "")
     .split(",")
-    .map((s) => relayOrigin(s.trim()))
+    .map((s) => relayOrigin(s.trim(), isLoopbackDev(request)))
     .includes(origin);
 }
 
@@ -242,7 +261,7 @@ export interface FederatedRequest {
 export async function parseFederated(env: Env, request: Request, bodyText: string): Promise<FederatedRequest> {
   const policy = federationPolicy(env);
   if (policy.mode === "off") throw new HttpError(403, "This relay does not accept requests from other relays");
-  const origin = relayOrigin(request.headers.get(FEDERATION_HEADERS.origin));
+  const origin = relayOrigin(request.headers.get(FEDERATION_HEADERS.origin), isLoopbackDev(request));
   if (!origin) throw new HttpError(401, "X-Clairix-Relay must be the https origin of the forwarding relay");
   if (policy.mode === "allow" && !policy.origins.has(origin)) throw new HttpError(403, "This relay does not accept requests from that relay");
   if (isOwnOrigin(env, request, origin)) throw new HttpError(400, "A relay does not forward to itself");

@@ -15,6 +15,8 @@ import org.json.JSONObject
 import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PublicBundle
 import uniffi.clairix_comms_crypto.SignedKey
+import uniffi.clairix_comms_crypto.tokenBlind
+import uniffi.clairix_comms_crypto.tokenFinalize
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -58,6 +60,8 @@ class RelayClient(
      * these, and the one that answers is kept for the requests after it.
      */
     private val alternates: () -> List<String> = { emptyList() },
+    /** The blind-token keys seen per relay and epoch; see [TokenKeyPins]. */
+    private val tokenKeys: TokenKeyPins = MemoryTokenKeyPins(),
 ) {
 
     /** The alternate address requests go to since the registered one stopped answering, if any. */
@@ -81,18 +85,38 @@ class RelayClient(
         return (listOf(primary) + alternates().map { it.trimEnd('/') }).distinct().filter { it != current }
     }
 
-    data class Info(val version: Int, val alternates: List<String>)
+    /** The keys a relay issues blind tokens under in [epoch], kind (wire name) to base64url. */
+    data class TokenKeys(val epoch: Long, val keys: Map<String, String>)
 
-    /** The relay's description of itself: its API version and the other addresses it answers at. Unauthenticated. */
+    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null)
+
+    /**
+     * The relay's description of itself: its API version, the other addresses it
+     * answers at, and its blind-token keys (null from a relay before Beta 6).
+     * Unauthenticated, on a connection of its own.
+     */
     fun info(): Info {
         val relay = base() ?: throw RelayException("Not registered with a relay")
         val json = execute(Request.Builder().url("$relay/").header("Accept", "application/json").get(), quick)
         return parsed {
             val arr = json.optJSONArray("alternates")
             val urls = arr?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.startsWith("https://") } } } ?: emptyList()
-            Info(json.optInt("version", 0), urls)
+            val t = json.optJSONObject("tokens")?.takeIf { it.optInt("version") == 2 }
+            val keys = t?.optJSONObject("keys")?.let { k -> k.keys().asSequence().associateWith { k.getString(it) } }
+            val tokens = if (t != null && keys != null) TokenKeys(t.getLong("epoch"), keys) else null
+            if (tokens != null) {
+                // Seen on a request that names nobody, and as early as possible:
+                // the first keys seen for an epoch are the ones tokens are checked against.
+                val origin = relay.trimEnd('/')
+                if (tokenKeys.get(origin, tokens.epoch) == null) tokenKeys.put(origin, tokens.epoch, tokens.keys)
+                blindRelay = origin
+            }
+            Info(json.optInt("version", 0), urls, tokens)
         }
     }
+
+    /** The relay [info] last found issuing blind tokens. */
+    @Volatile private var blindRelay: String? = null
 
     private fun pool(kind: TokenKind): TokenPool = when (kind) {
         TokenKind.DELIVERY -> tokens
@@ -349,6 +373,14 @@ class RelayClient(
     /** Delivery tokens this phone holds, unexpired. */
     fun tokenCount(): Int = tokens.size(System.currentTimeMillis())
 
+    /** How many of the delivery tokens held are blind ones (the rest came from a relay before Beta 6). */
+    fun blindTokenCount(): Int = (tokens as? MemoryTokenPool)?.let { pool ->
+        runCatching {
+            val arr = JSONArray(pool.encode())
+            (0 until arr.length()).count { arr.getJSONObject(it).optString("t").startsWith("2.") }
+        }.getOrDefault(0)
+    } ?: 0
+
     /**
      * Fetches a batch of delivery tokens when fewer than [low] are left. Called
      * at registration, on every sync and by the hourly key top-up, and after a
@@ -380,20 +412,70 @@ class RelayClient(
 
     @Synchronized
     private fun fetchTokens(kind: TokenKind, count: Int) {
-        val body = JSONObject().put("count", count.coerceIn(1, TOKENS_BATCH)).put("kind", kind.wire)
-        val json = try {
-            signed("POST", "/v1/tokens", body)
-        } catch (e: RelayException) {
-            // The first signed request from a phone whose clock is off is refused;
-            // its response taught this client the relay's time, so once more.
-            if (e.code != 401) throw e
-            signed("POST", "/v1/tokens", body)
+        val relay = base() ?: throw RelayException("Not registered with a relay")
+        if (blindRelay != relay.trimEnd('/') && info().tokens == null) {
+            fetchPlainTokens(kind, count)
+            return
         }
+        fetchBlindTokens(relay, kind, count)
+    }
+
+    /** A relay before Beta 6: tokens it makes, and so could match to this account. */
+    private fun fetchPlainTokens(kind: TokenKind, count: Int) {
+        val body = JSONObject().put("count", count.coerceIn(1, TOKENS_BATCH)).put("kind", kind.wire)
+        val json = signedOnceMore("/v1/tokens", body)
         parsed {
             val arr = json.getJSONArray("tokens")
             pool(kind).add((0 until arr.length()).map { arr.getString(it) }, json.getLong("expiresAt"))
         }
     }
+
+    /**
+     * Blind tokens (comms-worker/src/tokens.ts): this phone makes [count] random
+     * inputs and sends the relay only their blinded forms. The relay's answer
+     * comes with a proof that it used its key for [kind]; the key must be the one
+     * it publishes at GET / to every caller, and the same one this phone saw
+     * first in that epoch, or the batch is refused. Unblinded, each is a token
+     * the relay can check but cannot trace to this account.
+     */
+    private fun fetchBlindTokens(relay: String, kind: TokenKind, count: Int) {
+        val blinds = List(count.coerceIn(1, BLIND_TOKENS_BATCH)) { tokenBlind() }
+        val body = JSONObject().put("kind", kind.wire).put("blinded", JSONArray(blinds.map { b64url(it.blinded) }))
+        val json = signedOnceMore("/v1/tokens", body)
+        val (epoch, key, evaluated, proof) = parsed {
+            val arr = json.getJSONArray("evaluated")
+            Quad(json.getLong("epoch"), json.getString("key"), (0 until arr.length()).map { fromB64url(arr.getString(it)) }, fromB64url(json.getString("proof")))
+        }
+        val origin = relay.trimEnd('/')
+        val pinned = tokenKeys.get(origin, epoch) ?: run {
+            // A new epoch since the keys were last seen: read them anonymously, as any caller does.
+            info()
+            tokenKeys.get(origin, epoch) ?: throw RelayException("The relay issued tokens for an epoch it does not publish", MALFORMED)
+        }
+        if (pinned[kind.wire] != key) {
+            throw RelayException("The relay issued ${kind.wire} tokens under a key it does not give everyone; refused", TOKEN_KEY_MISMATCH)
+        }
+        val outputs = try {
+            tokenFinalize(blinds, evaluated, proof, fromB64url(key))
+        } catch (e: Exception) {
+            throw RelayException("The relay's ${kind.wire} tokens did not prove out against its published key; refused", TOKEN_KEY_MISMATCH)
+        }
+        val made = outputs.mapIndexed { i, out -> "2.$epoch.${b64url(blinds[i].input)}.${b64url(out)}" }
+        parsed { pool(kind).add(made, json.getLong("expiresAt")) }
+    }
+
+    private data class Quad(val epoch: Long, val key: String, val evaluated: List<ByteArray>, val proof: ByteArray)
+
+    /** A signed POST, sent once more after a 401: the first from a phone whose clock is off is refused, and taught this client the relay's time. */
+    private fun signedOnceMore(path: String, body: JSONObject): JSONObject = try {
+        signed("POST", path, body)
+    } catch (e: RelayException) {
+        if (e.code != 401) throw e
+        signed("POST", path, body)
+    }
+
+    private fun b64url(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    private fun fromB64url(s: String): ByteArray = Base64.getUrlDecoder().decode(s)
 
     /** Forgets every token of every kind (the phone is unpairing). */
     fun clearTokens() {
@@ -747,6 +829,8 @@ class RelayClient(
         const val MALFORMED = -1
         /** [RelayException.code] for a send with no delivery token left: retry after [topUpTokens]. */
         const val NO_TOKENS = -2
+        /** The relay's tokens were not made with the key it publishes to everyone, or the first one seen this epoch. */
+        const val TOKEN_KEY_MISMATCH = -5
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
         /** Segments per /v1/traffic/typical request (the relay's limit). */
@@ -758,6 +842,8 @@ class RelayClient(
         private const val ICE_CACHE_MS = 10 * 60_000L
         /** Delivery tokens fetched at a time (the relay's maximum), and the level that triggers a fetch. */
         const val TOKENS_BATCH = 100
+        /** Blind tokens asked for at a time: each costs the relay about a quarter of a millisecond to sign. */
+        const val BLIND_TOKENS_BATCH = 50
         const val TOKENS_LOW = 40
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
@@ -769,6 +855,7 @@ class RelayClient(
          */
         fun originOf(url: String?): String? {
             val u = runCatching { java.net.URI(url?.trim()?.trimEnd('/') ?: return null) }.getOrNull() ?: return null
+            if (BuildConfig.DEBUG) loopbackOrigin(u)?.let { return it }
             if (!u.scheme.equals("https", ignoreCase = true) || u.rawUserInfo != null) return null
             if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
             val host = u.host?.lowercase() ?: return null
@@ -776,5 +863,23 @@ class RelayClient(
             if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return null
             return if (u.port == -1 || u.port == 443) "https://$host" else "https://$host:${u.port}"
         }
+
+        /**
+         * `http://127.0.0.1:port` or `http://localhost:port`: a relay on the
+         * computer this phone (or emulator, through adb reverse) is attached
+         * to, as the end-to-end tests run them. Debug builds only, as relays
+         * admit such addresses only when they themselves run on loopback
+         * (federation.ts isLoopbackDev); a release build never talks in the clear.
+         */
+        fun loopbackOrigin(u: java.net.URI): String? {
+            if (!u.scheme.equals("http", ignoreCase = true) || u.rawUserInfo != null || u.port <= 0) return null
+            if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
+            val host = u.host?.lowercase() ?: return null
+            return if (host == "127.0.0.1" || host == "localhost") "http://$host:${u.port}" else null
+        }
+
+        /** Whether [url] is a relay address registration accepts: https, or loopback in a debug build. */
+        fun acceptableRelayUrl(url: String): Boolean =
+            url.startsWith("https://") || (BuildConfig.DEBUG && runCatching { loopbackOrigin(java.net.URI(url)) }.getOrNull() != null)
     }
 }

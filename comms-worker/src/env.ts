@@ -53,6 +53,12 @@ export interface Env {
    */
   RELAY_KEY?: string;
   /**
+   * Optional secret: what this relay derives its blind-token keys from, base64
+   * of 32 random bytes. Unset: the relay makes its own on first use and keeps
+   * it in its "relay-identity" object. Changing it voids every token issued.
+   */
+  TOKEN_KEY?: string;
+  /**
    * Optional: the https origin other relays reach this one at, when it is not
    * the address requests arrive on (a custom domain in front of workers.dev).
    */

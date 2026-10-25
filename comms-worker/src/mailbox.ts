@@ -108,6 +108,11 @@ export const MAX_ENVELOPE_B64 = Math.floor((MAX_ENVELOPE_BYTES * 4) / 3) + 4;
 const FED_INBOUND_PER_HOUR = 1_800;
 const FED_INBOUND_BURST = 300;
 const FED_QUEUE_RESERVE = 500;
+
+/** The answer to a send for a number that does not exist; the caller accepts and drops it. */
+const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
+/** An envelope from another relay dropped at a limit: answered as NO_SUCH_NUMBER is. */
+const DROPPED: EnqueueResult = NO_SUCH_NUMBER;
 const ENVELOPE_TTL_MS = 30 * 24 * 60 * 60_000;
 /** One-time keys a mailbox holds; the app keeps a few hundred published so lookups cannot empty it. */
 const MAX_ONE_TIME_KEYS = 500;
@@ -556,6 +561,20 @@ export class Mailbox extends DurableObject<Env> {
     if (alarm === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
   }
 
+  /**
+   * Records a blind token (tokens.ts) as spent, keyed by the hash of its kind,
+   * epoch and input, until its key is retired. False when it was spent before.
+   * The token's output has already been checked; nothing here knows who it was
+   * issued to, because nothing anywhere does.
+   */
+  async spendBlindToken(hash: string, expiresAt: number): Promise<boolean> {
+    const key = `s:${hash}`;
+    if ((await this.ctx.storage.get<number>(key)) !== undefined) return false;
+    await this.ctx.storage.put({ [key]: expiresAt, tokenShard: true });
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
+    return true;
+  }
+
   /** Spends the token with this hash. False when it is unknown, expired or already spent. */
   async redeemToken(hash: string): Promise<boolean> {
     const key = `t:${hash}`;
@@ -565,12 +584,18 @@ export class Mailbox extends DurableObject<Env> {
     return expiresAt > Date.now();
   }
 
-  /** Drops expired token hashes, a page at a time; true when any are left. */
+  /** Drops expired token hashes, issued ("t:") and spent blind ones ("s:"), a page at a time; true when any are left. */
   private async cleanupTokens(now: number): Promise<boolean> {
+    let left = 0;
+    for (const prefix of ["t:", "s:"]) left += await this.cleanupTokenPrefix(prefix, now);
+    return left > 0;
+  }
+
+  private async cleanupTokenPrefix(prefix: string, now: number): Promise<number> {
     let startAfter: string | undefined;
     let left = 0;
     for (;;) {
-      const page = await this.ctx.storage.list<number>({ prefix: "t:", startAfter, limit: DELETE_BATCH });
+      const page = await this.ctx.storage.list<number>({ prefix, startAfter, limit: DELETE_BATCH });
       if (page.size === 0) break;
       const keys = [...page.keys()];
       const stale = [...page].filter(([, exp]) => exp <= now).map(([k]) => k);
@@ -578,7 +603,7 @@ export class Mailbox extends DurableObject<Env> {
       left += keys.length - stale.length;
       startAfter = keys[keys.length - 1];
     }
-    return left > 0;
+    return left;
   }
 
   // ── Limits ───────────────────────────────────────────────────────────
@@ -764,13 +789,25 @@ export class Mailbox extends DurableObject<Env> {
    * object only. It is never sent anywhere; GET / publishes its public half.
    */
   async relayIdentitySeed(): Promise<string> {
-    const existing = await this.ctx.storage.get<string>("relaySeed");
+    return this.relaySecret("relaySeed");
+  }
+
+  /**
+   * The secret this relay derives its blind-token keys from (tokens.ts), made
+   * and kept the same way as the relay's signing seed, in this object only.
+   */
+  async tokenSeed(): Promise<string> {
+    return this.relaySecret("tokenSeed");
+  }
+
+  private async relaySecret(name: "relaySeed" | "tokenSeed"): Promise<string> {
+    const existing = await this.ctx.storage.get<string>(name);
     if (existing) return existing;
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     let s = "";
     for (const b of bytes) s += String.fromCharCode(b);
     const seed = btoa(s);
-    await this.ctx.storage.put("relaySeed", seed);
+    await this.ctx.storage.put(name, seed);
     return seed;
   }
 
@@ -834,15 +871,23 @@ export class Mailbox extends DurableObject<Env> {
     // envelope is answered the same whether the number exists or not.
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
     const profile = await this.ctx.storage.get<Profile>("profile");
-    if (!profile) return { ok: false, reason: "no such number", status: 404 };
+    if (!profile) return NO_SUCH_NUMBER;
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
-    if (count >= (federated ? MAX_QUEUE - FED_QUEUE_RESERVE : MAX_QUEUE)) return { ok: false, reason: "mailbox full", status: 413 };
     if (federated) {
-      const fed = await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST);
-      if (!fed.ok) return { ok: false, reason: "this number is receiving too much from other relays; try again shortly", status: 429, retryAfter: fed.retryAfter };
+      // Envelopes from other relays that would go over this mailbox's limits
+      // are dropped and answered exactly as a send to a number that does not
+      // exist: several relays acting together could otherwise fill a mailbox
+      // or its allowance and learn from the refusal that the number is real.
+      // Only other relays' envelopes are dropped, and only while this mailbox
+      // is being flooded from outside; this relay's own senders are untouched.
+      if (count >= MAX_QUEUE - FED_QUEUE_RESERVE) return DROPPED;
+      if (!(await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST)).ok) return DROPPED;
+      if (!(await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST)).ok) return DROPPED;
+    } else {
+      if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };
+      const inbound = await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST);
+      if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     }
-    const inbound = await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST);
-    if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     // The first envelope of a session spends the one-time key it was built on.
     if (claim !== null) await this.confirmClaim(claim);
     const now = Date.now();

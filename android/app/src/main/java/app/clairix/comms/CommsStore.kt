@@ -23,6 +23,16 @@ class CommsStore(
     context.applicationContext, name, CommsDb.password(context, DB_VERSION, name), null, DB_VERSION, 0, null, null, false
 ) {
 
+    /**
+     * Deleted rows are overwritten, not just unlinked: a disappearing message, a
+     * wiped conversation or a deleted contact leaves nothing in the file's free
+     * pages for someone who later has the file and its key.
+     */
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        db.rawQuery("PRAGMA secure_delete = ON", null).use { it.moveToFirst() }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE contacts (
@@ -75,6 +85,7 @@ class CommsStore(
         createVersion5(db)
         createVersion6(db)
         createVersion7(db)
+        createVersion8(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -86,6 +97,26 @@ class CommsStore(
         if (oldVersion < 5) createVersion5(db)
         if (oldVersion < 6) createVersion6(db)
         if (oldVersion < 7) createVersion7(db)
+        if (oldVersion < 8) createVersion8(db)
+    }
+
+    /**
+     * Disappearing messages: how long each message lasts and when it goes, and
+     * each conversation's timer with the time it was last changed (a change from
+     * the other side applies only if it is newer).
+     */
+    private fun createVersion8(db: SQLiteDatabase) {
+        val cols = columnsOf(db, "messages")
+        if ("ttl" !in cols) db.execSQL("ALTER TABLE messages ADD COLUMN ttl INTEGER NOT NULL DEFAULT 0")
+        if ("expires_at" !in cols) db.execSQL("ALTER TABLE messages ADD COLUMN expires_at INTEGER")
+        db.execSQL("CREATE INDEX IF NOT EXISTS messages_expires ON messages (expires_at) WHERE expires_at IS NOT NULL")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS timers (
+                peer TEXT PRIMARY KEY,
+                ttl INTEGER NOT NULL,
+                ts INTEGER NOT NULL
+            )"""
+        )
     }
 
     /** Contacts on other relays: the relay each one is on, null for this phone's own. */
@@ -308,6 +339,10 @@ class CommsStore(
             put("kind", m.kind)
             put("gid", gid)
             put("sender", m.sender)
+            put("ttl", m.ttl)
+            // An outbound message's clock starts now; an inbound one's when it is read.
+            val expires = m.expiresAt ?: if (m.ttl > 0 && (m.direction == Direction.OUT || m.read)) System.currentTimeMillis() + m.ttl * 1000L else null
+            if (expires != null) put("expires_at", expires) else putNull("expires_at")
         }
         writableDatabase.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
@@ -431,7 +466,7 @@ class CommsStore(
     }
 
     fun messages(peer: String): List<ChatMessage> =
-        readableDatabase.query("messages", null, "peer = ?", arrayOf(peer), null, null, "ts ASC").use { c ->
+        readableDatabase.query("messages", null, "peer = ? AND ${alive()}", arrayOf(peer), null, null, "ts ASC").use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
             out
@@ -454,7 +489,7 @@ class CommsStore(
 
     /** Outbound messages still waiting to be sent, oldest first. */
     fun queued(): List<ChatMessage> =
-        readableDatabase.query("messages", null, "direction = 'OUT' AND status = 'queued'", null, null, null, "ts ASC").use { c ->
+        readableDatabase.query("messages", null, "direction = 'OUT' AND status = 'queued' AND ${alive()}", null, null, null, "ts ASC").use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
             out
@@ -464,11 +499,11 @@ class CommsStore(
         val contacts = contacts()
         val db = readableDatabase
         return contacts.map { contact ->
-            val last = db.query("messages", null, "peer = ?", arrayOf(contact.number), null, null, "ts DESC", "1").use { c ->
+            val last = db.query("messages", null, "peer = ? AND ${alive()}", arrayOf(contact.number), null, null, "ts DESC", "1").use { c ->
                 if (c.moveToFirst()) readMessage(c) else null
             }
             val unread = db.rawQuery(
-                "SELECT COUNT(*) FROM messages WHERE peer = ? AND direction = 'IN' AND read = 0", arrayOf(contact.number)
+                "SELECT COUNT(*) FROM messages WHERE peer = ? AND direction = 'IN' AND read = 0 AND ${alive()}", arrayOf(contact.number)
             ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
             ChatThread(contact, last, unread)
         }.sortedByDescending { it.lastMessage?.ts ?: it.contact.addedTs }
@@ -495,6 +530,7 @@ class CommsStore(
             for (id in ids) db.execSQL("UPDATE messages SET read = 1 WHERE id = ?", arrayOf(id))
             // Missed-call entries and this phone's own notes are read too, but are not messages to receipt.
             db.execSQL("UPDATE messages SET read = 1 WHERE peer = ? AND direction = 'IN' AND read = 0 AND status != ?", arrayOf(peer, STATUS_RECEIVING))
+            startClocks(db, "peer = ?", peer)
             db.setTransactionSuccessful()
             return ids
         } finally {
@@ -505,7 +541,7 @@ class CommsStore(
     /** The newest unread inbound messages from [peer], for the notification; only these are decrypted. */
     fun unreadInbound(peer: String, limit: Int): List<ChatMessage> =
         readableDatabase.query(
-            "messages", null, "peer = ? AND direction = 'IN' AND read = 0", arrayOf(peer), null, null, "ts DESC", limit.toString()
+            "messages", null, "peer = ? AND direction = 'IN' AND read = 0 AND ${alive()}", arrayOf(peer), null, null, "ts DESC", limit.toString()
         ).use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
@@ -513,7 +549,7 @@ class CommsStore(
         }
 
     fun unreadCount(): Int =
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM messages WHERE direction = 'IN' AND read = 0", null).use { c ->
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM messages WHERE direction = 'IN' AND read = 0 AND ${alive()}", null).use { c ->
             if (c.moveToFirst()) c.getInt(0) else 0
         }
 
@@ -637,7 +673,7 @@ class CommsStore(
 
     /** The newest [limit] messages in group [gid]'s conversation, newest first. */
     fun groupMessages(gid: String, limit: Int = 100): List<ChatMessage> =
-        readableDatabase.query("messages", null, "gid = ?", arrayOf(gid), null, null, "ts DESC", limit.toString()).use { c ->
+        readableDatabase.query("messages", null, "gid = ? AND ${alive()}", arrayOf(gid), null, null, "ts DESC", limit.toString()).use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
             out
@@ -645,18 +681,89 @@ class CommsStore(
 
     /** Marks a group conversation read; group messages are not receipted, so nothing is returned. */
     fun markGroupRead(gid: String) {
-        writableDatabase.execSQL("UPDATE messages SET read = 1 WHERE gid = ? AND direction = 'IN' AND read = 0", arrayOf(gid))
+        val db = writableDatabase
+        db.execSQL("UPDATE messages SET read = 1 WHERE gid = ? AND direction = 'IN' AND read = 0", arrayOf(gid))
+        startClocks(db, "gid = ?", gid)
     }
+
+    /** Starts the clock of every read disappearing message in one conversation that has not started yet. */
+    private fun startClocks(db: SQLiteDatabase, where: String, arg: String) {
+        db.execSQL(
+            "UPDATE messages SET expires_at = ? + ttl * 1000 WHERE $where AND ttl > 0 AND expires_at IS NULL AND read = 1",
+            arrayOf(System.currentTimeMillis(), arg)
+        )
+    }
+
+    // ── Disappearing messages ────────────────────────────────────────────
+
+    /** The disappearing-messages timer of a conversation (a contact's number or a group id), in seconds; 0 when off. */
+    fun timer(peer: String): Int =
+        readableDatabase.rawQuery("SELECT ttl FROM timers WHERE peer = ?", arrayOf(peer)).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /**
+     * Sets a conversation's timer, as changed at [ts]. A change older than the
+     * one already recorded is ignored (two phones changing it at once settle on
+     * the later). Returns true when it changed anything.
+     */
+    fun setTimer(peer: String, ttl: Int, ts: Long): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val current = db.rawQuery("SELECT ttl, ts FROM timers WHERE peer = ?", arrayOf(peer)).use { c ->
+                if (c.moveToFirst()) c.getInt(0) to c.getLong(1) else null
+            }
+            if (current != null && (current.second > ts || (current.second == ts && current.first == ttl))) return false
+            if (current == null && ttl == 0) return false
+            db.insertWithOnConflict("timers", null, ContentValues().apply { put("peer", peer); put("ttl", ttl); put("ts", ts) }, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+            return current?.first != ttl
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * Deletes every message whose time is up, with the chunks of any half-arrived
+     * file, and returns them (id, conversation, kind) so their files and
+     * notifications can go too.
+     */
+    fun expireMessages(now: Long): List<Triple<String, String, String>> {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val gone = db.rawQuery(
+                "SELECT id, peer, kind FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?", arrayOf(now.toString())
+            ).use { c ->
+                val out = ArrayList<Triple<String, String, String>>()
+                while (c.moveToNext()) out += Triple(c.getString(0), c.getString(1), if (c.isNull(2)) KIND_TEXT else c.getString(2))
+                out
+            }
+            for ((id, _, _) in gone) {
+                db.delete("messages", "id = ?", arrayOf(id))
+                db.delete("media_chunks", "id = ?", arrayOf(id))
+            }
+            db.setTransactionSuccessful()
+            return gone
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** When the next message is due to go, or null when none is counting down. */
+    fun nextExpiry(): Long? =
+        readableDatabase.rawQuery("SELECT MIN(expires_at) FROM messages WHERE expires_at IS NOT NULL", null).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
 
     fun groupUnread(gid: String): Int =
         readableDatabase.rawQuery(
-            "SELECT COUNT(*) FROM messages WHERE gid = ? AND direction = 'IN' AND read = 0", arrayOf(gid)
+            "SELECT COUNT(*) FROM messages WHERE gid = ? AND direction = 'IN' AND read = 0 AND ${alive()}", arrayOf(gid)
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
     /** The newest unread inbound messages in group [gid], oldest first, for the notification. */
     fun unreadGroupInbound(gid: String, limit: Int): List<ChatMessage> =
         readableDatabase.query(
-            "messages", null, "gid = ? AND direction = 'IN' AND read = 0", arrayOf(gid), null, null, "ts DESC", limit.toString()
+            "messages", null, "gid = ? AND direction = 'IN' AND read = 0 AND ${alive()}", arrayOf(gid), null, null, "ts DESC", limit.toString()
         ).use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
@@ -1003,6 +1110,7 @@ class CommsStore(
             db.delete("groups", null, null)
             db.delete("group_members", null, null)
             db.delete("shared_threats", null, null)
+            db.delete("timers", null, null)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -1038,11 +1146,16 @@ class CommsStore(
             read = c.getInt(c.getColumnIndexOrThrow("read")) != 0,
             error = if (c.isNull(errorIdx)) null else c.getString(errorIdx),
             kind = if (kindIdx >= 0 && !c.isNull(kindIdx)) c.getString(kindIdx) else KIND_TEXT,
-            sender = if (senderIdx >= 0 && !c.isNull(senderIdx)) c.getString(senderIdx) else null
+            sender = if (senderIdx >= 0 && !c.isNull(senderIdx)) c.getString(senderIdx) else null,
+            ttl = c.getColumnIndex("ttl").let { i -> if (i >= 0) c.getInt(i) else 0 },
+            expiresAt = c.getColumnIndex("expires_at").let { i -> if (i >= 0 && !c.isNull(i)) c.getLong(i) else null }
         )
     }
 
+    /** SQL that keeps only messages not yet past their time: an expired one is never shown, even before it is deleted. */
+    private fun alive(): String = "(expires_at IS NULL OR expires_at > ${System.currentTimeMillis()})"
+
     private companion object {
-        const val DB_VERSION = 7
+        const val DB_VERSION = 8
     }
 }
