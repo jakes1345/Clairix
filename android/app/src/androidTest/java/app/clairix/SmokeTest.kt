@@ -54,6 +54,11 @@ class SmokeTest {
         device.waitForIdle(2_000)
         val f = File(shots, "%02d-%s.png".format(shotIndex++, name.replace(Regex("[^A-Za-z0-9]+"), "-")))
         device.takeScreenshot(f)
+        // Secure screens (Comms) come out black, so a failure also keeps the
+        // window hierarchy: what was on screen, as text.
+        if (name.startsWith("MISSING") || name.startsWith("LEFT")) {
+            runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
+        }
     }
 
     /** Fails if the app has crashed, stopped responding or left the foreground. */
