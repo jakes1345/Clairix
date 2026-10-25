@@ -1,0 +1,47 @@
+name: Relay
+
+# Type-checks the comms relay Worker and runs its tests end to end: the
+# Worker's own fetch handler and Durable Objects over in-memory storage
+# (test/harness/fake-env.mjs), including mixing and relay-to-relay federation.
+on:
+  pull_request:
+    paths:
+      - 'comms-worker/**'
+      - '.github/workflows/relay.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'comms-worker/**'
+      - '.github/workflows/relay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: comms-worker
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Node 22.18+ runs the TypeScript sources directly and has node:sqlite.
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Bundle
+        run: npx wrangler deploy --dry-run --outdir=dist

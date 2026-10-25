@@ -82,17 +82,37 @@ jobs:
           "$SDKM" --install emulator "$IMAGE" platform-tools > /dev/null
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n smoke -k "$IMAGE" -d pixel_6 --force
 
+      # Never `adb wait-for-device` alone: an emulator that dies at start leaves it
+      # waiting until the job's timeout, with nothing in the log to say why.
       - name: Boot the emulator
+        timeout-minutes: 20
         run: |
+          "$ANDROID_HOME/emulator/emulator" -accel-check || true
           "$ANDROID_HOME/emulator/emulator" -avd smoke -no-window -no-audio -no-boot-anim -no-snapshot \
-            -gpu swiftshader_indirect -camera-back none -camera-front none -memory 4096 > emulator.log 2>&1 &
+            -gpu swiftshader_indirect -camera-back none -camera-front none -memory 4096 -accel on > emulator.log 2>&1 &
+          EMU=$!
           ADB="$ANDROID_HOME/platform-tools/adb"
-          "$ADB" wait-for-device
-          for i in $(seq 1 120); do
-            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+          "$ADB" start-server
+          booted=
+          for i in $(seq 1 180); do
+            if ! kill -0 "$EMU" 2>/dev/null; then
+              echo "::error::The emulator exited before it booted"
+              tail -n 120 emulator.log
+              exit 1
+            fi
+            if [ "$(timeout 10 "$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              booted=1
+              break
+            fi
             sleep 5
           done
-          "$ADB" shell getprop sys.boot_completed
+          if [ -z "$booted" ]; then
+            echo "::error::The emulator did not finish booting in 15 minutes"
+            tail -n 120 emulator.log
+            "$ADB" devices -l || true
+            exit 1
+          fi
+          echo "Booted after about $((i * 5)) s"
           "$ADB" shell settings put global window_animation_scale 0
           "$ADB" shell settings put global transition_animation_scale 0
           "$ADB" shell settings put global animator_duration_scale 0
@@ -100,13 +120,14 @@ jobs:
 
       - name: Run the smoke test
         working-directory: android
+        timeout-minutes: 30
         run: |
           ADB="$ANDROID_HOME/platform-tools/adb"
           "$ADB" logcat -c
           "$ADB" install -r -g app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
           "$ADB" install -r app/build/outputs/apk/androidTest/fullSuite/debug/app-full-suite-debug-androidTest.apk
           set +e
-          "$ADB" shell am instrument -w -r app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../instrument.txt
+          timeout 1500 "$ADB" shell am instrument -w -r app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../instrument.txt
           set -e
           "$ADB" logcat -d > ../logcat.txt
           mkdir -p ../screens
