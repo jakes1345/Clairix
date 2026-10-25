@@ -80,6 +80,23 @@ jobs:
           echo "NDK: $ANDROID_NDK_HOME"
           ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # The Kotlin unit tests: detectors, routing, comms wire formats, the tour's
+      # coverage. They used to be run by nobody; a build that compiles is not one
+      # whose detectors work.
+      - name: Kotlin unit tests
+        working-directory: android
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
+          ./gradlew testFullSuiteDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload unit test report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unit-test-report
+          path: android/app/build/reports/tests/
+          if-no-files-found: ignore
+
       # Every debug variant: the full edition's whole app (app-full-suite-debug.apk)
       # and comms-only build (app-full-comms-debug.apk), and the Play edition
       # (app-play-suite-debug.apk).

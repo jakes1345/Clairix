@@ -134,6 +134,63 @@ export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 const MAX_TX_HISTORY = 100;
 /** ClairixCoin: the most one transfer may move. */
 const MAX_SINGLE_TRANSFER = 1_000_000;
+/**
+ * Mixing: the longest a non-urgent envelope is held before it is released to
+ * its recipient, unless MIX_MAX_MS says otherwise ("0" turns mixing off). The
+ * hold is drawn from an exponential distribution with a fifth of this as its
+ * mean, cut off here.
+ */
+const MIX_MAX_MS_DEFAULT = 20_000;
+/** Staged envelopes released by one alarm at most; the rest go on the next, at once. */
+const MIX_RELEASE_BATCH = 500;
+/** Storage writes per call stay under the platform's 128-key limit. */
+const PUT_BATCH = 64;
+
+/**
+ * How long to hold one envelope: exponential with mean [max]/5, at most [max].
+ * The memoryless distribution means how long an envelope has already waited
+ * says nothing about when it leaves, so departures do not line up with arrivals.
+ */
+export function mixDelay(max: number, uniform: number = randomUnit()): number {
+  if (max <= 0) return 0;
+  const mean = max / 5;
+  const u = Math.min(Math.max(uniform, Number.MIN_VALUE), 1);
+  return Math.min(max, Math.max(0, Math.round(-mean * Math.log(u))));
+}
+
+/** A uniform number in (0, 1] from the platform's CSPRNG. */
+function randomUnit(): number {
+  const word = crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
+  return (word + 1) / 2 ** 32;
+}
+
+/** The hold limit [env] sets, in milliseconds; 0 means mixing is off. */
+export function mixMaxMs(env: Pick<Env, "MIX_MAX_MS">): number {
+  const raw = env.MIX_MAX_MS?.trim();
+  if (raw === undefined || raw === "") return MIX_MAX_MS_DEFAULT;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.round(n), 120_000) : MIX_MAX_MS_DEFAULT;
+}
+
+/** Fisher-Yates over the platform's CSPRNG. */
+function shuffle<T>(items: T[]): T[] {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(randomUnit() * (i + 1)) % (i + 1);
+    const t = items[i] as T;
+    items[i] = items[j] as T;
+    items[j] = t;
+  }
+  return items;
+}
+
+/** The storage key of an envelope held for mixing: sorts by release time. */
+function stagedKey(releaseAt: number, id: string): string {
+  return `m:${releaseAt.toString(36).padStart(10, "0")}:${id}`;
+}
+
+function stagedReleaseAt(key: string): number {
+  return parseInt(key.slice(2, 12), 36);
+}
 
 /** An invite: one registration without the enrollment secret. Stored in its own object, named after its code. */
 interface Invite {
@@ -157,6 +214,12 @@ interface PendingPush {
   endpoint: string;
   codeHash: string;
   expiresAt: number;
+}
+
+/** An envelope held for mixing, released to the queue at [releaseAt]. */
+interface StagedEnvelope {
+  envelope: Envelope;
+  releaseAt: number;
 }
 
 export type EnqueueResult =
@@ -681,13 +744,48 @@ export class Mailbox extends DurableObject<Env> {
     await this.ctx.storage.deleteAll();
   }
 
+  // ── Another relay ("fed:<hash>" objects; see federation.ts) ─────────
+
+  /** The signing key the other relay publishes, as last fetched, and when. */
+  async federationKey(): Promise<{ key: string; fetchedAt: number } | null> {
+    return (await this.ctx.storage.get<{ key: string; fetchedAt: number }>("fedKey")) ?? null;
+  }
+
+  async setFederationKey(key: string): Promise<void> {
+    await this.ctx.storage.put("fedKey", { key, fetchedAt: Date.now() });
+  }
+
+  /** Whether [nonce] is new from this relay within the replay window; records it if so. */
+  async federationNonceOk(nonce: string): Promise<boolean> {
+    const nonces = (await this.ctx.storage.get<NonceRecord>("nonces")) ?? {};
+    const now = Date.now();
+    for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS + 60_000) delete nonces[n];
+    if (nonces[nonce] !== undefined) return false;
+    nonces[nonce] = minuteFloor(now);
+    await this.ctx.storage.put("nonces", nonces);
+    return true;
+  }
+
+  /** Whether the other relay, for all its phones together, may claim one more one-time key this hour. */
+  async federatedClaimOk(perHour: number, burst: number): Promise<boolean> {
+    return (await this.allowanceOk("fed-claims", perHour, burst)).ok;
+  }
+
   // ── Envelopes ───────────────────────────────────────────────────────
 
   /**
    * Queues an envelope for the owner and delivers it to any live socket. Returns
    * false when the mailbox does not exist or is full.
+   *
+   * Unless it is [urgent] (a call being set up, an SOS), the envelope is first
+   * held for a few seconds, a random time for each one, and released by the
+   * alarm together with whatever else is due, in shuffled order. Someone who
+   * watches traffic into the relay and traffic out to the owner's phone then
+   * cannot pair an envelope in with the delivery out by timing alone, and a
+   * burst from one sender arrives interleaved with everyone else's. The hold
+   * counts towards the queue, so a full mailbox is full either way.
    */
-  async enqueue(data: string, claim: string | null = null): Promise<EnqueueResult> {
+  async enqueue(data: string, claim: string | null = null, urgent = false): Promise<EnqueueResult> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return { ok: false, reason: "no such number", status: 404 };
     if (data.length > (MAX_ENVELOPE_BYTES * 4) / 3 + 4) return { ok: false, reason: "envelope too large", status: 413 };
@@ -697,35 +795,85 @@ export class Mailbox extends DurableObject<Env> {
     if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     // The first envelope of a session spends the one-time key it was built on.
     if (claim !== null) await this.confirmClaim(claim);
-    const id = `${Date.now().toString(36)}-${crypto.randomUUID()}`;
-    const envelope: Envelope = { id, ts: Date.now(), data };
+    const now = Date.now();
+    const id = `${now.toString(36)}-${crypto.randomUUID()}`;
+    const envelope: Envelope = { id, ts: now, data };
+    const hold = urgent ? 0 : mixDelay(mixMaxMs(this.env));
+    if (hold > 0) {
+      const staged: StagedEnvelope = { envelope, releaseAt: now + hold };
+      await this.ctx.storage.put({ [stagedKey(staged.releaseAt, id)]: staged, queueCount: count + 1 });
+      await this.scheduleAlarm();
+      return { ok: true, id };
+    }
     await this.ctx.storage.put({ [`q:${id}`]: envelope, queueCount: count + 1 });
+    await this.handOver([envelope], true);
+    return { ok: true, id };
+  }
 
+  /**
+   * Gives envelopes just queued to the owner's live socket, and wakes the
+   * phone through push when there is none. Outside a request ([fromRequest]
+   * false: the alarm) the wake is awaited rather than left to waitUntil.
+   */
+  private async handOver(envelopes: Envelope[], fromRequest: boolean): Promise<void> {
+    if (envelopes.length === 0) return;
     const sockets = this.ctx.getWebSockets();
     let delivered = false;
-    for (const ws of sockets) {
-      try {
-        ws.send(JSON.stringify({ type: "envelope", envelope }));
-        delivered = true;
-      } catch {
-        // a dead socket; the owner will fetch on reconnect
+    for (const envelope of envelopes) {
+      for (const ws of sockets) {
+        try {
+          ws.send(JSON.stringify({ type: "envelope", envelope }));
+          delivered = true;
+        } catch {
+          // a dead socket; the owner will fetch on reconnect
+        }
       }
     }
     const endpoint = await this.ctx.storage.get<string>("push");
-    if (endpoint) {
-      if (delivered) {
-        // A socket whose phone lost its network still accepts a send without
-        // error, so "delivered" only means handed over. If the phone has not
-        // acked within a few seconds, the alarm wakes it through push as well.
-        const check = (await this.ctx.storage.get<WakeCheck>("wakeCheck")) ?? { due: Date.now() + UNACKED_WAKE_MS, ids: [] };
-        check.ids.push(id);
-        await this.ctx.storage.put("wakeCheck", { due: check.due, ids: check.ids.slice(-200) });
-        await this.scheduleAlarm();
-      } else {
-        this.ctx.waitUntil(this.wakeOwner(endpoint));
-      }
+    if (!endpoint) return;
+    if (delivered) {
+      // A socket whose phone lost its network still accepts a send without
+      // error, so "delivered" only means handed over. If the phone has not
+      // acked within a few seconds, the alarm wakes it through push as well.
+      const check = (await this.ctx.storage.get<WakeCheck>("wakeCheck")) ?? { due: Date.now() + UNACKED_WAKE_MS, ids: [] };
+      check.ids.push(...envelopes.map((e) => e.id));
+      await this.ctx.storage.put("wakeCheck", { due: check.due, ids: check.ids.slice(-200) });
+      await this.scheduleAlarm();
+    } else if (fromRequest) {
+      this.ctx.waitUntil(this.wakeOwner(endpoint));
+    } else {
+      await this.wakeOwner(endpoint);
     }
-    return { ok: true, id };
+  }
+
+  /**
+   * Moves every held envelope that is due into the queue, in shuffled order,
+   * and hands them over together. Returns how many were released.
+   */
+  private async releaseStaged(now: number): Promise<number> {
+    const page = await this.ctx.storage.list<StagedEnvelope>({ prefix: "m:", limit: MIX_RELEASE_BATCH });
+    const due: [string, StagedEnvelope][] = [];
+    for (const entry of page) {
+      if (stagedReleaseAt(entry[0]) > now) break;
+      due.push(entry);
+    }
+    if (due.length === 0) return 0;
+    const released = shuffle(due.map(([, s]) => s.envelope));
+    for (let i = 0; i < released.length; i += PUT_BATCH) {
+      const batch: Record<string, Envelope> = {};
+      for (const e of released.slice(i, i + PUT_BATCH)) batch[`q:${e.id}`] = e;
+      await this.ctx.storage.put(batch);
+    }
+    await this.deleteKeys(due.map(([key]) => key));
+    await this.handOver(released, false);
+    return released.length;
+  }
+
+  /** When the next held envelope is due, or null when none is held. */
+  private async nextRelease(): Promise<number | null> {
+    const first = await this.ctx.storage.list<StagedEnvelope>({ prefix: "m:", limit: 1 });
+    for (const key of first.keys()) return stagedReleaseAt(key);
+    return null;
   }
 
   /**
@@ -751,14 +899,17 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /**
-   * Sets the alarm for whichever comes first: the unacked-delivery check, the
-   * next heartbeat while a phone is connected, or the daily cleanup.
+   * Sets the alarm for whichever comes first: the next held envelope's
+   * release, the unacked-delivery check, the next heartbeat while a phone is
+   * connected, or the daily cleanup.
    */
   private async scheduleAlarm(rearm = false): Promise<void> {
     const cleanupAt = (await this.ctx.storage.get<number>("cleanupAt")) ?? Date.now() + CLEANUP_INTERVAL_MS;
     const check = await this.ctx.storage.get<WakeCheck>("wakeCheck");
     let next = check ? Math.min(cleanupAt, check.due) : cleanupAt;
     if (this.ctx.getWebSockets().length > 0) next = Math.min(next, Date.now() + HEARTBEAT_MS);
+    const release = await this.nextRelease();
+    if (release !== null) next = Math.min(next, release);
     // From inside alarm() the alarm being handled may still read as set, so the
     // handler re-arms outright; anyone else only ever brings the alarm forward.
     const current = rearm ? null : await this.ctx.storage.getAlarm();
@@ -782,9 +933,9 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /**
-   * Three jobs share the object's one alarm: the heartbeat to a connected
-   * phone, waking a phone that did not ack a live delivery in time, and the
-   * daily drop of envelopes past their TTL.
+   * Four jobs share the object's one alarm: releasing envelopes held for
+   * mixing, the heartbeat to a connected phone, waking a phone that did not
+   * ack a live delivery in time, and the daily drop of envelopes past their TTL.
    */
   override async alarm(): Promise<void> {
     const now = Date.now();
@@ -803,6 +954,13 @@ export class Mailbox extends DurableObject<Env> {
         await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
       }
       return;
+    }
+    try {
+      // A release past the batch limit leaves the rest due at once: the
+      // re-arm below brings the alarm straight back for them.
+      await this.releaseStaged(now);
+    } catch (e) {
+      console.error("mix release failed", e);
     }
     for (const ws of this.ctx.getWebSockets()) {
       try {

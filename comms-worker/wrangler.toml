@@ -9,6 +9,10 @@
 #   HERE_API_KEY         Optional, for navigation: HERE Traffic API v7 key; GET /v1/traffic/incidents
 #                        reports HERE as "off" without it
 #   TOMTOM_API_KEY       Optional, for navigation: TomTom Traffic API key; likewise "off" without it
+#   RELAY_KEY            Optional, for reaching other relays: this relay's Ed25519 seed, base64.
+#                        Make one with `npm run relay-key`. Without it, phones here reach only
+#                        numbers on this relay; with it, a phone can add a contact from another
+#                        relay's QR code and this relay forwards to that relay, signed as itself.
 #
 # Plain variables (may go in [vars] below):
 #   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with, e.g. "100"; unset: none
@@ -26,6 +30,14 @@
 #                        already read every USDOT-registry feed from the `workzones` release
 #                        (tools/workzones), so list only feeds missing from the registry; a
 #                        zone in both is shown once.
+#   MIX_MAX_MS           Longest an envelope is held for mixing, in ms (default "20000"; the mean hold
+#                        is a fifth of it). Held envelopes are released in shuffled batches so traffic
+#                        in cannot be paired with deliveries out by timing alone. Call set-up, SOS
+#                        and group membership changes are never held. "0" turns mixing off.
+#   FEDERATION           Which other relays may forward to this one: "open" (default; any relay,
+#                        within per-relay limits), "off", or comma-separated https origins
+#   RELAY_ORIGIN         The https address other relays should reach this one at, when requests
+#                        arrive on a different one (a custom domain in front of workers.dev)
 #   HERE_DAILY_CAP       Upstream HERE incident calls allowed per UTC day, default "1000"
 #   TOMTOM_DAILY_CAP     Upstream TomTom incident calls allowed per UTC day, default "2300"
 #                        (at the cap the provider reports "quota" until UTC midnight; past 80% of a

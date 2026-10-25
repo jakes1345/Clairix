@@ -39,6 +39,28 @@ export interface Env {
    * try them when the address they registered at stops answering.
    */
   RELAY_ALTERNATES?: string;
+  /**
+   * Optional: the longest a non-urgent envelope is held for mixing, in
+   * milliseconds (default 20000; the mean hold is a fifth of it). "0" turns
+   * mixing off.
+   */
+  MIX_MAX_MS?: string;
+  /**
+   * Optional secret: this relay's Ed25519 signing key for reaching other
+   * relays, base64 of a 32-byte seed (`npm run relay-key`). Unset: phones here
+   * can only reach numbers on this relay. Its public half is published at GET /.
+   */
+  RELAY_KEY?: string;
+  /**
+   * Optional: the https origin other relays reach this one at, when it is not
+   * the address requests arrive on (a custom domain in front of workers.dev).
+   */
+  RELAY_ORIGIN?: string;
+  /**
+   * Optional: which other relays may forward to this one. "open" (default):
+   * any, within per-relay limits; "off": none; or comma-separated origins.
+   */
+  FEDERATION?: string;
 }
 
 /** A JSON response with the headers every API reply carries. */

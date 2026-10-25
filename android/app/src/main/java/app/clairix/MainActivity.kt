@@ -244,6 +244,8 @@ class MainActivity : AppCompatActivity() {
             // enrolment tripwire is tested once per launch — Keystore work, off the
             // main thread. Each publishes straight into the Registry.
             UnlockLedger.init(this)
+            // The offline mesh comes back on if the owner left it on.
+            app.clairix.comms.mesh.Mesh.resume(this)
             lifecycleScope.launch {
                 // A card the guard disarmed (screen off, time up) while this screen
                 // is up: back to reader mode, as STOP would have done.
@@ -534,6 +536,7 @@ class MainActivity : AppCompatActivity() {
                         )
                     )
                 } else {
+                    runCatching { app.clairix.analysis.CellularExposure.noteServing(this@MainActivity, snapshot.cell) }
                     Registry.publishCell(
                         CellStatus(
                             available = true, cell = snapshot.cell, radio = radio,
@@ -1198,6 +1201,8 @@ private fun MainApp(
     val locked by AppLock.locked.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // The tour runs once on its own, after onboarding, and from Settings → About after that.
+    var showTour by rememberSaveable { mutableStateOf(!isTourSeen(context)) }
 
     // The hub cards' status lines, and the red dot on the Scan tab, come from the
     // same readings. The comms-only build has no scanner to read.
@@ -1233,6 +1238,7 @@ private fun MainApp(
             tabName = HomeTab.COMMS.name
             commsActionName = null
             showSettings = false
+            showTour = false
             explainerTarget = null
         }
     }
@@ -1262,10 +1268,51 @@ private fun MainApp(
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    if (showTour) {
+        fun close() { markTourSeen(context); showTour = false }
+        TourScreen(
+            onClose = { close() },
+            onGo = { target ->
+                close()
+                showSettings = false
+                when (target) {
+                    is TourTarget.Tab -> {
+                        if (target.tab == HomeTab.SCAN) { categoryName = null; trackerActionName = null }
+                        if (target.tab == HomeTab.COMMS) commsActionName = null
+                        tabName = target.tab.name
+                    }
+                    is TourTarget.Category -> {
+                        tabName = HomeTab.SCAN.name
+                        categoryName = target.category.name
+                        trackerActionName = null
+                        if (target.category == ScanCategory.TRACKERS) trackerSub = target.sub
+                        if (target.category == ScanCategory.PHONE) phoneSub = target.sub
+                    }
+                    is TourTarget.TrackerTool -> {
+                        tabName = HomeTab.SCAN.name
+                        categoryName = ScanCategory.TRACKERS.name
+                        trackerActionName = target.action.name
+                    }
+                    is TourTarget.CommsPage -> {
+                        tabName = HomeTab.COMMS.name
+                        commsActionName = target.action.name
+                    }
+                    is TourTarget.ActivityPage -> {
+                        tabName = HomeTab.ACTIVITY.name
+                        activitySub = target.sub
+                    }
+                    TourTarget.Settings -> showSettings = true
+                }
+            }
+        )
+        return
+    }
+
     if (showSettings) {
         SettingsScreen(
             onBack = { showSettings = false },
-            onClearData = onClearData
+            onClearData = onClearData,
+            onTour = { showSettings = false; showTour = true }
         )
         return
     }
@@ -1374,6 +1421,8 @@ private fun MainApp(
                     onShowExplainer = { f -> explainerTarget = ExplainerTarget.CellIndicator(f) },
                     onShown = onRefreshCell
                 )
+                category == ScanCategory.GPS -> GnssScreen()
+                category == ScanCategory.ULTRASOUND -> UltrasoundScreen()
                 category == ScanCategory.WIFI -> WifiScreen(onShown = onRefreshWifi)
                 category == ScanCategory.NFC -> NfcScreen(
                     onAddToVault = onAddToVault,
@@ -1395,6 +1444,7 @@ private fun MainApp(
                 when (commsAction) {
                     CommsAction.FAKE_CALL -> FakeCallPage()
                     CommsAction.DURESS -> DuressPage()
+                    CommsAction.MESH -> MeshPage()
                     CommsAction.WIPE -> WipePage()
                     null -> CommsScreen(
                         openPeer = threadRequest,

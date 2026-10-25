@@ -70,6 +70,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(
         createVersion4(db)
         createVersion5(db)
         createVersion6(db)
+        createVersion7(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -80,6 +81,12 @@ class CommsStore(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 4) createVersion4(db)
         if (oldVersion < 5) createVersion5(db)
         if (oldVersion < 6) createVersion6(db)
+        if (oldVersion < 7) createVersion7(db)
+    }
+
+    /** Contacts on other relays: the relay each one is on, null for this phone's own. */
+    private fun createVersion7(db: SQLiteDatabase) {
+        if ("relay" !in columnsOf(db, "contacts")) db.execSQL("ALTER TABLE contacts ADD COLUMN relay TEXT")
     }
 
     /**
@@ -228,6 +235,7 @@ class CommsStore(context: Context) : SQLiteOpenHelper(
             put("verified", if (c.verified) 1 else 0)
             put("key_changed", if (c.keyChanged) 1 else 0)
             put("added_ts", c.addedTs)
+            if (c.relay != null) put("relay", c.relay) else putNull("relay")
         }
         val db = writableDatabase
         db.beginTransaction()
@@ -1006,7 +1014,8 @@ class CommsStore(context: Context) : SQLiteOpenHelper(
         signature = c.getString(c.getColumnIndexOrThrow("signature")),
         verified = c.getInt(c.getColumnIndexOrThrow("verified")) != 0,
         keyChanged = c.getInt(c.getColumnIndexOrThrow("key_changed")) != 0,
-        addedTs = c.getLong(c.getColumnIndexOrThrow("added_ts"))
+        addedTs = c.getLong(c.getColumnIndexOrThrow("added_ts")),
+        relay = c.getColumnIndex("relay").let { i -> if (i >= 0 && !c.isNull(i)) c.getString(i) else null }
     )
 
     private fun readMessage(c: Cursor): ChatMessage? {
@@ -1030,6 +1039,6 @@ class CommsStore(context: Context) : SQLiteOpenHelper(
     }
 
     private companion object {
-        const val DB_VERSION = 6
+        const val DB_VERSION = 7
     }
 }

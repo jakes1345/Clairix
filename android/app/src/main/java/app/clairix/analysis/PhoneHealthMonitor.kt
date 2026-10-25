@@ -403,6 +403,8 @@ class PhoneHealthMonitor(private val context: Context) {
         out += HealthFact("pdns", "Network", "Private DNS", if (privateDns) (link?.privateDnsServerName ?: "Automatic") else "Off")
         val alwaysOnVpn = runCatching { Settings.Secure.getString(cr, "always_on_vpn_app") }.getOrNull()
         if (!alwaysOnVpn.isNullOrBlank()) out += HealthFact("vpn_always", "Network", "Always-on VPN", alwaysOnVpn)
+        runCatching { CellularExposure.fact(context, advancedProtectionEnabled()) }.getOrNull()?.let { out += it }
+        runCatching { NetworkLeaks.facts(NetworkLeaks.read(context)) }.getOrNull()?.let { out += it }
 
         // ── Identity ────────────────────────────────────────────────────────
         out += identityFacts()
@@ -449,6 +451,18 @@ class PhoneHealthMonitor(private val context: Context) {
      * so it is reached by reflection; a phone on an older release is told the
      * row does not apply rather than shown a false "off".
      */
+    /** Whether Advanced Protection is on; null below Android 16 or when the phone does not answer. */
+    private fun advancedProtectionEnabled(): Boolean? {
+        if (Build.VERSION.SDK_INT < 36) return null
+        return runCatching {
+            val cls = Class.forName("android.security.advancedprotection.AdvancedProtectionManager")
+            // Context.ADVANCED_PROTECTION_SERVICE; the class lookup is the type-safe route when the SDK has it.
+            val manager = context.getSystemService("advanced_protection")
+                ?: runCatching { context.getSystemService(cls) }.getOrNull()
+            manager?.let { cls.getMethod("isAdvancedProtectionEnabled").invoke(it) as? Boolean }
+        }.getOrNull()
+    }
+
     private fun advancedProtectionFact(): HealthFact {
         val id = "adv_protection"
         val category = "Protection"
@@ -457,14 +471,7 @@ class PhoneHealthMonitor(private val context: Context) {
             id, category, label, "Not available on Android ${Build.VERSION.RELEASE}",
             detail = "Google's Advanced Protection mode arrived with Android 16. On this release the rows above are the individual checks it would enforce."
         )
-        val enabled: Boolean? = runCatching {
-            val cls = Class.forName("android.security.advancedprotection.AdvancedProtectionManager")
-            // Context.ADVANCED_PROTECTION_SERVICE; the class lookup is the type-safe route when the SDK has it.
-            val manager = context.getSystemService("advanced_protection")
-                ?: runCatching { context.getSystemService(cls) }.getOrNull()
-            manager?.let { cls.getMethod("isAdvancedProtectionEnabled").invoke(it) as? Boolean }
-        }.getOrNull()
-        return when (enabled) {
+        return when (advancedProtectionEnabled()) {
             true -> HealthFact(
                 id, category, label, "On",
                 detail = "Sideloading, 2G, insecure Wi-Fi and USB data while locked are all blocked by the platform, and memory tagging is on."

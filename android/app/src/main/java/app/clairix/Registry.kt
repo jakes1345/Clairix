@@ -168,6 +168,11 @@ object Registry {
         return kept
     }
 
+    /** What the satellite receiver hears and whether it looks like satellites; see [app.clairix.analysis.GnssMonitor]. */
+    private val _gnss = MutableStateFlow(app.clairix.analysis.GnssAssessment())
+    val gnss: StateFlow<app.clairix.analysis.GnssAssessment> = _gnss.asStateFlow()
+    fun publishGnss(a: app.clairix.analysis.GnssAssessment) { _gnss.value = a }
+
     private val _phoneHealth = MutableStateFlow(PhoneHealth())
     val phoneHealth: StateFlow<PhoneHealth> = _phoneHealth.asStateFlow()
     fun publishPhoneHealth(h: PhoneHealth) { _phoneHealth.value = h }
@@ -342,5 +347,6 @@ object Registry {
         _screenRecordings.value = emptyList()
         _audioRoutes.value = emptyList()
         _infrastructure.value = emptyList()
+        _gnss.value = app.clairix.analysis.GnssAssessment()
     }
 }

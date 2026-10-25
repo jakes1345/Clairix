@@ -62,6 +62,12 @@ object CommsWire {
     const val F_SEALING = "s"
     const val F_SIGNATURE = "g"
     val SENDER_FIELDS = setOf(F_FROM, F_NAME, F_ED25519, F_CURVE25519, F_SEALING, F_SIGNATURE)
+    /**
+     * The address of the sender's relay, so a contact on another relay knows
+     * where the number is. Optional: absent, the sender is on the receiver's
+     * own relay, as every sender was before relays could reach each other.
+     */
+    const val F_RELAY = "relay"
 
     const val T_MSG = "msg"
     const val T_RECEIPT = "receipt"

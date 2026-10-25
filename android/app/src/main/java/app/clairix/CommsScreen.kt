@@ -136,7 +136,7 @@ private val dateTimeFmt = SimpleDateFormat("MMM d HH:mm", Locale.US)
 private const val UI_PREFS = "comms_ui"
 private const val KEY_MIC_ASKED = "microphone_asked"
 
-private const val NOT_A_PHONE = "Clairix numbers are not phone numbers. They only reach other Clairix apps on the same relay; they cannot call or text a phone."
+private const val NOT_A_PHONE = "Clairix numbers are not phone numbers. They only reach other Clairix apps, on your relay or on another relay that yours can reach; they cannot call or text a phone."
 
 /** Per-group switch: whether threats this phone confirms are sent to the group. Suffixed with the group id. */
 private const val KEY_SHARE_THREATS = "share_threats_"
@@ -1872,6 +1872,19 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
         Spacer(Modifier.height(20.dp))
         Header(contactLabel(c), onBack = onBack)
         Text("${formatClairixNumber(c.number)} · Clairix number, not a phone number", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+
+        c.relay?.let { theirs ->
+            ClairixCard {
+                Text("On another relay", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(theirs, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.text)
+                Text(
+                    "Everything for this contact goes to your relay, which forwards it to theirs signed as itself. Their relay sees your relay's address, never your phone's, and nothing names you as the sender. " +
+                        "Your relay sees that you write to this number on that relay. Both relays' operators must have turned this on; if either has not, sending says so. ClairixCoin cannot be sent across relays.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+            }
+        }
 
         ClairixCard {
             val (label, colour) = when {

@@ -13,7 +13,18 @@ export const RELAY = "https://relay.test";
 // ── Clock ───────────────────────────────────────────────────────────────────
 
 const realNow = Date.now.bind(Date);
-let offsetMs = 0;
+const HOUR = 60 * 60_000;
+/**
+ * Every test starts at twenty past an hour, never in the last seconds of
+ * one: allowances and stored times are kept to the hour and the day, and a
+ * test that ran across midnight or the top of the hour would see its own
+ * bookkeeping change under it.
+ */
+function startOffset() {
+  const now = realNow();
+  return (((20 * 60_000 - (now % HOUR)) % HOUR) + HOUR) % HOUR;
+}
+let offsetMs = startOffset();
 Date.now = () => realNow() + offsetMs;
 
 /** Moves the clock every part of the relay (and the test phones) reads. */
@@ -22,7 +33,7 @@ export function advance(ms) {
 }
 
 export function resetClock() {
-  offsetMs = 0;
+  offsetMs = startOffset();
 }
 
 // ── Storage ─────────────────────────────────────────────────────────────────
@@ -221,15 +232,17 @@ class FakeNamespace {
 }
 
 /** A fresh relay: the Worker's own fetch handler over empty storage. */
-export function makeRelay(vars = {}) {
-  const env = { ENROLL_SECRET, ...vars };
+export function makeRelay(vars = {}, origin = RELAY) {
+  // Mixing holds envelopes for a random few seconds; the tests that are not
+  // about it turn it off so a send is in the inbox at once.
+  const env = { ENROLL_SECRET, MIX_MAX_MS: "0", ...vars };
   env.MAILBOX = new FakeNamespace(Mailbox, env);
   env.TRAFFIC = new FakeNamespace(Traffic, env);
   env.INCIDENTS = new FakeNamespace(IncidentCache, env);
   const call = async (method, path, { body, headers = {} } = {}) => {
     const init = { method, headers: { ...headers } };
     if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
-    const res = await worker.fetch(new Request(RELAY + path, init), env);
+    const res = await worker.fetch(new Request(origin + path, init), env);
     const text = await res.text();
     let json = null;
     try {
@@ -239,7 +252,35 @@ export function makeRelay(vars = {}) {
     }
     return { status: res.status, json, headers: res.headers };
   };
-  return { env, call };
+  return { env, call, origin };
+}
+
+/**
+ * Connects [relays] to each other: a fetch the relay code makes to one of
+ * their origins is answered by that relay's own handler, as over the network.
+ * [intercept], when given, sees each such request first and may answer it
+ * itself (a Response) or let it through (undefined). Returns the requests
+ * made, and restore().
+ */
+export function network(relays, intercept) {
+  const byOrigin = new Map(relays.map((r) => [r.origin, r]));
+  const requests = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    const body = request.method === "GET" ? null : await request.clone().text();
+    const record = { url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body };
+    requests.push(record);
+    if (intercept) {
+      const answer = await intercept(record);
+      if (answer !== undefined) return answer;
+    }
+    const relay = byOrigin.get(url.origin);
+    if (!relay) throw new TypeError(`fetch failed: ${url.origin} is not on this network`);
+    return worker.fetch(request, relay.env);
+  };
+  return { requests, restore: () => { globalThis.fetch = original; } };
 }
 
 // ── Phones ─────────────────────────────────────────────────────────────────
@@ -337,8 +378,8 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
       return relay.call(method, path, body === undefined ? { headers } : { body, headers });
     },
     /** An anonymous send: a token, the recipient and the envelope, and nothing that names this phone. */
-    send(token, to, envelope = randomB64(200), claim) {
-      const body = { to, envelope };
+    send(token, to, envelope = randomB64(200), claim, extra = {}) {
+      const body = { to, envelope, ...extra };
       if (claim !== undefined) body.claim = claim;
       const headers = token === null ? {} : { "x-clairix-token": token };
       return relay.call("POST", "/v1/send", { body, headers });

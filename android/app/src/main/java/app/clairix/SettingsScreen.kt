@@ -172,7 +172,7 @@ object AppSettings {
 // ── SettingsScreen composable ──────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
+fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}) {
     val context = LocalContext.current
     val trusted by Registry.trusted.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
@@ -706,6 +706,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}) {
                     KeyValueRow("Version", "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
                     KeyValueRow("Package", BuildConfig.APPLICATION_ID)
                     KeyValueRow("Edition", if (BuildConfig.FULL_ACCESS) "Full: scanner, tools and Comms" else "Comms only", mono = false)
+                    SecondaryButton("Take the tour", onClick = onTour, tone = Tone.Accent)
 
                     if (BuildConfig.FULL_ACCESS) {
                         Hairline(Modifier.padding(vertical = 4.dp))

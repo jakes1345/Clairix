@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.3'
+        default: 'v3.0.0-beta.4'
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -266,7 +266,28 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 3: built for a seized phone and a watched network"
+            echo "### What's new in Beta 4: what your Bluetooth gives away, and plate readers for real"
+            echo
+            echo "- **Bluetooth exposure** (Scan → Trackers). What a receiver by the road or in a"
+            echo "  shop can log from this phone: its name, replaced with the model name in one tap"
+            echo "  if it reads like yours; whether it is discoverable (and an alert if it stays"
+            echo "  so); every paired accessory with whether its address is fixed for life or"
+            echo "  rotates, which are connected now, and which rode along on your drives. The"
+            echo "  phone's own advertising address rotates; a car's hands-free and most earbuds"
+            echo "  do not, and the page says which of yours is the one being logged."
+            echo "- **Surveillance hardware heard over radio.** A Flock Safety camera's battery"
+            echo "  pack, a Raven gunshot detector or a Flock setup hotspot is recognised by the"
+            echo "  signatures the DeFlock and flock-you projects published, compared with the"
+            echo "  plate readers on your map (\"matches the reader mapped 80 m away\" or \"not on"
+            echo "  the map yet\") and written to the timeline with your position. A certain match"
+            echo "  notifies (Settings → Scanning). Flock has been turning these radios down since"
+            echo "  2025, so hearing nothing next to a camera is normal; the map is the better guide."
+            echo "- **The plate-reader lists are now published.** Beta 3 shipped the map layer, but"
+            echo "  the daily map build had been failing since 22 October and no list ever went"
+            echo "  out. Fixed; every region's release now carries its signed camera list, and the"
+            echo "  app downloads it with the map."
+            echo
+            echo "### What was new in Beta 3: built for a seized phone and a watched network"
             echo
             echo "- **Everything at rest is sealed.** The location log, timeline, cell baseline,"
             echo "  trips, unlock ledger and comms log are encrypted under a key in the phone's"
