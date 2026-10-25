@@ -211,8 +211,9 @@ jobs:
             exit 1
           fi
           grep -q "^OK (8 tests)" ../e2e.txt || { echo "::error::The end-to-end tests failed; see e2e.txt"; exit 1; }
-          # Every test must have run: a skipped one (status -3) means the relays were not passed through.
-          if grep -q "INSTRUMENTATION_STATUS_CODE: -3" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
+          # Every test must have run: a skipped one (status -4 for an unmet assumption,
+          # -3 for an ignored test) means the relays were not passed through.
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
 
       - name: Upload screenshots and logs
         if: always()
