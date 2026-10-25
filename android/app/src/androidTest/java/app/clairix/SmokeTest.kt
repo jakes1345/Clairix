@@ -158,7 +158,7 @@ class SmokeTest {
         shot("tour-index")
         var pages = 0
         while (device.hasObject(By.text("Next")) && pages < 60) {
-            device.findObject(By.text("Next")).click(); alive("tour page ${pages + 2}")
+            tap("Next", "tour page ${pages + 2}")
             if (pages % 4 == 0) shot("tour-page-${pages + 2}")
             pages++
         }
