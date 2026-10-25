@@ -51,6 +51,35 @@ test("relay addresses: https origins with a host name only", () => {
   }
 });
 
+test("loopback relay addresses exist only for relays running on a developer's own computer", async () => {
+  assert.equal(relayOrigin("http://127.0.0.1:8788"), null, "never by default");
+  assert.equal(relayOrigin("http://127.0.0.1:8788", true), "http://127.0.0.1:8788");
+  assert.equal(relayOrigin("http://localhost:8788/", true), "http://localhost:8788");
+  for (const bad of ["http://127.0.0.1", "http://10.0.2.2:8788", "http://relay.example.org:8788", "http://127.0.0.1:8788/v1", "http://u:p@127.0.0.1:8788"]) {
+    assert.equal(relayOrigin(bad, true), null, bad);
+  }
+  // A deployed relay (https) refuses a loopback relay address outright.
+  const deployed = makeRelay({ RELAY_KEY: seed() }, A);
+  const alice = await makePhone(deployed);
+  const [t] = await alice.tokens(1);
+  const refused = await sendVia(alice, t, "123456789", "http://127.0.0.1:8788");
+  assert.equal(refused.status, 400);
+  // Two relays side by side on one computer reach each other.
+  const a = makeRelay({ RELAY_KEY: seed() }, "http://127.0.0.1:8787");
+  const b = makeRelay({ RELAY_KEY: seed() }, "http://127.0.0.1:8788");
+  const net = network([a, b]);
+  try {
+    const ana = await makePhone(a);
+    const ben = await makePhone(b);
+    const [token] = await ana.tokens(1);
+    const res = await sendVia(ana, token, ben.number, "http://127.0.0.1:8788");
+    assert.equal(res.status, 202, JSON.stringify(res.json));
+    assert.equal((await ben.inbox()).length, 1);
+  } finally {
+    net.restore();
+  }
+});
+
 test("FEDERATION is open by default, off, or a list of relays", () => {
   assert.deepEqual(federationPolicy({}), { mode: "open" });
   assert.deepEqual(federationPolicy({ FEDERATION: "OFF" }), { mode: "off" });

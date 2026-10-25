@@ -561,6 +561,20 @@ export class Mailbox extends DurableObject<Env> {
     if (alarm === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
   }
 
+  /**
+   * Records a blind token (tokens.ts) as spent, keyed by the hash of its kind,
+   * epoch and input, until its key is retired. False when it was spent before.
+   * The token's output has already been checked; nothing here knows who it was
+   * issued to, because nothing anywhere does.
+   */
+  async spendBlindToken(hash: string, expiresAt: number): Promise<boolean> {
+    const key = `s:${hash}`;
+    if ((await this.ctx.storage.get<number>(key)) !== undefined) return false;
+    await this.ctx.storage.put({ [key]: expiresAt, tokenShard: true });
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
+    return true;
+  }
+
   /** Spends the token with this hash. False when it is unknown, expired or already spent. */
   async redeemToken(hash: string): Promise<boolean> {
     const key = `t:${hash}`;
@@ -570,12 +584,18 @@ export class Mailbox extends DurableObject<Env> {
     return expiresAt > Date.now();
   }
 
-  /** Drops expired token hashes, a page at a time; true when any are left. */
+  /** Drops expired token hashes, issued ("t:") and spent blind ones ("s:"), a page at a time; true when any are left. */
   private async cleanupTokens(now: number): Promise<boolean> {
+    let left = 0;
+    for (const prefix of ["t:", "s:"]) left += await this.cleanupTokenPrefix(prefix, now);
+    return left > 0;
+  }
+
+  private async cleanupTokenPrefix(prefix: string, now: number): Promise<number> {
     let startAfter: string | undefined;
     let left = 0;
     for (;;) {
-      const page = await this.ctx.storage.list<number>({ prefix: "t:", startAfter, limit: DELETE_BATCH });
+      const page = await this.ctx.storage.list<number>({ prefix, startAfter, limit: DELETE_BATCH });
       if (page.size === 0) break;
       const keys = [...page.keys()];
       const stale = [...page].filter(([, exp]) => exp <= now).map(([k]) => k);
@@ -583,7 +603,7 @@ export class Mailbox extends DurableObject<Env> {
       left += keys.length - stale.length;
       startAfter = keys[keys.length - 1];
     }
-    return left > 0;
+    return left;
   }
 
   // ── Limits ───────────────────────────────────────────────────────────
@@ -769,13 +789,25 @@ export class Mailbox extends DurableObject<Env> {
    * object only. It is never sent anywhere; GET / publishes its public half.
    */
   async relayIdentitySeed(): Promise<string> {
-    const existing = await this.ctx.storage.get<string>("relaySeed");
+    return this.relaySecret("relaySeed");
+  }
+
+  /**
+   * The secret this relay derives its blind-token keys from (tokens.ts), made
+   * and kept the same way as the relay's signing seed, in this object only.
+   */
+  async tokenSeed(): Promise<string> {
+    return this.relaySecret("tokenSeed");
+  }
+
+  private async relaySecret(name: "relaySeed" | "tokenSeed"): Promise<string> {
+    const existing = await this.ctx.storage.get<string>(name);
     if (existing) return existing;
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     let s = "";
     for (const b of bytes) s += String.fromCharCode(b);
     const seed = btoa(s);
-    await this.ctx.storage.put("relaySeed", seed);
+    await this.ctx.storage.put(name, seed);
     return seed;
   }
 

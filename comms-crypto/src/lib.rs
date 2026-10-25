@@ -921,6 +921,63 @@ fn push_session(sessions: &mut HashMap<String, Vec<SessionEntry>>, peer: String,
 
 // ── Free functions ─────────────────────────────────────────────────────────
 
+/// One blind token in the making: the random input the token will show when
+/// it is spent, the blinded element the relay is sent, and the client state
+/// (the blind and the blinded element) needed to unblind its answer. Kept in
+/// memory between the request and its answer, never stored.
+#[derive(Clone, uniffi::Record)]
+pub struct BlindedToken {
+    pub input: Vec<u8>,
+    pub blinded: Vec<u8>,
+    pub state: Vec<u8>,
+}
+
+/// Starts a blind send token (RFC 9497 VOPRF, ristretto255-SHA512): a fresh
+/// 32-byte input, blinded. The relay sees only `blinded`.
+#[uniffi::export]
+pub fn token_blind() -> BlindedToken {
+    let mut input = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut input);
+    let result = voprf::VoprfClient::<voprf::Ristretto255>::blind(&input, &mut rand::thread_rng())
+        .expect("a 32-byte input is always accepted");
+    BlindedToken {
+        input,
+        blinded: result.message.serialize().to_vec(),
+        state: result.state.serialize().to_vec(),
+    }
+}
+
+/// Unblinds the relay's answer to [`token_blind`] requests into token outputs.
+/// `evaluated` answers the first `evaluated.len()` of `tokens` (a relay grants
+/// fewer when the allowance runs low), and `proof` must show that all of them
+/// were made with `public_key`, the key the relay publishes for the kind: a
+/// relay that used another key, which could tell whose tokens they were, is
+/// refused here with [`CryptoError::BadSignature`].
+#[uniffi::export]
+pub fn token_finalize(tokens: Vec<BlindedToken>, evaluated: Vec<Vec<u8>>, proof: Vec<u8>, public_key: Vec<u8>) -> Result<Vec<Vec<u8>>> {
+    use voprf::{EvaluationElement, Group, Proof, Ristretto255, VoprfClient};
+    if evaluated.is_empty() || evaluated.len() > tokens.len() {
+        return Err(CryptoError::Decrypt { reason: "token answer does not match the request".into() });
+    }
+    let bad = |what: &str| CryptoError::BadKey { reason: format!("token {what}") };
+    let pk = Ristretto255::deserialize_elem(&public_key).map_err(|_| bad("public key"))?;
+    let proof = Proof::<Ristretto255>::deserialize(&proof).map_err(|_| bad("proof"))?;
+    let used = &tokens[..evaluated.len()];
+    let clients = used
+        .iter()
+        .map(|t| VoprfClient::<Ristretto255>::deserialize(&t.state).map_err(|_| bad("state")))
+        .collect::<Result<Vec<_>>>()?;
+    let messages = evaluated
+        .iter()
+        .map(|e| EvaluationElement::<Ristretto255>::deserialize(e).map_err(|_| bad("element")))
+        .collect::<Result<Vec<_>>>()?;
+    let inputs: Vec<&[u8]> = used.iter().map(|t| t.input.as_slice()).collect();
+    let outputs = VoprfClient::batch_finalize(&inputs, &clients, &messages, &proof, pk).map_err(|_| CryptoError::BadSignature)?;
+    outputs
+        .map(|o| o.map(|o| o.to_vec()).map_err(|_| CryptoError::Decrypt { reason: "token output".into() }))
+        .collect()
+}
+
 /// Verifies an Ed25519 signature (base64) over `message` with `ed25519` (base64).
 #[uniffi::export]
 pub fn verify(ed25519: String, message: Vec<u8>, signature: String) -> bool {
@@ -1055,6 +1112,56 @@ mod tests {
 
     fn signer(id: &Identity) -> impl FnOnce(&[u8]) -> [u8; 64] + '_ {
         move |claim| id.inner.lock().unwrap().account.sign(claim).to_bytes()
+    }
+
+    /// The phone's half of the blind tokens against the relay's own module.
+    #[test]
+    fn blind_tokens_round_trip_with_the_relay_module() {
+        use clairix_relay_voprf as relay;
+        let secret = [3u8; 32];
+        let info = b"clairix-token-v2|delivery|1500";
+        let put = |parts: &[&[u8]]| {
+            let buf = unsafe { std::slice::from_raw_parts_mut(relay::buffer(), relay::buffer_len()) };
+            let mut at = 0;
+            for p in parts {
+                buf[at..at + p.len()].copy_from_slice(p);
+                at += p.len();
+            }
+            buf
+        };
+        put(&[&secret, info]);
+        assert_eq!(relay::public_key(info.len()), 0);
+        let pk = put(&[])[..32].to_vec();
+
+        let tokens: Vec<BlindedToken> = (0..4).map(|_| token_blind()).collect();
+        let mut req = vec![];
+        req.extend_from_slice(&secret);
+        req.extend_from_slice(&[5u8; 32]);
+        req.extend_from_slice(info);
+        // The relay grants three of the four.
+        for t in &tokens[..3] {
+            req.extend_from_slice(&t.blinded);
+        }
+        put(&[&req]);
+        assert_eq!(relay::evaluate_batch(info.len(), 3), 0);
+        let out = put(&[]).to_vec();
+        let evaluated: Vec<Vec<u8>> = (0..3).map(|i| out[i * 32..(i + 1) * 32].to_vec()).collect();
+        let proof = out[96..160].to_vec();
+
+        let outputs = token_finalize(tokens.clone(), evaluated.clone(), proof.clone(), pk.clone()).unwrap();
+        assert_eq!(outputs.len(), 3);
+        for (t, o) in tokens.iter().zip(&outputs) {
+            put(&[&secret, info, &t.input, o]);
+            assert_eq!(relay::verify(info.len(), 32), 0, "the relay accepts what the phone unblinded");
+        }
+        // Checked against a key the relay does not publish: refused.
+        let mut other = pk.clone();
+        put(&[&[4u8; 32], info]);
+        assert_eq!(relay::public_key(info.len()), 0);
+        other.copy_from_slice(&put(&[])[..32]);
+        assert!(matches!(token_finalize(tokens.clone(), evaluated.clone(), proof.clone(), other), Err(CryptoError::BadSignature)));
+        // An answer that does not fit the request.
+        assert!(token_finalize(tokens[..2].to_vec(), evaluated, proof, pk).is_err());
     }
 
     #[test]

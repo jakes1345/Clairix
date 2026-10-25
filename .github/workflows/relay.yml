@@ -37,6 +37,23 @@ jobs:
       - name: Install
         run: npm ci --no-audit --no-fund
 
+      # src/voprf.wasm (the relay's half of the blind send tokens) is committed
+      # so the Worker deploys without Rust. Its own tests run here, and it is
+      # rebuilt with the pinned compiler: the job fails if the committed bytes
+      # are not what voprf/ makes.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: 1.97.0
+          targets: wasm32-unknown-unknown
+
+      - name: Test the token module
+        working-directory: comms-worker/voprf
+        run: cargo test --locked --release
+
+      - name: Check src/voprf.wasm is what voprf/ builds
+        run: sh scripts/build-voprf.sh --check
+
       - name: Type-check
         run: npm run typecheck
 

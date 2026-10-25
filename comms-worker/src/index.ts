@@ -21,7 +21,7 @@ import {
   type IceServer,
   type TokenKind,
 } from "./comms-logic";
-import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
+import { HttpError, base64ToBytes, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
 import { KNOWN_REGIONS } from "./regions";
 import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
@@ -38,6 +38,7 @@ import {
   federationPolicy,
   fetchRelayKey,
   forward,
+  isLoopbackDev,
   isOwnOrigin,
   parseFederated,
   policyName,
@@ -47,6 +48,7 @@ import {
   relayOrigin,
   verifyFederated,
 } from "./federation";
+import { BLIND_BATCH_MAX, TOKEN_EPOCH_MS, checkBlindToken, epochExpiry, epochOf, issueBlind, tokenPublicKey } from "./tokens";
 import { INCIDENTS_NAME, IncidentCache } from "./incidents";
 import { parseBBoxParam } from "./incidents-logic";
 import { REGISTRY_NAME, Traffic, type ProbeSample } from "./traffic";
@@ -177,6 +179,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       // federation says which relays this one accepts them from.
       relayKey: key?.publicKey ?? null,
       federation: policyName(federationPolicy(env)),
+      // The keys blind tokens of each kind are issued under this epoch
+      // (tokens.ts). The same for every caller: a phone checks the proof that
+      // comes with its tokens against these.
+      tokens: await blindTokenKeys(env),
     });
   }
 
@@ -228,7 +234,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (path === "/v1/federate/send") {
       const allowed = await other.rateOk("fed-send", FED_SENDS_PER_MINUTE, FED_SENDS_BURST);
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
-      const body = parseSendBody(bodyText);
+      const body = parseSendBody(bodyText, isLoopbackDev(request));
       if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
         throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", 60);
       }
@@ -236,7 +242,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
-    const body = parseLookupBody(bodyText);
+    const body = parseLookupBody(bodyText, isLoopbackDev(request));
     return answerLookup(env, body.target, body.pin, body.claim, () => other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST));
   }
 
@@ -317,17 +323,27 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/tokens" && request.method === "POST") {
-    const body = parseJson<{ count?: unknown; kind?: unknown }>(bodyText);
-    const want = body.count;
-    if (typeof want !== "number" || !Number.isInteger(want) || want < 1 || want > DELIVERY_TOKEN_BATCH_MAX) {
-      throw new HttpError(400, `count must be a whole number from 1 to ${DELIVERY_TOKEN_BATCH_MAX}`);
-    }
+    const body = parseJson<{ count?: unknown; kind?: unknown; blinded?: unknown }>(bodyText);
     let kind: TokenKind = "delivery";
     if (body.kind !== undefined && body.kind !== null) {
       if (!isTokenKind(body.kind)) throw new HttpError(400, "kind must be delivery, traffic or report");
       kind = body.kind;
     }
     const spec = TOKEN_KINDS[kind];
+    if (body.blinded !== undefined) {
+      // Blind tokens (tokens.ts): the relay sees blinded elements only, and
+      // keeps nothing about what it issued.
+      const blinded = parseBlinded(body.blinded);
+      const taken = await me.allowance(`tokens-${kind}`, spec.perHour, spec.burst, blinded.length);
+      if (taken.granted === 0) throw new HttpError(429, `No more ${kind} tokens this hour`, taken.retryAfter);
+      const issued = await issueBlind(env, kind, blinded.slice(0, taken.granted));
+      if (!issued) throw new HttpError(400, "blinded must hold valid ristretto255 elements");
+      return json({ kind, ...issued, expiresAt: epochExpiry(issued.epoch) });
+    }
+    const want = body.count;
+    if (typeof want !== "number" || !Number.isInteger(want) || want < 1 || want > DELIVERY_TOKEN_BATCH_MAX) {
+      throw new HttpError(400, `count must be a whole number from 1 to ${DELIVERY_TOKEN_BATCH_MAX}`);
+    }
     const taken = await me.allowance(`tokens-${kind}`, spec.perHour, spec.burst, want);
     if (taken.granted === 0) throw new HttpError(429, `No more ${kind} tokens this hour`, taken.retryAfter);
     const tokens = Array.from({ length: taken.granted }, () => randomToken());
@@ -342,7 +358,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/lookup" && request.method === "POST") {
-    const body = parseLookupBody(bodyText);
+    const body = parseLookupBody(bodyText, isLoopbackDev(request));
     if (body.relay !== null && !isOwnOrigin(env, request, body.relay)) {
       // A number on another relay: asked through this one, which signs the
       // question as itself, so the other relay never learns who is asking.
@@ -510,6 +526,30 @@ async function answerLookup(env: Env, target: string, pin: string | null, claim:
   return json({ identity });
 }
 
+/** The blinded elements of a blind token request: 1 to BLIND_BATCH_MAX base64url ristretto255 elements. */
+function parseBlinded(raw: unknown): Uint8Array[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > BLIND_BATCH_MAX) {
+    throw new HttpError(400, `blinded must be a list of 1 to ${BLIND_BATCH_MAX} elements`);
+  }
+  return raw.map((e) => {
+    if (typeof e !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(e)) throw new HttpError(400, "blinded elements are 32 bytes of base64url");
+    return base64ToBytes(e);
+  });
+}
+
+/** What GET / says about blind tokens: the epoch and each kind's key in it. */
+async function blindTokenKeys(env: Env): Promise<{ version: number; epoch: number; epochMs: number; keys: Record<TokenKind, string> } | null> {
+  try {
+    const epoch = epochOf(Date.now());
+    const keys = {} as Record<TokenKind, string>;
+    for (const kind of Object.keys(TOKEN_KINDS) as TokenKind[]) keys[kind] = await tokenPublicKey(env, kind, epoch);
+    return { version: 2, epoch, epochMs: TOKEN_EPOCH_MS, keys };
+  } catch (e) {
+    console.error("token keys unavailable", e);
+    return null;
+  }
+}
+
 const IDENTITY_HEADERS = ["x-clairix-number", "x-clairix-sig", "x-clairix-nonce", "x-clairix-ts"] as const;
 
 /**
@@ -524,6 +564,15 @@ async function spendToken(env: Env, request: Request, kind: TokenKind): Promise<
   }
   const token = request.headers.get("x-clairix-token");
   if (token === null || token.length === 0) throw new HttpError(401, `A ${kind} token is required`);
+  if (token.startsWith("2.")) {
+    // A blind token: checked against the key that made it, then recorded as
+    // spent in the same shard objects, which still learn no account.
+    const spent = await checkBlindToken(env, kind, token);
+    if (!spent || !(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(spent.hash, kind))).spendBlindToken(spent.hash, spent.expiresAt))) {
+      throw new HttpError(403, `Token rejected: unknown, expired, already used, or not a ${kind} token`);
+    }
+    return;
+  }
   if (!DELIVERY_TOKEN_RE.test(token)) throw new HttpError(403, "Token rejected");
   const hash = await tokenHash(token);
   if (!(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(hash, kind))).redeemToken(hash))) {
@@ -935,7 +984,7 @@ async function releaseKeys(env: Env, profile: Profile): Promise<void> {
  * inbound and queue limits.
  */
 async function send(env: Env, request: Request, bodyText: string): Promise<Response> {
-  const body = parseSendBody(bodyText);
+  const body = parseSendBody(bodyText, isLoopbackDev(request));
   const foreign = body.relay !== null && !isOwnOrigin(env, request, body.relay);
   // Checked before the token is spent, so a phone on a relay that cannot
   // forward keeps its token.
@@ -964,7 +1013,7 @@ interface SendBody {
   relay: string | null;
 }
 
-function parseSendBody(bodyText: string): SendBody {
+function parseSendBody(bodyText: string, loopback = false): SendBody {
   const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
@@ -981,7 +1030,7 @@ function parseSendBody(bodyText: string): SendBody {
   if (body.mix !== undefined && typeof body.mix !== "boolean") throw new HttpError(400, "mix must be a boolean");
   // Held for mixing only when asked: an app from before mixing sends call
   // set-up and SOS without saying so, and must not have them wait.
-  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay) };
+  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback) };
 }
 
 interface LookupBody {
@@ -991,7 +1040,7 @@ interface LookupBody {
   relay: string | null;
 }
 
-function parseLookupBody(bodyText: string): LookupBody {
+function parseLookupBody(bodyText: string, loopback = false): LookupBody {
   const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown; relay?: unknown }>(bodyText);
   const target = typeof body.number === "string" ? normaliseNumber(body.number) : null;
   if (!target) throw new HttpError(400, "number must be a Clairix number");
@@ -1001,12 +1050,12 @@ function parseLookupBody(bodyText: string): LookupBody {
     pin = body.pin;
   }
   if (body.claim !== undefined && typeof body.claim !== "boolean") throw new HttpError(400, "claim must be a boolean");
-  return { target, pin, claim: body.claim !== false, relay: parseRelayField(body.relay) };
+  return { target, pin, claim: body.claim !== false, relay: parseRelayField(body.relay, loopback) };
 }
 
-function parseRelayField(value: unknown): string | null {
+function parseRelayField(value: unknown, loopback: boolean): string | null {
   if (value === undefined || value === null) return null;
-  const origin = relayOrigin(value);
+  const origin = relayOrigin(value, loopback);
   if (!origin) throw new HttpError(400, "relay must be the https address of a relay");
   return origin;
 }
