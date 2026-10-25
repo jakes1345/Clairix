@@ -39,6 +39,8 @@ Clairix scans for Bluetooth trackers and unknown devices, follows them through a
 
 **Bluetooth exposure.** The same radios work the other way too: a receiver by the road or in a shop logs every Bluetooth address it hears. The phone itself is hard to follow, because Android changes the address it advertises on every quarter of an hour, but the name can give you away and your accessories do not rotate at all. A car's hands-free, most earbuds and many watches keep one address for life. The Bluetooth exposure page shows the phone's name and replaces a personal one with the model name in a tap, warns if the phone has been left discoverable, and lists every paired accessory with whether its address is fixed and which of them were connected on your drives. It also lists the surveillance hardware the radios have heard: a Flock Safety camera's battery pack, a Raven gunshot detector or a Flock setup hotspot, matched against the map's plate readers or flagged as one the map does not have.
 
+**Ultrasonic beacons.** *New in Beta 5.* Some advertising kits play tones too high for you to hear from TVs, shops and web pages, so that an app on your phone can hear them and tie your phone to the place or the programme. Clairix listens on demand for steady and keyed tones between 17.5 and 21.5 kHz. First it plays a 19 kHz tone and listens for it, because a quiet result means nothing from a microphone that cannot hear that band. Nothing is recorded: the microphone feeds a spectrum, and the spectrum is thrown away.
+
 **Pattern of life.** From your own location history, Clairix finds the places you stay, works out which is home and which is work, measures how consistent your weekday departure times are and how often you take the same route between the same two places, and gives you a predictability score with suggestions. Everything runs on the phone. Nothing is sent anywhere.
 
 </div>
@@ -54,6 +56,7 @@ Clairix scans for Bluetooth trackers and unknown devices, follows them through a
 - Identification over the tracker protocol works only when the tracker has been separated from its owner for a while and only on trackers that implement it.
 - Distance estimates are approximate. Signal strength indoors varies by a factor of two or more for the same distance.
 - It cannot switch Bluetooth off, unpair a device or change an accessory's address: Android keeps those for its own Settings. It can rename the phone and tell you which accessory is the fixed one.
+- The ultrasound check runs only while its page is open, never in the background, and only finds tones in the band phone microphones can hear.
 - Flock's plate readers upload over LTE and most have had their Bluetooth turned down since 2025, so hearing nothing next to one is normal. A phone also cannot see the Wi-Fi probe requests the newest detectors key on. The map list is the better guide; the radio is a second opinion.
 
 </div>

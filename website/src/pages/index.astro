@@ -90,12 +90,13 @@ const features: FeatureBlock[] = [
   {
     id: 'networks',
     kicker: 'Networks',
-    title: 'Spot fake networks and towers',
-    lede: 'Know when a Wi-Fi hotspot or a cell tower is not what it claims to be.',
+    title: 'Spot fake networks, towers and GPS',
+    lede: 'Know when a Wi-Fi hotspot, a cell tower or a GPS signal is not what it claims to be.',
     body: [
       'Some interception tools answer “yes” to every phone that asks for a network by name. Clairix asks for a network that does not exist anywhere, a random name only your phone knows. Anything that answers is lying. That test has no innocent explanation, so it never cries wolf.',
       'Clairix also flags open networks that borrow a carrier’s name, open twins of a secured network you can see, and the default names of known interception equipment.',
       'For cell towers, Clairix learns what normal looks like where you live and work: which cells serve you, on what technology, how loud, with how many neighbours. It then watches for the things a fake tower does: a sudden downgrade to an older network, a cell that appears in the wrong area, a tower that exists for thirty seconds and vanishes, a signal far stronger than anything you have seen there before. No internet, no account and no tower database are needed. It is your own history of normal.',
+      'From Beta 5, Clairix also checks that your GPS signal comes from satellites rather than a spoofer or a jammer, tells you when 2G is allowed (2G is how fake towers listen in), and warns when your VPN leaks your DNS or IPv6 traffic.',
     ],
     note: {
       label: 'What it cannot do',
@@ -111,7 +112,8 @@ const features: FeatureBlock[] = [
     lede: 'Messages and calls that only the two of you can read or hear.',
     body: [
       'Clairix gives you a Clairix number: nine random digits that are not your phone number and not tied to your identity. Share it with the people you trust, or pair in person by scanning each other’s QR code.',
-      'Every message, voice note, photo and call is end-to-end encrypted on your phone with the Olm double ratchet, the same construction used by Matrix, before it goes anywhere. Each message is then sealed in an anonymous envelope addressed only to the recipient. Our relay stores and forwards envelopes it cannot open and does not know who sent them. Calls travel directly between the two phones, or through a relay that forwards encrypted packets it cannot decrypt.',
+      'Every message, voice note, photo and call is end-to-end encrypted on your phone with the Olm double ratchet, the same construction used by Matrix, before it goes anywhere. Each message is then sealed in an anonymous envelope addressed only to the recipient. Our relay stores and forwards envelopes it cannot open and does not know who sent them, and from Beta 5 it holds each one a random few seconds and releases them shuffled, so timing does not pair a sender with a recipient. Calls travel directly between the two phones, or through a relay that forwards encrypted packets it cannot decrypt.',
+      'From Beta 5, anyone can run their own relay. A contact on another relay is reached through yours, which forwards your envelopes signed as itself, so their relay never sees your phone. With the offline mesh on, texts and SOS travel phone to phone over Bluetooth when there is no network at all.',
       'Your keys, contacts and message history live on your phone, encrypted with a key held in its secure hardware. There is no password to leak, no phone number to look up, and no Google service in the path.',
     ],
     link: { href: '/security#encryption', text: 'Read the encryption details' },
@@ -120,7 +122,7 @@ const features: FeatureBlock[] = [
 ];
 
 const emergency: { icon: IconName; title: string; body: string }[] = [
-  { icon: 'sos', title: 'SOS', body: 'One tap sends your location, end-to-end encrypted, to the people in your group. Location is read at that moment and at no other time.' },
+  { icon: 'sos', title: 'SOS', body: 'Hold the button until it fills and confirm, and your location goes, end-to-end encrypted, to the people in your groups. Location is read at that moment and at no other time.' },
   { icon: 'phrase', title: 'Duress phrase', body: 'An ordinary-looking sentence you can type into any chat. The message goes out as written. Underneath, the SOS fires. Anyone watching the screen sees a normal conversation.' },
   { icon: 'phone', title: 'Fake call', body: 'Schedule an incoming call for 30 seconds, 2 minutes or 5 minutes from now. Your phone rings with its real ringtone and shows a real-looking call screen. Answer it and walk away, or have it place a real encrypted call to a contact.' },
   { icon: 'lock', title: 'App lock', body: 'A passcode protects Clairix itself, with optional biometric unlock. Too many wrong attempts can wipe the app’s data. A separate duress passcode wipes it immediately and shows nothing unusual.' },
@@ -136,7 +138,7 @@ const steps: { icon: IconName; title: string; body: string }[] = [
 const trust: { icon: IconName; title: string; body: string }[] = [
   { icon: 'ban', title: 'No ads. No analytics. No trackers.', body: 'There is no advertising SDK, analytics SDK or crash reporter in the app. We cannot see how you use it.' },
   { icon: 'device', title: 'Detection data stays on your phone.', body: 'Bluetooth, Wi-Fi, cellular and NFC scan results, your timeline, your location history, your app list and your unlock ledger are never uploaded. Android backups are turned off for Clairix.' },
-  { icon: 'eye', title: 'The exceptions are named.', body: 'Encrypted messages pass through our relay as sealed envelopes. Map tiles and address searches go to OpenStreetMap. SOS alerts carry your location, end-to-end encrypted, to your chosen contacts. That is the complete list, and it is spelled out on the <a class="text-link" href="/security">security page</a>.' },
+  { icon: 'eye', title: 'The exceptions are named.', body: 'Encrypted messages pass through our relay as sealed envelopes, and on to another relay when your contact uses one. With the offline mesh on, they also pass phone to phone over Bluetooth. Map tiles and address searches go to OpenStreetMap, and offline maps come from GitHub. SOS alerts carry your location, end-to-end encrypted, to your chosen contacts. Every destination, and what it can see, is listed on the <a class="text-link" href="/security">security page</a>.' },
   { icon: 'key', title: 'Standard, audited cryptography.', body: 'vodozemac for the double ratchet. X25519, HKDF-SHA256 and ChaCha20-Poly1305 for sealed envelopes. Ed25519 signatures instead of passwords. Keys held in Android’s hardware-backed keystore.' },
   { icon: 'gauge', title: 'Open about limits.', body: 'Every feature says what it cannot do. Detection is a strong aid, not a guarantee.' },
 ];
@@ -145,11 +147,11 @@ const faqs: { q: string; a: string }[] = [
   { q: 'Can Clairix find every hidden camera?', a: 'No. The optical sweep finds a camera when its lens has line of sight to you and you can point the phone at it. It cannot see a camera behind a solid surface, a camera pointing away from you, or one hidden where you did not look. The network checks find cameras that stream over the venue’s Wi-Fi or are still in setup mode. Cameras that only record to a memory card, and analogue wireless cameras, transmit nothing a phone’s radios can hear. Clairix tells you this inside the app, and the guided sweep is built so that your eyes, your hands and the phone work together.' },
   { q: 'Will it alert me every time an AirTag is nearby?', a: 'No. A tracker in the next apartment or a stranger’s bag on the train is not a threat and would train you to ignore alerts. Clairix only confirms a tracker as following you after it has been heard with you across real distance over real time. Devices that are merely around are listed quietly, without an alarm.' },
   { q: 'Does Clairix see my messages?', a: 'No. Messages are encrypted on your phone for one recipient before they leave it. The relay stores sealed envelopes it cannot open, and it does not learn who sent them. We could not read your messages if we wanted to.' },
-  { q: 'What does the relay store about me?', a: 'Your Clairix number, your public keys, any encrypted envelopes waiting for your phone (deleted on delivery or after 30 days), and a push endpoint if you set one up. That is all. There is no name, phone number or email on the relay. <a href="/security#relay">Full details.</a>' },
+  { q: 'What does the relay store about me?', a: 'Your Clairix number, your public keys, any encrypted envelopes waiting for your phone (deleted on delivery or after 30 days), a push endpoint if you set one up, and short-lived counters that keep abuse in check. There is no name, phone number or email on the relay. <a href="/security#relay">Full details.</a>' },
   { q: 'Does Clairix track my location?', a: 'The tracker scanner uses your location to tell whether a device is moving with you, and your location history is stored on your phone only. Nothing in that history is uploaded. Location is sent off the phone in exactly one case: when you press SOS or type your duress phrase, your position is sent end-to-end encrypted to your chosen contacts.' },
   { q: 'Is the cell tower check reliable?', a: 'It is honest. No phone can prove a cell tower is fake; what it can do is notice when your modem’s view of the network stops matching what is normal for the place you are in. Clairix learns normal over days, scores several indicators together and tells you when the baseline is too young to judge. Treat it as a reason to be careful, not as a verdict.' },
   { q: 'Can spyware hide from the spyware check?', a: 'Partly. Clairix reads everything stock Android lets an app read, and it asks for the two extra grants that widen the view. Spyware installed with root access, or built into a modified system image, can hide from any app, including this one. Clairix checks for signs of root, an unlocked bootloader and failed verified boot for that reason.' },
-  { q: 'Why does it need so many permissions?', a: 'Because the threats live in different radios. Bluetooth for trackers, location to confirm movement, camera for the lens sweep, Wi-Fi for fake hotspots, phone state for cell towers, microphone for calls. Each permission is asked for only when you open the feature that needs it, and you can use the rest of the app without granting any of them.' },
+  { q: 'Why does it need so many permissions?', a: 'Because the threats live in different radios. Bluetooth for trackers and the offline mesh, location to confirm movement and check GPS, camera for the lens sweep, Wi-Fi for fake hotspots, phone state for cell towers, microphone for calls and the ultrasound check. Each permission is asked for only when you open the feature that needs it, and you can use the rest of the app without granting any of them.' },
   { q: 'Is Clairix free?', a: 'Yes, every feature is free right now.' },
   { q: 'Does Clairix work on iPhone?', a: 'No. Clairix is built for Android 12 and newer. Much of what it does, such as scanning for unknown Bluetooth devices with the screen off or inspecting installed apps, is not possible for third-party apps on iOS.' },
   { q: 'Is Clairix a replacement for calling for help?', a: 'No. If you believe you are in danger, contact local emergency services. Clairix is a detection aid and a private channel to the people you trust.' },
