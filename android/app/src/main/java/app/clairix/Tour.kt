@@ -98,7 +98,11 @@ internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
         "near the TV or speaker you are wondering about. Only the spectrum is read; no audio is kept."
     ScanCategory.WIFI -> "The network you are on, and every hotspot in range." to
         "Flags open networks, evil twins of networks you use, carrier names on open hotspots and the default names of " +
-        "interception kit, and checks the network you are on: encryption, captive portals, where DNS goes."
+        "interception kit, and checks the network you are on: encryption, captive portals, where DNS goes. It also sets " +
+        "a trap: a made-up network name only this phone knows, which the phone asks for in every scan. A box that " +
+        "answers to any name (a Karma or Pineapple interception kit) answers that one too, and is caught. Adding the " +
+        "name is why Android may ask, the first time you start scanning, whether Clairix can suggest Wi-Fi networks. " +
+        "Nothing joins it: no such network exists. Say no and the trap stays off; everything else still works."
     ScanCategory.NFC -> "NFC tags and cards, and skimmers." to
         "Hold a card or tag to the back of the phone to read what it carries and flag tags that look planted. In the full " +
         "edition a card can be kept in the vault, locked by your screen lock, and presented from the phone."

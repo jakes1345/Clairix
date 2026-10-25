@@ -63,10 +63,27 @@ class SmokeTest {
         if (device.hasObject(By.textContains("isn't responding"))) {
             shot("ANR-$step"); fail("Clairix stopped responding at: $step")
         }
-        // A system permission dialog is not a failure; dismiss it and carry on.
+        // A system dialog the app asked for is not a failure: a permission, or
+        // Android asking whether Clairix may suggest Wi-Fi networks (the Karma trap's
+        // decoy network, added when scanning starts). Answer it as an owner would and
+        // carry on; the screenshot shows it was there.
         device.findObject(By.res("com.android.permissioncontroller:id/permission_allow_foreground_only_button"))?.click()
         device.findObject(By.res("com.android.permissioncontroller:id/permission_allow_button"))?.click()
+        val current = device.currentPackageName
+        if (current != pkg && current in SYSTEM_PROMPTS) {
+            shot("system-prompt-$step")
+            val allow = device.findObject(By.pkg(current).text(ALLOW)) ?: device.findObject(By.pkg(current).clickable(true).text(ALLOW))
+            if (allow != null) allow.click() else device.pressBack()
+            device.wait(Until.hasObject(By.pkg(pkg).depth(0)), 5_000)
+            device.waitForIdle(2_000)
+        }
         if (device.currentPackageName != pkg) { shot("LEFT-$step"); fail("Clairix left the foreground at: $step (now ${device.currentPackageName})") }
+    }
+
+    private companion object {
+        /** System apps that show a dialog over Clairix on its behalf. */
+        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller")
+        val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
     }
 
     private fun text(t: String, timeout: Long = 8_000): UiObject2? = device.wait(Until.findObject(By.text(t)), timeout)

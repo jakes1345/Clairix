@@ -141,7 +141,9 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                     else -> ReadyPage(
                         title = "Ready when you are",
                         lead = "Start scanning and keep the app running while you move.",
-                        note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together."
+                        note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together. " +
+                            "Android may ask whether Clairix can suggest Wi-Fi networks: that is the Wi-Fi trap, a made-up " +
+                            "network name only interception kit answers to. Nothing ever joins it. The tour explains it."
                     )
                 }
             } else {
