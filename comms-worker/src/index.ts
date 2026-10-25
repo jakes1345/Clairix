@@ -71,11 +71,12 @@ export { IncidentCache, Mailbox, Traffic };
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
  * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
  * account they went to:
- *   POST   /v1/send            {to, envelope, claim?, urgent?} → queue for a contact; a "delivery" token.
+ *   POST   /v1/send            {to, envelope, claim?, mix?}  → queue for a contact; a "delivery" token.
  *                              "claim" is the ticket of the one-time key the envelope's session was built
- *                              on, which spends that key for good. Unless "urgent" (call set-up, SOS, group changes), the
- *                              envelope is held a random few seconds and released in a shuffled batch
- *                              (MIX_MAX_MS; see Mailbox.enqueue).
+ *                              on, which spends that key for good. With "mix" true, the envelope is held a
+ *                              random few seconds and released in a shuffled batch (MIX_MAX_MS; see
+ *                              Mailbox.enqueue). The app asks for it on everything but call set-up, SOS and
+ *                              group changes; apps from before mixing never ask, so nothing of theirs waits.
  *   Traffic (one Durable Object per map region; "traffic" tokens, "report" tokens for new reports; probes,
  *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
  *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
@@ -121,7 +122,7 @@ export { IncidentCache, Mailbox, Traffic };
  * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
  * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
  * one through:
- *   POST   /v1/federate/send   {to, envelope, claim?, urgent?} → as /v1/send     (signed by the forwarding relay)
+ *   POST   /v1/federate/send   {to, envelope, claim?, mix?}    → as /v1/send     (signed by the forwarding relay)
  *   POST   /v1/federate/lookup {number, pin?, claim}           → as /v1/lookup   (likewise)
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
  */
@@ -944,7 +945,7 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     // A number on another relay: this relay forwards the envelope, signed as
     // itself. The other relay sees this relay's address, not the phone's, and
     // the forwarded request names no sender, as the phone's did not.
-    const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, urgent: body.urgent };
+    const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, mix: !body.urgent };
     if (body.claim !== null) forwarded.claim = body.claim;
     const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
     if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
@@ -957,13 +958,14 @@ interface SendBody {
   to: string;
   envelope: string;
   claim: string | null;
+  /** Not to be held for mixing: everything the sender did not ask to have mixed. */
   urgent: boolean;
   /** The relay the recipient is on, when it is not this one. */
   relay: string | null;
 }
 
 function parseSendBody(bodyText: string): SendBody {
-  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; urgent?: unknown; relay?: unknown }>(bodyText);
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
@@ -976,8 +978,10 @@ function parseSendBody(bodyText: string): SendBody {
     if (typeof body.claim !== "string" || !DELIVERY_TOKEN_RE.test(body.claim)) throw new HttpError(400, "claim must be a claim ticket");
     claim = body.claim;
   }
-  if (body.urgent !== undefined && typeof body.urgent !== "boolean") throw new HttpError(400, "urgent must be a boolean");
-  return { to, envelope: body.envelope, claim, urgent: body.urgent === true, relay: parseRelayField(body.relay) };
+  if (body.mix !== undefined && typeof body.mix !== "boolean") throw new HttpError(400, "mix must be a boolean");
+  // Held for mixing only when asked: an app from before mixing sends call
+  // set-up and SOS without saying so, and must not have them wait.
+  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay) };
 }
 
 interface LookupBody {

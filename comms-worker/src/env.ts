@@ -40,7 +40,7 @@ export interface Env {
    */
   RELAY_ALTERNATES?: string;
   /**
-   * Optional: the longest a non-urgent envelope is held for mixing, in
+   * Optional: the longest an envelope sent with "mix" is held for mixing, in
    * milliseconds (default 20000; the mean hold is a fifth of it). "0" turns
    * mixing off.
    */

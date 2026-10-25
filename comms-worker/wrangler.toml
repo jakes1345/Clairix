@@ -32,8 +32,9 @@
 #                        zone in both is shown once.
 #   MIX_MAX_MS           Longest an envelope is held for mixing, in ms (default "20000"; the mean hold
 #                        is a fifth of it). Held envelopes are released in shuffled batches so traffic
-#                        in cannot be paired with deliveries out by timing alone. Call set-up, SOS
-#                        and group membership changes are never held. "0" turns mixing off.
+#                        in cannot be paired with deliveries out by timing alone. Only envelopes sent
+#                        with "mix": true are held; the app leaves it off call set-up, SOS and group
+#                        changes, and apps older than mixing never send it. "0" turns mixing off.
 #   FEDERATION           Which other relays may forward to this one: "open" (default; any relay,
 #                        within per-relay limits), "off", or comma-separated https origins
 #   RELAY_ORIGIN         The https address other relays should reach this one at, when requests

@@ -435,6 +435,11 @@ code found two real holes, both fixed with tests.
   Group sends and receives now require the key the roster holds for the member
   (or, where the roster has none, a contact on this phone's own relay or one
   verified in person).
+- Mixing shipped to the relay before an app that marks calls and SOS as
+  urgent: the published Beta 4 sends them unmarked, so the live relay held
+  Beta 4's call set-up and SOS for a few seconds. The relay now holds only
+  envelopes that ask to be mixed ("mix": true), which no app before mixing
+  sends.
 - Every text field now asks the keyboard not to learn from what is typed
   (IME_FLAG_NO_PERSONALIZED_LEARNING), and Phone check names the keyboard in
   use and whether it can reach the internet.

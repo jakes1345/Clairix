@@ -820,9 +820,10 @@ export class Mailbox extends DurableObject<Env> {
    * Queues an envelope for the owner and delivers it to any live socket. Returns
    * false when the mailbox does not exist or is full.
    *
-   * Unless it is [urgent] (a call being set up, an SOS), the envelope is first
-   * held for a few seconds, a random time for each one, and released by the
-   * alarm together with whatever else is due, in shuffled order. Someone who
+   * Unless it is [urgent] (the sender did not ask for mixing: a call being set
+   * up, an SOS, or anything from an app older than mixing), the envelope is
+   * first held for a few seconds, a random time for each one, and released by
+   * the alarm together with whatever else is due, in shuffled order. Someone who
    * watches traffic into the relay and traffic out to the owner's phone then
    * cannot pair an envelope in with the delivery out by timing alone, and a
    * burst from one sender arrives interleaved with everyone else's. The hold

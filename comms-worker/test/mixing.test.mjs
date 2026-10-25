@@ -1,5 +1,6 @@
-// Relay-side mixing: non-urgent envelopes are held a random few seconds and
-// released in shuffled batches; urgent ones (call set-up, SOS) are not held.
+// Relay-side mixing: envelopes the sender asks to have mixed are held a random
+// few seconds and released in shuffled batches; the rest (call set-up, SOS,
+// and everything from apps older than mixing) are not held.
 // Run with `npm test`.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -7,6 +8,9 @@ import { advance, makePhone, makeRelay, mockFetch, resetClock } from "./harness/
 import { mixDelay, mixMaxMs } from "../src/mailbox.ts";
 
 afterEach(() => resetClock());
+
+/** What the app sends with everything but call set-up, SOS and group changes. */
+const MIX = { mix: true };
 
 /** A stand-in for the owner's live socket, recording what the relay hands it. */
 function attachSocket(relay, number) {
@@ -56,7 +60,7 @@ test("a send is held, counted against the queue, and released by the alarm with 
   const sentAt = Date.now();
   // Held envelopes are not visible until released; send until one is held
   // (a hold of 0 ms, drawn with probability ~1/4000 per send, goes straight out).
-  const res = await alice.send(token, bob.number, "aGVsZA==");
+  const res = await alice.send(token, bob.number, "aGVsZA==", undefined, MIX);
   assert.equal(res.status, 202);
   const box = relay.env.MAILBOX.storageOf(bob.number);
   if (stagedKeys(relay, bob.number).length === 1) {
@@ -76,22 +80,23 @@ test("a send is held, counted against the queue, and released by the alarm with 
   assert.equal(box.get("queueCount"), 1);
 });
 
-test("an urgent send is not held", async () => {
+test("a send that does not ask for mixing is not held, as from every app before mixing", async () => {
   const relay = makeRelay({ MIX_MAX_MS: "20000" });
   const alice = await makePhone(relay);
   const bob = await makePhone(relay);
   const tokens = await alice.tokens(5);
-  for (const t of tokens) assert.equal((await alice.send(t, bob.number, undefined, undefined, { urgent: true })).status, 202);
+  assert.equal((await alice.send(tokens[0], bob.number, undefined, undefined, { mix: false })).status, 202);
+  for (const t of tokens.slice(1)) assert.equal((await alice.send(t, bob.number)).status, 202);
   assert.equal((await bob.inbox()).length, 5);
   assert.deepEqual(stagedKeys(relay, bob.number), []);
 });
 
-test("urgent must be a boolean", async () => {
+test("mix must be a boolean", async () => {
   const relay = makeRelay({ MIX_MAX_MS: "20000" });
   const alice = await makePhone(relay);
   const bob = await makePhone(relay);
   const [t] = await alice.tokens(1);
-  const res = await alice.send(t, bob.number, undefined, undefined, { urgent: "yes" });
+  const res = await alice.send(t, bob.number, undefined, undefined, { mix: "yes" });
   assert.equal(res.status, 400);
 });
 
@@ -101,7 +106,7 @@ test("a burst from one sender reaches the owner's socket in shuffled order, all 
   const bob = await makePhone(relay);
   const tokens = await alice.tokens(40);
   const ids = [];
-  for (const t of tokens) ids.push((await alice.send(t, bob.number)).json.id);
+  for (const t of tokens) ids.push((await alice.send(t, bob.number, undefined, undefined, MIX)).json.id);
   const sent = attachSocket(relay, bob.number);
   advance(20_001);
   await relay.env.MAILBOX.runDueAlarms();
@@ -119,7 +124,7 @@ test("envelopes not yet due stay held while earlier ones go", async () => {
   const alice = await makePhone(relay);
   const bob = await makePhone(relay);
   const tokens = await alice.tokens(60);
-  for (const t of tokens) await alice.send(t, bob.number);
+  for (const t of tokens) await alice.send(t, bob.number, undefined, undefined, MIX);
   const state = relay.env.MAILBOX.objects.get(bob.number).state;
   let seen = 0;
   // Step through the alarms as the runtime would fire them.
@@ -145,7 +150,7 @@ test("a release with no socket wakes the owner through push", async () => {
   try {
     await bob.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upBob" });
     const [t] = await alice.tokens(1);
-    await alice.send(t, bob.number);
+    await alice.send(t, bob.number, undefined, undefined, MIX);
     await relay.env.MAILBOX.settle();
     advance(20_001);
     await relay.env.MAILBOX.runDueAlarms();
@@ -162,7 +167,7 @@ test("a full mailbox counts held envelopes", async () => {
   const bob = await makePhone(relay);
   await relay.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 1999);
   const [a, b] = await alice.tokens(2);
-  assert.equal((await alice.send(a, bob.number)).status, 202);
-  const full = await alice.send(b, bob.number);
+  assert.equal((await alice.send(a, bob.number, undefined, undefined, MIX)).status, 202);
+  const full = await alice.send(b, bob.number, undefined, undefined, MIX);
   assert.equal(full.status, 413);
 });
