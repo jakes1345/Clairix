@@ -108,6 +108,11 @@ export const MAX_ENVELOPE_B64 = Math.floor((MAX_ENVELOPE_BYTES * 4) / 3) + 4;
 const FED_INBOUND_PER_HOUR = 1_800;
 const FED_INBOUND_BURST = 300;
 const FED_QUEUE_RESERVE = 500;
+
+/** The answer to a send for a number that does not exist; the caller accepts and drops it. */
+const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
+/** An envelope from another relay dropped at a limit: answered as NO_SUCH_NUMBER is. */
+const DROPPED: EnqueueResult = NO_SUCH_NUMBER;
 const ENVELOPE_TTL_MS = 30 * 24 * 60 * 60_000;
 /** One-time keys a mailbox holds; the app keeps a few hundred published so lookups cannot empty it. */
 const MAX_ONE_TIME_KEYS = 500;
@@ -834,15 +839,23 @@ export class Mailbox extends DurableObject<Env> {
     // envelope is answered the same whether the number exists or not.
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
     const profile = await this.ctx.storage.get<Profile>("profile");
-    if (!profile) return { ok: false, reason: "no such number", status: 404 };
+    if (!profile) return NO_SUCH_NUMBER;
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
-    if (count >= (federated ? MAX_QUEUE - FED_QUEUE_RESERVE : MAX_QUEUE)) return { ok: false, reason: "mailbox full", status: 413 };
     if (federated) {
-      const fed = await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST);
-      if (!fed.ok) return { ok: false, reason: "this number is receiving too much from other relays; try again shortly", status: 429, retryAfter: fed.retryAfter };
+      // Envelopes from other relays that would go over this mailbox's limits
+      // are dropped and answered exactly as a send to a number that does not
+      // exist: several relays acting together could otherwise fill a mailbox
+      // or its allowance and learn from the refusal that the number is real.
+      // Only other relays' envelopes are dropped, and only while this mailbox
+      // is being flooded from outside; this relay's own senders are untouched.
+      if (count >= MAX_QUEUE - FED_QUEUE_RESERVE) return DROPPED;
+      if (!(await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST)).ok) return DROPPED;
+      if (!(await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST)).ok) return DROPPED;
+    } else {
+      if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };
+      const inbound = await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST);
+      if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     }
-    const inbound = await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST);
-    if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     // The first envelope of a session spends the one-time key it was built on.
     if (claim !== null) await this.confirmClaim(claim);
     const now = Date.now();

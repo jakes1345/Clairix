@@ -11,9 +11,11 @@ import java.util.UUID
  * Bluetooth, until one reaches the phone it is for. The envelopes are exactly the
  * ones the relay carries (sealed sender, padded, end to end), so a carrier learns
  * nothing it could not learn from the relay, and less: instead of a Clairix number
- * each bundle is addressed by a routing tag, a hash of the recipient's public
- * sealing key and the day. A stranger carrying it cannot tell whose it is; the
- * recipient, and anyone who already has the recipient's keys, can.
+ * each bundle is addressed by a routing tag only its sender and recipient can
+ * compute (Identity.meshTag: a secret their two sealing keys share, and the day).
+ * Nobody else can tell whose a bundle is, not even another contact of the
+ * recipient who holds the recipient's public keys. Bundles between the same two
+ * people on the same day carry the same tag.
  *
  * Epidemic routing with limits: on meeting, two phones swap the ids they hold and
  * each sends what the other lacks, up to [MAX_HOPS] hops, kept [TTL_MS], [MAX_STORE]
@@ -61,20 +63,27 @@ object MeshProtocol {
 
     fun idOf(envelope: ByteArray): ByteArray = sha256(envelope).copyOf(ID_LEN)
 
-    /** The routing tag for a recipient's public sealing key (base64, as contacts hold it) on [day]. */
-    fun tag(sealingB64: String, day: Long): ByteArray {
+    /**
+     * Beta 5's routing tag: a hash of the recipient's public sealing key and the
+     * day, which anyone holding that public key could compute. Beta 6 sends only
+     * the pairwise tag; this one is still recognised on arrival, so bundles from
+     * phones that have not updated reach their recipient. Recognising it reveals
+     * nothing: a phone never announces the tags it answers to.
+     */
+    fun legacyTag(sealingB64: String, day: Long): ByteArray {
         val key = Base64.getDecoder().decode(sealingB64)
         return sha256("clairix-mesh-tag-v1".toByteArray(), key, ByteBuffer.allocate(8).putLong(day).array()).copyOf(TAG_LEN)
     }
 
     fun day(ms: Long): Long = Math.floorDiv(ms, DAY_MS)
 
-    /** The tags a phone answers to around [now]: yesterday, today and tomorrow, for clocks that disagree. */
-    fun tagsFor(sealingB64: String, now: Long): Set<String> = (-1L..1L).map { hex(tag(sealingB64, day(now) + it)) }.toSet()
+    /** A tag for yesterday, today and tomorrow around [now], for clocks that disagree. */
+    fun around(now: Long, tagFor: (Long) -> ByteArray): Set<String> = (-1L..1L).map { hex(tagFor(day(now) + it)) }.toSet()
 
-    fun newBundle(envelope: ByteArray, recipientSealingB64: String, now: Long): Bundle? {
-        if (envelope.size > MAX_ENVELOPE) return null
-        return Bundle(idOf(envelope), tag(recipientSealingB64, day(now)), 0, now, envelope)
+    /** A bundle carrying [envelope] under [tag], today's tag for the sender and recipient. */
+    fun newBundle(envelope: ByteArray, tag: ByteArray, now: Long): Bundle? {
+        if (envelope.size > MAX_ENVELOPE || tag.size != TAG_LEN) return null
+        return Bundle(idOf(envelope), tag.copyOf(), 0, now, envelope)
     }
 
     fun encode(frame: Frame): ByteArray = when (frame) {

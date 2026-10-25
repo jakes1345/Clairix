@@ -459,7 +459,49 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   // And the queue keeps room for them: other relays stop 500 short of full.
   await b.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 1500);
   advance(3_600_000);
-  assert.equal((await box.enqueue("c2VhbGVk", null, true, true)).status, 413);
+  assert.equal((await box.enqueue("c2VhbGVk", null, true, true)).status, 404, "dropped, answered as no such number");
   const [t2] = await carol.tokens(1);
   assert.equal((await carol.send(t2, bob.number)).status, 202);
+});
+
+test("a mailbox at its limits for other relays answers them as a number that does not exist", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const real = b.env.MAILBOX.objects;
+    const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
+    const answer = async (to) => {
+      const [t] = await alice.tokens(1);
+      const res = await sendVia(alice, t, to, B);
+      return [res.status, Object.keys(res.json ?? {}).sort().join(",")];
+    };
+    const queued = async () => (await real.get(bob.number).state.storage.get("queueCount")) ?? 0;
+
+    // Allowance for other relays used up (several relays together could).
+    for (let i = 0; i < 400; i++) await box.enqueue("c2VhbGVk", null, true, true);
+    let before = await queued();
+    assert.deepEqual(await answer(bob.number), await answer("123456789"));
+    assert.deepEqual(await answer(bob.number), [202, "id"]);
+    assert.equal(await queued(), before, "nothing was queued");
+
+    // Queue at the share other relays may fill.
+    advance(3_600_000);
+    await real.get(bob.number).state.storage.put("queueCount", 1500);
+    before = await queued();
+    assert.deepEqual(await answer(bob.number), await answer("123456789"));
+    assert.deepEqual(await answer(bob.number), [202, "id"]);
+    assert.equal(await queued(), before, "nothing was queued");
+
+    // The relay's own senders still get through, and are told when it is full.
+    const carol = await makePhone(b);
+    const [t] = await carol.tokens(1);
+    assert.equal((await carol.send(t, bob.number)).status, 202);
+    await real.get(bob.number).state.storage.put("queueCount", 2000);
+    const [t2] = await carol.tokens(1);
+    assert.equal((await carol.send(t2, bob.number)).status, 413);
+  } finally {
+    net.restore();
+  }
 });

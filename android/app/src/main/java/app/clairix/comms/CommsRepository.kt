@@ -1925,14 +1925,32 @@ object CommsRepository {
 
     // ── Offline mesh ──────────────────────────────────────────────────────
 
-    /** This phone's public sealing key, read once: the mesh tags are made from it. */
+    /** This phone's public sealing key, read once: Beta 5 senders' mesh tags are made from it. */
     @Volatile private var ownSealing: String? = null
 
-    /** The routing tags this phone answers to on the mesh (yesterday, today, tomorrow). */
+    /** The tags worked out for one day and one set of contacts; a carried bundle is checked against them. */
+    private data class MeshTagCache(val day: Long, val contacts: Set<String>, val tags: Set<String>)
+    @Volatile private var meshTagCache: MeshTagCache? = null
+
+    /**
+     * The routing tags this phone answers to on the mesh, yesterday, today and
+     * tomorrow: the one it shares with each contact, and Beta 5's tag from its own
+     * key for bundles from phones that have not updated. Worked out once a day,
+     * or when the contacts change.
+     */
     fun meshTags(): Set<String> {
-        val sealing = ownSealing ?: runCatching { identities.get()?.publicBundle()?.sealing }.getOrNull()?.also { ownSealing = it }
-            ?: return emptySet()
-        return MeshProtocol.tagsFor(sealing, System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val day = MeshProtocol.day(now)
+        val contacts = runCatching { store.contacts() }.getOrDefault(emptyList()).map { it.sealing }.filter { it.isNotBlank() }.toSet()
+        meshTagCache?.takeIf { it.day == day && it.contacts == contacts }?.let { return it.tags }
+        val identity = runCatching { identities.get() }.getOrNull() ?: return emptySet()
+        val sealing = ownSealing ?: runCatching { identity.publicBundle().sealing }.getOrNull()?.also { ownSealing = it }
+        val tags = HashSet<String>()
+        if (sealing != null) tags += MeshProtocol.around(now) { MeshProtocol.legacyTag(sealing, it) }
+        for (peer in contacts) {
+            runCatching { tags += MeshProtocol.around(now) { d -> identity.meshTag(peer, d) } }
+        }
+        return tags.also { meshTagCache = MeshTagCache(day, contacts, it) }
     }
 
     /**
@@ -1971,8 +1989,12 @@ object CommsRepository {
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
         return when (val p = lock.withLock { prepareLocked(contact, JSONObject(payload.toString()), null) }) {
             is Prepared.Ready -> {
-                val b = MeshProtocol.newBundle(p.envelope, contact.sealing, now)
-                if (b == null) {
+                val tag = runCatching { identities.get()?.meshTag(contact.sealing, MeshProtocol.day(now)) }.getOrNull()
+                val b = tag?.let { MeshProtocol.newBundle(p.envelope, it, now) }
+                if (tag == null) {
+                    CommsLog.add("A message to $label could not be addressed for the offline mesh; it waits for the relay")
+                    false
+                } else if (b == null) {
                     CommsLog.add("A message to $label is too long for the offline mesh; it waits for the relay")
                     false
                 } else {

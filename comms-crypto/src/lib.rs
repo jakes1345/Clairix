@@ -328,6 +328,10 @@ fn unseal(secret: &StaticSecret, envelope: &[u8]) -> Result<([u8; 32], Zeroizing
     Ok((eph_bytes, Zeroizing::new(plain)))
 }
 
+/// HKDF info prefix for the mesh routing tag; the day follows it.
+const MESH_TAG_INFO: &[u8] = b"clairix-mesh-tag-v2";
+const MESH_TAG_LEN: usize = 16;
+
 fn seal_key(shared: &[u8], eph_pub: &[u8], recipient_pub: &[u8]) -> Zeroizing<[u8; 32]> {
     let mut salt = Vec::with_capacity(64);
     salt.extend_from_slice(eph_pub);
@@ -850,6 +854,33 @@ impl Identity {
         let peer = ed25519_from(&peer_ed25519)?.to_base64();
         Ok(safety_number_for(&mine, &peer))
     }
+
+    /// The offline mesh's routing tag for bundles between this device and the
+    /// owner of `peer_sealing` on `day` (days since the Unix epoch, UTC): 16
+    /// bytes from HKDF-SHA256 over the X25519 secret the two sealing keys
+    /// share, with both public keys in sorted order as salt and the day in
+    /// the info. Both ends compute the same tag and nobody else can: not the
+    /// relay, not a carrier, and not another contact who holds either public
+    /// key. The secret never leaves this crate.
+    pub fn mesh_tag(&self, peer_sealing: String, day: i64) -> Result<Vec<u8>> {
+        let peer = x25519_from(&peer_sealing)?;
+        let inner = self.inner.lock().expect("identity mutex poisoned");
+        let mine = XPublicKey::from(&inner.sealing_secret);
+        let shared = inner.sealing_secret.diffie_hellman(&peer);
+        if !shared.was_contributory() {
+            return Err(CryptoError::BadKey { reason: "low-order sealing key".into() });
+        }
+        let (a, b) = if mine.as_bytes() <= peer.as_bytes() { (mine, peer) } else { (peer, mine) };
+        let mut salt = Vec::with_capacity(64);
+        salt.extend_from_slice(a.as_bytes());
+        salt.extend_from_slice(b.as_bytes());
+        let hk = Hkdf::<Sha256>::new(Some(&salt), shared.as_bytes());
+        let mut info = MESH_TAG_INFO.to_vec();
+        info.extend_from_slice(&day.to_be_bytes());
+        let mut tag = vec![0u8; MESH_TAG_LEN];
+        hk.expand(&info, &mut tag).expect("16 bytes is a valid HKDF output length");
+        Ok(tag)
+    }
 }
 
 /// True when `list` already holds [`SESSION_HARD_LIMIT`] protected sessions:
@@ -1024,6 +1055,24 @@ mod tests {
 
     fn signer(id: &Identity) -> impl FnOnce(&[u8]) -> [u8; 64] + '_ {
         move |claim| id.inner.lock().unwrap().account.sign(claim).to_bytes()
+    }
+
+    #[test]
+    fn mesh_tags_are_shared_by_the_two_ends_only() {
+        let alice = Identity::create();
+        let bob = Identity::create();
+        let carol = Identity::create();
+        let a = alice.public_bundle().sealing;
+        let b = bob.public_bundle().sealing;
+        let c = carol.public_bundle().sealing;
+        let ab = alice.mesh_tag(b.clone(), 20_000).unwrap();
+        assert_eq!(ab.len(), 16);
+        assert_eq!(ab, bob.mesh_tag(a.clone(), 20_000).unwrap(), "both ends compute the same tag");
+        assert_ne!(ab, alice.mesh_tag(b.clone(), 20_001).unwrap(), "the tag changes every day");
+        assert_ne!(ab, carol.mesh_tag(b.clone(), 20_000).unwrap(), "another contact of Bob's gets another tag");
+        assert_ne!(ab, carol.mesh_tag(a, 20_000).unwrap());
+        assert_ne!(ab, bob.mesh_tag(c, 20_000).unwrap());
+        assert!(alice.mesh_tag(B64.encode([0u8; 32]), 20_000).is_err(), "a low-order key is refused");
     }
 
     #[test]
