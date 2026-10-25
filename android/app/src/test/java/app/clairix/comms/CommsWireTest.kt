@@ -179,4 +179,39 @@ class CommsWireTest {
         val partial = JSONObject().put(CommsWire.F_FROM, "123456789").put(CommsWire.F_ED25519, "k")
         assertNull(CommsWire.senderOf(partial))
     }
+
+    /** Disappearing messages: the timer travels on every message and on its own, within four weeks. */
+    @Test
+    fun disappearingTimersRoundTripAndAreBounded() {
+        val msg = roundTrip(CommsWire.message("m1", 1_700_000_000_000, "hi", ttl = 3600))
+        assertEquals(CommsWire.T_MSG, CommsWire.type(msg))
+        assertEquals(3600, CommsWire.ttlOf(msg))
+        assertEquals("no ttl on a message that stays", 0, CommsWire.ttlOf(roundTrip(CommsWire.message("m2", 1L, "hi"))))
+        assertTrue(!roundTrip(CommsWire.message("m2", 1L, "hi")).has(CommsWire.F_TTL))
+        assertEquals(86_400, CommsWire.ttlOf(roundTrip(CommsWire.groupMsg("g1", "hi", "m3", 1L, ttl = 86_400))))
+        assertEquals(300, CommsWire.ttlOf(roundTrip(CommsWire.voicemail("v1", 1L, "AAAA", 1000, ttl = 300))))
+        assertEquals(60, CommsWire.ttlOf(roundTrip(CommsWire.mediaHeader("p1", 1L, "image/jpeg", 1, 1, 0, 10, 1, null, null, ttl = 60))))
+
+        val timer = roundTrip(CommsWire.timer("t1", 1_700_000_000_000, 7 * 86_400))
+        assertEquals(CommsWire.T_TIMER, CommsWire.type(timer))
+        assertEquals(7 * 86_400, CommsWire.ttlOf(timer))
+        assertTrue(!timer.has(CommsWire.F_GID))
+        assertEquals("g9", roundTrip(CommsWire.timer("t2", 1L, 0, "g9")).getString(CommsWire.F_GID))
+        // A sender cannot ask for more than four weeks, or for less than nothing.
+        assertEquals(CommsWire.MAX_TTL, CommsWire.ttlOf(JSONObject().put(CommsWire.F_TTL, 999_999_999L)))
+        assertEquals(0, CommsWire.ttlOf(JSONObject().put(CommsWire.F_TTL, -5)))
+        assertEquals(CommsWire.MAX_TTL, CommsWire.ttlOf(roundTrip(CommsWire.timer("t3", 1L, Int.MAX_VALUE))))
+    }
+
+    @Test
+    fun timerLabelsReadNaturally() {
+        assertEquals("off", ttlLabel(0))
+        assertEquals("5 minutes", ttlLabel(300))
+        assertEquals("1 hour", ttlLabel(3600))
+        assertEquals("8 hours", ttlLabel(8 * 3600))
+        assertEquals("1 day", ttlLabel(86_400))
+        assertEquals("1 week", ttlLabel(7 * 86_400))
+        assertEquals("4 weeks", ttlLabel(28 * 86_400))
+        assertTrue(TIMER_CHOICES.all { it in 0..CommsWire.MAX_TTL })
+    }
 }

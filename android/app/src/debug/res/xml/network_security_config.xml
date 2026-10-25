@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug builds only (src/debug overrides src/main's file of the same name):
+    everything as in the release configuration, plus plain http to a relay on
+    the computer the device is attached to (127.0.0.1 or localhost, reached
+    through adb reverse), which is how the end-to-end tests run two local
+    relays. Release builds never send anything in the clear.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

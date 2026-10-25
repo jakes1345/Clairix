@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -194,6 +195,9 @@ object CommsRepository {
     private var retryJob: Job? = null
     @Volatile private var retryBackoffMs = RETRY_MIN_MS
     private const val RETRY_MIN_MS = 5_000L
+    /** The disappearing-messages sweep looks at least this often, and never sooner than [EXPIRY_MIN_WAIT_MS] apart. */
+    private const val EXPIRY_POLL_MS = 60_000L
+    private const val EXPIRY_MIN_WAIT_MS = 250L
     private const val RETRY_MAX_MS = 5 * 60_000L
     private const val RECEIPT_BATCH = 100
     private const val MAX_INBOX_PAGES = 25
@@ -251,6 +255,7 @@ object CommsRepository {
             tokens = StoredTokenPool(appContext),
             trafficTokens = StoredTokenPool(appContext, "traffic"),
             reportTokens = StoredTokenPool(appContext, "report"),
+            tokenKeys = StoredTokenKeyPins(appContext),
             // The canary's pin, enforced on every handshake when the owner asked for it.
             alternates = { config.relayAlternates },
             pin = { TlsCanary.enforcedPin(appContext, config.relayUrl?.let { runCatching { java.net.URI(it).host }.getOrNull() }) },
@@ -270,6 +275,7 @@ object CommsRepository {
             CommsLog.add("Background connection switched on (calls ring while Clairix is closed)")
         }
         initialised = true
+        startExpirySweep()
         syncCoverTraffic()
         refreshAlternates()
         // Every entry point that initialises comms also arms the duress phrase.
@@ -399,7 +405,7 @@ object CommsRepository {
         withContext(Dispatchers.IO) {
             val result = lock.withLock {
                 val url = (invite?.relayUrl ?: relayUrl).trim().trimEnd('/')
-                if (!url.startsWith("https://")) return@withLock Result.failure(RelayException("The relay URL must start with https://"))
+                if (!RelayClient.acceptableRelayUrl(url)) return@withLock Result.failure(RelayException("The relay URL must start with https://"))
                 if (invite == null && secret.isBlank()) return@withLock Result.failure(RelayException("Enter the enrollment secret"))
                 if (invite != null && invite.invite == null) return@withLock Result.failure(RelayException("That code is not an invite"))
                 setBusy(true)
@@ -882,8 +888,9 @@ object CommsRepository {
         store.contact(peer) ?: return@withContext Result.failure(RelayException("Unknown contact"))
         runSendHooks(text)
         val id = UUID.randomUUID().toString()
-        store.insertMessage(ChatMessage(id, peer, Direction.OUT, text, System.currentTimeMillis(), "queued", read = true))
+        store.insertMessage(ChatMessage(id, peer, Direction.OUT, text, System.currentTimeMillis(), "queued", read = true, ttl = store.timer(peer)))
         bump()
+        wakeExpiry()
         // On the repository's scope: the caller's scope is the screen's, and leaving
         // the conversation used to cancel the flush half-way, leaving the message
         // "queued" with no retry timer. The bubble shows a failure and its RETRY
@@ -911,8 +918,9 @@ object CommsRepository {
                 caption.trim().take(MAX_CAPTION), media.thumbB64
             )
             CommsMedia.save(id, media.bytes)
-            store.insertMessage(ChatMessage(id, peer, Direction.OUT, body.encode(), System.currentTimeMillis(), "queued", read = true, kind = KIND_MEDIA))
+            store.insertMessage(ChatMessage(id, peer, Direction.OUT, body.encode(), System.currentTimeMillis(), "queued", read = true, kind = KIND_MEDIA, ttl = store.timer(peer)))
             bump()
+            wakeExpiry()
             CommsLog.add("${if (media.isVideo) "Video" else "Photo"} (${media.bytes.size / 1024} KB, $chunks envelope(s)) queued for ${formatClairixNumber(peer)}")
             // On the repository's scope: a photo takes many envelopes, and leaving
             // the conversation must not cancel it half-way.
@@ -947,7 +955,7 @@ object CommsRepository {
                     store.setStatus(m.id, "failed", "Contact removed")
                     continue
                 }
-                val outcome = if (m.isMedia) deliverMedia(contact, m) else deliver(contact, CommsWire.message(m.id, m.ts, m.body))
+                val outcome = if (m.isMedia) deliverMedia(contact, m) else deliver(contact, CommsWire.message(m.id, m.ts, m.body, m.ttl))
                 when (outcome) {
                     Deliver.Sent -> { store.markSentIfQueued(m.id); retryBackoffMs = RETRY_MIN_MS }
                     is Deliver.Failed -> {
@@ -1001,7 +1009,7 @@ object CommsRepository {
         try {
             if (done < 0) {
                 progress(0)
-                val header = CommsWire.mediaHeader(m.id, m.ts, body.mime, body.width, body.height, body.durationMs, bytes.size.toLong(), total, body.caption, body.thumbB64)
+                val header = CommsWire.mediaHeader(m.id, m.ts, body.mime, body.width, body.height, body.durationMs, bytes.size.toLong(), total, body.caption, body.thumbB64, m.ttl)
                 when (val d = deliver(contact, header)) {
                     Deliver.Sent -> { done = 0; synchronized(mediaSent) { mediaSent[m.id] = 0 } }
                     else -> return d
@@ -1281,7 +1289,8 @@ object CommsRepository {
             if (audioB64.length > MAX_VOICEMAIL_B64) throw IllegalArgumentException("The recording is too long to send")
             val id = UUID.randomUUID().toString()
             val ts = System.currentTimeMillis()
-            when (val result = deliver(contact, CommsWire.voicemail(id, ts, audioB64, durationMs))) {
+            val ttl = store.timer(contact.number)
+            when (val result = deliver(contact, CommsWire.voicemail(id, ts, audioB64, durationMs, ttl))) {
                 Deliver.Sent -> Unit
                 is Deliver.Failed -> throw RelayException(result.reason)
                 is Deliver.TooLarge -> throw RelayException(result.reason)
@@ -1289,10 +1298,11 @@ object CommsRepository {
             }
             val body = VoicemailBody(audioB64, durationMs).encode()
             lock.withLock {
-                store.insertMessage(ChatMessage(id, contact.number, Direction.OUT, body, ts, STATUS_VOICEMAIL, read = true))
+                store.insertMessage(ChatMessage(id, contact.number, Direction.OUT, body, ts, STATUS_VOICEMAIL, read = true, ttl = ttl))
             }
             CommsLog.add("Voicemail (${durationLabel(durationMs)}) sent to ${formatClairixNumber(contact.number)}")
             bump()
+            wakeExpiry()
         }.onFailure { CommsLog.add("Voicemail to ${formatClairixNumber(contact.number)} not sent: ${it.message}") }
     }
 
@@ -1397,6 +1407,7 @@ object CommsRepository {
         if (AppLock.locked.value) return@withContext
         if (store.groupUnread(gid) == 0) return@withContext
         store.markGroupRead(gid)
+        wakeExpiry()
         bump()
     }
 
@@ -1577,13 +1588,15 @@ object CommsRepository {
             runSendHooks(text)
             val id = UUID.randomUUID().toString()
             val ts = System.currentTimeMillis()
+            val ttl = store.timer(gid)
             lock.withLock {
-                store.insertGroupMessage(gid, ChatMessage(id, gid, Direction.OUT, text, ts, "queued", read = true, sender = ctx.me))
+                store.insertGroupMessage(gid, ChatMessage(id, gid, Direction.OUT, text, ts, "queued", read = true, sender = ctx.me, ttl = ttl))
             }
             bump()
+            wakeExpiry()
             scope.launch {
                 val recipients = ctx.others()
-                val sent = if (recipients.isEmpty()) 0 else fanOut("Group message", recipients, CommsWire.groupMsg(gid, text, id, ts))
+                val sent = if (recipients.isEmpty()) 0 else fanOut("Group message", recipients, CommsWire.groupMsg(gid, text, id, ts, ttl))
                 if (sent > 0 || recipients.isEmpty()) {
                     store.markSentIfQueued(id)
                     if (recipients.isNotEmpty() && sent < recipients.size) {
@@ -1716,12 +1729,14 @@ object CommsRepository {
                 if (body.isEmpty()) return
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 val onScreen = openPeer == gid && !AppLock.locked.value
-                store.insertGroupMessage(gid, ChatMessage(id, gid, Direction.IN, body, ts, "received", read = onScreen, sender = from))
+                store.insertGroupMessage(gid, ChatMessage(id, gid, Direction.IN, body, ts, "received", read = onScreen, sender = from, ttl = disappearAfter(gid, json)))
+                if (onScreen) wakeExpiry()
                 if (!onScreen) {
                     CommsNotifications.notifyGroupInbound(appContext, group, store.unreadGroupInbound(gid, 5)) { memberName(gid, it) }
                 }
             }
             CommsWire.T_GROUP_CTRL -> applyGroupCtrl(contact, group, sender, json)
+            CommsWire.T_TIMER -> applyTimer(gid, envelopeTs, json, memberName(gid, from), group = true)
             CommsWire.T_THREAT -> {
                 val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
                 if (store.hasSharedThreat(id)) return
@@ -1972,7 +1987,7 @@ object CommsRepository {
         for (m in store.queued()) {
             if (m.isMedia) continue
             val contact = store.contact(m.peer) ?: continue
-            meshQueue(contact, CommsWire.message(m.id, m.ts, m.body), m.id)
+            meshQueue(contact, CommsWire.message(m.id, m.ts, m.body, m.ttl), m.id)
         }
     }
 
@@ -2245,7 +2260,8 @@ object CommsRepository {
                 val body = json.optString(CommsWire.F_BODY).take(MAX_BODY)
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
-                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body, ts, "received", read = onScreen))
+                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body, ts, "received", read = onScreen, ttl = disappearAfter(contact.number, json)))
+                if (onScreen) wakeExpiry()
                 store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                 if (!onScreen) {
                     CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
@@ -2325,7 +2341,7 @@ object CommsRepository {
                 // Arrives unread even to an open conversation: it is audio, and the
                 // owner has not heard it; the conversation marks it read as usual.
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
-                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, VoicemailBody(audioB64, durationMs).encode(), ts, STATUS_VOICEMAIL, read = false))
+                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, VoicemailBody(audioB64, durationMs).encode(), ts, STATUS_VOICEMAIL, read = false, ttl = disappearAfter(contact.number, json)))
                 store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
                 if (!onScreen) {
                     CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
@@ -2362,7 +2378,7 @@ object CommsRepository {
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 // Shown at once as a thumbnail that fills in; read, receipted and
                 // notified only when the whole file is here.
-                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body.encode(), ts, STATUS_RECEIVING, read = false, kind = KIND_MEDIA))
+                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body.encode(), ts, STATUS_RECEIVING, read = false, kind = KIND_MEDIA, ttl = disappearAfter(contact.number, json)))
                 CommsLog.add("${if (body.isVideo) "Video" else "Photo"} (${size / 1024} KB, $chunks envelope(s)) announced by ${formatClairixNumber(contact.number)}")
                 // Its chunks may have overtaken the header.
                 completeMediaIfWhole(contact, id, body)
@@ -2395,6 +2411,9 @@ object CommsRepository {
             }
             CommsWire.T_GROUP_MSG, CommsWire.T_GROUP_CTRL, CommsWire.T_THREAT, CommsWire.T_PANIC ->
                 processGroupPayload(contact, envelopeTs, json)
+            CommsWire.T_TIMER ->
+                if (json.has(CommsWire.F_GID)) processGroupPayload(contact, envelopeTs, json)
+                else applyTimer(contact.number, envelopeTs, json, contact.name.ifBlank { formatClairixNumber(contact.number) }, group = false)
             // Cover traffic: nothing is kept, shown or acknowledged.
             CommsWire.T_NOISE -> Unit
             else -> CommsLog.add("Payload of type \"${CommsWire.type(json)}\" from ${formatClairixNumber(contact.number)} not understood; ignored")
@@ -2630,11 +2649,120 @@ object CommsRepository {
         // Behind the lock nothing is being read, whatever is on screen underneath it.
         if (AppLock.locked.value) return@withContext
         val ids = store.markRead(peer)
+        wakeExpiry()
         if (ids.isEmpty()) return@withContext
         bump()
         store.queueReceipt(peer, ids, CommsWire.STATUS_READ)
         // On the repository's scope: leaving the screen must not cancel the receipt.
         scope.launch { flushReceipts() }
+    }
+
+    // ── Disappearing messages ─────────────────────────────────────────────
+
+    /** The disappearing-messages timer of a conversation (contact number or group id), in seconds; 0 when off. */
+    fun timer(peer: String): Int = if (initialised) store.timer(peer) else 0
+
+    /**
+     * Sets a conversation's disappearing-messages timer and tells the other side
+     * (every member, for a group). From then on everything sent in it carries the
+     * timer, so a phone that missed the change still deletes what it is sent, and
+     * this phone deletes its own copies of everything in it, sent or received.
+     */
+    suspend fun setTimer(peer: String, ttl: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!config.isRegistered) throw RelayException("Not registered with a relay")
+            val seconds = ttl.coerceIn(0, CommsWire.MAX_TTL)
+            val now = System.currentTimeMillis()
+            val group = store.group(peer)
+            val contact = if (group == null) store.contact(peer) ?: throw RelayException("Unknown contact") else null
+            val changed = lock.withLock {
+                store.setTimer(peer, seconds, now).also { changed ->
+                    if (changed) noteTimer(peer, group != null, null, seconds, now)
+                }
+            }
+            if (!changed) return@runCatching
+            bump()
+            val payload = CommsWire.timer(UUID.randomUUID().toString(), now, seconds, group?.id)
+            if (group != null) {
+                val recipients = groupContext(peer).others()
+                if (recipients.isNotEmpty()) fanOut("Disappearing-messages change", recipients, payload)
+            } else if (contact != null) {
+                when (val d = deliver(contact, payload)) {
+                    Deliver.Sent -> Unit
+                    is Deliver.Failed -> CommsLog.add("Disappearing-messages change not sent: ${d.reason}")
+                    is Deliver.TooLarge -> CommsLog.add("Disappearing-messages change not sent: ${d.reason}")
+                    // The next message carries the timer anyway.
+                    is Deliver.Offline -> CommsLog.add("Disappearing-messages change waits for the next message: ${d.reason}")
+                }
+            }
+        }
+    }
+
+    /**
+     * How long an inbound message in [peer]'s conversation lasts once read: the
+     * shorter of what the sender asked for and this phone's own timer, so the
+     * owner's setting governs every copy on this phone, whatever the sender's app.
+     */
+    private fun disappearAfter(peer: String, json: JSONObject): Int {
+        val asked = CommsWire.ttlOf(json)
+        val mine = store.timer(peer)
+        return listOf(asked, mine).filter { it > 0 }.minOrNull() ?: 0
+    }
+
+    /** A timer change from [who] in [peer]'s conversation. Caller holds [lock]. */
+    private fun applyTimer(peer: String, envelopeTs: Long, json: JSONObject, who: String, group: Boolean) {
+        val ttl = CommsWire.ttlOf(json)
+        val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
+        if (!store.setTimer(peer, ttl, ts)) return
+        noteTimer(peer, group, who, ttl, ts)
+        CommsLog.add("$who ${if (ttl > 0) "set disappearing messages to ${ttlLabel(ttl)}" else "turned disappearing messages off"}")
+        bump()
+    }
+
+    /** Writes the line that says the timer changed into the conversation. [who] null is this phone's owner. */
+    private fun noteTimer(peer: String, group: Boolean, who: String?, ttl: Int, ts: Long) {
+        val subject = who ?: "You"
+        val line = if (ttl > 0) "$subject set disappearing messages to ${ttlLabel(ttl)}" else "$subject turned disappearing messages off"
+        val note = ChatMessage(UUID.randomUUID().toString(), peer, Direction.IN, line, ts, STATUS_SYSTEM, read = who == null, kind = KIND_NOTE)
+        if (group) store.insertGroupMessage(peer, note) else store.insertMessage(note)
+    }
+
+    private val expiryWake = Channel<Unit>(Channel.CONFLATED)
+
+    /** Has the sweep look again now: a message's clock started or a new one is counting down. */
+    private fun wakeExpiry() {
+        expiryWake.trySend(Unit)
+    }
+
+    /**
+     * Deletes disappearing messages as their time comes, for as long as the
+     * process lives: at the moment the next one is due, and at least once a
+     * minute. What is past its time is never shown even before this runs (the
+     * store's reads leave it out), and a process that was not running sweeps
+     * the moment it starts.
+     */
+    private fun startExpirySweep() {
+        scope.launch {
+            while (true) {
+                val next = runCatching { sweepExpired() }
+                    .onFailure { CommsLog.add("Deleting disappearing messages failed: ${it.message}") }
+                    .getOrNull()
+                val wait = next?.let { (it - System.currentTimeMillis()).coerceIn(EXPIRY_MIN_WAIT_MS, EXPIRY_POLL_MS) } ?: EXPIRY_POLL_MS
+                withTimeoutOrNull(wait) { expiryWake.receive() }
+            }
+        }
+    }
+
+    /** Deletes what is due now, with its files and notifications; returns when the next is due. */
+    private suspend fun sweepExpired(): Long? = lock.withLock {
+        val gone = store.expireMessages(System.currentTimeMillis())
+        if (gone.isNotEmpty()) {
+            for ((id, _, kind) in gone) if (kind == KIND_MEDIA) CommsMedia.delete(id)
+            for (peer in gone.map { it.second }.toSet()) CommsNotifications.cancel(appContext, peer)
+            CommsLog.add("${gone.size} disappearing message(s) deleted")
+            bump()
+        }
+        store.nextExpiry()
     }
 
     // ── Service helpers ───────────────────────────────────────────────────
