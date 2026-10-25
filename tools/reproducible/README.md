@@ -30,14 +30,18 @@ tools/reproducible/compare-apk.sh \
     clairix-v3.1.0.apk
 ```
 
-You need JDK 17, the Android SDK (API 35), an NDK, `cargo-ndk`, and Rust
-`1.97.0`, which rustup installs from `comms-crypto/rust-toolchain.toml` on the
-first build. `android/README.md` says what is pinned and what is not.
+You need JDK 17, the Android SDK (API 35), NDK `27.2.12479018`, `cargo-ndk`
+`4.1.2` and Rust `1.97.0`, which rustup installs from
+`comms-crypto/rust-toolchain.toml` on the first build:
 
-## What is not pinned
+```
+sdkmanager "ndk;27.2.12479018"
+cargo install cargo-ndk --version 4.1.2 --locked
+```
 
-The NDK (CI uses the runner's latest; `source.properties` under
-`$ANDROID_HOME/ndk/<version>` says which one a machine has) and `cargo-ndk`
-(the latest release at build time). A rebuild with a different NDK can differ
-in the native library. No published release has yet been rebuilt and matched
-this way; until one has, the comparison is a check, not a promise.
+From 3.0.0 Beta 6 the build checks both versions and stops on any other, so a
+rebuild cannot quietly use a different NDK. Releases up to Beta 5 were built
+with whichever NDK the CI runner had installed as its latest, so a rebuild of
+one of those may differ in the native library. No published release has yet
+been rebuilt and matched this way; until one has, the comparison is a check,
+not a promise.

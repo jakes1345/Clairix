@@ -52,8 +52,13 @@ jobs:
         with:
           workspaces: comms-crypto
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+      # The NDK and cargo-ndk versions android/app/build.gradle.kts pins; the
+      # build refuses any other, so a release can be rebuilt with the same tools.
+      - name: Install the pinned NDK and cargo-ndk
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          cargo install cargo-ndk --version 4.1.2 --locked
 
       - name: Validate the Gradle wrapper
         uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
@@ -64,7 +69,6 @@ jobs:
       - name: Build the app and the smoke test
         working-directory: android
         run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
           ./gradlew assembleFullSuiteDebug assembleFullSuiteDebugAndroidTest --no-daemon --stacktrace
 
       # Hosted Linux runners have KVM; the runner user needs access to it.
