@@ -75,12 +75,20 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
+      # avdmanager and the emulator do not agree on where AVDs live by default
+      # (the emulator looked only in $HOME/.android/avd and found nothing), so
+      # both are told, and the step fails here if the emulator cannot see it.
       - name: Install the emulator and system image
         run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKM" --licenses > /dev/null || true
           "$SDKM" --install emulator "$IMAGE" platform-tools > /dev/null
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n smoke -k "$IMAGE" -d pixel_6 --force
+          "$ANDROID_HOME/emulator/emulator" -list-avds | tee avds.txt
+          grep -qx smoke avds.txt || { echo "::error::The emulator cannot see the AVD just created"; ls -la "$ANDROID_AVD_HOME" "$HOME/.android" || true; exit 1; }
 
       # Never `adb wait-for-device` alone: an emulator that dies at start leaves it
       # waiting until the job's timeout, with nothing in the log to say why.
