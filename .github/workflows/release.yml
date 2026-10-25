@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.4'
+        default: 'v3.0.0-beta.5'
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -266,7 +266,41 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 4: what your Bluetooth gives away, and plate readers for real"
+            echo "### What's new in Beta 5: relays that reach each other, and checks on GPS, 2G and your keyboard"
+            echo
+            echo "- **Contacts on other relays.** Anyone can run a Clairix relay, and a contact on"
+            echo "  another one is added by scanning their QR code. Your relay forwards to theirs,"
+            echo "  signed with its own key: their relay sees your relay's address, never your"
+            echo "  phone's, and nothing it receives names you. The contact's page says which relay"
+            echo "  they are on. Both of you need Beta 5."
+            echo "- **Mixing.** The relay holds each message a random few seconds (about four on"
+            echo "  average, never more than twenty) and releases everything due together, shuffled,"
+            echo "  so timing alone does not pair a message in with a delivery out. Calls being set"
+            echo "  up, SOS alerts and group changes are never held."
+            echo "- **Offline mesh** (off by default). Texts, group texts and SOS that cannot reach the"
+            echo "  relay are passed phone to phone over Bluetooth in the same sealed envelopes,"
+            echo "  addressed by a tag that changes daily, for at most two days and eight hops."
+            echo "- **GPS spoofing and jamming checks.** Satellite signal strengths, satellite time"
+            echo "  against network time, GPS against Wi-Fi and cell position, impossible jumps,"
+            echo "  mock-location apps and the receiver's own gain control. Navigation warns over the"
+            echo "  map when the signal is spoofed or jammed."
+            echo "- **2G and VPN leaks** in Phone check: whether the phone has the \"Allow 2G\" switch"
+            echo "  (and a red row if it is ever seen on a 2G tower), DNS or IPv6 leaking past the VPN,"
+            echo "  Clairix left outside it, and \"Block connections without VPN\" turned off."
+            echo "- **Ultrasonic beacons.** Listens on demand for the inaudible tones advertising kits"
+            echo "  use to tie a phone to a place or a programme, after first checking the microphone"
+            echo "  can hear that band. Nothing is recorded."
+            echo "- **Your keyboard.** Clairix asks the keyboard not to learn from anything typed in"
+            echo "  it, and Phone check names the keyboard in use and warns if it can reach the internet."
+            echo "- **A tour of the app** after setup, covering every page with a button to open it;"
+            echo "  take it again from Settings. Onboarding now explains why Android asks whether"
+            echo "  Clairix may suggest Wi-Fi networks."
+            echo "- **Security fixes from our own review:** a way to learn whether any number existed,"
+            echo "  a way for another relay to fill someone's mailbox, and group messages that"
+            echo "  recognised members by number alone. Members are now matched by their keys."
+            echo "- The COMMS database is upgraded once, on first start, to record each contact's relay."
+            echo
+            echo "### What was new in Beta 4: what your Bluetooth gives away, and plate readers for real"
             echo
             echo "- **Bluetooth exposure** (Scan → Trackers). What a receiver by the road or in a"
             echo "  shop can log from this phone: its name, replaced with the model name in one tap"
