@@ -147,6 +147,8 @@ class CallActivity : ComponentActivity() {
         handle(intent)
 
         setContent {
+            // Every text field: the keyboard is asked not to learn from what is typed.
+            app.clairix.ui.NoKeyboardLearning {
             val theme by AppSettings.theme.collectAsStateWithLifecycle()
             ClairixTheme(theme = theme) {
                 Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
@@ -162,6 +164,7 @@ class CallActivity : ComponentActivity() {
                         c != null -> InCallScreen(c, Modifier.systemBarsPadding())
                     }
                 }
+            }
             }
         }
     }

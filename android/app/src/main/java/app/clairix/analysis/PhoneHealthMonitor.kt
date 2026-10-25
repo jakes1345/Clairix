@@ -405,6 +405,7 @@ class PhoneHealthMonitor(private val context: Context) {
         if (!alwaysOnVpn.isNullOrBlank()) out += HealthFact("vpn_always", "Network", "Always-on VPN", alwaysOnVpn)
         runCatching { CellularExposure.fact(context, advancedProtectionEnabled()) }.getOrNull()?.let { out += it }
         runCatching { NetworkLeaks.facts(NetworkLeaks.read(context)) }.getOrNull()?.let { out += it }
+        runCatching { KeyboardExposure.fact(KeyboardExposure.current(context)) }.getOrNull()?.let { out += it }
 
         // ── Identity ────────────────────────────────────────────────────────
         out += identityFacts()

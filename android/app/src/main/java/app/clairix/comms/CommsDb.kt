@@ -45,17 +45,17 @@ object CommsDb {
      * converting a plain database from an earlier version before it is opened.
      */
     @Synchronized
-    fun password(context: Context, version: Int): String {
+    fun password(context: Context, version: Int, name: String = NAME): String {
         loadLibrary()
         val app = context.applicationContext
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val file = app.getDatabasePath(NAME)
+        val file = app.getDatabasePath(name)
         var key = prefs.getString(KEY_WRAPPED, null)
             ?.let { wrapped -> runCatching { KeystoreBox.decrypt(Base64.decode(wrapped, Base64.NO_WRAP)) }.getOrNull() }
         if (key == null) {
             // No usable key. A sealed database left behind (its Keystore key
             // destroyed by a wipe or an unpair) is ciphertext nobody can open.
-            if (file.exists() && !isPlain(file)) app.deleteDatabase(NAME)
+            if (file.exists() && !isPlain(file)) app.deleteDatabase(name)
             key = ByteArray(32).also { SecureRandom().nextBytes(it) }
             prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(KeystoreBox.encrypt(key), Base64.NO_WRAP)).commit()
         }
@@ -117,7 +117,7 @@ object CommsDb {
                 plain.close()
             }
             // The journal and WAL files belong to the plain database and go with it.
-            app.deleteDatabase(NAME)
+            app.deleteDatabase(file.name)
             if (!sealed.renameTo(file)) throw IllegalStateException("could not move the sealed database into place")
             CommsLog.add("Message database sealed")
         }.onFailure {
