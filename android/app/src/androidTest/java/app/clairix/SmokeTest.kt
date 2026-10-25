@@ -128,7 +128,12 @@ class SmokeTest {
     fun everyScreenOpensWithoutCrashing() {
         // Onboarding.
         text("Skip", 15_000)?.let { it.click(); alive("onboarding skip") }
-        text("Start scanning", 5_000)?.let { shot("onboarding-last"); it.click(); alive("start scanning") }
+        text("Start scanning", 5_000)?.let {
+            shot("onboarding-last")
+            // Scanning can be left for later: the last page offers that too.
+            assertTrue("no Not now on the last page", device.hasObject(By.text("Not now")))
+            it.click(); alive("start scanning")
+        }
 
         // The tour, every page.
         assertTrue("the tour did not open", text("Where everything is", 15_000) != null)
