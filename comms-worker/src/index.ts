@@ -23,7 +23,7 @@ import {
 } from "./comms-logic";
 import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
 import { KNOWN_REGIONS } from "./regions";
-import { INVITE_TTL_MS, Mailbox, type CoinTx, type Profile, type SignedKey } from "./mailbox";
+import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
 import {
   FED_CLAIMS_BURST,
@@ -32,6 +32,8 @@ import {
   FED_LOOKUPS_PER_MINUTE,
   FED_SENDS_BURST,
   FED_SENDS_PER_MINUTE,
+  FED_SENDS_PER_TARGET_BURST,
+  FED_SENDS_PER_TARGET_PER_MINUTE,
   federationObjectName,
   federationPolicy,
   fetchRelayKey,
@@ -69,11 +71,12 @@ export { IncidentCache, Mailbox, Traffic };
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
  * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
  * account they went to:
- *   POST   /v1/send            {to, envelope, claim?, urgent?} → queue for a contact; a "delivery" token.
+ *   POST   /v1/send            {to, envelope, claim?, mix?}  → queue for a contact; a "delivery" token.
  *                              "claim" is the ticket of the one-time key the envelope's session was built
- *                              on, which spends that key for good. Unless "urgent" (call set-up, SOS, group changes), the
- *                              envelope is held a random few seconds and released in a shuffled batch
- *                              (MIX_MAX_MS; see Mailbox.enqueue).
+ *                              on, which spends that key for good. With "mix" true, the envelope is held a
+ *                              random few seconds and released in a shuffled batch (MIX_MAX_MS; see
+ *                              Mailbox.enqueue). The app asks for it on everything but call set-up, SOS and
+ *                              group changes; apps from before mixing never ask, so nothing of theirs waits.
  *   Traffic (one Durable Object per map region; "traffic" tokens, "report" tokens for new reports; probes,
  *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
  *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
@@ -119,7 +122,7 @@ export { IncidentCache, Mailbox, Traffic };
  * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
  * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
  * one through:
- *   POST   /v1/federate/send   {to, envelope, claim?, urgent?} → as /v1/send     (signed by the forwarding relay)
+ *   POST   /v1/federate/send   {to, envelope, claim?, mix?}    → as /v1/send     (signed by the forwarding relay)
  *   POST   /v1/federate/lookup {number, pin?, claim}           → as /v1/lookup   (likewise)
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
  */
@@ -226,7 +229,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       const allowed = await other.rateOk("fed-send", FED_SENDS_PER_MINUTE, FED_SENDS_BURST);
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
       const body = parseSendBody(bodyText);
-      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
+      if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
+        throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", 60);
+      }
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, true);
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
@@ -933,13 +939,13 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
   const foreign = body.relay !== null && !isOwnOrigin(env, request, body.relay);
   // Checked before the token is spent, so a phone on a relay that cannot
   // forward keeps its token.
-  if (foreign && !(await relayKey(env))) throw new HttpError(501, "This relay does not reach other relays: its operator has not set RELAY_KEY");
+  if (foreign && !(await relayKey(env))) throw new HttpError(501, "This relay does not reach other relays: its operator has turned federation off");
   await spendToken(env, request, "delivery");
   if (foreign && body.relay !== null) {
     // A number on another relay: this relay forwards the envelope, signed as
     // itself. The other relay sees this relay's address, not the phone's, and
     // the forwarded request names no sender, as the phone's did not.
-    const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, urgent: body.urgent };
+    const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, mix: !body.urgent };
     if (body.claim !== null) forwarded.claim = body.claim;
     const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
     if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
@@ -952,25 +958,30 @@ interface SendBody {
   to: string;
   envelope: string;
   claim: string | null;
+  /** Not to be held for mixing: everything the sender did not ask to have mixed. */
   urgent: boolean;
   /** The relay the recipient is on, when it is not this one. */
   relay: string | null;
 }
 
 function parseSendBody(bodyText: string): SendBody {
-  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; urgent?: unknown; relay?: unknown }>(bodyText);
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
     throw new HttpError(400, "envelope must be base64");
   }
+  // Refused here, before a token is spent or a mailbox is asked, for every number alike.
+  if (body.envelope.length > MAX_ENVELOPE_B64) throw new HttpError(413, "envelope too large");
   let claim: string | null = null;
   if (body.claim !== undefined && body.claim !== null) {
     if (typeof body.claim !== "string" || !DELIVERY_TOKEN_RE.test(body.claim)) throw new HttpError(400, "claim must be a claim ticket");
     claim = body.claim;
   }
-  if (body.urgent !== undefined && typeof body.urgent !== "boolean") throw new HttpError(400, "urgent must be a boolean");
-  return { to, envelope: body.envelope, claim, urgent: body.urgent === true, relay: parseRelayField(body.relay) };
+  if (body.mix !== undefined && typeof body.mix !== "boolean") throw new HttpError(400, "mix must be a boolean");
+  // Held for mixing only when asked: an app from before mixing sends call
+  // set-up and SOS without saying so, and must not have them wait.
+  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay) };
 }
 
 interface LookupBody {
@@ -1077,8 +1088,8 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
 }
 
 /** Queues [envelope] for [to] on this relay. */
-async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean): Promise<Response> {
-  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent);
+async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean, federated = false): Promise<Response> {
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to
     // one that does not is accepted and dropped, its token spent like any other.

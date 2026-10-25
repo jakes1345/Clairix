@@ -305,10 +305,11 @@ class RelayClient(
     fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false): String {
         val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
         if (claim != null) body.put("claim", claim)
-        // The relay holds anything not urgent for a random few seconds and
-        // releases it shuffled with whatever else is due (mixing); a call
-        // being set up or an SOS goes straight through.
-        if (urgent) body.put("urgent", true)
+        // Everything but a call being set up, an SOS or a group change asks
+        // the relay to hold it a random few seconds and release it shuffled
+        // with whatever else is due (mixing). The relay holds only what asks,
+        // so apps from before mixing are never delayed.
+        if (!urgent) body.put("mix", true)
         // A contact on another relay: this phone's relay forwards it there.
         if (relay != null) body.put("relay", relay)
         val json = anonymous(TokenKind.DELIVERY, "POST", "/v1/send", body)

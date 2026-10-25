@@ -101,17 +101,19 @@ the accounts, the envelopes and the coin community are the same behind each.
 
 ### Mixing
 
-A non-urgent envelope is held for a random time before it reaches its
-recipient: exponential, with a mean of four seconds, never longer than twenty
+An envelope sent with `"mix": true` is held for a random time before it
+reaches its recipient: exponential, with a mean of four seconds, never longer than twenty
 (`MIX_MAX_MS` sets the cap; `"0"` turns mixing off). Every envelope due at
 the same moment is released together, in shuffled order. Someone watching
 traffic into the relay and traffic out to phones then cannot match an
 envelope going in with a delivery coming out by its timing alone, and a burst
-from one sender arrives interleaved with whatever else was due. Call set-up,
-SOS alerts and group membership changes are marked urgent by the app and are
-never held: a call that rings four seconds late is a call missed, and an add
-followed by a remove must not arrive the other way round. The urgent flag
-tells the relay which envelopes those are. Everything else may arrive in any
+from one sender arrives interleaved with whatever else was due. The app asks
+for it on everything except call set-up, SOS alerts and group membership
+changes, which go straight through: a call that rings four seconds late is a
+call missed, and an add followed by a remove must not arrive the other way
+round. The relay holds only what asks, so apps from before mixing, which send
+calls and SOS without saying which they are, are never delayed; the flag does
+tell the relay which envelopes are which. Everything that asks may arrive in any
 order, which the app handles: messages sort by their own time, receipts only
 move forward, and a photo's chunks may overtake its header.
 
@@ -125,18 +127,24 @@ minutes, which blurs volume a little but not against that observer.
 
 ### Running your own relay, and reaching other relays
 
-Anyone can run this Worker. Phones on different relays reach each other once
-both relays have a signing key:
+Anyone can run this Worker, and relays reach each other out of the box. Each
+relay signs what it forwards with its own Ed25519 key, which it makes for
+itself the first time it needs one and keeps in its `relay-identity` Durable
+Object: nobody makes, copies or pastes a secret, and the seed never leaves the
+relay. `GET /` publishes the public half. To supply the key yourself instead
+(to keep it across a move to another account, say):
 
 ```bash
 npm run relay-key                 # prints RELAY_KEY=… and the public key
 npx wrangler secret put RELAY_KEY # paste the base64 seed
 ```
 
+`FEDERATION=off` turns it off in both directions.
+
 A phone then adds a contact by scanning the contact's QR code, which names
 their relay. Everything for that contact goes through the phone's own relay:
 the phone asks its relay, its relay forwards the request to the contact's relay,
-signed with `RELAY_KEY`, and passes the answer back. The contact's relay
+signed with its key, and passes the answer back. The contact's relay
 checks the signature against the key the phone's relay publishes at `GET /`
 (fetched once a day, and again when a signature stops verifying, so a
 replaced key is picked up), with a five-minute window and a single-use nonce
@@ -339,7 +347,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/tokens` | `{count, kind?}` → `{tokens, expiresAt, kind}`: single-use tokens, `delivery` (default), `traffic` or `report` |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
-| POST | `/v1/send` | `{to, envelope, claim?, urgent?, relay?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. Unless `urgent`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there |
+| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |

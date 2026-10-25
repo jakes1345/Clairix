@@ -35,28 +35,36 @@ If you choose to use Comms, your phone registers with the Clairix relay server. 
 
 Messages, voice notes, photos, videos, emergency (SOS) alerts and calls are end-to-end encrypted. The relay cannot read their content and does not learn who sent a message. Call audio travels directly between the two phones, or through a relay server that cannot decrypt it.
 
-The relay can observe the recipient of each envelope, its size and the time it was queued. A send is not signed and names no account: it spends one of the single-use tokens above, and the token's hash does not say which account it was issued to. Like any server, the relay handles the network address a request comes from while answering it. We do not keep request logs, and the relay stores nothing that says when you were last online.
+From Beta 5, before delivery the relay holds each envelope a random few seconds and releases it together with others, so that timing does not pair a sender with a recipient. The relay can observe the recipient of each envelope, its size and the time it was queued. A send is not signed and names no account: it spends one of the single-use tokens above, and the token's hash does not say which account it was issued to. Like any server, the relay handles the network address a request comes from while answering it. We do not keep request logs, and the relay stores nothing that says when you were last online.
 
-### 2.2 ClairixCoin (Clairix Full only)
+### 2.2 Contacts on other relays
+
+From Beta 5, anyone can run a Clairix relay. If you add a contact who uses another one, our relay forwards your sealed envelopes and lookups for that contact to their relay, signed with our relay's own key. Their relay is run by someone else under their own terms. It receives the recipient's number and the sealed envelope; it sees our relay's address, never yours, and nothing in what it receives names you. Our relay keeps, for each other relay, its public key and short-lived limits on what it may send.
+
+### 2.3 Offline mesh
+
+From Beta 5, if you turn on the offline mesh (off by default), texts, group texts and SOS alerts that cannot reach the relay are passed over Bluetooth to nearby phones running Clairix with the mesh on, which pass them on until they reach the person they are for. They are the same sealed envelopes the relay carries, addressed by a tag that changes every day rather than by a number. While the mesh is on, your phone tells nearby Bluetooth scanners that a Clairix phone is present, but not whose.
+
+### 2.4 ClairixCoin (Clairix Full only)
 
 If you use the coin feature, the relay records the transfers you make: who sent, who received, the amount and the time. It keeps the 100 most recent transfers per account. Notes attached to a transfer are end-to-end encrypted and not visible to the relay. ClairixCoin is an in-app token with no monetary value.
 
-### 2.3 Emergency alerts
+### 2.5 Emergency alerts
 
-When you press SOS or type your duress phrase, Clairix reads your current location and sends it, end-to-end encrypted, to the contacts in your groups. Location is not read for this purpose at any other time.
+When you send an SOS or type your duress phrase, Clairix reads your current location and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time.
 
-### 2.4 Traffic and navigation
+### 2.6 Traffic and navigation
 
 Live traffic is used only when you are actively navigating and are registered with Comms. In that case Clairix sends anonymous speed samples to the relay. Each sample contains a road segment, the segment's map position, a speed and a time. Your GPS track is never sent. Nothing is sent for the first 500 metres of a trip or the final approach to your destination, so trips cannot be traced back to where they start or end. Samples are sent without your Clairix number: each request spends a single-use token, and samples from one drive share a temporary pseudonym your phone creates and replaces every ten minutes. They are deleted after two hours. Learned road-segment positions are kept for 30 days. Traffic incidents you choose to report are shared with other users until they expire.
 
-### 2.5 Maps and search
+### 2.7 Maps and search
 
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's servers. Those servers see your IP address and the area being viewed.
 - **Address search.** A search runs on your phone over the road names of the offline map you downloaded, and a dropped pin is named after the nearest road on that map; nothing is sent. Only when you choose "Search online instead" is the search text sent to OpenStreetMap's Nominatim service.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
 - **Offline road maps, work-zone lists and plate-reader lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify. The plate-reader list is the licence-plate cameras mapped in OpenStreetMap for that region; the app shows them, warns you before one and routes around them, all on the phone.
 
-### 2.6 Things you choose to share
+### 2.8 Things you choose to share
 
 When you export a report or share an invite link, Clairix hands it to the app you pick through Android's share menu. What happens next is up to that app.
 

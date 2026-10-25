@@ -9,10 +9,10 @@
 #   HERE_API_KEY         Optional, for navigation: HERE Traffic API v7 key; GET /v1/traffic/incidents
 #                        reports HERE as "off" without it
 #   TOMTOM_API_KEY       Optional, for navigation: TomTom Traffic API key; likewise "off" without it
-#   RELAY_KEY            Optional, for reaching other relays: this relay's Ed25519 seed, base64.
-#                        Make one with `npm run relay-key`. Without it, phones here reach only
-#                        numbers on this relay; with it, a phone can add a contact from another
-#                        relay's QR code and this relay forwards to that relay, signed as itself.
+#   RELAY_KEY            Optional: the Ed25519 seed (base64) this relay signs what it forwards to
+#                        other relays with. Unset, the relay makes its own on first use and keeps
+#                        it in its "relay-identity" object; set it (`npm run relay-key`) only to
+#                        choose the key yourself. FEDERATION=off stops forwarding either way.
 #
 # Plain variables (may go in [vars] below):
 #   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with, e.g. "100"; unset: none
@@ -32,8 +32,9 @@
 #                        zone in both is shown once.
 #   MIX_MAX_MS           Longest an envelope is held for mixing, in ms (default "20000"; the mean hold
 #                        is a fifth of it). Held envelopes are released in shuffled batches so traffic
-#                        in cannot be paired with deliveries out by timing alone. Call set-up, SOS
-#                        and group membership changes are never held. "0" turns mixing off.
+#                        in cannot be paired with deliveries out by timing alone. Only envelopes sent
+#                        with "mix": true are held; the app leaves it off call set-up, SOS and group
+#                        changes, and apps older than mixing never send it. "0" turns mixing off.
 #   FEDERATION           Which other relays may forward to this one: "open" (default; any relay,
 #                        within per-relay limits), "off", or comma-separated https origins
 #   RELAY_ORIGIN         The https address other relays should reach this one at, when requests

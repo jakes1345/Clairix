@@ -1217,6 +1217,19 @@ object CommsRepository {
         config.relayUrl?.let { RelayClient.originOf(it) }?.let { o.put(CommsWire.F_RELAY, it) }
     }
 
+    /**
+     * Whether [contact] is the group member whose roster entry carries
+     * [rosterEd25519]. A number names one person on one relay only: with
+     * relays reaching each other, anyone running a relay can present any
+     * number there. So the roster's key decides when the group knows it; when
+     * it does not, only a contact on this phone's own relay (whose number the
+     * relay vouches for) or one verified in person counts.
+     */
+    private fun isGroupMember(contact: Contact, rosterEd25519: String?): Boolean = when {
+        !rosterEd25519.isNullOrBlank() -> rosterEd25519 == contact.ed25519
+        else -> contact.relay == null || contact.verified
+    }
+
     /** Whether [url] is this phone's relay, under any of the addresses it answers at. */
     private fun isOwnRelay(url: String?): Boolean {
         val mine = config.relayUrl ?: return false
@@ -1437,6 +1450,12 @@ object CommsRepository {
             val contact = store.contact(m.number)
             if (contact == null) {
                 CommsLog.add("$what to ${memberLabel(m)} not sent: they are not a contact on this phone")
+                continue
+            }
+            if (!isGroupMember(contact, m.ed25519)) {
+                // Someone else holds this number on another relay: the group's
+                // messages go to the member the group knows, never to a number.
+                CommsLog.add("$what to ${memberLabel(m)} not sent: the contact with that number is not the person this group knows")
                 continue
             }
             when (val d = deliver(contact, payload)) {
@@ -1683,6 +1702,10 @@ object CommsRepository {
         val sender = store.groupMember(gid, from)
         if (sender == null) {
             CommsLog.add("$type from $label, who is not in \"${group.name}\"; dropped")
+            return
+        }
+        if (!isGroupMember(contact, sender.ed25519)) {
+            CommsLog.add("$type from $label dropped: they have the number of someone in \"${group.name}\", not their keys")
             return
         }
         when (type) {

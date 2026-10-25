@@ -96,6 +96,18 @@ const MAX_QUEUE = 2000;
  * fits (see comms-crypto's padding). Media chunks sit well below it.
  */
 const MAX_ENVELOPE_BYTES = 72 * 1024;
+/** The longest base64 envelope a mailbox takes; checked before anything else, for every number alike. */
+export const MAX_ENVELOPE_B64 = Math.floor((MAX_ENVELOPE_BYTES * 4) / 3) + 4;
+/**
+ * What envelopes forwarded by other relays may use of a mailbox, all other
+ * relays together: an hourly allowance of their own, and a queue that stops
+ * short of full, so another relay (which spends no delivery tokens here) can
+ * neither exhaust the allowance this relay's own senders draw on nor fill the
+ * mailbox against them.
+ */
+const FED_INBOUND_PER_HOUR = 1_800;
+const FED_INBOUND_BURST = 300;
+const FED_QUEUE_RESERVE = 500;
 const ENVELOPE_TTL_MS = 30 * 24 * 60 * 60_000;
 /** One-time keys a mailbox holds; the app keeps a few hundred published so lookups cannot empty it. */
 const MAX_ONE_TIME_KEYS = 500;
@@ -744,6 +756,24 @@ export class Mailbox extends DurableObject<Env> {
     await this.ctx.storage.deleteAll();
   }
 
+  // ── This relay's own identity ("relay-identity"; see federation.ts) ──
+
+  /**
+   * The seed of the key this relay signs forwarded requests with, made here
+   * from the platform's CSPRNG the first time it is asked for and kept in this
+   * object only. It is never sent anywhere; GET / publishes its public half.
+   */
+  async relayIdentitySeed(): Promise<string> {
+    const existing = await this.ctx.storage.get<string>("relaySeed");
+    if (existing) return existing;
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    const seed = btoa(s);
+    await this.ctx.storage.put("relaySeed", seed);
+    return seed;
+  }
+
   // ── Another relay ("fed:<hash>" objects; see federation.ts) ─────────
 
   /** The signing key the other relay publishes, as last fetched, and when. */
@@ -766,6 +796,19 @@ export class Mailbox extends DurableObject<Env> {
     return true;
   }
 
+  /** Per-target send limits for the other relay this object stands for: in memory only. */
+  private fedTargets: MemoryBuckets | null = null;
+
+  /**
+   * Whether the other relay may send one more envelope to [target] now. Kept
+   * in memory and applied before anything is known about the target, so it
+   * reads the same for a number that does not exist.
+   */
+  async federatedSendOk(target: string, perMinute: number, burst: number): Promise<boolean> {
+    this.fedTargets ??= new MemoryBuckets(perMinute, burst);
+    return this.fedTargets.take(target, Date.now());
+  }
+
   /** Whether the other relay, for all its phones together, may claim one more one-time key this hour. */
   async federatedClaimOk(perHour: number, burst: number): Promise<boolean> {
     return (await this.allowanceOk("fed-claims", perHour, burst)).ok;
@@ -777,20 +820,27 @@ export class Mailbox extends DurableObject<Env> {
    * Queues an envelope for the owner and delivers it to any live socket. Returns
    * false when the mailbox does not exist or is full.
    *
-   * Unless it is [urgent] (a call being set up, an SOS), the envelope is first
-   * held for a few seconds, a random time for each one, and released by the
-   * alarm together with whatever else is due, in shuffled order. Someone who
+   * Unless it is [urgent] (the sender did not ask for mixing: a call being set
+   * up, an SOS, or anything from an app older than mixing), the envelope is
+   * first held for a few seconds, a random time for each one, and released by
+   * the alarm together with whatever else is due, in shuffled order. Someone who
    * watches traffic into the relay and traffic out to the owner's phone then
    * cannot pair an envelope in with the delivery out by timing alone, and a
    * burst from one sender arrives interleaved with everyone else's. The hold
    * counts towards the queue, so a full mailbox is full either way.
    */
-  async enqueue(data: string, claim: string | null = null, urgent = false): Promise<EnqueueResult> {
+  async enqueue(data: string, claim: string | null = null, urgent = false, federated = false): Promise<EnqueueResult> {
+    // The size is checked before anything about the number, so an oversized
+    // envelope is answered the same whether the number exists or not.
+    if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return { ok: false, reason: "no such number", status: 404 };
-    if (data.length > (MAX_ENVELOPE_BYTES * 4) / 3 + 4) return { ok: false, reason: "envelope too large", status: 413 };
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
-    if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };
+    if (count >= (federated ? MAX_QUEUE - FED_QUEUE_RESERVE : MAX_QUEUE)) return { ok: false, reason: "mailbox full", status: 413 };
+    if (federated) {
+      const fed = await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST);
+      if (!fed.ok) return { ok: false, reason: "this number is receiving too much from other relays; try again shortly", status: 429, retryAfter: fed.retryAfter };
+    }
     const inbound = await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST);
     if (!inbound.ok) return { ok: false, reason: "this number is receiving too much; try again shortly", status: 429, retryAfter: inbound.retryAfter };
     // The first envelope of a session spends the one-time key it was built on.

@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -89,9 +90,20 @@ class SmokeTest {
     private fun text(t: String, timeout: Long = 8_000): UiObject2? = device.wait(Until.findObject(By.text(t)), timeout)
 
     private fun tap(t: String, step: String = t) {
-        val o = text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
-        o.click()
-        alive(step)
+        // Live screens (Trackers refreshes as scan results arrive) can redraw
+        // between finding a button and tapping it, which leaves the object
+        // found stale; the button is then found again, a few times at most.
+        repeat(3) {
+            val o = text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
+            try {
+                o.click()
+                alive(step)
+                return
+            } catch (_: StaleObjectException) {
+                device.waitForIdle(1_000)
+            }
+        }
+        shot("STALE-$step"); fail("\"$t\" kept redrawing before it could be tapped at: $step")
     }
 
     /**
@@ -101,7 +113,9 @@ class SmokeTest {
      */
     private fun tapScrolling(t: String) {
         repeat(30) {
-            device.findObject(By.text(t))?.let { it.click(); alive(t); return }
+            device.findObject(By.text(t))?.let {
+                try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
+            }
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
             device.waitForIdle(1_000)
         }
@@ -142,7 +156,8 @@ class SmokeTest {
                             device.wait(Until.findObject(By.text(tool)), 3_000)
                         }
                     if (b == null) { shot("MISSING-$tool"); fail("No tracker tool \"$tool\"") }
-                    b!!.click(); alive(tool)
+                    try { b!!.click() } catch (_: StaleObjectException) { tap(tool) }
+                    alive(tool)
                     device.waitForIdle(3_000)
                     shot("tool-$tool")
                     back(tool)

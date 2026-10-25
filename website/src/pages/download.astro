@@ -32,7 +32,7 @@ const compare: { row: string; play: string; full: string }[] = [
 
 const requirements: { icon: IconName; title: string; body: string }[] = [
   { icon: 'device', title: 'Android 12 or newer.', body: 'Clairix uses platform APIs that first appeared in Android 12 (API level 31). Some checks need newer versions and say so in the app, for example screen-recording detection on Android 15.' },
-  { icon: 'bluetooth', title: 'Bluetooth Low Energy', body: 'for tracker detection.' },
+  { icon: 'bluetooth', title: 'Bluetooth Low Energy', body: 'for tracker detection and the offline mesh.' },
   { icon: 'lens', title: 'A rear camera with a torch', body: 'for the lens-glint sweep, and a front camera for the infrared sweep.' },
   { icon: 'compass', title: 'Location', body: 'to confirm that a tracker is moving with you and to read Wi-Fi network names, as Android requires.' },
   { icon: 'chip', title: 'Google Play services.', body: 'The tracker scanner uses Google’s fused location provider, so a phone without Google Play services may not be able to confirm that a tracker is following you. The rest of the app does not depend on it.' },

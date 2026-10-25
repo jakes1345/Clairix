@@ -65,9 +65,8 @@ test("a relay publishes its key and its federation policy", async () => {
   const info = (await a.call("GET", "/")).json;
   assert.equal(Buffer.from(info.relayKey, "base64").length, 32);
   assert.equal(info.federation, "open");
-  const plain = makeRelay({}, C);
-  const none = (await plain.call("GET", "/")).json;
-  assert.equal(none.relayKey, null);
+  const off = makeRelay({ FEDERATION: "off" }, C);
+  assert.equal((await off.call("GET", "/")).json.relayKey, null);
 });
 
 test("a send to a number on another relay arrives, and the other relay never learns the sender", async () => {
@@ -257,17 +256,52 @@ test("a relay with federation off, or not on the list, refuses; the phone is tol
   }
 });
 
-test("a relay without a key does not forward, and the phone keeps its token", async () => {
+test("a relay with no RELAY_KEY makes its own, keeps it, and publishes the same public key every time", async () => {
   const a = makeRelay({}, A);
-  const b = makeRelay({ RELAY_KEY: seed() }, B);
+  const first = (await a.call("GET", "/")).json.relayKey;
+  assert.equal(Buffer.from(first, "base64").length, 32);
+  assert.equal((await a.call("GET", "/")).json.relayKey, first);
+  const kept = a.env.MAILBOX.storageOf("relay-identity").get("relaySeed");
+  assert.equal(Buffer.from(kept, "base64").length, 32);
+  // The seed itself is published nowhere.
+  assert.ok(!JSON.stringify((await a.call("GET", "/")).json).includes(kept));
+  // Another relay makes another key.
+  const b = makeRelay({}, B);
+  assert.notEqual((await b.call("GET", "/")).json.relayKey, first);
+});
+
+test("two relays with keys they made themselves reach each other", async () => {
+  const a = makeRelay({}, A);
+  const b = makeRelay({}, B);
   const net = network([a, b]);
   try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const [token] = await alice.tokens(1);
+    assert.equal((await sendVia(alice, token, bob.number, B)).status, 202);
+    assert.equal((await bob.inbox()).length, 1);
+    const back = await bob.signed("POST", "/v1/lookup", { number: alice.number, claim: false, relay: A });
+    assert.equal(back.status, 200);
+    assert.equal(back.json.identity.ed25519, alice.ed25519);
+  } finally {
+    net.restore();
+  }
+});
+
+test("a relay with federation off neither forwards nor publishes a key, and the phone keeps its token", async () => {
+  const a = makeRelay({ FEDERATION: "off" }, A);
+  const b = makeRelay({}, B);
+  const net = network([a, b]);
+  try {
+    assert.equal((await a.call("GET", "/")).json.relayKey, null);
+    assert.equal((await a.call("GET", "/")).json.federation, "off");
     const alice = await makePhone(a);
     const bob = await makePhone(b);
     const local = await makePhone(a);
     const [token] = await alice.tokens(1);
     const res = await sendVia(alice, token, bob.number, B);
     assert.equal(res.status, 501);
+    assert.match(res.json.error, /federation off/);
     assert.equal(net.requests.length, 0);
     assert.equal((await alice.send(token, local.number)).status, 202, "the token was not spent");
   } finally {
@@ -363,4 +397,69 @@ test("each other relay is held to its own send limit", async () => {
   } finally {
     net.restore();
   }
+});
+
+test("an oversized envelope is refused alike for a number that exists and one that does not, before a token is spent", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b, { listed: false });
+    const local = await makePhone(a, { listed: false });
+    const huge = "A".repeat(100_000);
+    const [token] = await alice.tokens(1);
+    const answers = [];
+    for (const [to, relay] of [[local.number, undefined], ["123456789", undefined], [bob.number, B], ["123456789", B]]) {
+      const res = await alice.send(token, to, huge, undefined, relay ? { relay } : {});
+      answers.push(`${res.status} ${res.json.error}`);
+    }
+    assert.deepEqual(new Set(answers).size, 1, answers.join(" | "));
+    assert.match(answers[0], /^413 envelope too large/);
+    assert.equal((await alice.send(token, local.number)).status, 202, "the token was not spent");
+  } finally {
+    net.restore();
+  }
+});
+
+test("another relay is held per recipient, alike for numbers that exist and ones that do not", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const statuses = async (to) => {
+      const out = [];
+      for (let i = 0; i < 64; i++) {
+        const [t] = await alice.tokens(1);
+        out.push((await sendVia(alice, t, to, B)).status);
+      }
+      return out;
+    };
+    const real = await statuses(bob.number);
+    const made = await statuses("123456789");
+    assert.deepEqual(real, made);
+    assert.equal(real.filter((s) => s === 202).length, 60);
+    assert.equal(real.filter((s) => s === 429).length, 4);
+  } finally {
+    net.restore();
+  }
+});
+
+test("other relays together cannot fill a mailbox or use up what this relay's own senders draw on", async () => {
+  const { b } = relays();
+  const bob = await makePhone(b);
+  const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
+  let federated = 0;
+  for (let i = 0; i < 400; i++) if ((await box.enqueue("c2VhbGVk", null, true, true)).ok) federated++;
+  assert.equal(federated, 300, "other relays get their own allowance");
+  // This relay's own senders are not affected.
+  const carol = await makePhone(b);
+  const [t] = await carol.tokens(1);
+  assert.equal((await carol.send(t, bob.number)).status, 202);
+  // And the queue keeps room for them: other relays stop 500 short of full.
+  await b.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 1500);
+  advance(3_600_000);
+  assert.equal((await box.enqueue("c2VhbGVk", null, true, true)).status, 413);
+  const [t2] = await carol.tokens(1);
+  assert.equal((await carol.send(t2, bob.number)).status, 202);
 });

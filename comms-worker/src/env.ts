@@ -40,15 +40,16 @@ export interface Env {
    */
   RELAY_ALTERNATES?: string;
   /**
-   * Optional: the longest a non-urgent envelope is held for mixing, in
+   * Optional: the longest an envelope sent with "mix" is held for mixing, in
    * milliseconds (default 20000; the mean hold is a fifth of it). "0" turns
    * mixing off.
    */
   MIX_MAX_MS?: string;
   /**
    * Optional secret: this relay's Ed25519 signing key for reaching other
-   * relays, base64 of a 32-byte seed (`npm run relay-key`). Unset: phones here
-   * can only reach numbers on this relay. Its public half is published at GET /.
+   * relays, base64 of a 32-byte seed (`npm run relay-key`). Unset: the relay
+   * makes its own on first use and keeps it in its "relay-identity" object.
+   * Its public half is published at GET /.
    */
   RELAY_KEY?: string;
   /**
@@ -58,7 +59,8 @@ export interface Env {
   RELAY_ORIGIN?: string;
   /**
    * Optional: which other relays may forward to this one. "open" (default):
-   * any, within per-relay limits; "off": none; or comma-separated origins.
+   * any, within per-relay limits; "off": none, and this relay forwards to none
+   * either; or comma-separated origins.
    */
   FEDERATION?: string;
 }

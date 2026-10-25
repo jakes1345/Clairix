@@ -293,6 +293,8 @@ class MainActivity : AppCompatActivity() {
         handleOpenThreadIntent(intent)
 
         setContent {
+            // Every text field: the keyboard is asked not to learn from what is typed.
+            app.clairix.ui.NoKeyboardLearning {
             // The colour theme the user picked in Settings > Appearance; switching it
             // there recolours everything at once, without a restart.
             val theme by AppSettings.theme.collectAsStateWithLifecycle()
@@ -385,6 +387,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+            }
             }
         }
     }

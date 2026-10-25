@@ -1879,7 +1879,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
                 Text(theirs, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.text)
                 Text(
                     "Everything for this contact goes to your relay, which forwards it to theirs signed as itself. Their relay sees your relay's address, never your phone's, and nothing names you as the sender. " +
-                        "Your relay sees that you write to this number on that relay. Both relays' operators must have turned this on; if either has not, sending says so. ClairixCoin cannot be sent across relays.",
+                        "Your relay sees that you write to this number on that relay. Either relay's operator can turn this off; if one has, sending says so. ClairixCoin cannot be sent across relays.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )

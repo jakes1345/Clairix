@@ -35,7 +35,9 @@ Clairix inspects the apps on your phone for stalkerware, audits the certificates
 
 **Microphone, camera and audio routes.** Clairix shows when another app is recording audio or using a camera. It also watches for a Bluetooth or USB microphone that attaches itself while nothing is playing and no call is up, which is how a paired earpiece left in a bag becomes a live microphone on your phone.
 
-**Phone health.** One screen with the facts that matter: root, bootloader state, verified boot, SELinux, screen lock, storage encryption, USB and wireless debugging, developer options, installs from unknown sources, security patch age, VPN and private DNS, whether your phone's Bluetooth name is your real name, and whether it is discoverable.
+**Phone health.** One screen with the facts that matter: root, bootloader state, verified boot, SELinux, screen lock, storage encryption, USB and wireless debugging, developer options, installs from unknown sources, security patch age, VPN and private DNS, whether your phone's Bluetooth name is your real name, whether it is discoverable and, from Beta 5, whether the VPN leaks, whether 2G is allowed and whether your keyboard can reach the internet. A row that can be fixed takes you to the setting that fixes it.
+
+**Your keyboard.** *New in Beta 5.* A keyboard sees everything you type in every app, before any app can encrypt it. Clairix asks the keyboard not to learn from anything typed in Clairix, which Gboard and Samsung's keyboard honour, and Phone check names the keyboard in use and warns if it can reach the internet.
 
 </div>
 
@@ -49,5 +51,6 @@ Clairix inspects the apps on your phone for stalkerware, audits the certificates
 - The interception canary checks the path to the Clairix relay. It does not inspect your other apps' traffic.
 - The unlock ledger is only as complete as the grants you give it. Without the device-admin grant it relies on the usage log, which may lag.
 - Screen-recording detection needs Android 15 or newer. On older versions Clairix cannot be told.
+- Asking the keyboard not to learn is a request. A keyboard is free to ignore it, and it covers nothing typed in other apps. A keyboard with no internet access cannot send anything anywhere.
 
 </div>

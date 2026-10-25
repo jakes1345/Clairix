@@ -15,8 +15,12 @@ import net.zetetic.database.sqlcipher.SQLiteOpenHelper
  * Message bodies are encrypted once more under the Keystore key, as they were
  * before the file was.
  */
-class CommsStore(context: Context) : SQLiteOpenHelper(
-    context.applicationContext, CommsDb.NAME, CommsDb.password(context, DB_VERSION), null, DB_VERSION, 0, null, null, false
+class CommsStore(
+    context: Context,
+    /** The database file; another name only in tests, which must not touch the app's own. */
+    name: String = CommsDb.NAME
+) : SQLiteOpenHelper(
+    context.applicationContext, name, CommsDb.password(context, DB_VERSION, name), null, DB_VERSION, 0, null, null, false
 ) {
 
     override fun onCreate(db: SQLiteDatabase) {
