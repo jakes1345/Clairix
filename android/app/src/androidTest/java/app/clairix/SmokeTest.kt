@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
@@ -124,6 +125,18 @@ class SmokeTest {
 
     private fun back(step: String) { device.pressBack(); alive("back from $step") }
 
+    /**
+     * Back from [step] to a screen with [expect] on it. The emulator's keyboard
+     * service sometimes takes a Back key itself (it logs "Received KEYCODE_BACK.
+     * isAllViewsInvisible=false") without the app ever seeing it, so when the
+     * page titled [step] is still open a second Back is sent, as a person would.
+     */
+    private fun backTo(step: String, expect: BySelector) {
+        back(step)
+        if (device.wait(Until.hasObject(expect), 3_000)) return
+        if (device.hasObject(By.text(step))) back("$step (again)")
+    }
+
     @Test
     fun everyScreenOpensWithoutCrashing() {
         // Onboarding.
@@ -183,7 +196,7 @@ class SmokeTest {
                     val more = device.wait(Until.findObject(By.desc("More options")), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
                     more.click(); alive("comms menu")
                     tap(page, "comms $page"); device.waitForIdle(2_000); shot("comms-$page")
-                    back(page)
+                    backTo(page, By.desc("More options"))
                 }
             }
         }
