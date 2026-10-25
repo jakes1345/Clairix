@@ -56,7 +56,7 @@ class SmokeTest {
         device.takeScreenshot(f)
         // Secure screens (Comms) come out black, so a failure also keeps the
         // window hierarchy: what was on screen, as text.
-        if (name.startsWith("MISSING") || name.startsWith("LEFT")) {
+        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE")) {
             runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
         }
     }
@@ -156,11 +156,17 @@ class SmokeTest {
         // The tour, every page.
         assertTrue("the tour did not open", text("Where everything is", 15_000) != null)
         shot("tour-index")
-        var pages = 0
-        while (device.hasObject(By.text("Next")) && pages < 60) {
-            tap("Next", "tour page ${pages + 2}")
-            if (pages % 4 == 0) shot("tour-page-${pages + 2}")
-            pages++
+        // Step by the tour's own counter ("Tour · 3 of 25"), waiting for each page
+        // to settle: while the pager slides onto the last page, Next is still on
+        // screen for a moment before it turns into Done.
+        val counter = device.findObject(By.textStartsWith("Tour · 1 of "))?.text ?: run { shot("MISSING-tour-counter"); fail("No tour page counter"); return }
+        val total = counter.substringAfterLast(' ').toInt()
+        for (page in 2..total) {
+            tap("Next", "tour page $page")
+            if (!device.wait(Until.hasObject(By.text("Tour · $page of $total")), 5_000)) {
+                shot("MISSING-tour-page-$page"); fail("The tour did not reach page $page of $total")
+            }
+            if (page % 4 == 2) shot("tour-page-$page")
         }
         tap("Done", "tour done")
 
