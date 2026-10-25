@@ -94,9 +94,13 @@ class SmokeTest {
         alive(step)
     }
 
-    /** Scrolls the main list until [t] is on screen, then taps it. */
+    /**
+     * Scrolls the main list until [t] is on screen, then taps it. Settings is a
+     * long list (its About section, with "Take the tour", is near the bottom),
+     * so this goes up to 30 swipes.
+     */
     private fun tapScrolling(t: String) {
-        repeat(6) {
+        repeat(30) {
             device.findObject(By.text(t))?.let { it.click(); alive(t); return }
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
             device.waitForIdle(1_000)
