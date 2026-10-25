@@ -58,11 +58,14 @@ class RelayRoundTripTest {
         private var pendingClaim: String? = null
 
         init {
-            number = relay.register(relayUrl, identity, secret, listed = false).number
+            number = registerPatiently(relayUrl, secret)
             identity.markKeysPublished()
             // As the app does at registration: tokens before the first send.
             relay.topUpTokens()
         }
+
+        private fun registerPatiently(relayUrl: String, secret: String): String =
+            patiently { relay.register(relayUrl, identity, secret, listed = false) }.number
 
         val keys: PeerKeys
             get() = identity.publicBundle().let { PeerKeys(it.ed25519, it.curve25519, it.sealing, it.signature) }
@@ -105,7 +108,10 @@ class RelayRoundTripTest {
             val plaintext = CommsWire.withSender(payload, sender).toString().toByteArray(Charsets.UTF_8)
             // The app tops up on sync and never inside a send; here, whenever few are left.
             relay.topUpTokens()
-            relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext), pendingClaim)
+            // As CommsRepository.deliver: what must not wait or be reordered skips
+            // the relay's mixing; everything else may arrive in any order.
+            val urgent = CommsWire.type(payload) in setOf(CommsWire.T_CALL, CommsWire.T_PANIC, CommsWire.T_GROUP_CTRL)
+            relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext), pendingClaim, urgent = urgent)
             pendingClaim = null
         }
 
@@ -146,7 +152,7 @@ class RelayRoundTripTest {
 
         /** The next envelope off the live socket, decrypted and parsed. */
         fun receive(): Received {
-            val env = inbox.poll(20, TimeUnit.SECONDS) ?: throw AssertionError("$label: nothing arrived within 20 s")
+            val env = inbox.poll(RECEIVE_S, TimeUnit.SECONDS) ?: throw AssertionError("$label: nothing arrived within $RECEIVE_S s")
             val d = identity.decrypt(env.data)
             val payload = CommsWire.parse(String(d.plaintext, Charsets.UTF_8)) ?: throw AssertionError("$label: payload did not parse")
             return Received(d.senderCurve25519, d.senderEd25519, payload, d.newSession)
@@ -154,7 +160,7 @@ class RelayRoundTripTest {
 
         /** The next envelope, expected to fail decryption. */
         fun receiveUndecryptable(): CryptoException {
-            val env = inbox.poll(20, TimeUnit.SECONDS) ?: throw AssertionError("$label: nothing arrived within 20 s")
+            val env = inbox.poll(RECEIVE_S, TimeUnit.SECONDS) ?: throw AssertionError("$label: nothing arrived within $RECEIVE_S s")
             try {
                 identity.decrypt(env.data)
             } catch (e: CryptoException) {
@@ -184,20 +190,43 @@ class RelayRoundTripTest {
         if (::bob.isInitialized) bob.close()
     }
 
+    private companion object {
+        /** Longer than the relay's longest mixing hold (20 s), with room for its alarm. */
+        const val RECEIVE_S = 45L
+
+        /**
+         * Runs a registration, waiting out the relay's limit of ten a minute from
+         * one address: a full run registers two phones per test, and more.
+         */
+        fun <T> patiently(register: () -> T): T {
+            repeat(30) {
+                try {
+                    return register()
+                } catch (e: RelayException) {
+                    if (e.code != 429) throw e
+                    Thread.sleep(7_000)
+                }
+            }
+            throw AssertionError("the relay kept refusing registration")
+        }
+    }
+
     private fun msg(body: String) = CommsWire.message(UUID.randomUUID().toString(), System.currentTimeMillis(), body)
 
     @Test
     fun severalMessagesBeforeAnyReplyAllArriveAndReceiptsComeBack() {
         val ids = (1..5).map { i -> msg("hello $i").also { alice.send(bob, it) }.getString(CommsWire.F_ID) }
-        for ((i, id) in ids.withIndex()) {
+        // The relay's mixing may hand them over in any order; each arrives once, intact.
+        val bodies = HashMap<String, String>()
+        repeat(ids.size) {
             val got = bob.receive()
             assertEquals(alice.keys.curve25519, got.senderCurve)
             assertEquals(alice.keys.ed25519, got.senderEd)
             assertEquals(CommsWire.T_MSG, CommsWire.type(got.payload))
-            assertEquals(id, got.payload.getString(CommsWire.F_ID))
-            assertEquals("hello ${i + 1}", got.payload.getString(CommsWire.F_BODY))
             assertEquals(alice.number, CommsWire.senderOf(got.payload)?.number)
+            assertEquals(null, bodies.put(got.payload.getString(CommsWire.F_ID), got.payload.getString(CommsWire.F_BODY)))
         }
+        assertEquals(ids.mapIndexed { i, id -> id to "hello ${i + 1}" }.toMap(), bodies)
         bob.send(alice, CommsWire.receipt(ids, CommsWire.STATUS_DELIVERED))
         val receipt = alice.receive()
         assertEquals(CommsWire.T_RECEIPT, CommsWire.type(receipt.payload))
@@ -290,9 +319,8 @@ class RelayRoundTripTest {
         bob.startFreshSession(alice)
         bob.send(alice, CommsWire.resync())
 
-        // Bob still reads what Alice sent on the old session.
-        assertEquals("in flight 1", bob.receive().payload.getString(CommsWire.F_BODY))
-        assertEquals("in flight 2", bob.receive().payload.getString(CommsWire.F_BODY))
+        // Bob still reads what Alice sent on the old session, in whichever order it comes.
+        assertEquals(setOf("in flight 1", "in flight 2"), List(2) { bob.receive().payload.getString(CommsWire.F_BODY) }.toSet())
         // Alice takes the resync on a new session and from then on uses it.
         val resync = alice.receive()
         assertEquals(CommsWire.T_RESYNC, CommsWire.type(resync.payload))
@@ -371,8 +399,10 @@ class RelayRoundTripTest {
         val text = alice.encryptFor(bob, msg("ok"))
         assertEquals(receipt.size, text.size)
         for (e in listOf(receipt, text)) alice.sendRaw(bob, e)
-        assertEquals(CommsWire.T_RECEIPT, CommsWire.type(bob.receive().payload))
-        assertEquals("ok", bob.receive().payload.getString(CommsWire.F_BODY))
+        // Mixing may swap them; both arrive and read as what they are.
+        val got = List(2) { bob.receive().payload }
+        assertEquals(setOf(CommsWire.T_RECEIPT, CommsWire.T_MSG), got.map { CommsWire.type(it) }.toSet())
+        assertEquals("ok", got.single { CommsWire.type(it) == CommsWire.T_MSG }.getString(CommsWire.F_BODY))
     }
 
     @Test
@@ -451,15 +481,15 @@ class RelayRoundTripTest {
         val carol = Identity.create().also { it.generateOneTimeKeys(5u) }
         var carolNumber: String? = null
         val carolRelay = RelayClient({ carol }, { relayUrl }, { carolNumber })
-        carolNumber = carolRelay.register(relayUrl!!, carol, null, listed = false, invite = invite.code).number
+        carolNumber = patiently { carolRelay.register(relayUrl!!, carol, null, listed = false, invite = invite.code) }.number
         try {
             assertNotNull(carolNumber)
             // The invite is spent: a second phone cannot use it.
             val dave = Identity.create()
-            val refused = runCatching { RelayClient({ dave }, { relayUrl }, { null }).register(relayUrl!!, dave, null, false, invite.code) }
+            val refused = runCatching { patiently { RelayClient({ dave }, { relayUrl }, { null }).register(relayUrl!!, dave, null, false, invite.code) } }
             assertEquals(403, (refused.exceptionOrNull() as? RelayException)?.code)
             // Nor can a made-up code.
-            val made = runCatching { RelayClient({ dave }, { relayUrl }, { null }).register(relayUrl!!, dave, null, false, "AAAAAAAAAAAAAAAAAAAAAA") }
+            val made = runCatching { patiently { RelayClient({ dave }, { relayUrl }, { null }).register(relayUrl!!, dave, null, false, "AAAAAAAAAAAAAAAAAAAAAA") } }
             assertEquals(403, (made.exceptionOrNull() as? RelayException)?.code)
         } finally {
             runCatching { carolRelay.wipe() }

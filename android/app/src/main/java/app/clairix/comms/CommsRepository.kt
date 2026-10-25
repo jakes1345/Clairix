@@ -83,9 +83,18 @@ object CommsRepository {
     private const val TAG = "CommsRepository"
     /** How long an unpair waits for the relay to delete the account before moving on. */
     private const val RELAY_WIPE_BUDGET_MS = 4_000L
-    /** Cover traffic: the mean, floor and ceiling of the random interval between envelopes. */
     /** What the offline mesh carries when the relay is out of reach: texts, group texts and SOS. */
     private val MESH_TYPES = setOf(CommsWire.T_MSG, CommsWire.T_GROUP_MSG, CommsWire.T_PANIC)
+    /**
+     * Payloads the relay must not hold for mixing: a call rings now or not at
+     * all, an SOS cannot wait, and group membership changes must arrive in the
+     * order they were made (an add then a remove, reordered, would leave the
+     * person in). Mixing reorders everything else, which the rest of the app
+     * takes in its stride: messages sort by their own time, receipts only
+     * advance, and media chunks may overtake their header.
+     */
+    private val URGENT_TYPES = setOf(CommsWire.T_CALL, CommsWire.T_PANIC, CommsWire.T_GROUP_CTRL)
+    /** Cover traffic: the mean, floor and ceiling of the random interval between envelopes. */
     private const val COVER_MEAN_MS = 20 * 60_000L
     private const val COVER_MIN_MS = 60_000L
     private const val COVER_MAX_MS = 90 * 60_000L
@@ -675,13 +684,26 @@ object CommsRepository {
      */
     suspend fun addContactFromCode(code: PairingCode, name: String? = null): Result<Contact> = withContext(Dispatchers.IO) {
         lock.withLock {
-            val relayUrl = config.relayUrl ?: return@withLock Result.failure(RelayException("Not registered"))
-            if (code.relayUrl != relayUrl) return@withLock Result.failure(RelayException("That code belongs to a different relay (${code.relayUrl}). Clairix numbers only work between apps on the same relay."))
-            if (code.number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
+            if (config.relayUrl == null) return@withLock Result.failure(RelayException("Not registered"))
+            // A contact on another relay is reached through this phone's own,
+            // which forwards to theirs; both relays must be set up for it
+            // (the relay's RELAY_KEY), and the first send says so if not.
+            val theirRelay = if (isOwnRelay(code.relayUrl)) null else RelayClient.originOf(code.relayUrl)
+                ?: return@withLock Result.failure(RelayException("That code names a relay address Clairix cannot use (${code.relayUrl})"))
+            if (theirRelay == null && code.number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
             if (!verify(code.ed25519, "${code.curve25519}|${code.sealing}".toByteArray(Charsets.UTF_8), code.signature)) {
                 return@withLock Result.failure(RelayException("The code's keys are not signed by its identity key"))
             }
             val existing = store.contact(code.number)
+            if (existing != null && existing.relay != theirRelay) {
+                // Numbers are random per relay, so two relays can hand out the same
+                // one. Contacts are kept by number; the second is refused rather
+                // than allowed to take over the first one's conversation.
+                return@withLock Result.failure(RelayException(
+                    "${contactLabel(existing)} already has the Clairix number ${formatClairixNumber(code.number)}, on ${relayLabel(existing.relay)}. " +
+                        "This code is for the same number on ${relayLabel(theirRelay)}; Clairix cannot keep both. Remove the existing contact first if it is no longer in use."
+                ))
+            }
             val existingByCurve = store.contactByCurve(code.curve25519)
             if (existingByCurve != null && existingByCurve.number != code.number) {
                 return@withLock Result.failure(RelayException("Those keys already belong to ${existingByCurve.name.ifBlank { formatClairixNumber(existingByCurve.number) }}"))
@@ -698,7 +720,8 @@ object CommsRepository {
                 signature = code.signature,
                 verified = true,
                 addedTs = existing?.addedTs ?: System.currentTimeMillis(),
-                keyChanged = false
+                keyChanged = false,
+                relay = theirRelay
             )
             store.upsertContact(contact)
             if (existing != null) {
@@ -1028,12 +1051,14 @@ object CommsRepository {
      * to 25 seconds while a network call completes.
      */
     private suspend fun deliver(contact: Contact, payload: JSONObject): Deliver {
+        // A call being set up and an SOS skip the relay's mixing delay.
+        val urgent = CommsWire.type(payload) in URGENT_TYPES
         // Phase 1: attempt encryption; if a fresh bundle is needed, surface that before
         // touching the network so the lock is held only for in-memory crypto work.
         val firstPass = lock.withLock { prepareLocked(contact, payload, null) }
         if (firstPass !is Prepared.NeedBundle) {
             return when (firstPass) {
-                is Prepared.Ready -> transmit(contact, firstPass.envelope)
+                is Prepared.Ready -> transmit(contact, firstPass.envelope, urgent)
                 is Prepared.Failed -> Deliver.Failed(firstPass.reason)
                 is Prepared.Offline -> Deliver.Offline(firstPass.reason)
                 else -> Deliver.Failed("Unexpected state")
@@ -1041,13 +1066,13 @@ object CommsRepository {
         }
         // Phase 2: fetch the bundle without holding the ratchet lock.
         val bundle = try {
-            relay.bundle(contact.number, fingerprint(contact.ed25519))
+            relay.bundle(contact.number, fingerprint(contact.ed25519), contact.relay)
         } catch (e: RelayException) {
             return relayOutcome(e)
         }
         // Phase 3: encrypt with the pre-fetched bundle.
         return when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
-            is Prepared.Ready -> transmit(contact, p.envelope)
+            is Prepared.Ready -> transmit(contact, p.envelope, urgent)
             is Prepared.Failed -> Deliver.Failed(p.reason)
             is Prepared.Offline -> Deliver.Offline(p.reason)
             else -> Deliver.Failed("Unexpected state")
@@ -1111,10 +1136,10 @@ object CommsRepository {
      * outbox's backoff retries it (fetching tokens first), and [tokenRefill]
      * retries once at once if a fetch does bring tokens. No lock is held.
      */
-    private fun transmit(contact: Contact, envelope: ByteArray): Deliver {
+    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false): Deliver {
         val claim = claims.get(contact.number, System.currentTimeMillis())
         return try {
-            relay.send(contact.number, envelope, claim)
+            relay.send(contact.number, envelope, claim, contact.relay, urgent)
             if (claim != null) claims.accepted(contact.number, claim)
             Deliver.Sent
         } catch (e: RelayException) {
@@ -1188,7 +1213,21 @@ object CommsRepository {
         CommsWire.withSender(
             o, CommsWire.Sender(number, config.displayName, bundle.ed25519, bundle.curve25519, bundle.sealing, bundle.signature)
         )
+        // Where this number lives, for a contact on another relay to reply to.
+        config.relayUrl?.let { RelayClient.originOf(it) }?.let { o.put(CommsWire.F_RELAY, it) }
     }
+
+    /** Whether [url] is this phone's relay, under any of the addresses it answers at. */
+    private fun isOwnRelay(url: String?): Boolean {
+        val mine = config.relayUrl ?: return false
+        if (url == null || url.trim().trimEnd('/') == mine.trim().trimEnd('/')) return true
+        val origin = RelayClient.originOf(url) ?: return false
+        return (listOf(mine) + config.relayAlternates).any { RelayClient.originOf(it) == origin }
+    }
+
+    /** How a relay is named to the owner: its host, or "this relay" for their own. */
+    private fun relayLabel(relay: String?): String =
+        if (relay == null) "your relay" else runCatching { java.net.URI(relay).host }.getOrNull() ?: relay
 
     /**
      * Sends a call signal (offer, answer, ICE, end) to [contact] through the
@@ -1276,6 +1315,9 @@ object CommsRepository {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
             if (amount <= 0L) throw IllegalArgumentException("The amount must be at least 1 $COIN_SYMBOL")
             if (contact.number == config.number) throw IllegalArgumentException("That is your own Clairix number")
+            // Coins live in the relay's mailboxes; each relay is its own coin
+            // community, and the same number on this relay is someone else.
+            if (contact.relay != null) throw IllegalArgumentException("${contactLabel(contact)} is on ${relayLabel(contact.relay)}; ClairixCoin moves only between people on the same relay")
             val text = note?.trim()?.take(MAX_COIN_NOTE)?.takeIf { it.isNotEmpty() }
             val result = relay.pay(contact.number, amount, null)
             val id = UUID.randomUUID().toString()
@@ -2103,7 +2145,7 @@ object CommsRepository {
         // suspends at lock.withLock below until the current holder releases it.
         scope.launch {
             try {
-                val bundle = relay.bundle(contact.number, fingerprint(contact.ed25519))
+                val bundle = relay.bundle(contact.number, fingerprint(contact.ed25519), contact.relay)
                 lock.withLock {
                     val fresh = store.contactByCurve(senderCurve) ?: return@withLock
                     if (bundle.ed25519 != fresh.ed25519 || bundle.curve25519 != fresh.curve25519 || bundle.sealing != fresh.sealing) {
@@ -2393,9 +2435,19 @@ object CommsRepository {
         if (!verify(ed, "$curve|$sealing".toByteArray(Charsets.UTF_8), sig)) {
             return Resolution.Rejected("keys claimed by ${formatClairixNumber(from)} are not signed")
         }
+        // The sender's relay, when it is not this phone's: their identity is
+        // confirmed there, through this phone's relay, and replies go there.
+        val claimedRelay = json.optString(CommsWire.F_RELAY).takeIf { it.isNotBlank() }
+        val theirRelay = if (claimedRelay == null || isOwnRelay(claimedRelay)) null
+            else RelayClient.originOf(claimedRelay) ?: return Resolution.Rejected("${formatClairixNumber(from)} gave a relay address Clairix cannot use")
+        store.contact(from)?.let { known ->
+            if (known.relay != theirRelay) {
+                return Resolution.Rejected("${formatClairixNumber(from)} on ${relayLabel(theirRelay)} is not ${contactLabel(known)}, who has that number on ${relayLabel(known.relay)}")
+            }
+        }
         val relayView = try {
             // The identity lookup claims none of their one-time keys.
-            relay.identity(from, fingerprint(ed))
+            relay.identity(from, fingerprint(ed), theirRelay)
         } catch (e: RelayException) {
             // 404 means the relay has no such number, or the pin (their identity key)
             // does not match it: the claim is false. Anything else is the relay's problem.
@@ -2415,7 +2467,7 @@ object CommsRepository {
             Contact(
                 number = from, name = json.optString(CommsWire.F_NAME).trim().take(40),
                 ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig,
-                verified = false, addedTs = System.currentTimeMillis()
+                verified = false, addedTs = System.currentTimeMillis(), relay = theirRelay
             )
         }
         store.upsertContact(contact)

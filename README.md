@@ -120,21 +120,31 @@ Read this part twice.
   talks to the relay and when. Envelopes are padded to a few fixed sizes, and
   "Cover traffic" (Comms settings, off by default) sends envelopes nobody
   reads to random contacts at random intervals, so the real ones are not the
-  only traffic there is. There is no mixing network, so someone watching both
-  ends can still pair a sender with a recipient by timing. The relay's
+  only traffic there is. The relay holds each envelope a random few seconds
+  (mean four, at most twenty) and releases what is due together in shuffled
+  order, so traffic in cannot be paired with deliveries out by timing alone;
+  call set-up, SOS and group membership changes skip the wait. That is a
+  single mixing relay, not a mix network: the relay itself still sees every
+  envelope arrive and leave, on a quiet relay there is little to mix with,
+  and someone watching both ends for weeks can still correlate by volume. The relay's
   operator, or the platform under it, could capture live requests and see the
   address each one came from and which account fetched a batch of tokens.
   None of this is written down, but it is possible while a request is in
   flight. If your IP address matters, use Tor or a VPN. A call hands your
   address to the contact's phone, answered or not, unless "Relay-only calls"
   is on.
-- **One relay.** There is one relay, on one platform. An order can shut it
-  down or make it refuse you; it cannot make it read your messages. The
-  operator can publish other addresses the same relay answers at, and the
-  app falls back to them when the first is blocked (unless you have pinned
-  the relay's key, in which case only the pinned address is used); those are
-  doors to one relay, not several relays. Independent relays and a mesh for
-  when there is no network are the next phase, not this one.
+- **Relays.** Anyone can run a relay (comms-worker), and a contact on
+  another relay is added by scanning their QR code: everything for them goes
+  to your relay, which forwards it to theirs signed with its own key, so
+  their relay sees your relay's address and never your phone's. Both relays'
+  operators must turn this on (`RELAY_KEY`); the contact's page says which
+  relay they are on. An order can shut a relay down or make it refuse you;
+  it cannot make it read your messages, and people on other relays are not
+  affected. The operator can publish other addresses the same relay answers
+  at, and the app falls back to them when the first is blocked (unless you
+  have pinned the relay's key, in which case only the pinned address is
+  used). With no network at all, the offline mesh carries texts and SOS
+  phone to phone over Bluetooth. ClairixCoin stays within one relay.
 - **Your contacts' phones.** A delivered message is theirs. A contact whose
   phone is compromised or seized unlocked gives up every conversation with
   them.

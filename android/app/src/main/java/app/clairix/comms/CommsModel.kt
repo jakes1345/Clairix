@@ -2,7 +2,8 @@ package app.clairix.comms
 
 /**
  * Formats a Clairix number for display: "482 913 605". Clairix numbers are not
- * phone numbers; they only reach other Clairix apps on the same relay.
+ * phone numbers; they only reach other Clairix apps, on the same relay or on
+ * another relay that relay forwards to.
  */
 fun formatClairixNumber(number: String): String =
     if (number.length == 9) "${number.substring(0, 3)} ${number.substring(3, 6)} ${number.substring(6)}" else number
@@ -83,7 +84,13 @@ data class Contact(
     val verified: Boolean,
     val addedTs: Long,
     /** Set when a message arrived from this identity with different keys than pinned. */
-    val keyChanged: Boolean = false
+    val keyChanged: Boolean = false,
+    /**
+     * The https origin of the relay this contact is on, when it is not this
+     * phone's own; null for a contact on the same relay. Everything for them
+     * still goes through this phone's relay, which forwards it there.
+     */
+    val relay: String? = null
 )
 
 /** One message in a conversation, stored on the phone with an encrypted body. */

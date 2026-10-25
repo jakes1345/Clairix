@@ -25,6 +25,26 @@ import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret
 import { KNOWN_REGIONS } from "./regions";
 import { INVITE_TTL_MS, Mailbox, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
+import {
+  FED_CLAIMS_BURST,
+  FED_CLAIMS_PER_HOUR,
+  FED_LOOKUPS_BURST,
+  FED_LOOKUPS_PER_MINUTE,
+  FED_SENDS_BURST,
+  FED_SENDS_PER_MINUTE,
+  federationObjectName,
+  federationPolicy,
+  fetchRelayKey,
+  forward,
+  isOwnOrigin,
+  parseFederated,
+  policyName,
+  RELAY_KEY_REFETCH_MS,
+  RELAY_KEY_TTL_MS,
+  relayKey,
+  relayOrigin,
+  verifyFederated,
+} from "./federation";
 import { INCIDENTS_NAME, IncidentCache } from "./incidents";
 import { parseBBoxParam } from "./incidents-logic";
 import { REGISTRY_NAME, Traffic, type ProbeSample } from "./traffic";
@@ -49,9 +69,11 @@ export { IncidentCache, Mailbox, Traffic };
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
  * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
  * account they went to:
- *   POST   /v1/send            {to, envelope, claim?}      → queue for a contact; a "delivery" token.
+ *   POST   /v1/send            {to, envelope, claim?, urgent?} → queue for a contact; a "delivery" token.
  *                              "claim" is the ticket of the one-time key the envelope's session was built
- *                              on, which spends that key for good.
+ *                              on, which spends that key for good. Unless "urgent" (call set-up, SOS, group changes), the
+ *                              envelope is held a random few seconds and released in a shuffled batch
+ *                              (MIX_MAX_MS; see Mailbox.enqueue).
  *   Traffic (one Durable Object per map region; "traffic" tokens, "report" tokens for new reports; probes,
  *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
  *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
@@ -93,6 +115,12 @@ export { IncidentCache, Mailbox, Traffic };
  *   POST   /v1/coin/pay        {to, amount, note?, txid?}  → {txid, balance, ok}: moves coins to a contact; a repeat with the same txid moves nothing twice
  *   GET    /v1/coin/history                                → {txs: [...]}, newest first
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
+ * Federation (federation.ts): /v1/send and /v1/lookup take an optional "relay", the https address of the
+ * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
+ * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
+ * one through:
+ *   POST   /v1/federate/send   {to, envelope, claim?, urgent?} → as /v1/send     (signed by the forwarding relay)
+ *   POST   /v1/federate/lookup {number, pin?, claim}           → as /v1/lookup   (likewise)
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
  */
 export default {
@@ -132,7 +160,21 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, "") || "/";
 
   if (request.method === "GET" && path === "/") {
-    return json({ service: "clairix-comms", version: API_VERSION, ok: true, note: "Clairix numbers are not phone numbers.", alternates: alternates(env) });
+    const key = await relayKey(env).catch((e) => {
+      console.error("RELAY_KEY unusable", e);
+      return null;
+    });
+    return json({
+      service: "clairix-comms",
+      version: API_VERSION,
+      ok: true,
+      note: "Clairix numbers are not phone numbers.",
+      alternates: alternates(env),
+      // Other relays verify forwarded requests from this one with relayKey;
+      // federation says which relays this one accepts them from.
+      relayKey: key?.publicKey ?? null,
+      federation: policyName(federationPolicy(env)),
+    });
   }
 
   let bodyText = "";
@@ -174,6 +216,22 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (path.startsWith("/v1/traffic/")) {
     return trafficRoute(env, request, url, path, bodyText);
+  }
+
+  // ── Forwarded by another relay, signed with its key (federation.ts) ───
+  if (path === "/v1/federate/send" || path === "/v1/federate/lookup") {
+    if (request.method !== "POST") throw new HttpError(405, "POST only");
+    const other = await authenticateRelay(env, request, bodyText);
+    if (path === "/v1/federate/send") {
+      const allowed = await other.rateOk("fed-send", FED_SENDS_PER_MINUTE, FED_SENDS_BURST);
+      if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
+      const body = parseSendBody(bodyText);
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
+    }
+    const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
+    if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
+    const body = parseLookupBody(bodyText);
+    return answerLookup(env, body.target, body.pin, body.claim, () => other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST));
   }
 
   // ── Authenticated ─────────────────────────────────────────────────────
@@ -278,16 +336,24 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/lookup" && request.method === "POST") {
-    const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown }>(bodyText);
-    const target = typeof body.number === "string" ? normaliseNumber(body.number) : null;
-    if (!target) throw new HttpError(400, "number must be a Clairix number");
-    let pin: string | null = null;
-    if (body.pin !== undefined && body.pin !== null) {
-      if (typeof body.pin !== "string" || body.pin.length === 0 || body.pin.length > 64) throw new HttpError(400, "pin must be a key fingerprint");
-      pin = body.pin;
+    const body = parseLookupBody(bodyText);
+    if (body.relay !== null && !isOwnOrigin(env, request, body.relay)) {
+      // A number on another relay: asked through this one, which signs the
+      // question as itself, so the other relay never learns who is asking.
+      const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
+      if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
+      const res = await forward(env, request, body.relay, "/v1/federate/lookup", { number: body.target, pin: body.pin, claim: body.claim });
+      if (res.status !== 200) throw otherRelayError(res);
+      if (body.claim) {
+        const bundle = checkedBundle(res.json.bundle, body.target);
+        if (!bundle) throw new HttpError(502, "The other relay answered with something that is not a key bundle");
+        return json({ bundle });
+      }
+      const identity = checkedIdentity(res.json.identity, body.target);
+      if (!identity) throw new HttpError(502, "The other relay answered with something that is not an identity");
+      return json({ identity });
     }
-    if (body.claim !== undefined && typeof body.claim !== "boolean") throw new HttpError(400, "claim must be a boolean");
-    return lookup(env, me, profile, target, pin, body.claim !== false);
+    return lookup(env, me, profile, body.target, body.pin, body.claim);
   }
 
   // The lookups apps before 3.0.0-beta.3 make, with the number in the path.
@@ -410,6 +476,15 @@ async function route(request: Request, env: Env): Promise<Response> {
 async function lookup(env: Env, me: MailboxStub, profile: Profile, target: string, pin: string | null, claim: boolean): Promise<Response> {
   const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
   if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
+  return answerLookup(env, target, pin, claim, async () => target !== profile.number && (await me.mayClaimFrom(target)));
+}
+
+/**
+ * The answer to a lookup of [target] here, for a phone on this relay or one
+ * asking through another: [mayClaim] says whether the asker is within its
+ * own limit for one-time keys.
+ */
+async function answerLookup(env: Env, target: string, pin: string | null, claim: boolean, mayClaim: () => Promise<boolean>): Promise<Response> {
   const them = env.MAILBOX.get(env.MAILBOX.idFromName(target));
   let unlisted = false;
   if (pin !== null) {
@@ -418,8 +493,7 @@ async function lookup(env: Env, me: MailboxStub, profile: Profile, target: strin
     unlisted = true;
   }
   if (claim) {
-    const mayClaim = target !== profile.number && (await me.mayClaimFrom(target));
-    const bundle = await them.bundle(!unlisted, mayClaim);
+    const bundle = await them.bundle(!unlisted, await mayClaim());
     if (!bundle) throw new HttpError(404, "No such Clairix number, or it is unlisted");
     return json({ bundle });
   }
@@ -855,7 +929,36 @@ async function releaseKeys(env: Env, profile: Profile): Promise<void> {
  * inbound and queue limits.
  */
 async function send(env: Env, request: Request, bodyText: string): Promise<Response> {
-  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown }>(bodyText);
+  const body = parseSendBody(bodyText);
+  const foreign = body.relay !== null && !isOwnOrigin(env, request, body.relay);
+  // Checked before the token is spent, so a phone on a relay that cannot
+  // forward keeps its token.
+  if (foreign && !(await relayKey(env))) throw new HttpError(501, "This relay does not reach other relays: its operator has not set RELAY_KEY");
+  await spendToken(env, request, "delivery");
+  if (foreign && body.relay !== null) {
+    // A number on another relay: this relay forwards the envelope, signed as
+    // itself. The other relay sees this relay's address, not the phone's, and
+    // the forwarded request names no sender, as the phone's did not.
+    const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, urgent: body.urgent };
+    if (body.claim !== null) forwarded.claim = body.claim;
+    const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
+    if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
+    return json({ id: res.json.id.slice(0, 80) }, 202);
+  }
+  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
+}
+
+interface SendBody {
+  to: string;
+  envelope: string;
+  claim: string | null;
+  urgent: boolean;
+  /** The relay the recipient is on, when it is not this one. */
+  relay: string | null;
+}
+
+function parseSendBody(bodyText: string): SendBody {
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; urgent?: unknown; relay?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
@@ -866,8 +969,116 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     if (typeof body.claim !== "string" || !DELIVERY_TOKEN_RE.test(body.claim)) throw new HttpError(400, "claim must be a claim ticket");
     claim = body.claim;
   }
-  await spendToken(env, request, "delivery");
-  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(body.envelope, claim);
+  if (body.urgent !== undefined && typeof body.urgent !== "boolean") throw new HttpError(400, "urgent must be a boolean");
+  return { to, envelope: body.envelope, claim, urgent: body.urgent === true, relay: parseRelayField(body.relay) };
+}
+
+interface LookupBody {
+  target: string;
+  pin: string | null;
+  claim: boolean;
+  relay: string | null;
+}
+
+function parseLookupBody(bodyText: string): LookupBody {
+  const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown; relay?: unknown }>(bodyText);
+  const target = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+  if (!target) throw new HttpError(400, "number must be a Clairix number");
+  let pin: string | null = null;
+  if (body.pin !== undefined && body.pin !== null) {
+    if (typeof body.pin !== "string" || body.pin.length === 0 || body.pin.length > 64) throw new HttpError(400, "pin must be a key fingerprint");
+    pin = body.pin;
+  }
+  if (body.claim !== undefined && typeof body.claim !== "boolean") throw new HttpError(400, "claim must be a boolean");
+  return { target, pin, claim: body.claim !== false, relay: parseRelayField(body.relay) };
+}
+
+function parseRelayField(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const origin = relayOrigin(value);
+  if (!origin) throw new HttpError(400, "relay must be the https address of a relay");
+  return origin;
+}
+
+/** What the other relay refused, passed on with its status, so the phone can tell a full mailbox from a dead relay. */
+function otherRelayError(res: { status: number; json: Record<string, unknown> }): HttpError {
+  const reason = typeof res.json.error === "string" ? res.json.error.slice(0, 200) : `status ${res.status}`;
+  const status = res.status >= 400 && res.status < 600 && res.status !== 401 ? res.status : 502;
+  return new HttpError(status, `The other relay refused: ${reason}`);
+}
+
+function checkedIdentity(value: unknown, number: string): IdentityLike | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (v.number !== number) return null;
+  for (const k of ["ed25519", "curve25519", "sealing", "signature"] as const) {
+    if (typeof v[k] !== "string" || (v[k] as string).length === 0 || (v[k] as string).length > 200) return null;
+  }
+  return { number, ed25519: v.ed25519 as string, curve25519: v.curve25519 as string, sealing: v.sealing as string, signature: v.signature as string };
+}
+
+function checkedSignedKey(value: unknown): SignedKey | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.id !== "string" || typeof v.key !== "string" || typeof v.signature !== "string") return null;
+  if (v.id.length > 100 || v.key.length > 200 || v.signature.length > 200) return null;
+  return { id: v.id, key: v.key, signature: v.signature };
+}
+
+/** A bundle from another relay, rebuilt from the fields a phone reads and nothing else. */
+function checkedBundle(value: unknown, number: string): Record<string, unknown> | null {
+  const identity = checkedIdentity(value, number);
+  if (!identity) return null;
+  const v = value as Record<string, unknown>;
+  const oneTimeKey = v.oneTimeKey === null || v.oneTimeKey === undefined ? null : checkedSignedKey(v.oneTimeKey);
+  const fallback = v.fallback === null || v.fallback === undefined ? null : checkedSignedKey(v.fallback);
+  if (!oneTimeKey && !fallback) return null;
+  const claim = typeof v.claim === "string" && DELIVERY_TOKEN_RE.test(v.claim) ? v.claim : null;
+  if (oneTimeKey && !claim) return null;
+  return { ...identity, oneTimeKey, fallback: oneTimeKey ? null : fallback, claim: oneTimeKey ? claim : null };
+}
+
+interface IdentityLike {
+  number: string;
+  ed25519: string;
+  curve25519: string;
+  sealing: string;
+  signature: string;
+}
+
+/**
+ * Checks a request another relay forwarded: its signature against the key that
+ * relay publishes (fetched once a day, or again after a failure at most every
+ * ten minutes, so a rotated key is picked up), and its nonce. Returns the
+ * object that keeps that relay's limits.
+ */
+async function authenticateRelay(env: Env, request: Request, bodyText: string): Promise<MailboxStub> {
+  const req = await parseFederated(env, request, bodyText);
+  const box = env.MAILBOX.get(env.MAILBOX.idFromName(await federationObjectName(req.origin)));
+  const now = Date.now();
+  let cached = await box.federationKey();
+  const refresh = async (): Promise<boolean> => {
+    const key = await fetchRelayKey(req.origin);
+    if (!key) return false;
+    await box.setFederationKey(key);
+    cached = { key, fetchedAt: Date.now() };
+    return true;
+  };
+  if (!cached || now - cached.fetchedAt > RELAY_KEY_TTL_MS) {
+    if (!(await refresh()) && !cached) throw new HttpError(401, "Could not fetch the forwarding relay's key from its address");
+  }
+  let ok = cached !== null && (await verifyFederated(cached.key, req));
+  if (!ok && cached !== null && now - cached.fetchedAt > RELAY_KEY_REFETCH_MS && (await refresh())) {
+    ok = await verifyFederated((cached as { key: string }).key, req);
+  }
+  if (!ok) throw new HttpError(401, "Relay signature rejected");
+  if (!(await box.federationNonceOk(req.nonce))) throw new HttpError(401, "Relay request replayed");
+  return box;
+}
+
+/** Queues [envelope] for [to] on this relay. */
+async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean): Promise<Response> {
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to
     // one that does not is accepted and dropped, its token spent like any other.

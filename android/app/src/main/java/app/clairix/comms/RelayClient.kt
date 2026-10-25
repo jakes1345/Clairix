@@ -250,8 +250,8 @@ class RelayClient(
      * unlisted number. The number asked about travels in the signed body,
      * never in the URL, so no request log anywhere names it.
      */
-    fun bundle(number: String, pin: String?): Bundle {
-        val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = true))
+    fun bundle(number: String, pin: String?, relay: String? = null): Bundle {
+        val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = true, relay))
         return parsed {
             val b = json.getJSONObject("bundle")
             val key = b.optJSONObject("oneTimeKey") ?: b.optJSONObject("fallback")
@@ -271,18 +271,23 @@ class RelayClient(
     /** A contact's public identity keys, without the one-time key a bundle claims. */
     data class IdentityKeys(val number: String, val ed25519: String, val curve25519: String, val sealing: String, val signature: String)
 
-    /** Who holds [number] (unlisted numbers need their key's [pin]); claims none of their keys. */
-    fun identity(number: String, pin: String?): IdentityKeys {
-        val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = false))
+    /**
+     * Who holds [number] (unlisted numbers need their key's [pin]); claims none
+     * of their keys. [relay]: the other relay the number is on, asked through
+     * this phone's own (see the relay's federation.ts); null for this one.
+     */
+    fun identity(number: String, pin: String?, relay: String? = null): IdentityKeys {
+        val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = false, relay))
         return parsed {
             val o = json.getJSONObject("identity")
             IdentityKeys(o.getString("number"), o.getString("ed25519"), o.getString("curve25519"), o.getString("sealing"), o.getString("signature"))
         }
     }
 
-    private fun lookupBody(number: String, pin: String?, claim: Boolean): JSONObject {
+    private fun lookupBody(number: String, pin: String?, claim: Boolean, relay: String?): JSONObject {
         val body = JSONObject().put("number", number).put("claim", claim)
         if (pin != null) body.put("pin", pin)
+        if (relay != null) body.put("relay", relay)
         return body
     }
 
@@ -297,9 +302,15 @@ class RelayClient(
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
      */
-    fun send(to: String, envelope: ByteArray, claim: String? = null): String {
+    fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false): String {
         val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
         if (claim != null) body.put("claim", claim)
+        // The relay holds anything not urgent for a random few seconds and
+        // releases it shuffled with whatever else is due (mixing); a call
+        // being set up or an SOS goes straight through.
+        if (urgent) body.put("urgent", true)
+        // A contact on another relay: this phone's relay forwards it there.
+        if (relay != null) body.put("relay", relay)
         val json = anonymous(TokenKind.DELIVERY, "POST", "/v1/send", body)
         return parsed { json.getString("id") }
     }
@@ -748,5 +759,21 @@ class RelayClient(
         const val TOKENS_BATCH = 100
         const val TOKENS_LOW = 40
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * The canonical origin of a relay address, `https://host[:port]` in
+         * lower case, as relays compare them (federation.ts relayOrigin): no
+         * path, query or credentials, and a host name rather than an IP
+         * literal. Null when [url] is not one.
+         */
+        fun originOf(url: String?): String? {
+            val u = runCatching { java.net.URI(url?.trim()?.trimEnd('/') ?: return null) }.getOrNull() ?: return null
+            if (!u.scheme.equals("https", ignoreCase = true) || u.rawUserInfo != null) return null
+            if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
+            val host = u.host?.lowercase() ?: return null
+            if (host.startsWith("[") || host.all { it.isDigit() || it == '.' } || '.' !in host) return null
+            if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return null
+            return if (u.port == -1 || u.port == 443) "https://$host" else "https://$host:${u.port}"
+        }
     }
 }

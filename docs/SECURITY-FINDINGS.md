@@ -401,10 +401,24 @@ of every screen whose pages are built from the app's own lists, so a feature
 without tour text does not compile. The Kotlin unit tests now run in CI, and
 an emulator job drives every screen.
 
+Done since (mesh, mixing, independent relays): an offline Bluetooth LE
+mesh that carries sealed texts, group texts and SOS phone to phone under a
+daily routing tag (off by default); relay-side mixing, each non-urgent
+envelope held an exponential random time (mean 4 s, cap 20 s) and released
+in shuffled batches, with call set-up, SOS and group changes exempt; and
+federation, so independent relays reach each other: the home relay forwards
+anonymous sends and lookups to the contact's relay signed with its own
+Ed25519 key, which the other relay fetches from `GET /`, with the target
+relay, a timestamp and a single-use nonce under the signature and per-relay
+limits. The app keeps each contact's relay and refuses a second contact with
+a number it already has. Tested end to end over two in-memory relays, and the
+app's relay round trip against a real local relay with mixing on. Limits: one
+mixing relay is not a mix network (the operator sees in and out), and a
+lookup or send through another relay tells your own relay which relay and
+number you write to.
+
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
-30, and the phase-2 work still ahead: independent relays, a mesh for no
-network, a mixing layer (cover traffic exists; mixing does not), place
-search beyond road names on the phone, a published release rebuilt and
+30, and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
 matched (CI now requires two builds of every change to agree; the NDK and
 cargo-ndk are not pinned; `tools/reproducible/` says how to compare a
 release), an audit.

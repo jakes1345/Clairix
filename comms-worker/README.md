@@ -99,6 +99,68 @@ whose owner has pinned the relay's TLS key stays on the pinned address, since
 the pin is that host's key. These are doors to one relay, not several relays:
 the accounts, the envelopes and the coin community are the same behind each.
 
+### Mixing
+
+A non-urgent envelope is held for a random time before it reaches its
+recipient: exponential, with a mean of four seconds, never longer than twenty
+(`MIX_MAX_MS` sets the cap; `"0"` turns mixing off). Every envelope due at
+the same moment is released together, in shuffled order. Someone watching
+traffic into the relay and traffic out to phones then cannot match an
+envelope going in with a delivery coming out by its timing alone, and a burst
+from one sender arrives interleaved with whatever else was due. Call set-up,
+SOS alerts and group membership changes are marked urgent by the app and are
+never held: a call that rings four seconds late is a call missed, and an add
+followed by a remove must not arrive the other way round. The urgent flag
+tells the relay which envelopes those are. Everything else may arrive in any
+order, which the app handles: messages sort by their own time, receipts only
+move forward, and a photo's chunks may overtake its header.
+
+What it does not do: the relay operator still sees each envelope arrive and
+leave, so mixing guards against outside observers, not the relay. It works
+best with traffic to mix with; on a relay with a handful of quiet users the
+delay hides little. A global observer who watches both ends for weeks can
+still correlate by volume. The app's optional cover traffic (Settings, off by
+default) adds dummy envelopes to random contacts, about one every twenty
+minutes, which blurs volume a little but not against that observer.
+
+### Running your own relay, and reaching other relays
+
+Anyone can run this Worker. Phones on different relays reach each other once
+both relays have a signing key:
+
+```bash
+npm run relay-key                 # prints RELAY_KEY=… and the public key
+npx wrangler secret put RELAY_KEY # paste the base64 seed
+```
+
+A phone then adds a contact by scanning the contact's QR code, which names
+their relay. Everything for that contact goes through the phone's own relay:
+the phone asks its relay, its relay forwards the request to the contact's relay,
+signed with `RELAY_KEY`, and passes the answer back. The contact's relay
+checks the signature against the key the phone's relay publishes at `GET /`
+(fetched once a day, and again when a signature stops verifying, so a
+replaced key is picked up), with a five-minute window and a single-use nonce
+in each request. The target relay's address is part of what is signed, so a
+request made for one relay is worthless at another.
+
+What each side learns:
+
+- The contact's relay sees the forwarding relay's address, never the phone's,
+  and the recipient's number, as it would for any envelope. Neither the
+  envelope nor the request names the sender.
+- The phone's own relay sees which relay and which number the phone writes to.
+  For a contact on the same relay it learns as much from the recipient alone.
+- Each relay holds the other to a limit for all its phones together: 600
+  envelopes a minute, 120 lookups a minute and 600 one-time keys an hour.
+
+`FEDERATION` chooses which relays may forward to this one: `open` (the
+default), `off`, or a comma-separated list of `https://` addresses. A relay
+reached at a custom domain while requests come in through another sets
+`RELAY_ORIGIN` to the address other relays should fetch its key from.
+Clairix numbers are random per relay, so the same number can exist on two
+relays; the app refuses a second contact with a number it already has.
+ClairixCoin does not cross relays: each relay is its own coin community.
+
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
@@ -267,6 +329,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | --- | --- | --- |
 | POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite`; allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
+| GET | `/` | `{service, version, alternates, relayKey, federation}`: the relay's other addresses, the public key it signs forwarded requests with, and which relays it accepts them from |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile and one-time-key count |
 | DELETE | `/v1/me` | Wipe the mailbox |
@@ -274,9 +337,10 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
 | POST | `/v1/tokens` | `{count, kind?}` → `{tokens, expiresAt, kind}`: single-use tokens, `delivery` (default), `traffic` or `report` |
-| POST | `/v1/lookup` | `{number, pin?, claim}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL |
+| POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
-| POST | `/v1/send` | `{to, envelope}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does |
+| POST | `/v1/send` | `{to, envelope, claim?, urgent?, relay?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. Unless `urgent`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there |
+| POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |
 | GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat every two minutes, and `pong` for a client's `{"type":"ping"}` |
