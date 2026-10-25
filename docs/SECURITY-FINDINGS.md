@@ -417,6 +417,39 @@ mixing relay is not a mix network (the operator sees in and out), and a
 lookup or send through another relay tells your own relay which relay and
 number you write to.
 
+Done since (first review of federation): a review of the new relay and app
+code found two real holes, both fixed with tests.
+
+- A mailbox checked whether a number existed before checking an envelope's
+  size, so an oversized envelope was "too large" for a real number and
+  "accepted" for a made-up one: a one-request test of whether any number,
+  unlisted or not, exists. Through another relay it cost nothing. The size is
+  now checked first, in the request and in the mailbox, for every number alike.
+- Another relay spends no delivery tokens here, so it could fill a mailbox or
+  use up the allowance this relay's own senders draw on. Other relays now share
+  an allowance of their own per mailbox (300, then 1,800 an hour), stop 500
+  envelopes short of a full queue, and each is held to 60 (then 30 a minute)
+  per recipient, applied before anything is known about the recipient.
+- Group messages matched members by number. With relays reaching each other a
+  number is not a person: anyone running a relay can present any number there.
+  Group sends and receives now require the key the roster holds for the member
+  (or, where the roster has none, a contact on this phone's own relay or one
+  verified in person).
+- Every text field now asks the keyboard not to learn from what is typed
+  (IME_FLAG_NO_PERSONALIZED_LEARNING), and Phone check names the keyboard in
+  use and whether it can reach the internet.
+
+Known and not fixed:
+
+- The mesh routing tag is derived from the recipient's public sealing key and
+  the day. Anyone who holds that public key (every contact, and the relay)
+  and listens over Bluetooth can tell that a bundle being carried is for that
+  person. A tag from a secret shared only by the two ends would fix it.
+- Several other relays acting together can still reach a mailbox's allowance
+  for other relays, and a 429 or "mailbox full" then shows the number exists.
+- The review was cut short after two findings; the mixing code and the mesh
+  have not had an outside review. Nothing here has had an independent audit.
+
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
 matched (CI now requires two builds of every change to agree; the NDK and

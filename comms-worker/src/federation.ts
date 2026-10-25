@@ -8,7 +8,7 @@ import { base64ToBytes, HttpError, sha256Hex, type Env } from "./env";
  * talks only to that one; a contact on another relay is reached through it.
  * The home relay forwards the phone's anonymous send, or its lookup, to the
  * other relay, signing the forwarded request with the home relay's own
- * Ed25519 key (RELAY_KEY). The other relay checks that signature against the
+ * Ed25519 key (RELAY_KEY, or one the relay made for itself; see relayKey). The other relay checks that signature against the
  * key the home relay publishes at `GET /`, fetched from the origin the
  * request names.
  *
@@ -45,6 +45,9 @@ const FORWARD_TIMEOUT_MS = 10_000;
 /** Per other relay, for everyone on it together. */
 export const FED_SENDS_PER_MINUTE = 600;
 export const FED_SENDS_BURST = 1_200;
+/** Per other relay and recipient: one relay alone cannot reach a mailbox's allowance for other relays. */
+export const FED_SENDS_PER_TARGET_PER_MINUTE = 30;
+export const FED_SENDS_PER_TARGET_BURST = 60;
 export const FED_LOOKUPS_PER_MINUTE = 120;
 export const FED_LOOKUPS_BURST = 240;
 /** One-time keys any one other relay may claim, per hour across all numbers here. */
@@ -126,14 +129,31 @@ interface RelayKey {
 }
 
 let cachedKey: RelayKey | null = null;
+/** The generated seed, per relay (per MAILBOX namespace), once read from its object. */
+const generatedSeeds = new WeakMap<object, string>();
+
+/** The object that keeps the relay's own generated signing seed. */
+export const RELAY_IDENTITY_NAME = "relay-identity";
 
 /**
- * This relay's signing key from RELAY_KEY (base64 of a 32-byte Ed25519 seed;
- * `npm run relay-key` makes one), or null when none is set.
+ * This relay's signing key, or null when it does not reach other relays
+ * (FEDERATION "off"). RELAY_KEY, when set, is the key (base64 of a 32-byte
+ * Ed25519 seed; `npm run relay-key` makes one). Otherwise the relay makes its
+ * own on first use and keeps it in its "relay-identity" object, so turning
+ * federation on needs no secret to be made, copied or pasted by anyone, and
+ * the seed never leaves the relay. Replacing it is safe: other relays fetch
+ * the new public key from GET / once the old one stops verifying.
  */
-export async function relayKey(env: Pick<Env, "RELAY_KEY">): Promise<RelayKey | null> {
-  const seedB64 = env.RELAY_KEY?.trim();
-  if (!seedB64) return null;
+export async function relayKey(env: Pick<Env, "RELAY_KEY" | "FEDERATION" | "MAILBOX">): Promise<RelayKey | null> {
+  if (federationPolicy(env).mode === "off") return null;
+  let seedB64 = env.RELAY_KEY?.trim();
+  if (!seedB64) {
+    seedB64 = generatedSeeds.get(env.MAILBOX);
+    if (!seedB64) {
+      seedB64 = await env.MAILBOX.get(env.MAILBOX.idFromName(RELAY_IDENTITY_NAME)).relayIdentitySeed();
+      generatedSeeds.set(env.MAILBOX, seedB64);
+    }
+  }
   if (cachedKey && cachedKey.seed === seedB64) return cachedKey;
   let seed: Uint8Array;
   try {
@@ -172,7 +192,7 @@ function randomNonce(): string {
  */
 export async function forward(env: Env, request: Request, target: string, path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
   const key = await relayKey(env);
-  if (!key) throw new HttpError(501, "This relay does not reach other relays: its operator has not set RELAY_KEY");
+  if (!key) throw new HttpError(501, "This relay does not reach other relays: its operator has turned federation off");
   const origin = ownOrigin(env, request);
   const text = JSON.stringify(body);
   const ts = Date.now();

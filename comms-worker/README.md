@@ -125,18 +125,24 @@ minutes, which blurs volume a little but not against that observer.
 
 ### Running your own relay, and reaching other relays
 
-Anyone can run this Worker. Phones on different relays reach each other once
-both relays have a signing key:
+Anyone can run this Worker, and relays reach each other out of the box. Each
+relay signs what it forwards with its own Ed25519 key, which it makes for
+itself the first time it needs one and keeps in its `relay-identity` Durable
+Object: nobody makes, copies or pastes a secret, and the seed never leaves the
+relay. `GET /` publishes the public half. To supply the key yourself instead
+(to keep it across a move to another account, say):
 
 ```bash
 npm run relay-key                 # prints RELAY_KEY=… and the public key
 npx wrangler secret put RELAY_KEY # paste the base64 seed
 ```
 
+`FEDERATION=off` turns it off in both directions.
+
 A phone then adds a contact by scanning the contact's QR code, which names
 their relay. Everything for that contact goes through the phone's own relay:
 the phone asks its relay, its relay forwards the request to the contact's relay,
-signed with `RELAY_KEY`, and passes the answer back. The contact's relay
+signed with its key, and passes the answer back. The contact's relay
 checks the signature against the key the phone's relay publishes at `GET /`
 (fetched once a day, and again when a signature stops verifying, so a
 replaced key is picked up), with a five-minute window and a single-use nonce

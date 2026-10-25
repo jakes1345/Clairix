@@ -9,10 +9,10 @@
 #   HERE_API_KEY         Optional, for navigation: HERE Traffic API v7 key; GET /v1/traffic/incidents
 #                        reports HERE as "off" without it
 #   TOMTOM_API_KEY       Optional, for navigation: TomTom Traffic API key; likewise "off" without it
-#   RELAY_KEY            Optional, for reaching other relays: this relay's Ed25519 seed, base64.
-#                        Make one with `npm run relay-key`. Without it, phones here reach only
-#                        numbers on this relay; with it, a phone can add a contact from another
-#                        relay's QR code and this relay forwards to that relay, signed as itself.
+#   RELAY_KEY            Optional: the Ed25519 seed (base64) this relay signs what it forwards to
+#                        other relays with. Unset, the relay makes its own on first use and keeps
+#                        it in its "relay-identity" object; set it (`npm run relay-key`) only to
+#                        choose the key yourself. FEDERATION=off stops forwarding either way.
 #
 # Plain variables (may go in [vars] below):
 #   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with, e.g. "100"; unset: none

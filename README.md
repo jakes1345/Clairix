@@ -136,15 +136,20 @@ Read this part twice.
 - **Relays.** Anyone can run a relay (comms-worker), and a contact on
   another relay is added by scanning their QR code: everything for them goes
   to your relay, which forwards it to theirs signed with its own key, so
-  their relay sees your relay's address and never your phone's. Both relays'
-  operators must turn this on (`RELAY_KEY`); the contact's page says which
-  relay they are on. An order can shut a relay down or make it refuse you;
+  their relay sees your relay's address and never your phone's. Relays do
+  this out of the box (an operator can turn it off); the contact's page says
+  which relay they are on. An order can shut a relay down or make it refuse you;
   it cannot make it read your messages, and people on other relays are not
   affected. The operator can publish other addresses the same relay answers
   at, and the app falls back to them when the first is blocked (unless you
   have pinned the relay's key, in which case only the pinned address is
   used). With no network at all, the offline mesh carries texts and SOS
   phone to phone over Bluetooth. ClairixCoin stays within one relay.
+- **Your keyboard.** It sees everything typed in every app before any app can
+  encrypt it. Clairix asks it not to learn from what is typed in Clairix, which
+  Gboard and Samsung's keyboard honour, and Phone check says whether the
+  keyboard in use can reach the internet. A keyboard is free to ignore the
+  request; one with no internet access cannot send anything anywhere.
 - **Your contacts' phones.** A delivered message is theirs. A contact whose
   phone is compromised or seized unlocked gives up every conversation with
   them.

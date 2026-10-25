@@ -23,7 +23,7 @@ import {
 } from "./comms-logic";
 import { HttpError, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
 import { KNOWN_REGIONS } from "./regions";
-import { INVITE_TTL_MS, Mailbox, type CoinTx, type Profile, type SignedKey } from "./mailbox";
+import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
 import {
   FED_CLAIMS_BURST,
@@ -32,6 +32,8 @@ import {
   FED_LOOKUPS_PER_MINUTE,
   FED_SENDS_BURST,
   FED_SENDS_PER_MINUTE,
+  FED_SENDS_PER_TARGET_BURST,
+  FED_SENDS_PER_TARGET_PER_MINUTE,
   federationObjectName,
   federationPolicy,
   fetchRelayKey,
@@ -226,7 +228,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       const allowed = await other.rateOk("fed-send", FED_SENDS_PER_MINUTE, FED_SENDS_BURST);
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
       const body = parseSendBody(bodyText);
-      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
+      if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
+        throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", 60);
+      }
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, true);
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
@@ -933,7 +938,7 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
   const foreign = body.relay !== null && !isOwnOrigin(env, request, body.relay);
   // Checked before the token is spent, so a phone on a relay that cannot
   // forward keeps its token.
-  if (foreign && !(await relayKey(env))) throw new HttpError(501, "This relay does not reach other relays: its operator has not set RELAY_KEY");
+  if (foreign && !(await relayKey(env))) throw new HttpError(501, "This relay does not reach other relays: its operator has turned federation off");
   await spendToken(env, request, "delivery");
   if (foreign && body.relay !== null) {
     // A number on another relay: this relay forwards the envelope, signed as
@@ -964,6 +969,8 @@ function parseSendBody(bodyText: string): SendBody {
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
     throw new HttpError(400, "envelope must be base64");
   }
+  // Refused here, before a token is spent or a mailbox is asked, for every number alike.
+  if (body.envelope.length > MAX_ENVELOPE_B64) throw new HttpError(413, "envelope too large");
   let claim: string | null = null;
   if (body.claim !== undefined && body.claim !== null) {
     if (typeof body.claim !== "string" || !DELIVERY_TOKEN_RE.test(body.claim)) throw new HttpError(400, "claim must be a claim ticket");
@@ -1077,8 +1084,8 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
 }
 
 /** Queues [envelope] for [to] on this relay. */
-async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean): Promise<Response> {
-  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent);
+async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean, federated = false): Promise<Response> {
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to
     // one that does not is accepted and dropped, its token spent like any other.
