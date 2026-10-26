@@ -64,7 +64,41 @@ class CommsStore(
 
     override fun close() {
         closed = true
-        super.close()
+        // A transaction under way is let finish first. Closed under it, every
+        // statement after, the rollback included, failed with "attempt to
+        // re-open an already-closed object", so its connection was never let
+        // go and kept the file's write lock for good: every store opened
+        // after found the file locked (SoakTest, API 33, round 190).
+        inUse.writeLock().lock()
+        try {
+            super.close()
+        } finally {
+            inUse.writeLock().unlock()
+        }
+    }
+
+    /** Held (shared) by every transaction under way; [close] takes it whole. */
+    private val inUse = java.util.concurrent.locks.ReentrantReadWriteLock()
+
+    /** Starts a write transaction that [close] waits for; end it with [endWrite]. */
+    private fun beginWrite(): SQLiteDatabase {
+        inUse.readLock().lock()
+        try {
+            val db = writableDatabase
+            db.beginTransaction()
+            return db
+        } catch (e: Throwable) {
+            inUse.readLock().unlock()
+            throw e
+        }
+    }
+
+    private fun endWrite(db: SQLiteDatabase) {
+        try {
+            db.endTransaction()
+        } finally {
+            inUse.readLock().unlock()
+        }
     }
 
     override val readableDatabase: SQLiteDatabase
@@ -335,14 +369,13 @@ class CommsStore(
             put("added_ts", c.addedTs)
             if (c.relay != null) put("relay", c.relay) else putNull("relay")
         }
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val updated = db.update("contacts", values, "number = ?", arrayOf(c.number))
             if (updated == 0) db.insertOrThrow("contacts", null, values)
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -366,8 +399,7 @@ class CommsStore(
     /** Deletes everything about [number]; returns the ids of its media messages so their files can go too. */
     fun deleteContact(number: String): List<String> {
         val media = mediaIds(number)
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             db.delete("receipts", "peer = ?", arrayOf(number))
             for (id in media) db.delete("media_chunks", "id = ?", arrayOf(id))
@@ -378,7 +410,7 @@ class CommsStore(
             db.delete("contacts", "number = ?", arrayOf(number))
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
         return media
     }
@@ -506,8 +538,7 @@ class CommsStore(
      * chunks go too. Returns how many.
      */
     fun expireStaleMedia(olderThan: Long): Int {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val ids = db.rawQuery(
                 "SELECT id FROM messages WHERE kind = ? AND direction = 'IN' AND status = ? AND ts < ?",
@@ -524,7 +555,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return ids.size
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -547,8 +578,7 @@ class CommsStore(
         if (ids.isEmpty()) return
         val rank = mapOf("queued" to 0, "sent" to 1, "delivered" to 2, "read" to 3)
         val target = rank[status] ?: return
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (id in ids) {
                 val current = db.rawQuery("SELECT status FROM messages WHERE id = ? AND peer = ? AND direction = 'OUT'", arrayOf(id, peer)).use { c ->
@@ -561,7 +591,7 @@ class CommsStore(
             }
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -615,8 +645,7 @@ class CommsStore(
      * neither marked read unseen nor left out of the receipt.
      */
     fun markRead(peer: String): List<String> {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             // A photo still arriving is neither shown nor receipted yet; it is read once it is whole.
             val ids = db.rawQuery(
@@ -634,7 +663,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return ids
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -682,8 +711,7 @@ class CommsStore(
     /** Deletes the group, its roster, its conversation and the threats shared in it; returns the ids of its media messages. */
     fun deleteGroup(id: String): List<String> {
         val media = mediaIds(id)
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (m in media) db.delete("media_chunks", "id = ?", arrayOf(m))
             db.delete("messages", "gid = ? OR peer = ?", arrayOf(id, id))
@@ -692,7 +720,7 @@ class CommsStore(
             db.delete("groups", "id = ?", arrayOf(id))
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
         return media
     }
@@ -806,8 +834,7 @@ class CommsStore(
      * the later). Returns true when it changed anything.
      */
     fun setTimer(peer: String, ttl: Int, ts: Long): Boolean {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             // A change stored with a time still ahead (dated so by a relay before
             // times were bounded) counts as made now, so it cannot outlast the
@@ -822,7 +849,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return current?.first != ttl
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -832,8 +859,7 @@ class CommsStore(
      * notifications can go too.
      */
     fun expireMessages(now: Long): List<Triple<String, String, String>> {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val gone = db.rawQuery(
                 "SELECT id, peer, kind FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?", arrayOf(now.toString())
@@ -849,7 +875,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return gone
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1021,8 +1047,7 @@ class CommsStore(
      * but unprocessed. False when it was already seen.
      */
     fun markSeenAndStage(key: String, ts: Long, senderCurve25519: String, senderEd25519: String, payload: String): Boolean {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val seen = ContentValues().apply { put("id", key); put("ts", ts) }
             if (db.insertWithOnConflict("seen_envelopes", null, seen, SQLiteDatabase.CONFLICT_IGNORE) == -1L) return false
@@ -1036,7 +1061,7 @@ class CommsStore(
             db.insertWithOnConflict("pending_inbound", null, staged, SQLiteDatabase.CONFLICT_REPLACE)
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
         purgeSeen()
         return true
@@ -1058,8 +1083,7 @@ class CommsStore(
     /** Records that [peer] is owed a receipt for [ids]; "read" replaces "delivered", never the reverse. */
     fun queueReceipt(peer: String, ids: List<String>, status: String) {
         if (ids.isEmpty()) return
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (id in ids) {
                 db.execSQL(
@@ -1070,7 +1094,7 @@ class CommsStore(
             }
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1090,13 +1114,12 @@ class CommsStore(
 
     /** Forgets receipts that went out (or can never go); a receipt upgraded to "read" meanwhile stays. */
     fun clearReceipts(peer: String, ids: List<String>, status: String) {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (id in ids) db.delete("receipts", "peer = ? AND id = ? AND status = ?", arrayOf(peer, id, status))
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1143,8 +1166,7 @@ class CommsStore(
      * At most [limit] are held per contact: past that the oldest go.
      */
     fun quarantine(id: String, peer: String, curve: String, ts: Long, payload: String, limit: Int) {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val values = ContentValues().apply {
                 put("id", id)
@@ -1160,7 +1182,7 @@ class CommsStore(
             )
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1200,8 +1222,7 @@ class CommsStore(
     }
 
     fun clearAll() {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             db.delete("quarantine", null, null)
             db.delete("messages", null, null)
@@ -1217,7 +1238,7 @@ class CommsStore(
             db.delete("timers", null, null)
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
