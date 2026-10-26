@@ -45,6 +45,7 @@ import org.json.JSONObject
 import org.unifiedpush.android.connector.UnifiedPush
 import uniffi.clairix_comms_crypto.CryptoException
 import uniffi.clairix_comms_crypto.PeerKeys
+import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.fingerprint
 import uniffi.clairix_comms_crypto.verify
 import java.security.MessageDigest
@@ -207,6 +208,10 @@ object CommsRepository {
     private const val ONE_TIME_KEYS_MAX_WAITING = 100
     /** The fallback key is replaced daily; the previous one keeps working until the next rotation. */
     private const val FALLBACK_ROTATE_MS = 24 * 3600_000L
+    /** A contact's keys are fetched for their sealing prekey at most this often when their envelopes show they have one. */
+    private const val PREKEY_REFRESH_MS = 3600_000L
+    /** How long the relay may hold an envelope for mixing before it shows in the inbox, with room to spare. */
+    private const val MIX_HOLD_MARGIN_MS = 5 * 60_000L
     private const val REPLENISH_INTERVAL_MS = 3600_000L
     /** How far back unconfirmed messages are sent again when a contact asks for a new session. */
     private const val RESEND_WINDOW_MS = 7L * 24 * 3600_000L
@@ -814,6 +819,7 @@ object CommsRepository {
                     verified = false, addedTs = System.currentTimeMillis()
                 )
                 store.upsertContact(contact)
+                notePrekey(contact, keys.sealingPrekey)
                 setBusy(false)
                 bump()
                 Result.success(contact)
@@ -1094,6 +1100,8 @@ object CommsRepository {
         class Offline(val reason: String) : Prepared()
         // No Olm session exists yet; caller must fetch a bundle outside the lock, then retry.
         object NeedBundle : Prepared()
+        // The contact's sealing prekey is missing or out of date; caller fetches their keys, then retries.
+        object NeedPrekey : Prepared()
     }
 
     /**
@@ -1105,29 +1113,83 @@ object CommsRepository {
     private suspend fun deliver(contact: Contact, payload: JSONObject): Deliver {
         // A call being set up and an SOS skip the relay's mixing delay.
         val urgent = CommsWire.type(payload) in URGENT_TYPES
-        // Phase 1: attempt encryption; if a fresh bundle is needed, surface that before
-        // touching the network so the lock is held only for in-memory crypto work.
-        val firstPass = lock.withLock { prepareLocked(contact, payload, null) }
-        if (firstPass !is Prepared.NeedBundle) {
-            return when (firstPass) {
-                is Prepared.Ready -> transmit(contact, firstPass.envelope, urgent)
-                is Prepared.Failed -> Deliver.Failed(firstPass.reason)
-                is Prepared.Offline -> Deliver.Offline(firstPass.reason)
-                else -> Deliver.Failed("Unexpected state")
+        // Encryption runs under the lock; anything it needs from the network (a
+        // bundle to start a session, the contact's current sealing prekey) is
+        // fetched without it, once each, and encryption tried again.
+        var bundle: RelayClient.Bundle? = null
+        var prekeyFetched = false
+        while (true) {
+            when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
+                is Prepared.Ready -> return transmit(contact, p.envelope, urgent)
+                is Prepared.Failed -> return Deliver.Failed(p.reason)
+                is Prepared.Offline -> return Deliver.Offline(p.reason)
+                Prepared.NeedBundle -> {
+                    if (bundle != null) return Deliver.Failed("Unexpected state")
+                    bundle = try {
+                        relay.bundle(contact.number, fingerprint(contact.ed25519), contact.relay)
+                    } catch (e: RelayException) {
+                        return relayOutcome(e)
+                    }
+                    notePrekey(contact, bundle.sealingPrekey)
+                }
+                Prepared.NeedPrekey -> {
+                    if (prekeyFetched) {
+                        return Deliver.Failed("${contactLabel(contact)}'s relay offers no current sealing key for them; their phone may be off or its clock wrong")
+                    }
+                    prekeyFetched = true
+                    val keys = try {
+                        relay.identity(contact.number, fingerprint(contact.ed25519), contact.relay)
+                    } catch (e: RelayException) {
+                        return relayOutcome(e)
+                    }
+                    if (keys.ed25519 == contact.ed25519 && keys.curve25519 == contact.curve25519 && keys.sealing == contact.sealing) {
+                        notePrekey(contact, keys.sealingPrekey)
+                    }
+                }
             }
         }
-        // Phase 2: fetch the bundle without holding the ratchet lock.
-        val bundle = try {
-            relay.bundle(contact.number, fingerprint(contact.ed25519), contact.relay)
-        } catch (e: RelayException) {
-            return relayOutcome(e)
+    }
+
+    /** The keys envelopes to [contact] are made for, with their sealing prekey when one is known. */
+    private fun peerKeys(contact: Contact): PeerKeys =
+        PeerKeys(contact.ed25519, contact.curve25519, contact.sealing, contact.signature, store.prekey(contact.number))
+
+    /**
+     * Keeps [prekey] as [contact]'s sealing prekey when their identity key
+     * signed it and it is newer than the one held. A relay can withhold a
+     * prekey but not forge one; a forged one is logged and dropped.
+     */
+    private fun notePrekey(contact: Contact, prekey: SealingPrekey?) {
+        if (prekey == null) return
+        val statement = "clairix-sealing-prekey-v1|${prekey.key}|${prekey.createdMs}".toByteArray(Charsets.UTF_8)
+        if (!verify(contact.ed25519, statement, prekey.signature)) {
+            CommsLog.add("The relay offered a sealing key for ${contactLabel(contact)} that they did not sign; ignored")
+            return
         }
-        // Phase 3: encrypt with the pre-fetched bundle.
-        return when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
-            is Prepared.Ready -> transmit(contact, p.envelope, urgent)
-            is Prepared.Failed -> Deliver.Failed(p.reason)
-            is Prepared.Offline -> Deliver.Offline(p.reason)
-            else -> Deliver.Failed("Unexpected state")
+        store.setPrekey(contact.number, prekey)
+    }
+
+    /** When each contact's keys were last fetched for their sealing prekey, so a burst of envelopes asks once. */
+    private val prekeyRefreshAt = HashMap<String, Long>()
+
+    /**
+     * [contact] sealed to this phone's prekey, so their app has them, but this
+     * phone holds none of theirs: fetches their keys in the background, at most
+     * once an hour, so replies are sealed the same way.
+     */
+    private fun refreshPrekeyLater(contact: Contact) {
+        val now = System.currentTimeMillis()
+        synchronized(prekeyRefreshAt) {
+            if (now - (prekeyRefreshAt[contact.number] ?: 0L) < PREKEY_REFRESH_MS) return
+            prekeyRefreshAt[contact.number] = now
+        }
+        scope.launch {
+            runCatching { relay.identity(contact.number, fingerprint(contact.ed25519), contact.relay) }
+                .onSuccess { keys ->
+                    if (keys.ed25519 == contact.ed25519 && keys.curve25519 == contact.curve25519 && keys.sealing == contact.sealing) {
+                        notePrekey(contact, keys.sealingPrekey)
+                    }
+                }
         }
     }
 
@@ -1145,7 +1207,7 @@ object CommsRepository {
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
         // Nothing goes to keys the owner has not looked at since they changed.
         if (contact.keyChanged) return Prepared.Failed("$label's keys have changed. Scan their code or compare safety numbers before messaging them.")
-        val peer = PeerKeys(contact.ed25519, contact.curve25519, contact.sealing, contact.signature)
+        val peer = peerKeys(contact)
         return try {
             putSelf(payload)
             val identity = identities.get() ?: return Prepared.Failed("No identity on this device")
@@ -1170,6 +1232,8 @@ object CommsRepository {
             }
         } catch (e: CryptoException.SessionLimit) {
             Prepared.Failed("$label has many sessions with this phone in use already; no new one was started")
+        } catch (e: CryptoException.StalePrekey) {
+            Prepared.NeedPrekey
         } catch (e: CryptoException) {
             Prepared.Failed("Encryption failed: ${e.message}")
         } catch (e: IllegalStateException) {
@@ -1991,6 +2055,10 @@ object CommsRepository {
         val type = CommsWire.type(payload)
         when (val p = prepareLocked(contact, payload, null)) {
             Prepared.NeedBundle -> CommsLog.add("$type to ${formatClairixNumber(contact.number)} not sent: no session with them")
+            Prepared.NeedPrekey -> {
+                CommsLog.add("$type to ${formatClairixNumber(contact.number)} not sent: their current sealing key is not known yet; fetching it")
+                refreshPrekeyLater(contact)
+            }
             is Prepared.Ready -> scope.launch {
                 when (val d = transmit(contact, p.envelope)) {
                     Deliver.Sent -> Unit
@@ -2115,6 +2183,13 @@ object CommsRepository {
                 CommsLog.add("No session with $label yet, so the offline mesh cannot reach them until one message has gone through the relay")
                 false
             }
+            Prepared.NeedPrekey -> {
+                // Their sealing key was last fetched over two weeks ago (or never);
+                // sealing to an older one, or to their long-term key, would undo
+                // what the rotating keys are for.
+                CommsLog.add("$label's sealing key is out of date, so the offline mesh cannot reach them until the relay is reachable again")
+                false
+            }
             else -> false
         }
     }
@@ -2181,6 +2256,11 @@ object CommsRepository {
         if (decrypted.evictedRecentSession) {
             val who = store.contactByCurve(decrypted.senderCurve25519)?.let { contactLabel(it) } ?: "A sender"
             CommsLog.add("$who started yet another session; the least recently used of the sessions kept with them was dropped")
+        }
+        if (decrypted.sealedToPrekey) {
+            store.contactByCurve(decrypted.senderCurve25519)
+                ?.takeIf { it.ed25519 == decrypted.senderEd25519 && store.prekey(it.number) == null }
+                ?.let { refreshPrekeyLater(it) }
         }
         // Durable before anything that can fail: seen and staged in one transaction.
         val text = String(decrypted.plaintext, Charsets.UTF_8)
@@ -2301,16 +2381,14 @@ object CommsRepository {
                 val bundle = relay.bundle(contact.number, fingerprint(contact.ed25519), contact.relay)
                 lock.withLock {
                     val fresh = store.contactByCurve(senderCurve) ?: return@withLock
+                    if (bundle.ed25519 == fresh.ed25519) notePrekey(fresh, bundle.sealingPrekey)
                     if (bundle.ed25519 != fresh.ed25519 || bundle.curve25519 != fresh.curve25519 || bundle.sealing != fresh.sealing) {
                         CommsLog.add("$what from $label, but the relay now holds different keys for them; nothing sent")
                         return@withLock
                     }
                     try {
                         identities.update {
-                            it.startSession(
-                                PeerKeys(fresh.ed25519, fresh.curve25519, fresh.sealing, fresh.signature),
-                                bundle.sessionKey
-                            )
+                            it.startSession(peerKeys(fresh), bundle.sessionKey)
                         }
                     } catch (e: CryptoException.SessionLimit) {
                         // Every session with them decrypted something in the last two
@@ -2648,6 +2726,7 @@ object CommsRepository {
             )
         }
         store.upsertContact(contact)
+        notePrekey(contact, relayView.sealingPrekey)
         if (existing != null) {
             noteKeyChange(contact)
             CommsLog.add("Keys of ${contactLabel(contact)} changed; what they send is held until you verify or accept them")
@@ -2667,9 +2746,13 @@ object CommsRepository {
             lock.withLock { retryPendingLocked() }
             // The relay hands out its queue a page at a time; acked envelopes are
             // deleted, so each fetch returns the next page.
+            var drainedAt = 0L
             for (page in 0 until MAX_INBOX_PAGES) {
+                // An envelope still held for mixing when this fetch starts is not
+                // in it, so "emptied" is dated a few minutes earlier than the fetch.
+                val fetchedFrom = System.currentTimeMillis() - MIX_HOLD_MARGIN_MS
                 val envelopes = relay.inbox()
-                if (envelopes.isEmpty()) break
+                if (envelopes.isEmpty()) { drainedAt = fetchedFrom; break }
                 val done = ArrayList<String>()
                 for (env in envelopes) {
                     val handled = try {
@@ -2681,8 +2764,10 @@ object CommsRepository {
                     if (handled) done += env.id
                 }
                 if (done.isNotEmpty()) relay.ack(done)
-                if (envelopes.size < RelayClient.INBOX_PAGE || done.size < envelopes.size) break
+                if (done.size < envelopes.size) break
+                if (envelopes.size < RelayClient.INBOX_PAGE) { drainedAt = fetchedFrom; break }
             }
+            if (drainedAt > 0L) pruneSealingPrekeys(drainedAt)
             flushOutbox()
             flushReceipts()
             replenishKeys()
@@ -2695,6 +2780,16 @@ object CommsRepository {
             bump()
             Result.failure(e)
         }
+    }
+
+    /**
+     * Deletes the replaced sealing prekeys nothing can still arrive for, now
+     * that the mailbox was emptied at [drainedAt] (see Identity.pruneSealingPrekeys).
+     * From then on, envelopes sealed to them are unreadable to anyone.
+     */
+    private suspend fun pruneSealingPrekeys(drainedAt: Long) {
+        val gone = runCatching { lock.withLock { identities.update { it.pruneSealingPrekeys(drainedAt) } } }.getOrDefault(0u)
+        if (gone > 0u) CommsLog.add("Deleted $gone old sealing key(s); envelopes sealed to them can no longer be opened")
     }
 
     fun syncInBackground() {
@@ -2731,7 +2826,17 @@ object CommsRepository {
         var count = me.oneTimeKeys
         val now = System.currentTimeMillis()
         val rotate = now - config.fallbackRotatedAt > FALLBACK_ROTATE_MS
-        if (count < ONE_TIME_KEYS_LOW || rotate) {
+        // A week-old sealing prekey (or none, on an identity from before them)
+        // is replaced and saved first, and published below; one whose upload
+        // failed goes up on the next try.
+        val prekey = lock.withLock {
+            identities.update { id ->
+                if (id.sealingPrekeyDue()) id.rotateSealingPrekey()
+                id.publicBundle().sealingPrekey
+            }
+        }
+        val prekeyUnpublished = prekey != null && prekey.createdMs != config.prekeyPublished
+        if (count < ONE_TIME_KEYS_LOW || rotate || prekeyUnpublished) {
             val bundle = lock.withLock {
                 identities.update { id ->
                     var waiting = id.publicBundle().oneTimeKeys.size
@@ -2750,6 +2855,7 @@ object CommsRepository {
             count = relay.putKeys(bundle)
             lock.withLock { identities.update { it.markKeysPublished() } }
             if (rotate) config.setFallbackRotatedAt(now)
+            bundle.sealingPrekey?.let { config.setPrekeyPublished(it.createdMs) }
         }
         if (me.listed != config.listed) config.setListed(me.listed)
         _state.update { it.copy(relayOneTimeKeys = count, listed = me.listed) }

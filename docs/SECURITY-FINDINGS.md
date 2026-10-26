@@ -590,10 +590,24 @@ Open from the second review, each a design change rather than a fix:
 
 - **The sealing key never rotates**, so sealed sender has no forward
   secrecy: whoever logs envelopes at the relay and later seizes the phone
-  learns who sent each one and when. Needs rotating, signed sealing keys.
+  learns who sent each one and when. *Since fixed (envelope format 3):*
+  envelopes are sealed to a signed sealing prekey each phone replaces every
+  week. A replaced one is deleted once nothing can still arrive for it: two
+  weeks and three days after it was made, once the mailbox has been emptied
+  since, and 30 days after it was replaced at the latest. Senders refuse a
+  prekey over two weeks old, and never fall back to the long-term key for a
+  contact once seen with a prekey, so a relay cannot force the old format by
+  withholding one. Limits: the window is up to about two and a half weeks,
+  not per message; format-2 envelopes from apps before Beta 7 are still
+  accepted and still sealed to the long-term key; the offline mesh cannot
+  reach a contact whose prekey this phone last fetched over two weeks ago.
 - **The sender's claim is a signature**, so a relay log plus the recipient's
   key proves to anyone that the sender sent a given ciphertext. Olm itself
-  is deniable; this layer is not. Needs a MAC both ends can compute instead.
+  is deniable; this layer is not. *Since fixed (format 3):* the claim is an
+  HMAC keyed from X25519 between the sender's long-term sealing key and the
+  recipient's prekey. The recipient could have made it, so it proves nothing
+  to anyone else. (The sender's bundle signature over its own keys travels
+  with it; that says who owns the keys, not that they sent anything.)
 - **Every comms key works while the phone is locked** (after first unlock),
   so an exploit that runs as the app reads everything (finding 7). Needs keys
   that need an unlocked device, and a locked-state inbox for what arrives.
@@ -607,7 +621,10 @@ Open from the second review, each a design change rather than a fix:
   use rely on. The relay keeps only the day someone last wrote to each
   relay: not who, nor to which number.
 - **Envelope length shows the Olm message type** (a new session is larger)
-  and roughly how many messages went unanswered. Needs padding after Olm.
+  and roughly how many messages went unanswered. *Since fixed for short
+  messages (format 3):* the sealed inside is padded to 1 KiB steps, so a
+  first message and a reply of up to about 480 bytes of text are one size;
+  longer ones differ only when the extra hundred bytes cross a step.
 - Old pickles stay decryptable under one never-rotated key; invite trees let
   one account multiply itself; a hello's list of carried ids fingerprints a
   phone for up to 48 hours; the relay's clock drives the clock-integrity

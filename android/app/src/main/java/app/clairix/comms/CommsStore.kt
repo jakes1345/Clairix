@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import net.zetetic.database.sqlcipher.SQLiteOpenHelper
+import uniffi.clairix_comms_crypto.SealingPrekey
 
 /**
  * Contacts, conversations and the outbox, in the app's private database.
@@ -86,6 +87,7 @@ class CommsStore(
         createVersion6(db)
         createVersion7(db)
         createVersion8(db)
+        createVersion9(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -98,6 +100,22 @@ class CommsStore(
         if (oldVersion < 6) createVersion6(db)
         if (oldVersion < 7) createVersion7(db)
         if (oldVersion < 8) createVersion8(db)
+        if (oldVersion < 9) createVersion9(db)
+    }
+
+    /**
+     * Each contact's current sealing prekey (envelope format 3), as last
+     * fetched and checked: envelopes to them are sealed to it.
+     */
+    private fun createVersion9(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS prekeys (
+                number TEXT PRIMARY KEY,
+                key TEXT NOT NULL,
+                created INTEGER NOT NULL,
+                signature TEXT NOT NULL
+            )"""
+        )
     }
 
     /**
@@ -311,12 +329,38 @@ class CommsStore(
             db.delete("messages", "peer = ?", arrayOf(number))
             db.delete("transactions", "peer = ?", arrayOf(number))
             db.delete("quarantine", "peer = ?", arrayOf(number))
+            db.delete("prekeys", "number = ?", arrayOf(number))
             db.delete("contacts", "number = ?", arrayOf(number))
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
         return media
+    }
+
+    // ── Sealing prekeys ──────────────────────────────────────────────────
+
+    /** [number]'s sealing prekey as last fetched, or null when none is known. */
+    fun prekey(number: String): SealingPrekey? =
+        readableDatabase.query("prekeys", arrayOf("key", "created", "signature"), "number = ?", arrayOf(number), null, null, null).use { c ->
+            if (!c.moveToFirst()) null else SealingPrekey(c.getString(0), c.getLong(1), c.getString(2))
+        }
+
+    /**
+     * Keeps [prekey] as [number]'s when it is newer than the one held; returns
+     * whether it was. The caller has checked its signature.
+     */
+    fun setPrekey(number: String, prekey: SealingPrekey): Boolean {
+        val held = prekey(number)
+        if (held != null && held.createdMs >= prekey.createdMs) return false
+        val values = ContentValues().apply {
+            put("number", number)
+            put("key", prekey.key)
+            put("created", prekey.createdMs)
+            put("signature", prekey.signature)
+        }
+        writableDatabase.insertWithOnConflict("prekeys", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        return true
     }
 
     // ── Messages ─────────────────────────────────────────────────────────
@@ -1171,6 +1215,6 @@ class CommsStore(
     private fun alive(): String = "(expires_at IS NULL OR expires_at > ${System.currentTimeMillis()})"
 
     private companion object {
-        const val DB_VERSION = 8
+        const val DB_VERSION = 9
     }
 }

@@ -14,6 +14,7 @@ import org.json.JSONException
 import org.json.JSONObject
 import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PublicBundle
+import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.SignedKey
 import uniffi.clairix_comms_crypto.tokenBlind
 import uniffi.clairix_comms_crypto.tokenFinalize
@@ -210,6 +211,8 @@ class RelayClient(
         val curve25519: String,
         val sealing: String,
         val signature: String,
+        /** Their current sealing prekey, signature not yet checked; null from an app or relay that has none. */
+        val sealingPrekey: SealingPrekey?,
         /** A one-time key, or the fallback when none is left. */
         val sessionKey: SignedKey,
         /**
@@ -242,6 +245,7 @@ class RelayClient(
             .put("signature", bundle.signature)
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
+            .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
             .put("listed", listed)
             .toString()
         val request = Request.Builder()
@@ -261,11 +265,32 @@ class RelayClient(
         return parsed { Me(json.getJSONObject("profile").optBoolean("listed", true), json.optInt("oneTimeKeys", 0)) }
     }
 
+    /**
+     * Uploads one-time keys and the fallback key, and the current sealing
+     * prekey, which the relay takes only when it is newer than the one it holds.
+     */
     fun putKeys(bundle: PublicBundle): Int {
         val body = JSONObject()
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
+            .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
         return signed("PUT", "/v1/keys", body).optInt("oneTimeKeys", 0)
+    }
+
+    private fun prekeyJson(p: SealingPrekey): JSONObject =
+        JSONObject().put("key", p.key).put("created", p.createdMs).put("signature", p.signature)
+
+    /**
+     * A sealing prekey in a relay's answer, in its expected shape; null when
+     * absent or malformed. Its signature is checked before it is kept
+     * ([CommsRepository]), as for every key a relay hands over.
+     */
+    private fun prekeyFrom(o: JSONObject?): SealingPrekey? {
+        if (o == null) return null
+        val key = o.optString("key").takeIf { it.isNotEmpty() && it.length <= 64 } ?: return null
+        val signature = o.optString("signature").takeIf { it.isNotEmpty() && it.length <= 128 } ?: return null
+        val created = o.opt("created") as? Number ?: return null
+        return SealingPrekey(key, created.toLong(), signature)
     }
 
     data class Invite(val code: String, val expiresAt: Long)
@@ -327,6 +352,7 @@ class RelayClient(
                 curve25519 = b.getString("curve25519"),
                 sealing = b.getString("sealing"),
                 signature = b.getString("signature"),
+                sealingPrekey = prekeyFrom(b.optJSONObject("sealingPrekey")),
                 sessionKey = SignedKey(key.getString("id"), key.getString("key"), key.getString("signature")),
                 claim = if (b.optJSONObject("oneTimeKey") != null) b.optString("claim").takeIf { it.isNotEmpty() } else null
             )
@@ -334,7 +360,14 @@ class RelayClient(
     }
 
     /** A contact's public identity keys, without the one-time key a bundle claims. */
-    data class IdentityKeys(val number: String, val ed25519: String, val curve25519: String, val sealing: String, val signature: String)
+    data class IdentityKeys(
+        val number: String,
+        val ed25519: String,
+        val curve25519: String,
+        val sealing: String,
+        val signature: String,
+        val sealingPrekey: SealingPrekey? = null
+    )
 
     /**
      * Who holds [number] (unlisted numbers need their key's [pin]); claims none
@@ -345,7 +378,10 @@ class RelayClient(
         val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = false, relay))
         return parsed {
             val o = json.getJSONObject("identity")
-            IdentityKeys(o.getString("number"), o.getString("ed25519"), o.getString("curve25519"), o.getString("sealing"), o.getString("signature"))
+            IdentityKeys(
+                o.getString("number"), o.getString("ed25519"), o.getString("curve25519"), o.getString("sealing"), o.getString("signature"),
+                prekeyFrom(o.optJSONObject("sealingPrekey"))
+            )
         }
     }
 

@@ -83,6 +83,11 @@ class CommsConfig(context: Context) {
 
     fun setFallbackRotatedAt(ts: Long) { prefs.edit().putLong(KEY_FALLBACK_ROTATED, ts).apply() }
 
+    /** When the sealing prekey last accepted by the relay was made (0 when none was): a newer one is still to be published. */
+    val prekeyPublished: Long get() = prefs.getLong(KEY_PREKEY_PUBLISHED, 0L)
+
+    fun setPrekeyPublished(createdMs: Long) { prefs.edit().putLong(KEY_PREKEY_PUBLISHED, createdMs).apply() }
+
     fun saveRegistration(relayUrl: String, number: String, name: String, listed: Boolean) {
         prefs.edit()
             .putString(KEY_RELAY, relayUrl.trimEnd('/'))
@@ -122,6 +127,7 @@ class CommsConfig(context: Context) {
         const val KEY_PUSH_PENDING = "push_endpoint_pending"
         const val KEY_ONLINE_DEFAULT = "online_default_applied"
         const val KEY_FALLBACK_ROTATED = "fallback_rotated_at"
+        const val KEY_PREKEY_PUBLISHED = "prekey_published"
         const val KEY_HIDE_PREVIEWS = "hide_previews"
         const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
         const val KEY_COVER_TRAFFIC = "cover_traffic"

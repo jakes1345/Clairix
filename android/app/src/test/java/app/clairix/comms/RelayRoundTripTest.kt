@@ -68,7 +68,7 @@ class RelayRoundTripTest {
             patiently { relay.register(relayUrl, identity, secret, listed = false) }.number
 
         val keys: PeerKeys
-            get() = identity.publicBundle().let { PeerKeys(it.ed25519, it.curve25519, it.sealing, it.signature) }
+            get() = identity.publicBundle().let { PeerKeys(it.ed25519, it.curve25519, it.sealing, it.signature, it.sealingPrekey) }
 
         private val sender: CommsWire.Sender
             get() = identity.publicBundle().let { CommsWire.Sender(number!!, label, it.ed25519, it.curve25519, it.sealing, it.signature) }
@@ -371,6 +371,19 @@ class RelayRoundTripTest {
         } catch (e: RelayException) {
             assertEquals(404, e.code)
         }
+    }
+
+    @Test
+    fun theRelayServesTheSealingPrekeyAndEnvelopesAreSealedToIt() {
+        val published = bob.identity.publicBundle().sealingPrekey
+        assertNotNull("a new identity has a sealing prekey", published)
+        val id = alice.relay.identity(bob.number!!, fingerprint(bob.keys.ed25519))
+        assertEquals(published, id.sealingPrekey)
+        val envelope = alice.encryptFor(bob, msg("sealed to the prekey"))
+        assertEquals("envelope format", 3, envelope[0].toInt())
+        alice.sendRaw(bob, envelope)
+        val got = bob.receive()
+        assertEquals("sealed to the prekey", got.payload.getString(CommsWire.F_BODY))
     }
 
     @Test
