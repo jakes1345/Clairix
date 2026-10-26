@@ -68,6 +68,9 @@ impl TorProxy {
         if username.is_empty() || password.is_empty() || username.len() > 255 || password.len() > 255 {
             return Err(fail("the proxy needs a username and password of 1-255 bytes"));
         }
+        // Arti's TLS needs a process-wide rustls provider; another start (or
+        // another library) may have installed it already, which is fine.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("clairix-tor")

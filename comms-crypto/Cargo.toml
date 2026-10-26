@@ -36,6 +36,9 @@ voprf = { version = "=0.5.0", default-features = false, features = ["ristretto25
 # compiled in for its directory cache.
 arti-client = { version = "0.47", default-features = false, features = ["tokio", "rustls", "onion-service-client", "static-sqlite", "compression"] }
 tor-rtcompat = { version = "0.47", default-features = false, features = ["tokio", "rustls"] }
+# Arti's rustls leaves the crypto provider to the application; without one
+# installed, rustls panics on first use. ring, installed in TorProxy::start.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time"] }
 futures = "0.3"
 subtle = "2"

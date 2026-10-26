@@ -90,8 +90,11 @@ class SmokeTest {
     private companion object {
         /** How long a Back may take to show the screen behind on CI's emulator (see backTo). */
         const val BACK_PATIENCE_MS = 10_000L
-        /** System apps that show a dialog over Clairix on its behalf. */
-        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller")
+        /**
+         * System apps that show a dialog over Clairix on its behalf. Android 12
+         * shows the Wi-Fi suggestion prompt from the framework itself ("android").
+         */
+        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller", "android")
         val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
     }
 
