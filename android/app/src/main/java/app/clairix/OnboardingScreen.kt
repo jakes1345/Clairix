@@ -73,8 +73,11 @@ fun markOnboardingDone(context: Context) =
 
 /**
  * First run: a few pages on what Clairix does and what it needs, then the start
- * button. The pages scroll on their own if a small phone or large text does not
- * fit them; the page bars and the main button stay pinned at the bottom.
+ * button, and beside it "Not now" for someone who wants to look around first:
+ * that finishes without asking for a permission or starting the scanner, which
+ * is then started from Scan → Trackers whenever they choose. The pages scroll
+ * on their own if a small phone or large text does not fit them; the page bars
+ * and the buttons stay pinned at the bottom.
  */
 @Composable
 fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
@@ -84,9 +87,9 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
     val c = ClairixTheme.colors
     val last = pagerState.currentPage == TOTAL_PAGES - 1
 
-    fun finish() {
+    fun finish(scan: Boolean = true) {
         markOnboardingDone(context)
-        startScanService()
+        if (scan) startScanService()
         onComplete()
     }
 
@@ -140,7 +143,8 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                     )
                     else -> ReadyPage(
                         title = "Ready when you are",
-                        lead = "Start scanning and keep the app running while you move.",
+                        lead = "Start scanning now and keep the app running while you move, or look around first " +
+                            "and start it later from Scan → Trackers.",
                         note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together. " +
                             "Android may ask whether Clairix can suggest Wi-Fi networks: that is the Wi-Fi trap, a made-up " +
                             "network name only interception kit answers to. Nothing ever joins it. The tour explains it."
@@ -189,6 +193,15 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                     onClick = { finish() },
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (BuildConfig.FULL_ACCESS) {
+                    // Nothing is asked for and nothing starts: the scanner waits in Scan → Trackers.
+                    GhostButton(
+                        "Not now",
+                        onClick = { finish(scan = false) },
+                        tone = Tone.Neutral,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             } else {
                 PrimaryButton(
                     "Next",

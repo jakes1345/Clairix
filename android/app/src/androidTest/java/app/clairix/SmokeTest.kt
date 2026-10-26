@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
@@ -53,6 +54,11 @@ class SmokeTest {
         device.waitForIdle(2_000)
         val f = File(shots, "%02d-%s.png".format(shotIndex++, name.replace(Regex("[^A-Za-z0-9]+"), "-")))
         device.takeScreenshot(f)
+        // Secure screens (Comms) come out black, so a failure also keeps the
+        // window hierarchy: what was on screen, as text.
+        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE")) {
+            runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
+        }
     }
 
     /** Fails if the app has crashed, stopped responding or left the foreground. */
@@ -124,20 +130,43 @@ class SmokeTest {
 
     private fun back(step: String) { device.pressBack(); alive("back from $step") }
 
+    /**
+     * Back from [step] to a screen with [expect] on it. The emulator's keyboard
+     * service sometimes takes a Back key itself (it logs "Received KEYCODE_BACK.
+     * isAllViewsInvisible=false") without the app ever seeing it, so when the
+     * page titled [step] is still open a second Back is sent, as a person would.
+     */
+    private fun backTo(step: String, expect: BySelector) {
+        back(step)
+        if (device.wait(Until.hasObject(expect), 3_000)) return
+        if (device.hasObject(By.text(step))) back("$step (again)")
+    }
+
     @Test
     fun everyScreenOpensWithoutCrashing() {
         // Onboarding.
         text("Skip", 15_000)?.let { it.click(); alive("onboarding skip") }
-        text("Start scanning", 5_000)?.let { shot("onboarding-last"); it.click(); alive("start scanning") }
+        text("Start scanning", 5_000)?.let {
+            shot("onboarding-last")
+            // Scanning can be left for later: the last page offers that too.
+            assertTrue("no Not now on the last page", device.hasObject(By.text("Not now")))
+            it.click(); alive("start scanning")
+        }
 
         // The tour, every page.
         assertTrue("the tour did not open", text("Where everything is", 15_000) != null)
         shot("tour-index")
-        var pages = 0
-        while (device.hasObject(By.text("Next")) && pages < 60) {
-            device.findObject(By.text("Next")).click(); alive("tour page ${pages + 2}")
-            if (pages % 4 == 0) shot("tour-page-${pages + 2}")
-            pages++
+        // Step by the tour's own counter ("Tour · 3 of 25"), waiting for each page
+        // to settle: while the pager slides onto the last page, Next is still on
+        // screen for a moment before it turns into Done.
+        val counter = device.findObject(By.textStartsWith("Tour · 1 of "))?.text ?: run { shot("MISSING-tour-counter"); fail("No tour page counter"); return }
+        val total = counter.substringAfterLast(' ').toInt()
+        for (page in 2..total) {
+            tap("Next", "tour page $page")
+            if (!device.wait(Until.hasObject(By.text("Tour · $page of $total")), 5_000)) {
+                shot("MISSING-tour-page-$page"); fail("The tour did not reach page $page of $total")
+            }
+            if (page % 4 == 2) shot("tour-page-$page")
         }
         tap("Done", "tour done")
 
@@ -178,7 +207,7 @@ class SmokeTest {
                     val more = device.wait(Until.findObject(By.desc("More options")), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
                     more.click(); alive("comms menu")
                     tap(page, "comms $page"); device.waitForIdle(2_000); shot("comms-$page")
-                    back(page)
+                    backTo(page, By.desc("More options"))
                 }
             }
         }

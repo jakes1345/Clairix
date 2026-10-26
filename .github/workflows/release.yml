@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.5'
+        default: 'v3.0.0-beta.6'
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -267,7 +267,33 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 5: relays that reach each other, and checks on GPS, 2G and your keyboard"
+            echo "### What's new in Beta 6: blind tokens, disappearing messages"
+            echo
+            echo "- **Blind send tokens.** Every message spends a single-use token, and the relay"
+            echo "  could once have matched a token to the account it handed it to. Tokens are now"
+            echo "  blind (RFC 9497, the construction Privacy Pass uses): your phone makes each one"
+            echo "  and the relay signs it without seeing it, proving it used the key it shows"
+            echo "  everyone. Even a relay that recorded every request cannot tell from the token"
+            echo "  whose a message was (it still sees the network address; use Tor or a VPN)."
+            echo "- **Disappearing messages.** Tap Disappearing in any chat or group and pick 5"
+            echo "  minutes to 4 weeks. Each message is deleted that long after it is read (yours,"
+            echo "  after they are sent), photos and voice notes with it, on both phones; every"
+            echo "  message carries the timer, so a phone that missed the change still deletes it."
+            echo "  Deleted messages are overwritten in the database, not just unlinked."
+            echo "- **The offline mesh hides who a message is for.** A carried bundle is addressed"
+            echo "  by a tag only its sender and recipient can work out; before, anyone with the"
+            echo "  recipient's public key could recognise it."
+            echo "- **No more learning that a number exists through other relays.** Several relays"
+            echo "  acting together could fill a mailbox and read the refusal; now they are answered"
+            echo "  exactly as for a number that does not exist."
+            echo "- **Tested end to end on Android.** Every change now runs the app on an emulator"
+            echo "  against two real relays: texts, receipts, voice notes, photos, groups,"
+            echo "  disappearing messages, a ringing call and a contact on another relay."
+            echo "- **Rebuildable releases.** The NDK and cargo-ndk are pinned, so anyone can rebuild"
+            echo "  this APK with the same tools and compare it."
+            echo "- The COMMS database is upgraded once, on first start (version 8)."
+            echo
+            echo "### What was new in Beta 5: relays that reach each other, and checks on GPS, 2G and your keyboard"
             echo
             echo "- **Contacts on other relays.** Anyone can run a Clairix relay, and a contact on"
             echo "  another one is added by scanning their QR code. Your relay forwards to theirs,"
