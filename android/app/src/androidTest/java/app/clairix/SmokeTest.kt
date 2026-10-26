@@ -96,20 +96,32 @@ class SmokeTest {
     private fun text(t: String, timeout: Long = 8_000): UiObject2? = device.wait(Until.findObject(By.text(t)), timeout)
 
     private fun tap(t: String, step: String = t) {
-        // Live screens (Trackers refreshes as scan results arrive) can redraw
-        // between finding a button and tapping it, which leaves the object
-        // found stale; the button is then found again, a few times at most.
-        repeat(3) {
-            val o = text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
+        text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
+        if (!clickFresh(By.text(t))) { shot("STALE-$step"); fail("\"$t\" kept redrawing before it could be tapped at: $step") }
+        alive(step)
+    }
+
+    /**
+     * Taps the centre of what [selector] finds, read from a fresh lookup each
+     * try. Live screens (Trackers redraws as scan results arrive) change the
+     * window's content often enough that UiAutomator's handle on a button goes
+     * stale between finding it and clicking it, though the button itself
+     * never moves; its position, read and used at once, does not go stale.
+     */
+    private fun clickFresh(selector: BySelector, tries: Int = 10): Boolean {
+        repeat(tries) {
             try {
-                o.click()
-                alive(step)
-                return
+                val bounds = device.findObject(selector)?.visibleBounds
+                if (bounds != null && !bounds.isEmpty) {
+                    device.click(bounds.centerX(), bounds.centerY())
+                    return true
+                }
             } catch (_: StaleObjectException) {
-                device.waitForIdle(1_000)
+                // Found again on the next try.
             }
+            device.waitForIdle(500)
         }
-        shot("STALE-$step"); fail("\"$t\" kept redrawing before it could be tapped at: $step")
+        return false
     }
 
     /**
@@ -197,7 +209,7 @@ class SmokeTest {
                             device.wait(Until.findObject(By.text(tool)), 3_000)
                         }
                     if (b == null) { shot("MISSING-$tool"); fail("No tracker tool \"$tool\"") }
-                    try { b!!.click() } catch (_: StaleObjectException) { tap(tool) }
+                    if (!clickFresh(By.text(tool))) { shot("STALE-$tool"); fail("\"$tool\" kept redrawing before it could be tapped") }
                     alive(tool)
                     device.waitForIdle(3_000)
                     shot("tool-$tool")
