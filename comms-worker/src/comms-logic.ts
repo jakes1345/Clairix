@@ -108,6 +108,15 @@ export interface SignedKey {
 }
 
 /**
+ * What a sender may ask a recipient's phone to do with an envelope it cannot
+ * open yet (the phone is locked, so its keys are out of reach): ring for a
+ * call, or sound the alarm for an SOS. The relay learns no more from it than
+ * the timing of a call set-up or an SOS fan-out already shows.
+ */
+export type Alert = "call" | "sos";
+export const ALERTS: readonly Alert[] = ["call", "sos"];
+
+/**
  * A phone's current sealing prekey (envelope format 3): an X25519 key it
  * replaces every week, signed with its identity key over [prekeyStatement].
  * Envelopes to the phone are sealed to it, and once the phone deletes an old

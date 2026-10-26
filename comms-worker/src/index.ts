@@ -18,9 +18,11 @@ import {
   TURN_TTL_S,
   TURN_PER_HOUR,
   TURN_BURST,
+  ALERTS,
   PREKEY_FUTURE_SKEW_MS,
   PREKEY_MAX_AGE_MS,
   prekeyStatement,
+  type Alert,
   type IceServer,
   type SealingPrekey,
   type TokenKind,
@@ -84,7 +86,9 @@ export { IncidentCache, Mailbox, Traffic };
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
  * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
  * account they went to:
- *   POST   /v1/send            {to, envelope, claim?, mix?}  → queue for a contact; a "delivery" token.
+ *   POST   /v1/send            {to, envelope, claim?, mix?, alert?}  → queue for a contact; a "delivery" token.
+ *                              "alert" ("call" or "sos") asks a locked recipient phone to ring or sound an SOS
+ *                              for an envelope it cannot open yet; it is delivered with the envelope.
  *                              "claim" is the ticket of the one-time key the envelope's session was built
  *                              on, which spends that key for good. With "mix" true, the envelope is held a
  *                              random few seconds and released in a shuffled batch (MIX_MAX_MS; see
@@ -123,6 +127,10 @@ export { IncidentCache, Mailbox, Traffic };
  *                                                            body, never in a URL anything might log.
  *   GET    /v1/bundle/:number[?pin=]                       → as a claiming lookup; for apps before 3.0.0-beta.3
  *   GET    /v1/identity/:number[?pin=]                     → as a non-claiming lookup; likewise
+ *   PUT    /v1/transport       {key|null}                  → the phone's transport key (Ed25519). Requests signed
+ *                                                            with it (X-Clairix-Key: transport) may only GET /v1/inbox,
+ *                                                            POST /v1/ack and GET /v1/ws: a locked phone collects what
+ *                                                            it cannot yet open, and the key reads and sends nothing
  *   GET    /v1/inbox                                       → waiting envelopes
  *   POST   /v1/ack             {ids}
  *   GET    /v1/ws                                          → live delivery (hibernatable WebSocket)
@@ -255,7 +263,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       // share the mailbox's allowance for other relays; any other relay draws
       // on a small one of its own (mailbox.ts).
       const known = federationPolicy(env).mode === "allow" || (await other.writtenToWithin(WRITTEN_TO_DAYS));
-      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, known ? "known" : "stranger");
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, known ? "known" : "stranger", body.alert);
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
@@ -266,7 +274,13 @@ async function route(request: Request, env: Env): Promise<Response> {
   // ── Authenticated ─────────────────────────────────────────────────────
   const signed = await parseSigned(request, bodyText);
   const me = env.MAILBOX.get(env.MAILBOX.idFromName(signed.number));
-  const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts);
+  // Signed with the transport key, a request may only collect envelopes: the
+  // phone is locked and its identity key out of reach.
+  const transport = request.headers.get("x-clairix-key") === "transport";
+  if (transport && !TRANSPORT_ROUTES.has(`${request.method} ${path}`)) {
+    throw new HttpError(403, "The transport key only fetches, acknowledges and streams envelopes");
+  }
+  const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts, transport);
   if (!profile) throw new HttpError(401, "Signature rejected");
   // An account from before keys were recorded as their owner's records them now.
   if (!profile.keysClaimed) {
@@ -299,6 +313,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(profile.ed25519, [body.fallback]))[0] ?? null;
     const sealingPrekey = await checkedSealingPrekey(profile.ed25519, body.sealingPrekey);
     return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey));
+  }
+
+  if (path === "/v1/transport" && request.method === "PUT") {
+    const body = parseJson<{ key?: unknown }>(bodyText);
+    const key = checkedTransportKey(body.key, profile.ed25519);
+    await me.setTransportKey(key);
+    return json({ ok: true });
   }
 
   if (path === "/v1/listed" && request.method === "PUT") {
@@ -878,6 +899,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     fallback?: unknown;
     oneTimeKeys?: unknown;
     sealingPrekey?: unknown;
+    transportKey?: unknown;
     listed?: unknown;
   }>(bodyText);
   // Either the relay's enrollment secret, or an invite a registered phone made.
@@ -914,6 +936,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
   const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(ed25519, [body.fallback]))[0] ?? null;
   const oneTimeKeys = await checkedKeys(ed25519, body.oneTimeKeys ?? []);
   const sealingPrekey = await checkedSealingPrekey(ed25519, body.sealingPrekey);
+  const transportKey = body.transportKey === undefined ? null : checkedTransportKey(body.transportKey, ed25519);
   const listed = body.listed !== false;
 
   // Used up only once everything else about the request has checked out.
@@ -928,7 +951,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(number));
     const now = Date.now();
     // Dated to the day: enough for anything that asks how old an account is.
-    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, sealingPrekey, listed, createdAt: dayFloor(now), keysClaimed: true };
+    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, sealingPrekey, transportKey, listed, createdAt: dayFloor(now), keysClaimed: true };
     if (await mailbox.claim(profile, oneTimeKeys)) {
       if (!(await claimKeys(env, profile, true))) {
         // One of the keys is already another account's. The number just taken
@@ -973,6 +996,22 @@ async function checkedKeys(ed25519: string, raw: unknown): Promise<SignedKey[]> 
     out.push({ id: k.id, key: k.key, signature: k.signature });
   }
   return out;
+}
+
+/** What a request signed with the transport key may do: collect envelopes, nothing else. */
+const TRANSPORT_ROUTES = new Set(["GET /v1/inbox", "POST /v1/ack", "GET /v1/ws"]);
+
+/**
+ * A transport key: null removes it; otherwise a 32-byte Ed25519 key in standard
+ * base64 that is not the identity key itself (which would make the restricted
+ * key a full one).
+ */
+function checkedTransportKey(raw: unknown, ed25519: string): string | null {
+  if (raw === null) return null;
+  const spellings = typeof raw === "string" ? keySpellings(raw) : null;
+  if (typeof raw !== "string" || spellings === null) throw new HttpError(400, "transport key must be a 32-byte key in standard base64");
+  if (spellings.includes(ed25519)) throw new HttpError(400, "transport key must not be the identity key");
+  return raw;
 }
 
 /**
@@ -1114,12 +1153,13 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     // the forwarded request names no sender, as the phone's did not.
     const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, mix: !body.urgent };
     if (body.claim !== null) forwarded.claim = body.claim;
+    if (body.alert !== null) forwarded.alert = body.alert;
     const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
     if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
     await noteWrittenTo(env, body.relay);
     return json({ id: res.json.id.slice(0, 80) }, 202);
   }
-  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
+  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, false, body.alert);
 }
 
 interface SendBody {
@@ -1130,10 +1170,12 @@ interface SendBody {
   urgent: boolean;
   /** The relay the recipient is on, when it is not this one. */
   relay: string | null;
+  /** What a locked recipient phone should do with it: ring, or sound an SOS. */
+  alert: Alert | null;
 }
 
 function parseSendBody(bodyText: string, loopback = false): SendBody {
-  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown }>(bodyText);
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown; alert?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
@@ -1149,7 +1191,9 @@ function parseSendBody(bodyText: string, loopback = false): SendBody {
   if (body.mix !== undefined && typeof body.mix !== "boolean") throw new HttpError(400, "mix must be a boolean");
   // Held for mixing only when asked: an app from before mixing sends call
   // set-up and SOS without saying so, and must not have them wait.
-  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback) };
+  if (body.alert !== undefined && body.alert !== null && !ALERTS.includes(body.alert as Alert)) throw new HttpError(400, "alert must be call or sos");
+  const alert = (body.alert ?? null) as Alert | null;
+  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback), alert };
 }
 
 interface LookupBody {
@@ -1289,8 +1333,16 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
 }
 
 /** Queues [envelope] for [to] on this relay. */
-async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean, federated: false | "known" | "stranger" = false): Promise<Response> {
-  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated);
+async function enqueueFor(
+  env: Env,
+  to: string,
+  envelope: string,
+  claim: string | null,
+  urgent: boolean,
+  federated: false | "known" | "stranger" = false,
+  alert: Alert | null = null,
+): Promise<Response> {
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated, alert);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to
     // one that does not is accepted and dropped, its token spent like any other.

@@ -616,3 +616,19 @@ test("an address that served no key is not fetched again for a while, and other 
     huge.restore();
   }
 });
+
+test("a sender's alert crosses relays with the envelope", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const [t] = await alice.tokens(1);
+    assert.equal((await sendVia(alice, t, bob.number, B, { alert: "sos" })).status, 202);
+    const got = await bob.inbox();
+    assert.equal(got.length, 1);
+    assert.equal(got[0].alert, "sos");
+  } finally {
+    net.restore();
+  }
+});

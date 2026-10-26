@@ -845,3 +845,52 @@ test("a phone from before sealing prekeys registers and is served without one", 
   assert.equal(bundle.sealingPrekey, null);
   assert.equal(bundle.sealing, old.sealing);
 });
+
+test("the transport key collects envelopes and does nothing else", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  // Not set yet: refused.
+  assert.equal((await bob.signedTransport("GET", "/v1/inbox")).status, 401);
+  assert.equal((await bob.signed("PUT", "/v1/transport", { key: bob.transportKey })).status, 200);
+
+  const [t] = await alice.tokens(1);
+  assert.equal((await alice.send(t, bob.number)).status, 202);
+  const inbox = await bob.signedTransport("GET", "/v1/inbox");
+  assert.equal(inbox.status, 200);
+  assert.equal(inbox.json.envelopes.length, 1);
+  const ack = await bob.signedTransport("POST", "/v1/ack", { ids: [inbox.json.envelopes[0].id] });
+  assert.equal(ack.status, 200);
+  assert.equal(ack.json.removed, 1);
+
+  // Everything else needs the identity key.
+  for (const [method, path, body] of [
+    ["GET", "/v1/me"],
+    ["POST", "/v1/tokens", { count: 1 }],
+    ["POST", "/v1/lookup", { number: alice.number, claim: false }],
+    ["PUT", "/v1/keys", { oneTimeKeys: [] }],
+    ["PUT", "/v1/transport", { key: null }],
+    ["DELETE", "/v1/me"],
+  ]) {
+    assert.equal((await bob.signedTransport(method, path, body)).status, 403, `${method} ${path}`);
+  }
+  // The identity key still collects too.
+  assert.equal((await bob.signed("GET", "/v1/inbox")).status, 200);
+
+  // It cannot be the identity key itself, and it can be removed.
+  assert.equal((await bob.signed("PUT", "/v1/transport", { key: bob.ed25519 })).status, 400);
+  assert.equal((await bob.signed("PUT", "/v1/transport", { key: null })).status, 200);
+  assert.equal((await bob.signedTransport("GET", "/v1/inbox")).status, 401);
+});
+
+test("a sender's alert travels with the envelope, and nothing else is accepted as one", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const [t1, t2, t3] = await alice.tokens(3);
+  assert.equal((await alice.send(t1, bob.number, undefined, undefined, { alert: "call" })).status, 202);
+  assert.equal((await alice.send(t2, bob.number)).status, 202);
+  assert.equal((await alice.send(t3, bob.number, undefined, undefined, { alert: "ring-loudly" })).status, 400);
+  const got = await bob.inbox();
+  assert.deepEqual(got.map((e) => e.alert ?? null).sort(), ["call", null].sort());
+});

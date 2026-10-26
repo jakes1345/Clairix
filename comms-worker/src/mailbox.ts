@@ -23,6 +23,7 @@ import {
   PUSH_CHALLENGE_TTL_MS,
   randomToken,
   tokenHash,
+  type Alert,
   type OtkClaim,
   type SealingPrekey,
   type SignedKey,
@@ -64,6 +65,12 @@ export interface Profile {
   fallback: SignedKey | null;
   /** The current sealing prekey; absent for apps from before envelope format 3. */
   sealingPrekey?: SealingPrekey | null;
+  /**
+   * The phone's transport key (Ed25519, base64): it signs only the requests
+   * that fetch, acknowledge and stream envelopes, so a locked phone can
+   * collect what it cannot yet open. It reads nothing and sends nothing.
+   */
+  transportKey?: string | null;
   /** Whether the number can be looked up. Unlisted numbers are reached by QR only. */
   listed: boolean;
   createdAt: number;
@@ -76,6 +83,8 @@ export interface Envelope {
   ts: number;
   /** Base64 of the sealed envelope bytes. */
   data: string;
+  /** Present when the sender asked a locked phone to ring or sound an SOS for it. */
+  alert?: Alert;
 }
 
 /** What a lookup returns: the identity and one key to start a session with. */
@@ -370,10 +379,11 @@ export class Mailbox extends DurableObject<Env> {
    * Checks a request signature against the owner's key and enforces the
    * single-use nonce. Returns the profile on success, null otherwise.
    */
-  async authenticate(payload: string, signature: string, nonce: string, ts: number): Promise<Profile | null> {
+  async authenticate(payload: string, signature: string, nonce: string, ts: number, transport = false): Promise<Profile | null> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
-    if (!(await verifyEd25519(profile.ed25519, payload, signature))) return null;
+    const key = transport ? profile.transportKey : profile.ed25519;
+    if (!key || !(await verifyEd25519(key, payload, signature))) return null;
     const nonces = (await this.ctx.storage.get<NonceRecord>("nonces")) ?? {};
     const now = Date.now();
     for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS) delete nonces[n];
@@ -526,6 +536,14 @@ export class Mailbox extends DurableObject<Env> {
       signature: profile.signature,
       sealingPrekey: profile.sealingPrekey ?? null,
     };
+  }
+
+  /** Sets (or with null removes) the phone's transport key. */
+  async setTransportKey(key: string | null): Promise<void> {
+    const profile = await this.ctx.storage.get<Profile>("profile");
+    if (!profile) throw new Error("unregistered");
+    profile.transportKey = key;
+    await this.ctx.storage.put("profile", profile);
   }
 
   async setListed(listed: boolean): Promise<void> {
@@ -902,7 +920,13 @@ export class Mailbox extends DurableObject<Env> {
    * burst from one sender arrives interleaved with everyone else's. The hold
    * counts towards the queue, so a full mailbox is full either way.
    */
-  async enqueue(data: string, claim: string | null = null, urgent = false, federated: false | "known" | "stranger" = false): Promise<EnqueueResult> {
+  async enqueue(
+    data: string,
+    claim: string | null = null,
+    urgent = false,
+    federated: false | "known" | "stranger" = false,
+    alert: Alert | null = null,
+  ): Promise<EnqueueResult> {
     // The size is checked before anything about the number, so an oversized
     // envelope is answered the same whether the number exists or not.
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
@@ -934,7 +958,7 @@ export class Mailbox extends DurableObject<Env> {
     if (claim !== null) await this.confirmClaim(claim);
     const now = Date.now();
     const id = `${now.toString(36)}-${crypto.randomUUID()}`;
-    const envelope: Envelope = { id, ts: now, data };
+    const envelope: Envelope = alert ? { id, ts: now, data, alert } : { id, ts: now, data };
     const hold = urgent ? 0 : mixDelay(mixMaxMs(this.env));
     if (hold > 0) {
       const staged: StagedEnvelope = { envelope, releaseAt: now + hold };

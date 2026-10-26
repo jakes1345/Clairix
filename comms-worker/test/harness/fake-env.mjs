@@ -356,7 +356,7 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10, prekey
   if (reg.status !== 201) throw new Error(`registration failed: ${reg.status} ${JSON.stringify(reg.json)}`);
   const number = reg.json.number;
 
-  const signed = async (method, path, bodyObj) => {
+  const signedWith = (signer, extraHeaders) => async (method, path, bodyObj) => {
     const text = bodyObj === undefined ? "" : JSON.stringify(bodyObj);
     const ts = Date.now();
     const nonce = randomB64(18).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -367,10 +367,17 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10, prekey
         "x-clairix-number": number,
         "x-clairix-ts": String(ts),
         "x-clairix-nonce": nonce,
-        "x-clairix-sig": await sign(payload),
+        "x-clairix-sig": await signer(payload),
+        ...extraHeaders,
       },
     });
   };
+  const signed = signedWith(sign, {});
+  // The transport key: a second Ed25519 key that may only collect envelopes.
+  const transportPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const transportKey = b64(await crypto.subtle.exportKey("raw", transportPair.publicKey));
+  const signTransport = async (text) => b64(await crypto.subtle.sign({ name: "Ed25519" }, transportPair.privateKey, enc.encode(text)));
+  const signedTransport = signedWith(signTransport, { "x-clairix-key": "transport" });
 
   return {
     number,
@@ -385,6 +392,8 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10, prekey
     fallbackId: fallback.id,
     signed,
     signedKey,
+    transportKey,
+    signedTransport,
     async tokens(count, kind) {
       const res = await signed("POST", "/v1/tokens", kind === undefined ? { count } : { count, kind });
       if (res.status !== 200) throw new Error(`tokens: ${res.status} ${JSON.stringify(res.json)}`);
