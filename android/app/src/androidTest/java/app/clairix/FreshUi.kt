@@ -21,7 +21,9 @@ import androidx.test.uiautomator.UiObject2
  * failed or stalled on exactly that, with the app idle and its window
  * already redrawn. The app's own nodes are recomputed whenever they are
  * asked for; only the cache was stale. Every lookup here clears it first
- * (UiAutomation.clearCache, Android 14 on; the CI emulator runs 34).
+ * (UiAutomation.clearCache, Android 14 on). Before 14 there is no public way
+ * to, and the emulator workflow enables NoopAccessibilityService instead, so
+ * Compose sends its events and the cache stays current.
  */
 internal class FreshUi(private val instrumentation: Instrumentation, val device: UiDevice) {
 

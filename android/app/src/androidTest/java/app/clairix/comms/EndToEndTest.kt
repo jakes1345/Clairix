@@ -362,6 +362,21 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         }
     }
 
+    /** Everything that arrives within [ms], plus anything already received and not yet matched. */
+    fun drain(ms: Long): List<JSONObject> {
+        val deadline = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < deadline) {
+            val envelopes = relay.inbox()
+            for (env in envelopes) {
+                val d = identity.decrypt(env.data)
+                CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
+            }
+            if (envelopes.isNotEmpty()) relay.ack(envelopes.map { it.id })
+            Thread.sleep(400)
+        }
+        return waiting.toList().also { waiting.clear() }
+    }
+
     fun close() {
         runCatching { relay.wipe() }
     }

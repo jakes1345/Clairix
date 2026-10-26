@@ -13,8 +13,15 @@ name: Emulator smoke test
 # disappearing messages, a call that rings, and a contact on the other relay, every
 # envelope spending a blind token and going through the relay's mixing.
 #
+# Then, on the same emulator: an eight-minute soak (SoakTest), the app over the real
+# Tor network (TorDeviceTest), and last, since they move the app's vault keys, the
+# lock screen tests (VaultLockScreenTest).
+#
+# The APKs are built once (job build) and every step above runs on four emulators,
+# Android 12 (API 31, the oldest Clairix runs on), 13, 14 and 15 (job smoke).
+#
 # The emulator is started with the SDK's own tools rather than a third-party action:
-# every action here is pinned to a commit, and this needs none beyond the usual four.
+# every action here is pinned to a commit.
 on:
   pull_request:
     paths:
@@ -35,12 +42,10 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
+  # The app and its instrumentation tests, built once for every device below.
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-    env:
-      API: '34'
-      IMAGE: 'system-images;android-34;google_apis;x86_64'
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -75,6 +80,38 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      - name: Build the app and the smoke test
+        working-directory: android
+        run: |
+          ./gradlew assembleFullSuiteDebug assembleFullSuiteDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Keep the APKs for the devices
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apks
+          path: |
+            android/app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
+            android/app/build/outputs/apk/androidTest/fullSuite/debug/app-full-suite-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  # Every Android version from the oldest Clairix runs on (minSdk 31) to the
+  # newest: each runs the smoke test, the end-to-end tests, the soak test, the
+  # Tor tests and the lock screen tests on its own emulator.
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        api: ['31', '33', '34', '35']
+    env:
+      API: ${{ matrix.api }}
+      IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -108,10 +145,11 @@ jobs:
             echo
           done
 
-      - name: Build the app and the smoke test
-        working-directory: android
-        run: |
-          ./gradlew assembleFullSuiteDebug assembleFullSuiteDebugAndroidTest --no-daemon --stacktrace
+      - name: Fetch the APKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apks
+          path: android/app/build/outputs/apk
 
       # Hosted Linux runners have KVM; the runner user needs access to it.
       - name: Enable KVM
@@ -180,6 +218,11 @@ jobs:
           "$ADB" logcat -c
           "$ADB" install -r -g app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
           "$ADB" install -r app/build/outputs/apk/androidTest/fullSuite/debug/app-full-suite-debug-androidTest.apk
+          # An accessibility service on, so Compose reports screen changes to
+          # UiAutomator on every version (NoopAccessibilityService, FreshUi).
+          "$ADB" shell settings put secure enabled_accessibility_services app.clairix.test/app.clairix.NoopAccessibilityService
+          "$ADB" shell settings put secure accessibility_enabled 1
+          "$ADB" shell settings get secure enabled_accessibility_services
           set +e
           timeout 1500 "$ADB" shell am instrument -w -r app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../instrument.txt
           set -e
@@ -220,6 +263,32 @@ jobs:
           # Every test must have run: a skipped one (status -4 for an unmet assumption,
           # -3 for an ignored test) means the relays were not passed through.
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
+
+      # A long conversation on the same two relays: texts both ways with a
+      # contact on each, photos, the vault sealing and opening, the socket
+      # dropped; nothing lost, nothing twice, and memory that stops growing.
+      - name: Run the soak test
+        working-directory: android
+        timeout-minutes: 20
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 1100 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.SoakTest -e soakMinutes 8 \
+            -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
+            -e secret e2e-enrollment-secret-0123456789 \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../soak.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-soak.txt
+          grep "SoakTest" ../logcat-soak.txt | tail -20 || true
+          if grep -q "FATAL EXCEPTION" ../logcat-soak.txt; then
+            echo "::error::Clairix crashed during the soak test; see logcat-soak.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-soak.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (1 test)" ../soak.txt || { echo "::error::The soak test failed; see soak.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../soak.txt; then echo "::error::The soak test was skipped"; exit 1; fi
 
       # The app over the real Tor network (Arti on the phone, through its own
       # SOCKS proxy): requests come out of Tor, the listed relay answers with
@@ -273,7 +342,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: emulator-smoke
+          name: emulator-smoke-api${{ matrix.api }}
           path: |
             screens/
             instrument.txt
@@ -284,6 +353,8 @@ jobs:
             logcat-lockscreen.txt
             tor.txt
             logcat-tor.txt
+            soak.txt
+            logcat-soak.txt
             relay-a.log
             relay-b.log
             emulator.log

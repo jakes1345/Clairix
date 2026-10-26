@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="noop_accessibility_description">Does nothing. Enabled only on test emulators so the app under test reports screen changes, as it does for TalkBack users.</string>
+</resources>
