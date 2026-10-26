@@ -56,7 +56,7 @@ class SmokeTest {
         device.takeScreenshot(f)
         // Secure screens (Comms) come out black, so a failure also keeps the
         // window hierarchy: what was on screen, as text.
-        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-IGNORED")) {
+        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-")) {
             runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
         }
     }
@@ -131,20 +131,24 @@ class SmokeTest {
     private fun back(step: String) { device.pressBack(); alive("back from $step") }
 
     /**
-     * Back from [step] to a screen with [expect] on it. The emulator's keyboard
-     * service sometimes takes a Back key itself (it logs "Received KEYCODE_BACK.
-     * isAllViewsInvisible=false") without the app ever seeing it, so when the
-     * page titled [step] is still open a second Back is sent, as a person would.
-     * (That log line turned out to appear on Back presses that worked too; the
-     * cause is still being looked for, and the screen is kept when it happens.)
+     * Back from [step] to a screen with [expect] on it.
+     *
+     * The app always takes the Back at once (its back callback runs within
+     * 100 ms), but UiAutomator's copy of the screen can lag behind it by
+     * several seconds on a busy emulator: it went on finding the page titled
+     * [step] for four seconds after the app had left it, and a dump taken right
+     * then showed the screen behind it. Sending a second Back on that stale
+     * view took the app to the launcher. So this waits longer, and before
+     * deciding the Back was lost, takes a fresh dump and looks again.
      */
     private fun backTo(step: String, expect: BySelector) {
         back(step)
-        if (device.wait(Until.hasObject(expect), 3_000)) return
+        if (device.wait(Until.hasObject(expect), 10_000)) return
+        // A dump reads the screen afresh; keep it either way.
+        shot("BACK-SLOW-$step")
+        if (device.wait(Until.hasObject(expect), 2_000)) return
         // The page's title: drawn in capitals, described as written.
         if (device.hasObject(By.desc(step)) || device.hasObject(By.text(step.uppercase()))) {
-            // Keep what was on screen when the first Back did nothing: the cause
-            // of this has not been found yet.
             shot("BACK-IGNORED-$step")
             back("$step (again)")
         }
