@@ -90,6 +90,8 @@ class SmokeTest {
     }
 
     private companion object {
+        /** How long a Back may take to show the screen behind on CI's emulator (see backTo). */
+        const val BACK_PATIENCE_MS = 30_000L
         /** System apps that show a dialog over Clairix on its behalf. */
         val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller")
         val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
@@ -147,15 +149,19 @@ class SmokeTest {
     /**
      * Back from [step] to a screen with [expect] on it.
      *
-     * The app takes the Back at once, but going back to the Comms tab has
-     * sometimes held up its main thread: run 40258058822 drew no frame for
-     * 13.5 seconds after it (app_time_stats max=13496.96ms), while UiAutomator
-     * went on reporting the page that was left, and a second Back then closed
-     * the app. That is a freeze an owner would see, not a test problem, so
-     * nothing is pressed twice here: when the screen has not changed after
-     * three seconds, the main thread's stack is logged three times, a second
-     * apart (tag SmokeMainThread), and if the page is still up after twelve,
-     * the test fails as frozen with what the main thread was doing.
+     * The app takes the Back at once, but on CI's software-rendered emulator
+     * the screen behind can take many seconds to appear. Run 40259027708
+     * sampled the main thread during such waits, and every sample was idle in
+     * MessageQueue.nativePollOnce: the app had nothing left to do but draw,
+     * and the emulator delivered no frame. A Compose screen's accessibility
+     * tree is updated when a frame is laid out, so until then UiAutomator,
+     * fresh dumps included, still shows the page that was left. Run 40258058822
+     * waited 13 s and then sent a second Back, which closed the app.
+     *
+     * So nothing is pressed twice. When the screen has not changed after
+     * three seconds the main thread is sampled (tag SmokeMainThread); after
+     * [BACK_PATIENCE_MS] the test fails, saying whether the app was idle (the
+     * emulator's display stalled) or busy, with the stack.
      */
     private fun backTo(step: String, expect: BySelector) {
         back(step)
@@ -166,12 +172,11 @@ class SmokeTest {
             if (i < 3) Thread.sleep(1_000)
             stack
         }
-        if (device.wait(Until.hasObject(expect), 7_000)) return
-        // A dump reads the screen afresh; keep it either way.
-        shot("BACK-SLOW-$step")
-        if (device.wait(Until.hasObject(expect), 2_000)) return
+        if (device.wait(Until.hasObject(expect), BACK_PATIENCE_MS - 5_000)) return
         shot("FROZEN-$step")
-        fail("Clairix did not leave \"$step\" within 12 s of Back. Main thread, last sample:\n    at ${stacks.last()}")
+        val idle = stacks.all { it.startsWith("android.os.MessageQueue.nativePollOnce") }
+        val why = if (idle) "the main thread was idle throughout, so the emulator drew no frame" else "the main thread was busy"
+        fail("Clairix did not leave \"$step\" within ${BACK_PATIENCE_MS / 1000} s of Back; $why. Last sample:\n    at ${stacks.last()}")
     }
 
     @Test
