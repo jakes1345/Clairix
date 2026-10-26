@@ -19,12 +19,15 @@ class LockedInbox(context: Context) {
 
     class Entry(val file: File, val envelope: RelayClient.Envelope)
 
-    /** Keeps [envelope] until the vault opens. A second copy of one already kept is ignored. */
+    /**
+     * Keeps [envelope] until the vault opens. A second copy of one already kept
+     * is ignored, and false says so: it has been announced already.
+     */
     @Synchronized
-    fun put(envelope: RelayClient.Envelope) {
+    fun put(envelope: RelayClient.Envelope): Boolean {
         dir.mkdirs()
         val f = File(dir, "%016d-%s.bin".format(envelope.ts.coerceAtLeast(0), digest(envelope.data)))
-        if (f.exists()) return
+        if (f.exists()) return false
         val json = JSONObject()
             .put("id", envelope.id)
             .put("ts", envelope.ts)
@@ -39,6 +42,7 @@ class LockedInbox(context: Context) {
             tmp.delete()
             throw java.io.IOException("could not keep an envelope for after unlock")
         }
+        return true
     }
 
     @Synchronized

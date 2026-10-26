@@ -71,9 +71,10 @@ class VaultDeviceTest {
     fun theLockedInboxKeepsEnvelopesInOrderAndUnreadableOnDisk() {
         val first = RelayClient.Envelope("a", 1_000L, Random.nextBytes(300), RelayClient.ALERT_CALL)
         val second = RelayClient.Envelope("b", 2_000L, Random.nextBytes(300))
-        inbox.put(second)
-        inbox.put(first)
-        inbox.put(first) // a second copy (the socket and a fetch both handed it over)
+        assertTrue(inbox.put(second))
+        assertTrue(inbox.put(first))
+        // A second copy (the socket and a fetch both handed it over) is not news: it rang already.
+        assertFalse(inbox.put(first))
         assertEquals(2, inbox.count())
         val all = inbox.all()
         assertEquals(listOf("a", "b"), all.map { it.envelope.id })

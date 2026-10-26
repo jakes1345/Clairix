@@ -438,16 +438,26 @@ object CommsRepository {
      * message", with no sender, since nothing can be opened yet.
      */
     private fun keepForUnlock(envelope: RelayClient.Envelope): Boolean {
-        try {
+        val fresh = try {
             lockedInbox.put(envelope)
         } catch (e: Exception) {
             CommsLog.add("Envelope ${shortId(envelope.id)} left on the relay: it could not be kept until unlock (${e.message})")
             return false
         }
-        when (envelope.alert) {
+        // The live connection and the locked inbox fetch can both bring the
+        // same envelope; only the first copy rings.
+        if (fresh && Vault.sealed.value) when (envelope.alert) {
             RelayClient.ALERT_CALL -> if (System.currentTimeMillis() - envelope.ts < LOCKED_RING_MS) CommsNotifications.lockedCall(appContext)
             RelayClient.ALERT_SOS -> CommsNotifications.lockedSos(appContext)
             else -> CommsNotifications.lockedMessages(appContext, lockedInbox.count())
+        }
+        // The phone was unlocked while this was being kept, perhaps after the
+        // unlock had read what was waiting: it is read now, not at the next
+        // unlock, and anything that stood in for it goes.
+        if (!Vault.sealed.value) scope.launch {
+            CommsNotifications.cancelLocked(appContext)
+            readLockedInbox()
+            CallManager.stopLockedRing()
         }
         return true
     }
