@@ -328,18 +328,24 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         get() = identity.publicBundle().let { CommsWire.Sender(number, label, it.ed25519, it.curve25519, it.sealing, it.signature) }
 
     /**
-     * [call] to the relay, waiting out its rate limit the way the app does
-     * (the Retry-After it sends) rather than giving up: a peer that sends as
-     * often as the soak test's is over the relay's 30 lookups a minute, and
-     * over what one relay may forward to one recipient on another.
+     * [call] to the relay, retried the way the app retries rather than given
+     * up on: a rate limit waited out for the Retry-After it sends (a peer that
+     * sends as often as the soak test's is over the relay's 30 lookups a
+     * minute, and over what one relay may forward to one recipient on
+     * another), and a relay that did not answer, or a relay it forwards to
+     * that did not ("The other relay did not answer", 502), tried again after
+     * a growing pause. The app drops an envelope that arrives twice.
      */
     private fun <T> politely(call: () -> T): T {
-        repeat(4) {
+        repeat(6) { attempt ->
             try {
                 return call()
             } catch (e: RelayException) {
-                if (e.code != 429) throw e
-                Thread.sleep((e.retryAfterSec ?: 30) * 1000)
+                when {
+                    e.code == 429 -> Thread.sleep((e.retryAfterSec ?: 30) * 1000)
+                    e.code == 0 || e.code >= 500 -> Thread.sleep(2_000L shl attempt)
+                    else -> throw e
+                }
             }
         }
         return call()
@@ -388,12 +394,12 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         val deadline = System.currentTimeMillis() + timeoutMs
         while (true) {
             waiting.firstOrNull(matches)?.let { waiting.remove(it); return it }
-            val envelopes = relay.inbox()
+            val envelopes = politely { relay.inbox() }
             for (env in envelopes) {
                 val d = identity.decrypt(env.data)
                 CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
             }
-            if (envelopes.isNotEmpty()) relay.ack(envelopes.map { it.id })
+            if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
             if (System.currentTimeMillis() > deadline) {
                 throw AssertionError("$label: nothing matching arrived within ${timeoutMs / 1000} s; got ${waiting.map { CommsWire.type(it) }}")
             }
@@ -405,12 +411,12 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
     fun drain(ms: Long): List<JSONObject> {
         val deadline = System.currentTimeMillis() + ms
         while (System.currentTimeMillis() < deadline) {
-            val envelopes = relay.inbox()
+            val envelopes = politely { relay.inbox() }
             for (env in envelopes) {
                 val d = identity.decrypt(env.data)
                 CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
             }
-            if (envelopes.isNotEmpty()) relay.ack(envelopes.map { it.id })
+            if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
             Thread.sleep(400)
         }
         return waiting.toList().also { waiting.clear() }
