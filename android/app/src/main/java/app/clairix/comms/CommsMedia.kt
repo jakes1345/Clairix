@@ -80,6 +80,23 @@ object CommsMedia {
                 else if (f.name.startsWith("vm_") && f.stale()) f.delete()
             }
             File(cache, "camera").listFiles()?.forEach { if (it.isFile && it.stale()) it.delete() }
+            // Exported reports (current position, a timeline with places) are
+            // kept a day for the app they were shared to, then go: not only when
+            // the next report happens to be exported.
+            val reportCutoff = System.currentTimeMillis() - app.clairix.analysis.Report.EXPORT_RETENTION_MS
+            File(cache, "reports").listFiles()?.forEach { if (it.isFile && it.lastModified() < reportCutoff) it.delete() }
+        }
+    }
+
+    /**
+     * Deletes the plaintext copies made to play a video or a voice note: on lock,
+     * so what was on screen does not wait on disk, unencrypted, for the next start.
+     */
+    fun dropPlayCopies(context: Context) {
+        val cache = context.applicationContext.cacheDir
+        runCatching {
+            File(cache, "comms_media_play").listFiles()?.forEach { it.delete() }
+            cache.listFiles()?.forEach { f -> if (f.isFile && f.name.startsWith("vm_play_") && f.name.endsWith(".amr")) f.delete() }
         }
     }
 

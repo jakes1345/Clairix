@@ -256,7 +256,17 @@ object Registry {
     /** True from the moment an SOS is sent until it is cleared. */
     private val _panicActive = MutableStateFlow(false)
     val panicActive: StateFlow<Boolean> = _panicActive.asStateFlow()
-    fun setPanicActive(active: Boolean) { _panicActive.value = active }
+    /**
+     * Whether the SOS being raised is a covert one (the duress phrase): sent all
+     * the same, but leaving nothing on this phone that says it was, for whoever
+     * makes the owner unlock it afterwards.
+     */
+    @Volatile var panicCovert: Boolean = false
+        private set
+    fun setPanicActive(active: Boolean, covert: Boolean = false) {
+        if (active) panicCovert = covert
+        _panicActive.value = active
+    }
 
     // --- Platform hardening ----------------------------------------------------
     //

@@ -6,11 +6,12 @@ import app.clairix.Registry
 import app.clairix.ScanService
 import app.clairix.TimelineLog
 import app.clairix.analysis.LocationHistory
+import app.clairix.nav.MapTiles
 import java.util.concurrent.TimeUnit
 
 /**
  * How long the scanner's history is kept: the location log, the timeline, the
- * vehicle trips and the unlock ledger.
+ * vehicle trips, the unlock ledger and the map's tile cache.
  *
  * A seized phone gives up what is on it, however well sealed, once it is
  * unlocked under compulsion; what was deleted last month cannot be given up at
@@ -57,6 +58,7 @@ object HistoryRetention {
         runCatching { LocationHistory.pruneOlderThan(app, cutoff) }
         runCatching { ScanService.pruneTripsOlderThan(app, cutoff) }
         runCatching { UnlockLedger.pruneOlderThan(cutoff) }
+        runCatching { MapTiles.prune(app, cutoff) }
         runCatching {
             val log = TimelineLog.get(app)
             if (log.pruneOlderThan(cutoff) > 0) Registry.publishTimeline(log.snapshot())

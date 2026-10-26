@@ -291,6 +291,23 @@ class RelayClient(
 
     fun wipe() { signed("DELETE", "/v1/me") }
 
+    /**
+     * The account deletion, signed now, to be sent with [sendPrepared] after the
+     * keys that sign it are gone: a wipe destroys them first and asks the relay
+     * last, so the network never holds up what is erased on the phone. The
+     * relay accepts it for its five-minute window.
+     */
+    fun preparedWipe(): Request? = runCatching {
+        val builder = signedRequest("DELETE", "/v1/me", null)
+        val signing = builder.build().tag(Signing::class.java) ?: return@runCatching null
+        sign(builder, signing).tag(Signing::class.java, null).build()
+    }.getOrNull()
+
+    /** Sends a request [preparedWipe] made, on a connection of its own, waiting at most [timeoutSec]. */
+    fun sendPrepared(request: Request, timeoutSec: Long) {
+        runCatching { anonymousClient(timeoutSec).newCall(request).execute().close() }
+    }
+
     // ── Contacts and envelopes ────────────────────────────────────────────
 
     /**

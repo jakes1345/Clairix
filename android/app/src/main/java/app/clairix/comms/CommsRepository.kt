@@ -302,7 +302,8 @@ object CommsRepository {
         scope.launch {
             Registry.panicActive.collect { active ->
                 if (!active) return@collect
-                runCatching { broadcastPanic() }.onFailure { CommsLog.add("SOS could not be sent: ${it.message}") }
+                val covert = Registry.panicCovert
+                runCatching { broadcastPanic(covert) }.onFailure { if (!covert) CommsLog.add("SOS could not be sent: ${it.message}") }
                 Registry.setPanicActive(false)
             }
         }
@@ -464,6 +465,11 @@ object CommsRepository {
     }
 
     /** Deletes the mailbox on the relay (best effort) and everything local. */
+    /** The relay's account deletion, signed now for a wipe to send once the phone is erased (see [RelayClient.preparedWipe]). */
+    fun preparedRelayWipe(): okhttp3.Request? = if (initialised && config.isRegistered) relay.preparedWipe() else null
+
+    fun sendRelayWipe(request: okhttp3.Request, timeoutSec: Long) = relay.sendPrepared(request, timeoutSec)
+
     suspend fun unpair() = withContext(Dispatchers.IO) {
         lock.withLock {
             setBusy(true)
@@ -1544,31 +1550,33 @@ object CommsRepository {
      * per member. Nothing is queued: a group payload is sent once, and the
      * caller decides what a complete failure means.
      */
-    private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject): Int {
+    private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): Int {
+        // A covert SOS leaves no line in the comms log, failures included.
+        val log: (String) -> Unit = if (quiet) { _ -> } else CommsLog::add
         var sent = 0
         for (m in members) {
             val contact = store.contact(m.number)
             if (contact == null) {
-                CommsLog.add("$what to ${memberLabel(m)} not sent: they are not a contact on this phone")
+                log("$what to ${memberLabel(m)} not sent: they are not a contact on this phone")
                 continue
             }
             if (!isGroupMember(contact, m.ed25519)) {
                 // Someone else holds this number on another relay: the group's
                 // messages go to the member the group knows, never to a number.
-                CommsLog.add("$what to ${memberLabel(m)} not sent: the contact with that number is not the person this group knows")
+                log("$what to ${memberLabel(m)} not sent: the contact with that number is not the person this group knows")
                 continue
             }
             when (val d = deliver(contact, payload)) {
                 Deliver.Sent -> sent++
-                is Deliver.Failed -> CommsLog.add("$what to ${memberLabel(m)} failed: ${d.reason}")
-                is Deliver.TooLarge -> CommsLog.add("$what to ${memberLabel(m)} failed: ${d.reason}")
+                is Deliver.Failed -> log("$what to ${memberLabel(m)} failed: ${d.reason}")
+                is Deliver.TooLarge -> log("$what to ${memberLabel(m)} failed: ${d.reason}")
                 is Deliver.Offline -> {
                     val id = payload.optString(CommsWire.F_ID)
                     val type = payload.optString(CommsWire.F_TYPE)
                     if (type in MESH_TYPES && id.isNotEmpty() && meshQueue(contact, payload, id)) {
-                        CommsLog.add("$what to ${memberLabel(m)} is in the offline mesh: the relay is not reachable (${d.reason})")
+                        log("$what to ${memberLabel(m)} is in the offline mesh: the relay is not reachable (${d.reason})")
                     } else {
-                        CommsLog.add("$what to ${memberLabel(m)} not sent: ${d.reason}")
+                        log("$what to ${memberLabel(m)} not sent: ${d.reason}")
                     }
                 }
             }
@@ -1737,30 +1745,30 @@ object CommsRepository {
     }
 
     /** Sends an SOS to every member of [gid], with this phone's position when it has one. */
-    suspend fun sendPanic(gid: String, lat: Double?, lon: Double?, note: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun sendPanic(gid: String, lat: Double?, lon: Double?, note: String? = null, covert: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
             val ctx = groupContext(gid)
             val id = UUID.randomUUID().toString()
             val ts = System.currentTimeMillis()
             val text = note?.trim()?.take(MAX_PANIC_NOTE)
-            val sent = fanOut("SOS", ctx.others(), CommsWire.panic(gid, id, ts, lat, lon, text))
-            CommsLog.add("SOS sent to \"${ctx.group.name}\": $sent of ${ctx.others().size} member(s) reached" + if (lat == null || lon == null) " (no position)" else "")
+            val sent = fanOut("SOS", ctx.others(), CommsWire.panic(gid, id, ts, lat, lon, text), quiet = covert)
+            if (!covert) CommsLog.add("SOS sent to \"${ctx.group.name}\": $sent of ${ctx.others().size} member(s) reached" + if (lat == null || lon == null) " (no position)" else "")
             if (sent == 0 && ctx.others().isNotEmpty()) throw RelayException("No member of \"${ctx.group.name}\" could be reached")
             Unit
         }
     }
 
     /** The SOS was raised: to every group, with the last known position. */
-    private suspend fun broadcastPanic() {
+    private suspend fun broadcastPanic(covert: Boolean) {
         if (!config.isRegistered) return
         val groups = store.groups()
         if (groups.isEmpty()) {
-            CommsLog.add("SOS raised, but this phone is in no group to send it to")
+            if (!covert) CommsLog.add("SOS raised, but this phone is in no group to send it to")
             return
         }
         val s = Registry.status.value
-        for (g in groups) sendPanic(g.id, s.lat, s.lon, null)
+        for (g in groups) sendPanic(g.id, s.lat, s.lon, null, covert)
     }
 
     private fun expireSharedThreats() {

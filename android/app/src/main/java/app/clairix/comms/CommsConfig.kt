@@ -33,9 +33,9 @@ class CommsConfig(context: Context) {
     /**
      * Whether notifications say only that something arrived, naming no contact
      * and quoting nothing: for a phone that is sometimes in other hands while
-     * unlocked. Until the owner chooses, it follows the passcode: set, hide.
+     * unlocked. Hidden until the owner chooses to show them.
      */
-    fun hidePreviews(passcodeSet: Boolean): Boolean = prefs.getBoolean(KEY_HIDE_PREVIEWS, passcodeSet)
+    fun hidePreviews(): Boolean = prefs.getBoolean(KEY_HIDE_PREVIEWS, true)
 
     fun setHidePreviews(hide: Boolean) { prefs.edit().putBoolean(KEY_HIDE_PREVIEWS, hide).apply() }
 

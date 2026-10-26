@@ -2,17 +2,9 @@ package app.clairix.security
 
 import android.content.Context
 import android.util.Base64
-import app.clairix.EventKind
 import app.clairix.Registry
-import app.clairix.Severity
-import app.clairix.TimelineEvent
-import app.clairix.TimelineLog
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.KeystoreBox
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import java.security.MessageDigest
 
 /**
@@ -21,16 +13,15 @@ import java.security.MessageDigest
  * sees a normal chat; underneath, the SOS fires with the last known position.
  *
  * The phrase is kept encrypted under the comms Keystore key ([KeystoreBox]) and
- * compared in memory only. It is never written to a log, a toast, a
- * notification or the timeline — the timeline entry says only that the SOS was
- * triggered this way.
+ * compared in memory only. Neither it nor the SOS it raises is written to a
+ * log, a toast, a notification or the timeline: a captor who later makes the
+ * owner unlock the phone finds no sign that help was called.
  */
 object DuressPhrase {
 
     private const val PREFS = "duress"
     private const val KEY_PHRASE = "phrase_enc"
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** The decrypted, normalised phrase, held after the first check so the Keystore is not hit per message. */
     @Volatile
@@ -119,9 +110,8 @@ object DuressPhrase {
     }
 
     /**
-     * Checks [body] and, on a match, raises the SOS: [Registry.setPanicActive]
-     * with the last known location from [Registry.status], and a PANIC entry on
-     * the timeline. Returns whether it fired.
+     * Checks [body] and, on a match, raises a covert SOS ([Registry.setPanicActive]):
+     * sent with the last known location, recorded nowhere. Returns whether it fired.
      */
     fun checkAndTrigger(body: String, context: Context): Boolean {
         if (!check(body, context)) return false
@@ -143,26 +133,10 @@ object DuressPhrase {
     }
 
     private fun trigger(app: Context) {
-        val s = Registry.status.value
-        val lat = s.lat
-        val lon = s.lon
-        Registry.setPanicActive(true)
-        scope.launch {
-            val now = System.currentTimeMillis()
-            TimelineLog.record(
-                app,
-                TimelineEvent(
-                    id = "panic_duress@$now",
-                    kind = EventKind.PANIC,
-                    ts = now,
-                    title = "SOS triggered by duress phrase",
-                    detail = if (lat != null && lon != null) "Last known position attached" else "No GPS fix to attach",
-                    severity = Severity.CRITICAL,
-                    lat = lat, lon = lon
-                ),
-                dedupeKey = "panic_duress"
-            )
-        }
+        // Sent to every group like the SOS button's, and recorded nowhere on this
+        // phone: no timeline entry, no line in the comms log. Whoever makes the
+        // owner unlock the phone afterwards must not find that help was called.
+        Registry.setPanicActive(true, covert = true)
     }
 
     private fun load(context: Context): String? {

@@ -45,6 +45,10 @@ object KeystoreBox {
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").also { it.load(null) }
         (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey?.let { return it }
+        // During a wipe the key is gone on purpose: a write still in flight (the
+        // comms log, a preference) must fail, not seal itself under a new key
+        // that would outlive the wipe.
+        check(!app.clairix.security.Wiper.isActive) { "Wiping" }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(
             KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -55,6 +59,15 @@ object KeystoreBox {
         )
         return generator.generateKey()
     }
+
+    /**
+     * Whether the key exists, asked without making one. Null when the Keystore
+     * could not be asked (it does fail now and then, after an update on some
+     * phones): a caller must then not take the key for gone.
+     */
+    fun exists(): Boolean? = runCatching {
+        KeyStore.getInstance("AndroidKeyStore").also { it.load(null) }.containsAlias(KEY_ALIAS)
+    }.getOrNull()
 
     /** Deletes the key; every blob encrypted under it becomes unreadable. Used on unpair. */
     @Synchronized
