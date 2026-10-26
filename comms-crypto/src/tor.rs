@@ -406,30 +406,50 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let body = rt.block_on(async {
-            let mut s = TcpStream::connect(("127.0.0.1", proxy.socks_port())).await.unwrap();
-            assert_eq!(greet(&mut s, b"u", b"p").await, vec![0x01, 0x00]);
-            let host = "check.torproject.org";
-            let mut req = vec![SOCKS5, CMD_CONNECT, 0, ATYP_DOMAIN, host.len() as u8];
-            req.extend_from_slice(host.as_bytes());
-            req.extend_from_slice(&443u16.to_be_bytes());
-            s.write_all(&req).await.unwrap();
-            let mut answer = [0u8; 10];
-            s.read_exact(&mut answer).await.unwrap();
-            assert_eq!(answer[1], REPLY_OK, "the proxy could not connect");
-            let mut roots = tokio_rustls::rustls::RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let tls = tokio_rustls::rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
-            let connector = tokio_rustls::TlsConnector::from(Arc::new(tls));
-            let name = tokio_rustls::rustls::pki_types::ServerName::try_from(host).unwrap();
-            let mut s = connector.connect(name, s).await.unwrap();
-            s.write_all(b"GET /api/ip HTTP/1.0\r\nHost: check.torproject.org\r\n\r\n").await.unwrap();
-            let mut body = String::new();
-            let _ = s.read_to_string(&mut body).await;
-            body
-        });
+        // Each stream takes a circuit of its own, so a try that meets an exit
+        // relay that drops the connection (some do: "tls handshake eof") is
+        // followed by one through another exit, as any Tor client does.
+        let port = proxy.socks_port();
+        let mut failures = Vec::new();
+        let mut body = None;
+        for _ in 0..3 {
+            match rt.block_on(ask_check_torproject(port)) {
+                Ok(b) => {
+                    body = Some(b);
+                    break;
+                }
+                Err(e) => failures.push(e),
+            }
+        }
         proxy.stop();
         let _ = std::fs::remove_dir_all(&dir);
+        let body = body.unwrap_or_else(|| panic!("no request got through Tor in three tries: {failures:?}"));
         assert!(body.contains("\"IsTor\":true"), "not from Tor: {body}");
+    }
+
+    /// GET https://check.torproject.org/api/ip through the proxy on [port]: the body, or what went wrong.
+    async fn ask_check_torproject(port: u16) -> Result<String, String> {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.map_err(|e| format!("proxy: {e}"))?;
+        assert_eq!(greet(&mut s, b"u", b"p").await, vec![0x01, 0x00]);
+        let host = "check.torproject.org";
+        let mut req = vec![SOCKS5, CMD_CONNECT, 0, ATYP_DOMAIN, host.len() as u8];
+        req.extend_from_slice(host.as_bytes());
+        req.extend_from_slice(&443u16.to_be_bytes());
+        s.write_all(&req).await.map_err(|e| format!("request: {e}"))?;
+        let mut answer = [0u8; 10];
+        s.read_exact(&mut answer).await.map_err(|e| format!("reply: {e}"))?;
+        if answer[1] != REPLY_OK {
+            return Err(format!("the proxy could not connect: reply {}", answer[1]));
+        }
+        let mut roots = tokio_rustls::rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let tls = tokio_rustls::rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(tls));
+        let name = tokio_rustls::rustls::pki_types::ServerName::try_from(host).unwrap();
+        let mut s = connector.connect(name, s).await.map_err(|e| format!("tls: {e}"))?;
+        s.write_all(b"GET /api/ip HTTP/1.0\r\nHost: check.torproject.org\r\n\r\n").await.map_err(|e| format!("write: {e}"))?;
+        let mut body = String::new();
+        let _ = s.read_to_string(&mut body).await;
+        Ok(body)
     }
 }
