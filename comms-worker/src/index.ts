@@ -40,11 +40,16 @@ import {
   forward,
   isLoopbackDev,
   isOwnOrigin,
+  KEY_FETCHES_BURST,
+  KEY_FETCHES_PER_MINUTE,
+  keyFetchFailedRecently,
+  noteKeyFetchFailed,
   parseFederated,
   policyName,
   RELAY_KEY_REFETCH_MS,
   RELAY_KEY_TTL_MS,
   relayKey,
+  RELAY_IDENTITY_NAME,
   relayOrigin,
   verifyFederated,
 } from "./federation";
@@ -243,7 +248,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
     const body = parseLookupBody(bodyText, isLoopbackDev(request));
-    return answerLookup(env, body.target, body.pin, body.claim, () => other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST));
+    return answerLookup(env, body.target, body.pin, body.claim, async () => body.oneTime && (await other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST)));
   }
 
   // ── Authenticated ─────────────────────────────────────────────────────
@@ -364,7 +369,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       // question as itself, so the other relay never learns who is asking.
       const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
       if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
-      const res = await forward(env, request, body.relay, "/v1/federate/lookup", { number: body.target, pin: body.pin, claim: body.claim });
+      // The phone's own limits on one-time keys hold for contacts elsewhere
+      // too; past them, the other relay is asked for the fallback key only.
+      const oneTime = body.claim && (await me.mayClaimFrom(`${body.relay} ${body.target}`));
+      const res = await forward(env, request, body.relay, "/v1/federate/lookup", { number: body.target, pin: body.pin, claim: body.claim, oneTime });
       if (res.status !== 200) throw otherRelayError(res);
       if (body.claim) {
         const bundle = checkedBundle(res.json.bundle, body.target);
@@ -436,24 +444,31 @@ async function route(request: Request, env: Env): Promise<Response> {
     const amount = coinAmount(body.amount);
     const note = coinNote(body.note);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
-    // Whether a number exists is not told to anyone; a payment to one that does not is refused like any other.
-    if (!(await them.profile())) throw new HttpError(400, "Payment refused");
     // The phone names the payment, so a request it had to repeat (the answer
     // lost on the network) is the same payment: the debit and the credit are
     // each made once per txid, and a repeat gets the balance as it stands.
     const txid = typeof body.txid === "string" && TXID_RE.test(body.txid) ? body.txid.toLowerCase() : crypto.randomUUID();
+    // The debit comes first, so a payer who cannot cover the amount hears the
+    // same thing whether or not the number exists: an unlisted number cannot
+    // be found by paying it what one does not have. Only a payment that would
+    // really have gone through tells the payer the number is real.
     const debited = await me.debit(to, amount, txid, note);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
     try {
+      if (!(await them.profile())) {
+        await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
+        throw new HttpError(400, "Payment refused");
+      }
       await them.credit(profile.number, amount, txid, note);
     } catch (e) {
+      if (e instanceof HttpError) throw e;
       // The sender has paid and the recipient has not been credited: give the
       // coins back. If even that fails the error is logged with the txid, so
       // the operator can put it right by hand.
       try {
         await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
       } catch (refund) {
-        console.error(`coin payment ${txid} from ${profile.number} to ${to} for ${amount}: credit failed and so did the refund`, e, refund);
+        console.error(`coin payment ${txid} for ${amount}: credit failed and so did the refund`, e, refund);
       }
       throw e;
     }
@@ -659,12 +674,14 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
   }
 
   if (path === "/v1/traffic/report/vote" && request.method === "POST") {
-    await spendToken(env, request, "traffic");
     const body = parseJson<{ region?: unknown; trip?: unknown; id?: unknown; still?: unknown }>(bodyText);
     const region = trafficRegion(body.region);
     const trip = tripPseudonym(body.trip);
     if (typeof body.id !== "string" || !INCIDENT_ID_RE.test(body.id)) throw new HttpError(400, "id must be an incident id");
     if (typeof body.still !== "boolean") throw new HttpError(400, "still must be a boolean");
+    // A trip is whatever name the phone gives it, so one phone can be many
+    // voters; voting a report away costs a report token, which are scarce.
+    await spendToken(env, request, body.still ? "traffic" : "report");
     const incident = await regionStub(region).vote(region, trip, body.id, body.still, now);
     return json({ incident });
   }
@@ -860,6 +877,9 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
   const curve25519 = body.curve25519 as string;
   const sealing = body.sealing as string;
   const signature = body.signature as string;
+  for (const [field, key] of [["ed25519", ed25519], ["curve25519", curve25519], ["sealing", sealing]] as const) {
+    if (keySpellings(key) === null) throw new HttpError(400, `${field} must be a 32-byte key in standard base64`);
+  }
 
   const bodySig = request.headers.get("x-clairix-sig") ?? "";
   if (!(await verifyEd25519(ed25519, bodyText, bodySig))) throw new HttpError(401, "Body signature does not match ed25519");
@@ -920,6 +940,7 @@ async function checkedKeys(ed25519: string, raw: unknown): Promise<SignedKey[]> 
     if (typeof k.id !== "string" || typeof k.key !== "string" || typeof k.signature !== "string") {
       throw new HttpError(400, "each key needs id, key and signature");
     }
+    if (k.id.length > 64 || k.key.length > 64 || k.signature.length > 128) throw new HttpError(400, "key fields too long");
     if (!(await verifyEd25519(ed25519, k.key, k.signature))) throw new HttpError(400, `key ${k.id} is not signed by ed25519`);
     out.push({ id: k.id, key: k.key, signature: k.signature });
   }
@@ -957,24 +978,52 @@ const MAX_BODY_BYTES = 256 * 1024;
  */
 async function claimKeys(env: Env, profile: Profile, strict: boolean): Promise<boolean> {
   const claimed: string[] = [];
-  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
-    const name = `key:${await sha256Hex(key)}`;
+  for (const name of await keyRecordNames(profile)) {
     if (await env.MAILBOX.get(env.MAILBOX.idFromName(name)).claimKey(profile.number)) {
       claimed.push(name);
     } else if (strict) {
       for (const done of claimed) await env.MAILBOX.get(env.MAILBOX.idFromName(done)).releaseKey(profile.number);
       return false;
     } else {
-      console.error(`a key already registered to another number was found while recording ${profile.number}'s keys`);
+      console.error("a key already registered to another number was found while recording an account's keys");
     }
   }
   return true;
 }
 
 async function releaseKeys(env: Env, profile: Profile): Promise<void> {
-  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
-    await env.MAILBOX.get(env.MAILBOX.idFromName(`key:${await sha256Hex(key)}`)).releaseKey(profile.number);
+  for (const name of await keyRecordNames(profile)) {
+    await env.MAILBOX.get(env.MAILBOX.idFromName(name)).releaseKey(profile.number);
   }
+}
+
+/**
+ * The objects that record [profile]'s keys as its own: one per spelling of
+ * each key. Records were first named after the key as sent, which is one of
+ * the two spellings, so an account from then still holds its records.
+ */
+async function keyRecordNames(profile: Profile): Promise<string[]> {
+  const names: string[] = [];
+  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
+    for (const spelling of keySpellings(key) ?? [key]) names.push(`key:${await sha256Hex(spelling)}`);
+  }
+  return names;
+}
+
+/**
+ * The two spellings of a 32-byte key in standard base64, without padding and
+ * with it, when [key] is one of them; otherwise null. Decoding forgives a
+ * good deal (URL-safe letters, whitespace, bits past the last byte), and
+ * every forgiven variant would be the same key under a name no record covers.
+ */
+export function keySpellings(key: string): [string, string] | null {
+  if (!/^[A-Za-z0-9+/]{43}=?$/.test(key)) return null;
+  let bin: string;
+  try { bin = atob(key.endsWith("=") ? key : `${key}=`); } catch { return null; }
+  if (bin.length !== 32) return null;
+  const padded = btoa(bin);
+  const unpadded = padded.slice(0, -1);
+  return key === padded || key === unpadded ? [unpadded, padded] : null;
 }
 
 /**
@@ -1037,11 +1086,13 @@ interface LookupBody {
   target: string;
   pin: string | null;
   claim: boolean;
+  /** From another relay: false when its phone is past its own limit for one-time keys, so the fallback key is offered instead. */
+  oneTime: boolean;
   relay: string | null;
 }
 
 function parseLookupBody(bodyText: string, loopback = false): LookupBody {
-  const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown; relay?: unknown }>(bodyText);
+  const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown; oneTime?: unknown; relay?: unknown }>(bodyText);
   const target = typeof body.number === "string" ? normaliseNumber(body.number) : null;
   if (!target) throw new HttpError(400, "number must be a Clairix number");
   let pin: string | null = null;
@@ -1050,7 +1101,8 @@ function parseLookupBody(bodyText: string, loopback = false): LookupBody {
     pin = body.pin;
   }
   if (body.claim !== undefined && typeof body.claim !== "boolean") throw new HttpError(400, "claim must be a boolean");
-  return { target, pin, claim: body.claim !== false, relay: parseRelayField(body.relay, loopback) };
+  if (body.oneTime !== undefined && typeof body.oneTime !== "boolean") throw new HttpError(400, "oneTime must be a boolean");
+  return { target, pin, claim: body.claim !== false, oneTime: body.oneTime !== false, relay: parseRelayField(body.relay, loopback) };
 }
 
 function parseRelayField(value: unknown, loopback: boolean): string | null {
@@ -1118,8 +1170,17 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
   const now = Date.now();
   let cached = await box.federationKey();
   const refresh = async (): Promise<boolean> => {
+    // Nothing about the request has been checked yet but its shape, so the
+    // address it names is fetched sparingly: not again soon after a failure,
+    // and within one allowance for the whole relay.
+    if (keyFetchFailedRecently(req.origin)) return false;
+    const allowed = await env.MAILBOX.get(env.MAILBOX.idFromName(RELAY_IDENTITY_NAME)).rateOk("key-fetch", KEY_FETCHES_PER_MINUTE, KEY_FETCHES_BURST);
+    if (!allowed.ok) throw new HttpError(503, "Too many new relays at once; try again shortly", allowed.retryAfter);
     const key = await fetchRelayKey(req.origin);
-    if (!key) return false;
+    if (!key) {
+      noteKeyFetchFailed(req.origin);
+      return false;
+    }
     await box.setFederationKey(key);
     cached = { key, fetchedAt: Date.now() };
     return true;

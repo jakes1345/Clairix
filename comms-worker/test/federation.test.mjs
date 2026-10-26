@@ -3,7 +3,7 @@
 // Run with `npm test`.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { advance, makePhone, makeRelay, network, resetClock } from "./harness/fake-env.mjs";
+import { advance, makePhone, makeRelay, mockFetch, network, resetClock } from "./harness/fake-env.mjs";
 import { federationPayload, federationPolicy, relayOrigin } from "../src/federation.ts";
 
 afterEach(() => resetClock());
@@ -44,8 +44,9 @@ function sendVia(phone, token, to, relay, extra = {}) {
 test("relay addresses: https origins with a host name only", () => {
   assert.equal(relayOrigin("https://relay.example.org"), "https://relay.example.org");
   assert.equal(relayOrigin("https://Relay.Example.org/"), "https://relay.example.org");
-  assert.equal(relayOrigin("https://relay.example.org:8443"), "https://relay.example.org:8443");
-  for (const bad of ["http://relay.example.org", "https://relay.example.org/v1", "https://relay.example.org?x=1", "https://u:p@relay.example.org",
+  assert.equal(relayOrigin("https://relay.example.org:443"), "https://relay.example.org", "the default port is the same address");
+  for (const bad of ["https://relay.example.org:8443", "https://relay.example.org.", "https://localhost.", "https://metadata.internal.",
+    "http://relay.example.org", "https://relay.example.org/v1", "https://relay.example.org?x=1", "https://u:p@relay.example.org",
     "https://10.0.0.1", "https://[::1]", "https://localhost", "https://box.local", "ftp://relay.example.org", "relay.example.org", "", 7, null]) {
     assert.equal(relayOrigin(bad), null, String(bad));
   }
@@ -532,5 +533,37 @@ test("a mailbox at its limits for other relays answers them as a number that doe
     assert.equal((await carol.send(t2, bob.number)).status, 413);
   } finally {
     net.restore();
+  }
+});
+
+test("an address that served no key is not fetched again for a while, and other relays' answers are read only so far", async () => {
+  resetClock();
+  const relay = makeRelay();
+  await relay.call("GET", "/");
+  const m = mockFetch(() => new Response("nope", { status: 404 }));
+  try {
+    for (let i = 0; i < 5; i++) {
+      const r = await relay.call("POST", "/v1/federate/send", {
+        body: "{}",
+        headers: { "x-clairix-relay": "https://nokey.example.org", "x-clairix-relay-ts": String(Date.now()),
+          "x-clairix-relay-nonce": "aaaaaaaaaaaaaaaa" + i, "x-clairix-relay-sig": "x" },
+      });
+      assert.equal(r.status, 401);
+    }
+  } finally {
+    m.restore();
+  }
+  assert.equal(m.calls.length, 1, "fetched once, then remembered as failed");
+  // A key answer far larger than any key is not read to the end.
+  const huge = mockFetch(() => new Response(JSON.stringify({ relayKey: "A".repeat(100_000) }), { status: 200 }));
+  try {
+    const r = await relay.call("POST", "/v1/federate/send", {
+      body: "{}",
+      headers: { "x-clairix-relay": "https://bigkey.example.org", "x-clairix-relay-ts": String(Date.now()),
+        "x-clairix-relay-nonce": "bbbbbbbbbbbbbbbbbb", "x-clairix-relay-sig": "x" },
+    });
+    assert.equal(r.status, 401);
+  } finally {
+    huge.restore();
   }
 });

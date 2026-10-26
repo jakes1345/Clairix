@@ -352,6 +352,22 @@ export const HIGH_WATER_SHARE = 0.8;
 export interface UpstreamUsage {
   globalCount: number;
   cap: number;
+  /** How much of [cap] may be used by now: see [pacedCap]. Defaults to [cap]. */
+  paced?: number;
+}
+
+/**
+ * A daily cap spread over the day: by any moment, the share of the day gone
+ * plus [PACE_LEAD_SEC] of headroom. The requests arrive anonymously, so
+ * nothing ties them to one phone; pacing is what keeps a burst from any one
+ * of them (or a few) spending the whole day's cap in an hour and leaving
+ * everyone else without traffic until midnight UTC.
+ */
+export const PACE_LEAD_SEC = 3 * 3600;
+
+export function pacedCap(cap: number, now: number): number {
+  const intoDay = now - utcDay(now) * 86400;
+  return Math.min(cap, Math.ceil((cap * (intoDay + PACE_LEAD_SEC)) / 86400));
 }
 
 export function highWater(u: UpstreamUsage): boolean {
@@ -364,7 +380,7 @@ export function highWater(u: UpstreamUsage): boolean {
  * usable result) stands in the way.
  */
 export function upstreamGate(u: UpstreamUsage, hasUsable: boolean): "fetch" | "cap" | "limited" {
-  if (u.globalCount >= u.cap) return "cap";
+  if (u.globalCount >= (u.paced ?? u.cap)) return "cap";
   if (hasUsable && highWater(u)) return "limited";
   return "fetch";
 }
@@ -463,7 +479,7 @@ export function planUpstream(
     if (hw && usage.globalCount < usage.cap && staleUsable(row, now)) out.set(t.key, "limited");
     else eligible.push(t);
   }
-  const capLeft = Math.max(0, usage.cap - usage.globalCount);
+  const capLeft = Math.max(0, (usage.paced ?? usage.cap) - usage.globalCount);
   const budget = Math.min(perRequest, capLeft);
   const picked = new Set(pickTilesToFetch(eligible, rows, bbox, now, budget));
   // Why the tiles left over were left over: the cap, or just this request's share.

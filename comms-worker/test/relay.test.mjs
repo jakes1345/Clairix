@@ -660,7 +660,8 @@ test("an account from before keys were recorded has them recorded on its next re
   for (const [name] of relay.env.MAILBOX.objects) if (name.startsWith("key:")) relay.env.MAILBOX.objects.delete(name);
   await alice.signed("GET", "/v1/me");
   assert.equal(relay.env.MAILBOX.storageOf(alice.number).get("profile").keysClaimed, true);
-  assert.equal([...relay.env.MAILBOX.objects.keys()].filter((n) => n.startsWith("key:")).length, 3);
+  // Each of the three keys, under both of its spellings.
+  assert.equal([...relay.env.MAILBOX.objects.keys()].filter((n) => n.startsWith("key:")).length, 6);
 });
 
 test("a send to a number that does not exist looks exactly like one that does", async () => {
@@ -673,10 +674,20 @@ test("a send to a number that does not exist looks exactly like one that does", 
   // The token was spent all the same.
   assert.equal((await alice.send(t1, "987654321")).status, 403);
   assert.equal((await alice.send(t2, "987654321")).status, 202);
-  // And a payment to it is refused like any other refused payment.
-  const pay = await alice.signed("POST", "/v1/coin/pay", { to: "987654321", amount: 1 });
-  assert.equal(pay.status, 400);
-  assert.equal(pay.json.error, "Payment refused");
+  // A payer who cannot cover the amount hears the same whether or not the
+  // number exists, so an unlisted number cannot be found by paying it.
+  const bob = await makePhone(relay, { listed: false });
+  for (const to of ["987654321", bob.number]) {
+    const pay = await alice.signed("POST", "/v1/coin/pay", { to, amount: 1 });
+    assert.equal(pay.status, 400);
+    assert.equal(pay.json.error, "Insufficient balance", to);
+  }
+  // One who can is refused for a number that does not exist, and keeps the coins.
+  await relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(alice.number)).setInitialBalance(5);
+  const refused = await alice.signed("POST", "/v1/coin/pay", { to: "987654321", amount: 1 });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.json.error, "Payment refused");
+  assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 5);
 });
 
 test("a body larger than the relay could ever want is refused before anything else", async () => {
@@ -755,4 +766,27 @@ test("the relay names its alternate addresses: https origins only, trimmed, in o
   const info = (await relay.call("GET", "/")).json;
   assert.deepEqual(info.alternates, ["https://door-two.example", "https://clairix-relay.example.workers.dev"]);
   assert.deepEqual((await makeRelay().call("GET", "/")).json.alternates, []);
+});
+
+test("a key registered under one spelling cannot be registered again under another", async () => {
+  resetClock();
+  const relay = makeRelay();
+  const victim = await makePhone(relay);
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const b64 = (u8) => Buffer.from(u8).toString("base64");
+  const sign = async (t) => b64(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(t))));
+  const ed25519 = b64(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+  const register = async (curve25519, sealing) => {
+    const body = JSON.stringify({ ts: Date.now(), secret: "test-enrollment-secret-0123456789", ed25519, curve25519, sealing,
+      signature: await sign(`${curve25519}|${sealing}`), oneTimeKeys: [] });
+    return relay.call("POST", "/v1/register", { body, headers: { "x-clairix-sig": await sign(body), "cf-connecting-ip": "192.0.2.77" } });
+  };
+  const unpadded = (k) => k.replace(/=+$/, "");
+  const urlSafe = (k) => unpadded(k).replace(/\+/g, "-").replace(/\//g, "_");
+  // The other legal spelling is caught by the record under both spellings.
+  assert.equal((await register(unpadded(victim.curve25519), unpadded(victim.sealing))).status, 409);
+  // Any other spelling (URL-safe letters, whitespace) is not a key at all.
+  const k = victim.curve25519.includes("+") || victim.curve25519.includes("/") ? victim.curve25519 : null;
+  if (k) assert.equal((await register(urlSafe(k), victim.sealing)).status, 400);
+  assert.equal((await register(` ${victim.curve25519}`, victim.sealing)).status, 400);
 });
