@@ -515,7 +515,7 @@ class RelayRoundTripTest {
         val bundle = alice.relay.bundle(bob.number!!, fingerprint(bob.keys.ed25519))
         val after = bob.relay.me().oneTimeKeys
         val again = bob.identity.publicBundle().let {
-            uniffi.clairix_comms_crypto.PublicBundle(it.ed25519, it.curve25519, it.sealing, it.signature, null, listOf(bundle.sessionKey))
+            uniffi.clairix_comms_crypto.PublicBundle(it.ed25519, it.curve25519, it.sealing, it.signature, null, null, listOf(bundle.sessionKey))
         }
         assertEquals(after, bob.relay.putKeys(again))
     }

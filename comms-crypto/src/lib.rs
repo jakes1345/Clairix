@@ -41,6 +41,7 @@ use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
@@ -88,6 +89,13 @@ pub enum CryptoError {
     /// this device was asked to start). The app tells the owner.
     #[error("too many sessions in recent use with {peer_curve25519}")]
     SessionLimit { peer_curve25519: String },
+    /// `peer_curve25519` has published a sealing prekey, but the one given is
+    /// missing or too old to seal to. Once a peer is seen with a prekey, an
+    /// envelope is never sealed to them the old way again: that would be a
+    /// downgrade anyone serving their keys could force. The app fetches the
+    /// peer's keys again and retries.
+    #[error("the sealing prekey of {peer_curve25519} is missing or out of date")]
+    StalePrekey { peer_curve25519: String },
     #[error("could not decrypt: {reason}")]
     Decrypt { reason: String },
     #[error("could not encrypt: {reason}")]
@@ -111,6 +119,20 @@ pub struct SignedKey {
     pub signature: String,
 }
 
+/// A signed sealing prekey: the X25519 key envelopes to a device are sealed to
+/// (format 3). The owner replaces it every week and deletes its secret once
+/// nothing can still arrive for it, after which envelopes logged at the relay
+/// can no longer be opened, and who sent each one stays unknown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct SealingPrekey {
+    /// X25519 public key, base64.
+    pub key: String,
+    /// When the owner made it, ms since the epoch, by the owner's clock.
+    pub created_ms: i64,
+    /// The owner's Ed25519 signature over [`prekey_statement`], base64.
+    pub signature: String,
+}
+
 /// Everything another device needs to start a session with this one.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct PublicBundle {
@@ -122,6 +144,8 @@ pub struct PublicBundle {
     pub sealing: String,
     /// Signature over `curve25519 || sealing` by `ed25519`, base64.
     pub signature: String,
+    /// The current sealing prekey; envelopes to this device are sealed to it.
+    pub sealing_prekey: Option<SealingPrekey>,
     /// Fallback key, used when the relay has run out of one-time keys.
     pub fallback: Option<SignedKey>,
     /// One-time keys generated and not yet marked published.
@@ -135,6 +159,10 @@ pub struct PeerKeys {
     pub curve25519: String,
     pub sealing: String,
     pub signature: String,
+    /// Their current sealing prekey, when they publish one (apps from before
+    /// envelope format 3 do not). Envelopes to them are sealed to it.
+    #[uniffi(default = None)]
+    pub sealing_prekey: Option<SealingPrekey>,
 }
 
 /// The result of opening an envelope.
@@ -156,6 +184,10 @@ pub struct Decrypted {
     /// days. Only the sender can cause this, by starting that many sessions;
     /// the app tells the owner.
     pub evicted_recent_session: bool,
+    /// True when the envelope was sealed to one of this device's sealing
+    /// prekeys (format 3): the sender's app knows them. When this device
+    /// holds no prekey of the sender's, it should fetch their keys.
+    pub sealed_to_prekey: bool,
 }
 
 // ── Padding ────────────────────────────────────────────────────────────────
@@ -213,13 +245,61 @@ fn unpad(padded: &[u8]) -> Result<&[u8]> {
 
 // ── Sealed envelope ────────────────────────────────────────────────────────
 
-/// Envelope format 2: signed sender claim, binary inner layout, padded plaintext.
-const ENVELOPE_VERSION: u8 = 2;
-const SEAL_INFO: &[u8] = b"clairix-comms-seal-v2";
-/// Domain separation for the sender's signature over its claim.
+/// Envelope format 2: sealed to the recipient's long-term sealing key, with a
+/// sender claim signed by the sender's Ed25519 key. Still opened, so messages
+/// from apps that predate format 3 arrive; sent only to peers that publish no
+/// sealing prekey.
+const ENVELOPE_V2: u8 = 2;
+const SEAL_INFO_V2: &[u8] = b"clairix-comms-seal-v2";
+/// Domain separation for the format-2 sender signature.
 const SENDER_SIG_CONTEXT: &[u8] = b"clairix-comms-sender-v2";
 
-/// What sits inside the sealed box, in this order:
+/// Envelope format 3: sealed to the recipient's current sealing prekey, which
+/// rotates, with a sender claim authenticated by a MAC both ends can compute.
+///
+/// * Rotating the key the box is sealed to gives the sender's identity forward
+///   secrecy: once the recipient deletes a prekey's secret, envelopes logged at
+///   the relay can no longer be opened, by anyone who later seizes the phone
+///   included. In format 2 the one long-term key opened every envelope ever
+///   sent to it.
+/// * A signature proves to anyone who holds the envelope and the recipient's
+///   key that the sender made it. The MAC is keyed from X25519 between the
+///   sender's long-term sealing key and the recipient's prekey, which both of
+///   them hold: it convinces the recipient, who knows they did not make it, and
+///   proves nothing to anyone else, as Olm's own MACs do not.
+/// * The inside is padded to a multiple of [`INNER_V3_STEP`], so a message that
+///   starts a session (larger) and one that continues it look alike for
+///   anything up to about 480 bytes of text, and seldom differ beyond.
+const ENVELOPE_V3: u8 = 3;
+const SEAL_INFO_V3: &[u8] = b"clairix-comms-seal-v3";
+const CLAIM_KEY_INFO: &[u8] = b"clairix-comms-claim-v3";
+const CLAIM_MAC_CONTEXT: &[u8] = b"clairix-comms-sender-v3";
+/// What a sealing prekey's signature covers: this, the key and its time.
+const PREKEY_CONTEXT: &str = "clairix-sealing-prekey-v1";
+
+/// A device makes a new sealing prekey once its current one is this old.
+const PREKEY_ROTATE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// Senders do not seal to a prekey older than this (by their clock), so no
+/// envelope is sealed to one long after its owner replaced it.
+const PREKEY_MAX_AGE_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+/// How far in the future a prekey's time may be, for clocks that disagree.
+const PREKEY_FUTURE_SKEW_MS: u64 = 24 * 60 * 60 * 1000;
+/// After the last moment a sender may seal to a prekey, envelopes for it can
+/// still be on their way this long: carried phone to phone (48 hours at most)
+/// or held up by a sender's clock running behind.
+const PREKEY_DRAIN_GRACE_MS: u64 = 3 * 24 * 60 * 60 * 1000;
+/// A replaced prekey is deleted this long after it was replaced at the latest:
+/// the relay keeps an envelope no longer than this.
+const PREKEY_KEEP_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+/// The most prekeys kept; with the times above there are never more than six.
+const MAX_PREKEYS: usize = 8;
+
+/// The text a sealing prekey's signature covers.
+fn prekey_statement(key_b64: &str, created_ms: i64) -> String {
+    format!("{PREKEY_CONTEXT}|{key_b64}|{created_ms}")
+}
+
+/// What sits inside a format-2 sealed box, in this order:
 ///
 /// | bytes    | field                                              |
 /// |----------|----------------------------------------------------|
@@ -230,6 +310,26 @@ const SENDER_SIG_CONTEXT: &[u8] = b"clairix-comms-sender-v2";
 /// | 73..137  | Ed25519 signature over [`sender_claim`]            |
 /// | 137..    | Olm ciphertext                                     |
 const INNER_HEADER: usize = 1 + 32 + 32 + 8 + 64;
+
+/// What sits inside a format-3 sealed box, in this order:
+///
+/// | bytes    | field                                                        |
+/// |----------|--------------------------------------------------------------|
+/// | 0        | Olm message type: 0 pre-key, 1 normal                        |
+/// | 1..33    | sender's Curve25519 identity key                             |
+/// | 33..65   | sender's Ed25519 identity key                                |
+/// | 65..97   | sender's long-term sealing key                               |
+/// | 97..161  | sender's signature binding the two keys above (its bundle's) |
+/// | 161..169 | sent-at, ms since the epoch, big-endian                      |
+/// | 169..201 | HMAC-SHA256 over [`claim_mac_input`]                         |
+/// | 201..205 | Olm ciphertext length, big-endian                            |
+/// | 205..    | Olm ciphertext, then zeros to a multiple of [`INNER_V3_STEP`] |
+///
+/// The binding signature is the one the sender publishes in its bundle, the
+/// same in every envelope: it ties the sealing key to the identity, and says
+/// nothing about this envelope.
+const INNER_V3_HEADER: usize = 1 + 32 + 32 + 32 + 64 + 8 + 32 + 4;
+const INNER_V3_STEP: usize = 1024;
 
 /// The bytes the sender signs: its claim, bound to this one envelope by the
 /// ephemeral key, the recipient's sealing key and a hash of the ciphertext.
@@ -254,7 +354,45 @@ fn sender_claim(
     out
 }
 
-/// The parsed inner layout of an opened envelope; see [`INNER_HEADER`].
+/// The format-3 claim key: HKDF-SHA256 over X25519 between the sender's
+/// long-term sealing key and the recipient's prekey, salted with this
+/// envelope's ephemeral key and that prekey, so each envelope has its own.
+fn claim_key(shared: &[u8], eph_pub: &[u8; 32], prekey: &[u8; 32]) -> Zeroizing<[u8; 32]> {
+    let mut salt = Vec::with_capacity(64);
+    salt.extend_from_slice(eph_pub);
+    salt.extend_from_slice(prekey);
+    let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
+    let mut key = Zeroizing::new([0u8; 32]);
+    hk.expand(CLAIM_KEY_INFO, key.as_mut()).expect("32 bytes is a valid HKDF output length");
+    key
+}
+
+/// What the format-3 claim MAC covers: everything the inside says about the
+/// sender, and a hash of the ciphertext.
+fn claim_mac_input(
+    message_type: u8,
+    sender_curve: &[u8; 32],
+    sender_ed: &[u8; 32],
+    sender_sealing: &[u8; 32],
+    sent_at_ms: u64,
+    ciphertext: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(CLAIM_MAC_CONTEXT.len() + 1 + 96 + 8 + 32);
+    out.extend_from_slice(CLAIM_MAC_CONTEXT);
+    out.push(message_type);
+    out.extend_from_slice(sender_curve);
+    out.extend_from_slice(sender_ed);
+    out.extend_from_slice(sender_sealing);
+    out.extend_from_slice(&sent_at_ms.to_be_bytes());
+    out.extend_from_slice(&Sha256::digest(ciphertext));
+    out
+}
+
+fn claim_mac(key: &[u8; 32]) -> Hmac<Sha256> {
+    <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes a key of any length")
+}
+
+/// The parsed inner layout of an opened format-2 envelope; see [`INNER_HEADER`].
 struct InnerView<'a> {
     message_type: u8,
     sender_curve: [u8; 32],
@@ -286,11 +424,62 @@ fn parse_inner(bytes: &[u8]) -> Result<InnerView<'_>> {
     })
 }
 
+/// The parsed inner layout of an opened format-3 envelope; see [`INNER_V3_HEADER`].
+struct InnerV3View<'a> {
+    message_type: u8,
+    sender_curve: [u8; 32],
+    sender_ed: [u8; 32],
+    sender_sealing: [u8; 32],
+    binding: [u8; 64],
+    sent_at_ms: u64,
+    mac: [u8; 32],
+    ciphertext: &'a [u8],
+}
+
+fn parse_inner_v3(bytes: &[u8]) -> Result<InnerV3View<'_>> {
+    let bad = |reason: &str| CryptoError::Envelope { reason: reason.into() };
+    if bytes.len() <= INNER_V3_HEADER || bytes.len() % INNER_V3_STEP != 0 {
+        return Err(bad("inner message has the wrong length"));
+    }
+    let take = |from: usize| -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes[from..from + 32]);
+        out
+    };
+    let mut binding = [0u8; 64];
+    binding.copy_from_slice(&bytes[97..161]);
+    let mut ts = [0u8; 8];
+    ts.copy_from_slice(&bytes[161..169]);
+    let mut len = [0u8; 4];
+    len.copy_from_slice(&bytes[201..205]);
+    let len = u32::from_be_bytes(len) as usize;
+    let end = INNER_V3_HEADER.checked_add(len).filter(|&e| len > 0 && e <= bytes.len()).ok_or_else(|| bad("bad ciphertext length"))?;
+    // Padding that is not all zeros was not made by this code.
+    if bytes[end..].iter().any(|&b| b != 0) {
+        return Err(bad("bad inner padding"));
+    }
+    Ok(InnerV3View {
+        message_type: bytes[0],
+        sender_curve: take(1),
+        sender_ed: take(33),
+        sender_sealing: take(65),
+        binding,
+        sent_at_ms: u64::from_be_bytes(ts),
+        mac: take(169),
+        ciphertext: &bytes[INNER_V3_HEADER..end],
+    })
+}
+
 /// `crypto_box_seal`-style anonymous box: ephemeral X25519 with the recipient's
-/// static key, HKDF over the shared secret bound to both public keys, then
+/// key, HKDF over the shared secret bound to both public keys, then
 /// ChaCha20-Poly1305 with a zero nonce (the key is single-use). `inner` is
 /// handed the ephemeral public key so the sender can bind its claim to it.
-fn seal(recipient: &XPublicKey, inner: impl FnOnce(&[u8; 32]) -> Zeroizing<Vec<u8>>) -> Result<Vec<u8>> {
+fn seal(
+    version: u8,
+    info: &[u8],
+    recipient: &XPublicKey,
+    inner: impl FnOnce(&[u8; 32]) -> Result<Zeroizing<Vec<u8>>>,
+) -> Result<Vec<u8>> {
     let eph = StaticSecret::random_from_rng(&mut rand::thread_rng());
     let eph_pub = XPublicKey::from(&eph);
     let shared = eph.diffie_hellman(recipient);
@@ -299,26 +488,24 @@ fn seal(recipient: &XPublicKey, inner: impl FnOnce(&[u8; 32]) -> Zeroizing<Vec<u
     if !shared.was_contributory() {
         return Err(CryptoError::BadKey { reason: "sealing key is of low order".into() });
     }
-    let plaintext = inner(eph_pub.as_bytes());
-    let key = seal_key(shared.as_bytes(), eph_pub.as_bytes(), recipient.as_bytes());
+    let plaintext = inner(eph_pub.as_bytes())?;
+    let key = seal_key(info, shared.as_bytes(), eph_pub.as_bytes(), recipient.as_bytes());
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key.as_slice()));
     let ct = cipher
         .encrypt(Nonce::from_slice(&[0u8; 12]), plaintext.as_slice())
         .expect("ChaCha20-Poly1305 encryption cannot fail on in-memory data");
     let mut out = Vec::with_capacity(1 + 32 + ct.len());
-    out.push(ENVELOPE_VERSION);
+    out.push(version);
     out.extend_from_slice(eph_pub.as_bytes());
     out.extend_from_slice(&ct);
     Ok(out)
 }
 
-/// Opens a sealed box; returns the ephemeral public key with the plaintext.
-fn unseal(secret: &StaticSecret, envelope: &[u8]) -> Result<([u8; 32], Zeroizing<Vec<u8>>)> {
+/// Opens a sealed box (its version byte already checked by the caller);
+/// returns the ephemeral public key with the plaintext.
+fn unseal(secret: &StaticSecret, info: &[u8], envelope: &[u8]) -> Result<([u8; 32], Zeroizing<Vec<u8>>)> {
     if envelope.len() < 1 + 32 + 16 {
         return Err(CryptoError::Envelope { reason: "too short".into() });
-    }
-    if envelope[0] != ENVELOPE_VERSION {
-        return Err(CryptoError::Envelope { reason: format!("unknown version {}", envelope[0]) });
     }
     let mut eph_bytes = [0u8; 32];
     eph_bytes.copy_from_slice(&envelope[1..33]);
@@ -330,12 +517,104 @@ fn unseal(secret: &StaticSecret, envelope: &[u8]) -> Result<([u8; 32], Zeroizing
     if !shared.was_contributory() {
         return Err(CryptoError::Envelope { reason: "low-order ephemeral key".into() });
     }
-    let key = seal_key(shared.as_bytes(), eph_pub.as_bytes(), me.as_bytes());
+    let key = seal_key(info, shared.as_bytes(), eph_pub.as_bytes(), me.as_bytes());
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key.as_slice()));
     let plain = cipher
         .decrypt(Nonce::from_slice(&[0u8; 12]), &envelope[33..])
         .map_err(|_| CryptoError::Envelope { reason: "not addressed to this device, or tampered".into() })?;
     Ok((eph_bytes, Zeroizing::new(plain)))
+}
+
+/// An opened envelope's claim, checked, and its Olm ciphertext.
+struct Opened {
+    message_type: u8,
+    sender_identity: Curve25519PublicKey,
+    sender_ed: Ed25519PublicKey,
+    sent_at_ms: u64,
+    ciphertext: Vec<u8>,
+    sealed_to_prekey: bool,
+}
+
+/// Opens a format-2 envelope with the long-term sealing secret and checks its
+/// signed claim.
+fn open_v2(sealing_secret: &StaticSecret, envelope: &[u8]) -> Result<Opened> {
+    let (eph_pub, inner_bytes) = unseal(sealing_secret, SEAL_INFO_V2, envelope)?;
+    let view = parse_inner(&inner_bytes)?;
+    let my_sealing = XPublicKey::from(sealing_secret);
+    if !canonical_x25519(&view.sender_curve) {
+        return Err(CryptoError::Envelope { reason: "sender key is not in canonical form".into() });
+    }
+    let sender_identity =
+        Curve25519PublicKey::from_slice(&view.sender_curve).map_err(|e| CryptoError::Envelope { reason: e.to_string() })?;
+    let sender_ed = Ed25519PublicKey::from_slice(&view.sender_ed).map_err(|_| CryptoError::BadSignature)?;
+    let signature = Ed25519Signature::from_slice(&view.signature).map_err(|_| CryptoError::BadSignature)?;
+    let claim = sender_claim(&eph_pub, my_sealing.as_bytes(), view.message_type, &view.sender_curve, view.sent_at_ms, view.ciphertext);
+    sender_ed.verify(&claim, &signature).map_err(|_| CryptoError::BadSignature)?;
+    Ok(Opened {
+        message_type: view.message_type,
+        sender_identity,
+        sender_ed,
+        sent_at_ms: view.sent_at_ms,
+        ciphertext: view.ciphertext.to_vec(),
+        sealed_to_prekey: false,
+    })
+}
+
+/// Opens a format-3 envelope with whichever of this device's prekeys it was
+/// sealed to, and checks the claim's binding signature and MAC.
+fn open_v3(prekeys: &[PrekeyEntry], envelope: &[u8]) -> Result<Opened> {
+    let (prekey, eph_pub, inner_bytes) = prekeys
+        .iter()
+        .find_map(|p| unseal(&p.secret, SEAL_INFO_V3, envelope).ok().map(|(eph, inner)| (p, eph, inner)))
+        .ok_or_else(|| CryptoError::Envelope { reason: "not addressed to this device, or tampered".into() })?;
+    let view = parse_inner_v3(&inner_bytes)?;
+    if !canonical_x25519(&view.sender_curve) || !canonical_x25519(&view.sender_sealing) {
+        return Err(CryptoError::Envelope { reason: "sender key is not in canonical form".into() });
+    }
+    let sender_identity =
+        Curve25519PublicKey::from_slice(&view.sender_curve).map_err(|e| CryptoError::Envelope { reason: e.to_string() })?;
+    let sender_ed = Ed25519PublicKey::from_slice(&view.sender_ed).map_err(|_| CryptoError::BadSignature)?;
+    // The sealing key is the sender's: the same statement its bundle signs.
+    let binding = Ed25519Signature::from_slice(&view.binding).map_err(|_| CryptoError::BadSignature)?;
+    let statement = format!("{}|{}", sender_identity.to_base64(), B64.encode(view.sender_sealing));
+    sender_ed.verify(statement.as_bytes(), &binding).map_err(|_| CryptoError::BadSignature)?;
+    // And whoever holds it made this envelope (or this device did, which it knows it did not).
+    let shared = prekey.secret.diffie_hellman(&XPublicKey::from(view.sender_sealing));
+    if !shared.was_contributory() {
+        return Err(CryptoError::BadSignature);
+    }
+    let my_prekey = XPublicKey::from(&prekey.secret);
+    let key = claim_key(shared.as_bytes(), &eph_pub, my_prekey.as_bytes());
+    let mut mac = claim_mac(&key);
+    mac.update(&claim_mac_input(
+        view.message_type,
+        &view.sender_curve,
+        &view.sender_ed,
+        &view.sender_sealing,
+        view.sent_at_ms,
+        view.ciphertext,
+    ));
+    mac.verify_slice(&view.mac).map_err(|_| CryptoError::BadSignature)?;
+    Ok(Opened {
+        message_type: view.message_type,
+        sender_identity,
+        sender_ed,
+        sent_at_ms: view.sent_at_ms,
+        ciphertext: view.ciphertext.to_vec(),
+        sealed_to_prekey: true,
+    })
+}
+
+/// Checks a peer's sealing prekey: signed by their identity key, and neither
+/// too old to seal to nor made too far in the future. Returns the key.
+fn checked_prekey(peer_ed: &Ed25519PublicKey, peer_curve: &str, prekey: &SealingPrekey, now: u64) -> Result<XPublicKey> {
+    let key = x25519_from(&prekey.key)?;
+    verify_signature(peer_ed, prekey_statement(&prekey.key, prekey.created_ms).as_bytes(), &prekey.signature)?;
+    let created = u64::try_from(prekey.created_ms).map_err(|_| CryptoError::BadKey { reason: "prekey time before 1970".into() })?;
+    if created > now.saturating_add(PREKEY_FUTURE_SKEW_MS) || now.saturating_sub(created) > PREKEY_MAX_AGE_MS {
+        return Err(CryptoError::StalePrekey { peer_curve25519: peer_curve.to_string() });
+    }
+    Ok(key)
 }
 
 /// A writer that only counts what it is given: the size of a serialisation,
@@ -357,13 +636,13 @@ impl std::io::Write for ByteCounter {
 const MESH_TAG_INFO: &[u8] = b"clairix-mesh-tag-v2";
 const MESH_TAG_LEN: usize = 16;
 
-fn seal_key(shared: &[u8], eph_pub: &[u8], recipient_pub: &[u8]) -> Zeroizing<[u8; 32]> {
+fn seal_key(info: &[u8], shared: &[u8], eph_pub: &[u8], recipient_pub: &[u8]) -> Zeroizing<[u8; 32]> {
     let mut salt = Vec::with_capacity(64);
     salt.extend_from_slice(eph_pub);
     salt.extend_from_slice(recipient_pub);
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
     let mut key = Zeroizing::new([0u8; 32]);
-    hk.expand(SEAL_INFO, key.as_mut()).expect("32 bytes is a valid HKDF output length");
+    hk.expand(info, key.as_mut()).expect("32 bytes is a valid HKDF output length");
     key
 }
 
@@ -383,6 +662,16 @@ struct SessionRecord {
     used: Option<u64>,
 }
 
+/// One sealing prekey as pickled: its secret, when it was made, and when a
+/// newer one replaced it.
+#[derive(Serialize, Deserialize)]
+struct PrekeyRecord {
+    s: SecretBytes,
+    c: u64,
+    #[serde(default)]
+    x: Option<u64>,
+}
+
 /// Serialised form of everything a device owns.
 #[derive(Serialize, Deserialize)]
 struct State {
@@ -397,10 +686,30 @@ struct State {
     /// Peer Curve25519 key (base64) → the Ed25519 key it is bound to.
     #[serde(default)]
     peers: HashMap<String, String>,
+    /// Sealing prekeys, newest first.
+    #[serde(default)]
+    prekeys: Vec<PrekeyRecord>,
+    /// Peers (Curve25519, base64) seen publishing a sealing prekey.
+    #[serde(default)]
+    prekey_peers: HashSet<String>,
 }
 
-/// Pickle format of [`State`]. Version 1 had no session ages or peer bindings.
-const STATE_VERSION: u8 = 2;
+/// Pickle format of [`State`]. Version 1 had no session ages or peer bindings,
+/// version 2 no sealing prekeys; version 2 is still read.
+const STATE_VERSION: u8 = 3;
+
+/// A sealing prekey held in memory.
+struct PrekeyEntry {
+    secret: StaticSecret,
+    created_ms: u64,
+    superseded_ms: Option<u64>,
+}
+
+impl PrekeyEntry {
+    fn new(now: u64) -> Self {
+        Self { secret: StaticSecret::random_from_rng(&mut rand::thread_rng()), created_ms: now, superseded_ms: None }
+    }
+}
 
 /// A live session and when it last decrypted something.
 struct SessionEntry {
@@ -418,6 +727,10 @@ struct Inner2 {
     /// Olm authenticated. A sender claim that pairs a known Curve25519 key with
     /// another Ed25519 key is forged.
     peers: HashMap<String, String>,
+    /// This device's sealing prekeys, newest (the published one) first.
+    prekeys: Vec<PrekeyEntry>,
+    /// Peers seen publishing a sealing prekey: never sealed to the old way again.
+    prekey_peers: HashSet<String>,
 }
 
 /// How many accepted pre-key session ids are remembered to refuse replays.
@@ -462,6 +775,8 @@ impl Identity {
                 sessions: HashMap::new(),
                 used_prekeys: VecDeque::new(),
                 peers: HashMap::new(),
+                prekeys: vec![PrekeyEntry::new(now_ms())],
+                prekey_peers: HashSet::new(),
             }),
         })
     }
@@ -484,10 +799,14 @@ impl Identity {
         );
         let state: State =
             serde_json::from_slice(&plain).map_err(|e| CryptoError::BadPickle { reason: e.to_string() })?;
-        if state.v != STATE_VERSION {
+        if state.v != STATE_VERSION && state.v != 2 {
             return Err(CryptoError::BadPickle { reason: format!("unknown version {}", state.v) });
         }
-        let State { account, sealing_secret, sessions, used_prekeys, peers, .. } = state;
+        let State { account, sealing_secret, sessions, used_prekeys, peers, prekeys, prekey_peers, .. } = state;
+        let prekeys = prekeys
+            .into_iter()
+            .map(|r| PrekeyEntry { secret: StaticSecret::from(r.s.0), created_ms: r.c, superseded_ms: r.x })
+            .collect();
         let sessions = sessions
             .into_iter()
             .map(|(peer, records)| {
@@ -505,6 +824,8 @@ impl Identity {
                 sessions,
                 used_prekeys,
                 peers,
+                prekeys,
+                prekey_peers,
             }),
         }))
     }
@@ -531,6 +852,12 @@ impl Identity {
                 .collect(),
             used_prekeys: inner.used_prekeys.clone(),
             peers: inner.peers.clone(),
+            prekeys: inner
+                .prekeys
+                .iter()
+                .map(|p| PrekeyRecord { s: SecretBytes(p.secret.to_bytes()), c: p.created_ms, x: p.superseded_ms })
+                .collect(),
+            prekey_peers: inner.prekey_peers.clone(),
         };
         // Sized first, then written once into a buffer that never grows: a
         // growing Vec frees each smaller copy of the plaintext state (identity
@@ -582,11 +909,18 @@ impl Identity {
                 signature: inner.account.sign(key.to_base64()).to_base64(),
             })
             .collect();
+        let sealing_prekey = inner.prekeys.first().map(|p| {
+            let key = B64.encode(XPublicKey::from(&p.secret).as_bytes());
+            let created_ms = i64::try_from(p.created_ms).unwrap_or(i64::MAX);
+            let signature = inner.account.sign(prekey_statement(&key, created_ms)).to_base64();
+            SealingPrekey { key, created_ms, signature }
+        });
         PublicBundle {
             ed25519: inner.account.ed25519_key().to_base64(),
             curve25519: curve,
             sealing,
             signature,
+            sealing_prekey,
             fallback,
             one_time_keys,
         }
@@ -611,6 +945,57 @@ impl Identity {
     /// Ed25519 signature over `message`, base64.
     pub fn sign(&self, message: Vec<u8>) -> String {
         self.inner.lock().expect("identity mutex poisoned").account.sign(message).to_base64()
+    }
+
+    // ── Sealing prekeys ───────────────────────────────────────────────────
+
+    /// True when there is no sealing prekey yet (an identity from before
+    /// them) or the current one is a week old: call
+    /// [`Identity::rotate_sealing_prekey`] and publish the bundle.
+    pub fn sealing_prekey_due(&self) -> bool {
+        let inner = self.inner.lock().expect("identity mutex poisoned");
+        let now = now_ms();
+        inner.prekeys.first().is_none_or(|p| now.saturating_sub(p.created_ms) >= PREKEY_ROTATE_MS || p.created_ms > now.saturating_add(PREKEY_FUTURE_SKEW_MS))
+    }
+
+    /// Makes a new sealing prekey, the one [`Identity::public_bundle`] offers
+    /// from now on. The one it replaces is kept for envelopes already on their
+    /// way to it, until [`Identity::prune_sealing_prekeys`] lets it go.
+    pub fn rotate_sealing_prekey(&self) {
+        let mut inner = self.inner.lock().expect("identity mutex poisoned");
+        let now = now_ms();
+        if let Some(current) = inner.prekeys.first_mut() {
+            current.superseded_ms.get_or_insert(now);
+        }
+        inner.prekeys.insert(0, PrekeyEntry::new(now));
+        inner.prekeys.truncate(MAX_PREKEYS);
+    }
+
+    /// Deletes the secrets of replaced sealing prekeys that nothing can still
+    /// arrive for, and returns how many went. `drained_at_ms` is when this
+    /// device last emptied its relay mailbox (0 when unknown). A replaced
+    /// prekey goes once a sender can no longer seal to it (two weeks after it
+    /// was made), envelopes carried phone to phone have had time to arrive,
+    /// and the mailbox has been emptied since; or 30 days after it was
+    /// replaced, the longest the relay keeps an envelope, whatever happened.
+    /// After that, envelopes sealed to it can no longer be opened by anyone,
+    /// whoever logged them and whatever happens to this phone.
+    pub fn prune_sealing_prekeys(&self, drained_at_ms: i64) -> u32 {
+        let drained = u64::try_from(drained_at_ms).unwrap_or(0);
+        let mut inner = self.inner.lock().expect("identity mutex poisoned");
+        let now = now_ms();
+        let before = inner.prekeys.len();
+        let mut first = true;
+        inner.prekeys.retain(|p| {
+            let keep_current = std::mem::take(&mut first);
+            let Some(replaced) = p.superseded_ms else { return true };
+            if keep_current {
+                return true;
+            }
+            let last_use = p.created_ms.saturating_add(PREKEY_MAX_AGE_MS + PREKEY_DRAIN_GRACE_MS);
+            now < replaced.saturating_add(PREKEY_KEEP_MS) && !(drained >= last_use && now >= last_use)
+        });
+        (before - inner.prekeys.len()) as u32
     }
 
     // ── Sessions ──────────────────────────────────────────────────────────
@@ -682,12 +1067,23 @@ impl Identity {
     }
 
     /// Pads `plaintext`, encrypts it for `peer` and seals it for the relay,
-    /// with this identity's signed sender claim inside. Requires a session.
+    /// with this identity's sender claim inside. Requires a session.
+    ///
+    /// With the peer's sealing prekey (checked: signed by them, and fresh) the
+    /// envelope is format 3, sealed to it. Without one, format 2, sealed to
+    /// their long-term key, but only for a peer never seen with a prekey:
+    /// otherwise [`CryptoError::StalePrekey`], so the app fetches their keys.
     pub fn encrypt(&self, peer: PeerKeys, plaintext: Vec<u8>) -> Result<Vec<u8>> {
         verify_peer(&peer)?;
         let sealing = x25519_from(&peer.sealing)?;
         let peer_curve = curve_name(&peer.curve25519)?;
-        let peer_ed = ed25519_from(&peer.ed25519)?.to_base64();
+        let peer_ed_key = ed25519_from(&peer.ed25519)?;
+        let peer_ed = peer_ed_key.to_base64();
+        let now = now_ms();
+        let prekey = match &peer.sealing_prekey {
+            Some(p) => Some(checked_prekey(&peer_ed_key, &peer_curve, p, now)?),
+            None => None,
+        };
         let plaintext = Zeroizing::new(plaintext);
         let mut inner = self.inner.lock().expect("identity mutex poisoned");
         // The session belongs to whoever this device learned owns that Curve25519
@@ -695,6 +1091,15 @@ impl Identity {
         // key) would seal what goes over it for someone else.
         if inner.peers.get(&peer_curve).is_some_and(|known| *known != peer_ed) {
             return Err(CryptoError::BadKey { reason: "this Curve25519 key belongs to another identity".into() });
+        }
+        match prekey {
+            Some(_) => {
+                inner.prekey_peers.insert(peer_curve.clone());
+            }
+            None if inner.prekey_peers.contains(&peer_curve) => {
+                return Err(CryptoError::StalePrekey { peer_curve25519: peer_curve });
+            }
+            None => {}
         }
         let my_curve = inner.account.curve25519_key();
         let my_ed = inner.account.ed25519_key();
@@ -709,62 +1114,88 @@ impl Identity {
             .map_err(|e| CryptoError::Encrypt { reason: e.to_string() })?;
         let (message_type, ciphertext) = message.to_parts();
         let message_type = message_type as u8;
-        let sent_at = now_ms();
+        let sent_at = now;
         let account = &inner.account;
-        seal(&sealing, |eph_pub| {
-            let claim = sender_claim(eph_pub, sealing.as_bytes(), message_type, my_curve.as_bytes(), sent_at, &ciphertext);
-            let signature = account.sign(&claim).to_bytes();
-            let mut out = Zeroizing::new(Vec::with_capacity(INNER_HEADER + ciphertext.len()));
+        let Some(prekey) = prekey else {
+            return seal(ENVELOPE_V2, SEAL_INFO_V2, &sealing, |eph_pub| {
+                let claim = sender_claim(eph_pub, sealing.as_bytes(), message_type, my_curve.as_bytes(), sent_at, &ciphertext);
+                let signature = account.sign(&claim).to_bytes();
+                let mut out = Zeroizing::new(Vec::with_capacity(INNER_HEADER + ciphertext.len()));
+                out.push(message_type);
+                out.extend_from_slice(my_curve.as_bytes());
+                out.extend_from_slice(my_ed.as_bytes());
+                out.extend_from_slice(&sent_at.to_be_bytes());
+                out.extend_from_slice(&signature);
+                out.extend_from_slice(&ciphertext);
+                Ok(out)
+            });
+        };
+        let my_sealing_secret = &inner.sealing_secret;
+        let my_sealing = XPublicKey::from(my_sealing_secret);
+        let binding = account
+            .sign(format!("{}|{}", my_curve.to_base64(), B64.encode(my_sealing.as_bytes())))
+            .to_bytes();
+        let ct_len = u32::try_from(ciphertext.len()).map_err(|_| CryptoError::Encrypt { reason: "message too large".into() })?;
+        seal(ENVELOPE_V3, SEAL_INFO_V3, &prekey, |eph_pub| {
+            let shared = my_sealing_secret.diffie_hellman(&prekey);
+            if !shared.was_contributory() {
+                return Err(CryptoError::BadKey { reason: "sealing prekey is of low order".into() });
+            }
+            let key = claim_key(shared.as_bytes(), eph_pub, prekey.as_bytes());
+            let mut mac = claim_mac(&key);
+            mac.update(&claim_mac_input(
+                message_type,
+                my_curve.as_bytes(),
+                my_ed.as_bytes(),
+                my_sealing.as_bytes(),
+                sent_at,
+                &ciphertext,
+            ));
+            let tag = mac.finalize().into_bytes();
+            let len = (INNER_V3_HEADER + ciphertext.len()).div_ceil(INNER_V3_STEP) * INNER_V3_STEP;
+            let mut out = Zeroizing::new(Vec::with_capacity(len));
             out.push(message_type);
             out.extend_from_slice(my_curve.as_bytes());
             out.extend_from_slice(my_ed.as_bytes());
+            out.extend_from_slice(my_sealing.as_bytes());
+            out.extend_from_slice(&binding);
             out.extend_from_slice(&sent_at.to_be_bytes());
-            out.extend_from_slice(&signature);
+            out.extend_from_slice(&tag);
+            out.extend_from_slice(&ct_len.to_be_bytes());
             out.extend_from_slice(&ciphertext);
-            out
+            out.resize(len, 0);
+            Ok(out)
         })
     }
 
     /// Opens an envelope addressed to this device. The sender claim inside is
-    /// checked first: it must be signed by the Ed25519 key it names, for this
-    /// envelope, and that key must be the one this device knows for the named
-    /// Curve25519 key. Only then can a failure name the sender. A pre-key
-    /// message from an unknown session creates one; the sender's identity keys
-    /// are returned so the app can check them against a known contact before
-    /// trusting the content.
+    /// checked first: for format 3 its binding signature and MAC, for format 2
+    /// its signature, either one bound to this envelope; and the Ed25519 key it
+    /// names must be the one this device knows for the named Curve25519 key.
+    /// Only then can a failure name the sender. A pre-key message from an
+    /// unknown session creates one; the sender's identity keys are returned so
+    /// the app can check them against a known contact before trusting the
+    /// content.
     pub fn decrypt(&self, envelope: Vec<u8>) -> Result<Decrypted> {
         let mut inner = self.inner.lock().expect("identity mutex poisoned");
         let now = now_ms();
-        let (eph_pub, inner_bytes) = unseal(&inner.sealing_secret, &envelope)?;
-        let view = parse_inner(&inner_bytes)?;
-        let my_sealing = XPublicKey::from(&inner.sealing_secret);
-
-        // The claim: who says they sent this, and their proof.
-        if !canonical_x25519(&view.sender_curve) {
-            return Err(CryptoError::Envelope { reason: "sender key is not in canonical form".into() });
-        }
-        let sender_identity =
-            Curve25519PublicKey::from_slice(&view.sender_curve).map_err(|e| CryptoError::Envelope { reason: e.to_string() })?;
-        let sender_ed = Ed25519PublicKey::from_slice(&view.sender_ed).map_err(|_| CryptoError::BadSignature)?;
-        let signature = Ed25519Signature::from_slice(&view.signature).map_err(|_| CryptoError::BadSignature)?;
-        let claim = sender_claim(
-            &eph_pub,
-            my_sealing.as_bytes(),
-            view.message_type,
-            &view.sender_curve,
-            view.sent_at_ms,
-            view.ciphertext,
-        );
-        sender_ed.verify(&claim, &signature).map_err(|_| CryptoError::BadSignature)?;
+        let opened = match envelope.first() {
+            Some(&ENVELOPE_V3) => open_v3(&inner.prekeys, &envelope)?,
+            Some(&ENVELOPE_V2) => open_v2(&inner.sealing_secret, &envelope)?,
+            Some(v) => return Err(CryptoError::Envelope { reason: format!("unknown version {v}") }),
+            None => return Err(CryptoError::Envelope { reason: "too short".into() }),
+        };
+        let sealed_to_prekey = opened.sealed_to_prekey;
+        let sender_identity = opened.sender_identity;
         let curve_b64 = sender_identity.to_base64();
-        let ed_b64 = sender_ed.to_base64();
+        let ed_b64 = opened.sender_ed.to_base64();
         // A key pair this device already knows must not be re-paired by a claim.
         if inner.peers.get(&curve_b64).is_some_and(|known| *known != ed_b64) {
             return Err(CryptoError::BadSignature);
         }
-        let sent_at_ms = i64::try_from(view.sent_at_ms).unwrap_or(i64::MAX);
+        let sent_at_ms = i64::try_from(opened.sent_at_ms).unwrap_or(i64::MAX);
 
-        let olm = OlmMessage::from_parts(view.message_type as usize, view.ciphertext)
+        let olm = OlmMessage::from_parts(opened.message_type as usize, &opened.ciphertext)
             .map_err(|e| CryptoError::Envelope { reason: e.to_string() })?;
 
         // Existing sessions first, newest first. A session that knows the
@@ -795,6 +1226,7 @@ impl Identity {
                             plaintext,
                             new_session: false,
                             evicted_recent_session: false,
+                            sealed_to_prekey,
                         });
                     }
                     Err(DecryptionError::MissingMessageKey(_)) => spent = true,
@@ -881,6 +1313,7 @@ impl Identity {
                     plaintext,
                     new_session: true,
                     evicted_recent_session,
+                    sealed_to_prekey,
                 })
             }
             OlmMessage::Normal(_) => {
@@ -1146,7 +1579,23 @@ mod tests {
 
     fn peer_keys(id: &Identity) -> PeerKeys {
         let b = id.public_bundle();
-        PeerKeys { ed25519: b.ed25519, curve25519: b.curve25519, sealing: b.sealing, signature: b.signature }
+        PeerKeys { ed25519: b.ed25519, curve25519: b.curve25519, sealing: b.sealing, signature: b.signature, sealing_prekey: b.sealing_prekey }
+    }
+
+    /// A peer's keys as an app from before sealing prekeys has them: envelopes
+    /// to it are format 2.
+    fn legacy_keys(id: &Identity) -> PeerKeys {
+        PeerKeys { sealing_prekey: None, ..peer_keys(id) }
+    }
+
+    /// [`paired`], over format-2 envelopes.
+    fn paired_v2() -> (std::sync::Arc<Identity>, std::sync::Arc<Identity>) {
+        let alice = Identity::create();
+        let bob = Identity::create();
+        alice.start_session(legacy_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
+        bob.decrypt(alice.encrypt(legacy_keys(&bob), b"hi".to_vec()).unwrap()).unwrap();
+        alice.decrypt(bob.encrypt(legacy_keys(&alice), b"hello".to_vec()).unwrap()).unwrap();
+        (alice, bob)
     }
 
     /// Alice and Bob with a session each way, the way two paired phones end up.
@@ -1164,7 +1613,7 @@ mod tests {
     fn forge(to: &Identity, message_type: u8, curve: [u8; 32], ed: [u8; 32], sign: impl FnOnce(&[u8]) -> [u8; 64], ciphertext: &[u8]) -> Vec<u8> {
         let sealing = x25519_from(&to.public_bundle().sealing).unwrap();
         let sent_at = now_ms();
-        seal(&sealing, |eph| {
+        seal(ENVELOPE_V2, SEAL_INFO_V2, &sealing, |eph| {
             let claim = sender_claim(eph, sealing.as_bytes(), message_type, &curve, sent_at, ciphertext);
             let sig = sign(&claim);
             let mut out = Zeroizing::new(Vec::new());
@@ -1174,9 +1623,62 @@ mod tests {
             out.extend_from_slice(&sent_at.to_be_bytes());
             out.extend_from_slice(&sig);
             out.extend_from_slice(ciphertext);
-            out
+            Ok(out)
         })
         .unwrap()
+    }
+
+    /// Seals a hand-made format-3 inner message to `to`'s current prekey. The
+    /// MAC is keyed from `shared`, the X25519 value between the claimed
+    /// sealing key and that prekey, however the forger came by it.
+    #[allow(clippy::too_many_arguments)]
+    fn forge_v3(
+        to: &Identity,
+        message_type: u8,
+        curve: [u8; 32],
+        ed: [u8; 32],
+        sealing: [u8; 32],
+        binding: [u8; 64],
+        shared: [u8; 32],
+        ciphertext: &[u8],
+    ) -> Vec<u8> {
+        let prekey = x25519_from(&to.public_bundle().sealing_prekey.unwrap().key).unwrap();
+        let sent_at = now_ms();
+        seal(ENVELOPE_V3, SEAL_INFO_V3, &prekey, |eph| {
+            let key = claim_key(&shared, eph, prekey.as_bytes());
+            let mut mac = claim_mac(&key);
+            mac.update(&claim_mac_input(message_type, &curve, &ed, &sealing, sent_at, ciphertext));
+            let mut out = Zeroizing::new(Vec::new());
+            out.push(message_type);
+            out.extend_from_slice(&curve);
+            out.extend_from_slice(&ed);
+            out.extend_from_slice(&sealing);
+            out.extend_from_slice(&binding);
+            out.extend_from_slice(&sent_at.to_be_bytes());
+            out.extend_from_slice(&mac.finalize().into_bytes());
+            out.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+            out.extend_from_slice(ciphertext);
+            let len = out.len().div_ceil(INNER_V3_STEP) * INNER_V3_STEP;
+            out.resize(len, 0);
+            Ok(out)
+        })
+        .unwrap()
+    }
+
+    fn sealing_bytes(id: &Identity) -> [u8; 32] {
+        *x25519_from(&id.public_bundle().sealing).unwrap().as_bytes()
+    }
+
+    fn binding_bytes(id: &Identity) -> [u8; 64] {
+        // vodozemac writes signatures in base64 without padding.
+        base64::engine::general_purpose::STANDARD_NO_PAD.decode(id.public_bundle().signature).unwrap().try_into().unwrap()
+    }
+
+    /// The Olm ciphertext inside a format-3 envelope to `to`.
+    fn olm_ciphertext_v3(to: &Identity, env: &[u8]) -> Vec<u8> {
+        let me = to.inner.lock().unwrap();
+        let (_, inner) = me.prekeys.iter().find_map(|p| unseal(&p.secret, SEAL_INFO_V3, env).ok()).unwrap();
+        parse_inner_v3(&inner).unwrap().ciphertext.to_vec()
     }
 
     fn curve_bytes(id: &Identity) -> [u8; 32] {
@@ -1564,19 +2066,23 @@ mod tests {
             })
             .collect();
         assert!(sizes.windows(2).all(|w| w[0] == w[1]), "envelope sizes differ: {sizes:?}");
-        // A longer text moves up exactly one bucket.
-        let long = alice.encrypt(peer_keys(&bob), vec![b'y'; 200]).unwrap();
-        assert_eq!(long.len(), sizes[0] + PAD_BLOCK);
+        // Up to three blocks of text share that size; past it, one step up.
+        let long = alice.encrypt(peer_keys(&bob), vec![b'y'; 400]).unwrap();
+        assert_eq!(long.len(), sizes[0]);
+        let longer = alice.encrypt(peer_keys(&bob), vec![b'y'; 900]).unwrap();
+        assert_eq!(longer.len(), sizes[0] + INNER_V3_STEP);
+        assert_eq!(bob.decrypt(long).unwrap().plaintext, vec![b'y'; 400]);
+        assert_eq!(bob.decrypt(longer).unwrap().plaintext, vec![b'y'; 900]);
     }
 
     #[test]
     fn an_unsigned_sender_hint_is_rejected() {
-        let (alice, bob) = paired();
+        let (alice, bob) = paired_v2();
         // A normal message Bob cannot read, claiming to be from Alice with no valid signature.
-        let real = alice.encrypt(peer_keys(&bob), b"x".to_vec()).unwrap();
+        let real = alice.encrypt(legacy_keys(&bob), b"x".to_vec()).unwrap();
         let (_, inner) = {
             let me = bob.inner.lock().unwrap();
-            unseal(&me.sealing_secret, &real).unwrap()
+            unseal(&me.sealing_secret, SEAL_INFO_V2, &real).unwrap()
         };
         let ciphertext = parse_inner(&inner).unwrap().ciphertext.to_vec();
         bob.drop_sessions(alice.curve25519());
@@ -1595,16 +2101,16 @@ mod tests {
 
     #[test]
     fn a_forged_sender_hint_is_rejected() {
-        let (alice, bob) = paired();
+        let (alice, bob) = paired_v2();
         let mallory = Identity::create();
         let ciphertext = {
             // Any well-formed Olm normal message will do.
-            mallory.start_session(peer_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
-            bob.decrypt(mallory.encrypt(peer_keys(&bob), b"hi".to_vec()).unwrap()).unwrap();
-            mallory.decrypt(bob.encrypt(peer_keys(&mallory), b"hi".to_vec()).unwrap()).unwrap();
-            let env = mallory.encrypt(peer_keys(&bob), b"resync me".to_vec()).unwrap();
+            mallory.start_session(legacy_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
+            bob.decrypt(mallory.encrypt(legacy_keys(&bob), b"hi".to_vec()).unwrap()).unwrap();
+            mallory.decrypt(bob.encrypt(legacy_keys(&mallory), b"hi".to_vec()).unwrap()).unwrap();
+            let env = mallory.encrypt(legacy_keys(&bob), b"resync me".to_vec()).unwrap();
             let me = bob.inner.lock().unwrap();
-            let (_, inner) = unseal(&me.sealing_secret, &env).unwrap();
+            let (_, inner) = unseal(&me.sealing_secret, SEAL_INFO_V2, &env).unwrap();
             parse_inner(&inner).unwrap().ciphertext.to_vec()
         };
         bob.drop_sessions(alice.curve25519());
@@ -1621,9 +2127,9 @@ mod tests {
 
         // 3. A signature Alice really made, lifted onto another envelope, is refused.
         let lifted = {
-            let real = alice.encrypt(peer_keys(&bob), b"real".to_vec()).unwrap();
+            let real = alice.encrypt(legacy_keys(&bob), b"real".to_vec()).unwrap();
             let me = bob.inner.lock().unwrap();
-            let (_, inner) = unseal(&me.sealing_secret, &real).unwrap();
+            let (_, inner) = unseal(&me.sealing_secret, SEAL_INFO_V2, &real).unwrap();
             let sig: [u8; 64] = inner[73..137].try_into().unwrap();
             drop(me);
             forge(&bob, 1, curve_bytes(&alice), ed_bytes(&alice), move |_| sig, &ciphertext)
@@ -1641,13 +2147,13 @@ mod tests {
         let alice = Identity::create();
         let bob = Identity::create();
         let mallory = Identity::create();
-        mallory.start_session(peer_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
-        bob.decrypt(mallory.encrypt(peer_keys(&bob), b"hi".to_vec()).unwrap()).unwrap();
-        mallory.decrypt(bob.encrypt(peer_keys(&mallory), b"hi".to_vec()).unwrap()).unwrap();
-        let env = mallory.encrypt(peer_keys(&bob), b"x".to_vec()).unwrap();
+        mallory.start_session(legacy_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
+        bob.decrypt(mallory.encrypt(legacy_keys(&bob), b"hi".to_vec()).unwrap()).unwrap();
+        mallory.decrypt(bob.encrypt(legacy_keys(&mallory), b"hi".to_vec()).unwrap()).unwrap();
+        let env = mallory.encrypt(legacy_keys(&bob), b"x".to_vec()).unwrap();
         let ciphertext = {
             let me = bob.inner.lock().unwrap();
-            let (_, inner) = unseal(&me.sealing_secret, &env).unwrap();
+            let (_, inner) = unseal(&me.sealing_secret, SEAL_INFO_V2, &env).unwrap();
             parse_inner(&inner).unwrap().ciphertext.to_vec()
         };
         let forged = forge(&bob, 1, curve_bytes(&alice), ed_bytes(&mallory), signer(&mallory), &ciphertext);
@@ -1667,7 +2173,7 @@ mod tests {
         let mallory = Identity::create();
         let sealing = mallory.public_bundle().sealing;
         let signature = mallory.inner.lock().unwrap().account.sign(format!("{}|{}", alice.curve25519(), sealing).as_bytes()).to_base64();
-        let offered = PeerKeys { ed25519: mallory.ed25519(), curve25519: alice.curve25519(), sealing, signature };
+        let offered = PeerKeys { ed25519: mallory.ed25519(), curve25519: alice.curve25519(), sealing, signature, sealing_prekey: None };
         match bob.start_session(offered, mallory.public_bundle().fallback.unwrap()) {
             Err(CryptoError::BadKey { .. }) => {}
             other => panic!("expected BadKey, got {other:?}"),
@@ -1758,11 +2264,12 @@ mod tests {
         alice.start_session(peer_keys(&bob), key).unwrap();
         let env = alice.encrypt(peer_keys(&bob), b"secret".to_vec()).unwrap();
         // The sealed envelope carries nothing but a version byte and an ephemeral key in the clear.
-        assert_eq!(env[0], ENVELOPE_VERSION);
+        assert_eq!(env[0], ENVELOPE_V3);
         assert!(!env.windows(6).any(|w| w == b"secret"));
         let alice_curve = curve_bytes(&alice);
         let alice_ed = ed_bytes(&alice);
-        assert!(!env.windows(32).any(|w| w == alice_curve || w == alice_ed), "the sender's keys are visible");
+        let alice_sealing = sealing_bytes(&alice);
+        assert!(!env.windows(32).any(|w| w == alice_curve || w == alice_ed || w == alice_sealing), "the sender's keys are visible");
         assert!(eve.decrypt(env.clone()).is_err());
         // Tampering is detected.
         let mut bad = env.clone();
@@ -1885,7 +2392,7 @@ mod tests {
         let m = mallory.public_bundle();
         let a = alice.public_bundle();
         let signature = mallory.sign(format!("{}|{}", a.curve25519, m.sealing).into_bytes());
-        let mixed = PeerKeys { ed25519: m.ed25519, curve25519: a.curve25519, sealing: m.sealing, signature };
+        let mixed = PeerKeys { ed25519: m.ed25519, curve25519: a.curve25519, sealing: m.sealing, signature, sealing_prekey: m.sealing_prekey };
         assert!(matches!(bob.encrypt(mixed, b"for alice".to_vec()), Err(CryptoError::BadKey { .. })));
     }
 
@@ -1894,11 +2401,263 @@ mod tests {
     #[test]
     fn low_order_points_are_refused_by_the_sealed_box() {
         let low = XPublicKey::from([0u8; 32]);
-        assert!(seal(&low, |_| Zeroizing::new(vec![1, 2, 3])).is_err());
+        assert!(seal(ENVELOPE_V3, SEAL_INFO_V3, &low, |_| Ok(Zeroizing::new(vec![1, 2, 3]))).is_err());
         let bob = Identity::create();
-        let mut envelope = vec![ENVELOPE_VERSION];
-        envelope.extend_from_slice(&[0u8; 32]);
-        envelope.extend_from_slice(&[0u8; 64]);
-        assert!(matches!(bob.decrypt(envelope), Err(CryptoError::Envelope { .. })));
+        for version in [ENVELOPE_V2, ENVELOPE_V3] {
+            let mut envelope = vec![version];
+            envelope.extend_from_slice(&[0u8; 32]);
+            envelope.extend_from_slice(&[0u8; 64]);
+            assert!(matches!(bob.decrypt(envelope), Err(CryptoError::Envelope { .. })));
+        }
+    }
+
+    // ── Envelope format 3 ─────────────────────────────────────────────────
+
+    #[test]
+    fn envelopes_are_sealed_to_the_prekey_and_padded_to_whole_steps() {
+        let (alice, bob) = paired();
+        let env = alice.encrypt(peer_keys(&bob), b"x".to_vec()).unwrap();
+        assert_eq!(env[0], ENVELOPE_V3);
+        assert_eq!((env.len() - 1 - 32 - 16) % INNER_V3_STEP, 0);
+        let d = bob.decrypt(env).unwrap();
+        assert!(d.sealed_to_prekey);
+        assert_eq!(d.sender_curve25519, alice.curve25519());
+        assert_eq!(d.sender_ed25519, alice.ed25519());
+        // The long-term sealing key no longer opens it: only the prekey does.
+        let env = alice.encrypt(peer_keys(&bob), b"y".to_vec()).unwrap();
+        let me = bob.inner.lock().unwrap();
+        assert!(unseal(&me.sealing_secret, SEAL_INFO_V3, &env).is_err());
+    }
+
+    #[test]
+    fn a_message_that_starts_a_session_looks_like_one_that_continues_it() {
+        let alice = Identity::create();
+        let bob = Identity::create();
+        alice.start_session(peer_keys(&bob), bob.public_bundle().fallback.unwrap()).unwrap();
+        let first = alice.encrypt(peer_keys(&bob), b"hello".to_vec()).unwrap();
+        assert!(bob.decrypt(first.clone()).unwrap().new_session);
+        let reply = bob.encrypt(peer_keys(&alice), b"hello".to_vec()).unwrap();
+        assert!(!alice.decrypt(reply.clone()).unwrap().new_session);
+        assert_eq!(first.len(), reply.len(), "a pre-key message stands out by its length");
+    }
+
+    #[test]
+    fn envelopes_of_format_2_still_open() {
+        let (alice, bob) = paired_v2();
+        let env = alice.encrypt(legacy_keys(&bob), b"from an older app".to_vec()).unwrap();
+        assert_eq!(env[0], ENVELOPE_V2);
+        let d = bob.decrypt(env).unwrap();
+        assert_eq!(d.plaintext, b"from an older app");
+        assert!(!d.sealed_to_prekey);
+    }
+
+    #[test]
+    fn a_peer_seen_with_a_prekey_is_never_sealed_to_the_old_way() {
+        let (alice, bob) = paired();
+        // Keys served without the prekey (by a relay, say) do not make Alice
+        // fall back to sealing to Bob's long-term key.
+        match alice.encrypt(legacy_keys(&bob), b"x".to_vec()) {
+            Err(CryptoError::StalePrekey { peer_curve25519 }) => assert_eq!(peer_curve25519, bob.curve25519()),
+            other => panic!("expected StalePrekey, got {other:?}"),
+        }
+        // And that holds across a pickle.
+        let key = random_key();
+        let alice = Identity::restore(alice.pickle(key.clone()).unwrap(), key).unwrap();
+        assert!(matches!(alice.encrypt(legacy_keys(&bob), b"x".to_vec()), Err(CryptoError::StalePrekey { .. })));
+        assert!(alice.encrypt(peer_keys(&bob), b"x".to_vec()).is_ok());
+    }
+
+    #[test]
+    fn a_stale_or_forged_prekey_is_refused() {
+        let (alice, bob) = paired();
+        let mallory = Identity::create();
+        let signed = |by: &Identity, key: &str, created: i64| SealingPrekey {
+            key: key.to_string(),
+            created_ms: created,
+            signature: by.sign(prekey_statement(key, created).into_bytes()),
+        };
+        let current = bob.public_bundle().sealing_prekey.unwrap();
+        let now = now_ms() as i64;
+        let day = 24 * 60 * 60 * 1000;
+        let with = |p: SealingPrekey| PeerKeys { sealing_prekey: Some(p), ..peer_keys(&bob) };
+        // Too old to seal to, or from too far in the future: fetch again.
+        for created in [now - 15 * day, now + 2 * day] {
+            let got = alice.encrypt(with(signed(&bob, &current.key, created)), b"x".to_vec());
+            assert!(matches!(got, Err(CryptoError::StalePrekey { .. })), "{created}: {got:?}");
+        }
+        // Signed by someone else, a key swapped under Bob's signature, or a
+        // time changed under it: refused outright.
+        let mallory_key = mallory.public_bundle().sealing_prekey.unwrap().key;
+        let forged = [
+            signed(&mallory, &mallory_key, now),
+            SealingPrekey { key: mallory_key.clone(), ..current.clone() },
+            SealingPrekey { created_ms: current.created_ms + 1, ..current.clone() },
+        ];
+        for p in forged {
+            assert!(matches!(alice.encrypt(with(p), b"x".to_vec()), Err(CryptoError::BadSignature)));
+        }
+        // A low-order key is no prekey.
+        let low = B64.encode([0u8; 32]);
+        assert!(alice.encrypt(with(signed(&bob, &low, now)), b"x".to_vec()).is_err());
+    }
+
+    #[test]
+    fn a_replaced_prekey_still_opens_until_pruned_and_never_after() {
+        let (alice, bob) = paired();
+        let old = peer_keys(&bob);
+        assert!(!bob.sealing_prekey_due());
+        bob.rotate_sealing_prekey();
+        assert_ne!(bob.public_bundle().sealing_prekey, old.sealing_prekey);
+        // Alice still has the old prekey: what she seals to it opens.
+        let on_the_way = alice.encrypt(old.clone(), b"sealed to the old one".to_vec()).unwrap();
+        let logged = alice.encrypt(old, b"logged at the relay".to_vec()).unwrap();
+        assert_eq!(bob.decrypt(on_the_way).unwrap().plaintext, b"sealed to the old one");
+        assert_eq!(bob.prune_sealing_prekeys(now_ms() as i64), 0, "too soon: senders may still seal to it");
+
+        // Two weeks and three days after it was made, with the mailbox emptied
+        // since, nothing more can arrive for it, and it goes.
+        let day = 24 * 60 * 60 * 1000u64;
+        {
+            let mut me = bob.inner.lock().unwrap();
+            me.prekeys[1].created_ms = now_ms() - 18 * day;
+            me.prekeys[1].superseded_ms = Some(now_ms() - 11 * day);
+        }
+        assert_eq!(bob.prune_sealing_prekeys(0), 0, "the mailbox has not been emptied since");
+        assert_eq!(bob.prune_sealing_prekeys((now_ms() - 2 * day) as i64), 0, "emptied before the last envelope could arrive");
+        assert_eq!(bob.prune_sealing_prekeys(now_ms() as i64), 1);
+        assert_eq!(bob.inner.lock().unwrap().prekeys.len(), 1, "the current prekey is kept");
+        // The envelope logged at the relay can no longer be opened, by anyone.
+        assert!(matches!(bob.decrypt(logged), Err(CryptoError::Envelope { .. })));
+        // New mail, sealed to the new prekey, is unaffected.
+        let got = bob.decrypt(alice.encrypt(peer_keys(&bob), b"new".to_vec()).unwrap()).unwrap();
+        assert_eq!(got.plaintext, b"new");
+
+        // Without the mailbox emptied, a replaced prekey goes 30 days after it was replaced.
+        bob.rotate_sealing_prekey();
+        bob.inner.lock().unwrap().prekeys[1].superseded_ms = Some(now_ms() - 31 * day);
+        assert_eq!(bob.prune_sealing_prekeys(0), 1);
+    }
+
+    #[test]
+    fn a_week_old_prekey_is_due_for_rotation() {
+        let bob = Identity::create();
+        assert!(!bob.sealing_prekey_due());
+        bob.inner.lock().unwrap().prekeys[0].created_ms = now_ms() - 8 * 24 * 60 * 60 * 1000;
+        assert!(bob.sealing_prekey_due());
+        bob.rotate_sealing_prekey();
+        assert!(!bob.sealing_prekey_due());
+        for _ in 0..20 {
+            bob.rotate_sealing_prekey();
+        }
+        assert!(bob.inner.lock().unwrap().prekeys.len() <= MAX_PREKEYS);
+    }
+
+    /// The claim convinces the recipient and no one else: everything Bob can
+    /// check, Bob could have made himself from his prekey and Alice's public
+    /// keys. A signature, as in format 2, only Alice could have made.
+    #[test]
+    fn the_sender_claim_is_deniable() {
+        let (alice, bob) = paired();
+        let ciphertext = olm_ciphertext_v3(&bob, &alice.encrypt(peer_keys(&bob), b"x".to_vec()).unwrap());
+        let shared = {
+            let me = bob.inner.lock().unwrap();
+            *me.prekeys[0].secret.diffie_hellman(&XPublicKey::from(sealing_bytes(&alice))).as_bytes()
+        };
+        bob.drop_sessions(alice.curve25519());
+        let made_by_bob =
+            forge_v3(&bob, 1, curve_bytes(&alice), ed_bytes(&alice), sealing_bytes(&alice), binding_bytes(&alice), shared, &ciphertext);
+        match bob.decrypt(made_by_bob) {
+            // The claim passed every check and names Alice.
+            Err(CryptoError::NoSessionFor { sender_curve25519, sender_ed25519, .. }) => {
+                assert_eq!(sender_curve25519, alice.curve25519());
+                assert_eq!(sender_ed25519, alice.ed25519());
+            }
+            other => panic!("expected the claim to check out, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_forged_format_3_claim_is_refused() {
+        let (alice, bob) = paired();
+        let mallory = Identity::create();
+        let ciphertext = olm_ciphertext_v3(&bob, &alice.encrypt(peer_keys(&bob), b"x".to_vec()).unwrap());
+        bob.drop_sessions(alice.curve25519());
+        let prekey = x25519_from(&bob.public_bundle().sealing_prekey.unwrap().key).unwrap();
+        let mallory_shared = *mallory.inner.lock().unwrap().sealing_secret.diffie_hellman(&prekey).as_bytes();
+        let refused = |env: Vec<u8>, what: &str| {
+            let got = bob.decrypt(env);
+            assert!(matches!(got, Err(CryptoError::BadSignature)), "{what}: {got:?}");
+        };
+        // 1. Alice's keys and binding, but a MAC from Mallory's sealing key.
+        refused(
+            forge_v3(&bob, 1, curve_bytes(&alice), ed_bytes(&alice), sealing_bytes(&alice), binding_bytes(&alice), mallory_shared, &ciphertext),
+            "MAC from another key",
+        );
+        // 2. Mallory's sealing key under Alice's binding signature.
+        refused(
+            forge_v3(&bob, 1, curve_bytes(&alice), ed_bytes(&alice), sealing_bytes(&mallory), binding_bytes(&alice), mallory_shared, &ciphertext),
+            "sealing key not Alice's",
+        );
+        // 3. Mallory's own binding, claiming Alice's Curve25519 key.
+        let binding: [u8; 64] = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(mallory.sign(format!("{}|{}", alice.curve25519(), mallory.public_bundle().sealing).into_bytes()))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        refused(
+            forge_v3(&bob, 1, curve_bytes(&alice), ed_bytes(&mallory), sealing_bytes(&mallory), binding, mallory_shared, &ciphertext),
+            "Alice's Curve25519 key re-paired",
+        );
+    }
+
+    #[test]
+    fn prekeys_survive_a_pickle_and_identities_from_before_them_restore() {
+        let (alice, bob) = paired();
+        let old = peer_keys(&bob);
+        bob.rotate_sealing_prekey();
+        let key = random_key();
+        let bob = Identity::restore(bob.pickle(key.clone()).unwrap(), key.clone()).unwrap();
+        assert_eq!(bob.inner.lock().unwrap().prekeys.len(), 2);
+        assert_eq!(bob.decrypt(alice.encrypt(old, b"old".to_vec()).unwrap()).unwrap().plaintext, b"old");
+
+        // A version-2 pickle: no prekeys. It restores, offers none, and is due one.
+        let blob = B64.decode(bob.pickle(key.clone()).unwrap()).unwrap();
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+        let plain = cipher.decrypt(Nonce::from_slice(&blob[..12]), &blob[12..]).unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&plain).unwrap();
+        let o = json.as_object_mut().unwrap();
+        o.remove("prekeys").unwrap();
+        o.remove("prekey_peers").unwrap();
+        o.insert("v".into(), 2.into());
+        let nonce = [9u8; 12];
+        let mut out = nonce.to_vec();
+        out.extend(cipher.encrypt(Nonce::from_slice(&nonce), serde_json::to_vec(&json).unwrap().as_slice()).unwrap());
+        let restored = Identity::restore(B64.encode(out), key).unwrap();
+        assert!(restored.public_bundle().sealing_prekey.is_none());
+        assert!(restored.sealing_prekey_due());
+        // Format-2 mail still reaches it, and once it rotates, format 3 does.
+        let (carol, _) = paired_v2();
+        carol.start_session(legacy_keys(&restored), restored.public_bundle().fallback.unwrap()).unwrap();
+        assert!(!restored.decrypt(carol.encrypt(legacy_keys(&restored), b"v2".to_vec()).unwrap()).unwrap().sealed_to_prekey);
+        restored.rotate_sealing_prekey();
+        assert!(restored.decrypt(carol.encrypt(peer_keys(&restored), b"v3".to_vec()).unwrap()).unwrap().sealed_to_prekey);
+    }
+
+    #[test]
+    fn a_format_3_inner_message_must_be_exact() {
+        let mut inner = vec![0u8; INNER_V3_STEP];
+        inner[201..205].copy_from_slice(&10u32.to_be_bytes());
+        assert!(parse_inner_v3(&inner).is_ok());
+        // Not a whole step, a length past the end or of zero, or padding that is not zeros.
+        assert!(parse_inner_v3(&inner[..INNER_V3_STEP - 1]).is_err());
+        let mut long = inner.clone();
+        long[201..205].copy_from_slice(&(INNER_V3_STEP as u32).to_be_bytes());
+        assert!(parse_inner_v3(&long).is_err());
+        let mut zero = inner.clone();
+        zero[201..205].copy_from_slice(&0u32.to_be_bytes());
+        assert!(parse_inner_v3(&zero).is_err());
+        let mut dirty = inner.clone();
+        dirty[INNER_V3_STEP - 1] = 1;
+        assert!(parse_inner_v3(&dirty).is_err());
     }
 }
