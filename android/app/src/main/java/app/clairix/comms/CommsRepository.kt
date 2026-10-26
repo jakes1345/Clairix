@@ -141,6 +141,7 @@ object CommsRepository {
     private lateinit var appContext: Context
     private lateinit var config: CommsConfig
     private lateinit var identities: IdentityStore
+    private lateinit var transportKeys: TransportKeyStore
     private lateinit var store: CommsStore
     private lateinit var relay: RelayClient
 
@@ -256,6 +257,7 @@ object CommsRepository {
         appContext.deleteDatabase("comms.db")
         config.purgeLegacy()
         identities = IdentityStore(appContext)
+        transportKeys = TransportKeyStore(appContext)
         store = CommsStore(appContext)
         CommsMedia.init(appContext)
         relay = RelayClient(
@@ -267,6 +269,10 @@ object CommsRepository {
             // The canary's pin, enforced on every handshake when the owner asked for it.
             alternates = { config.relayAlternates },
             pin = { TlsCanary.enforcedPin(appContext, config.relayUrl?.let { runCatching { java.net.URI(it).host }.getOrNull() }) },
+            // Collecting envelopes is signed with the transport key once the
+            // relay has it, so it works while the identity is locked away.
+            transport = { if (transportKeys.published) runCatching { transportKeys.get() }.getOrNull() else null },
+            transportRefused = { transportKeys.setPublished(false) },
         )
         claims = StoredPendingClaims(appContext)
         // The relay's clock, as the Device tab's clock-integrity row compares it.
@@ -422,9 +428,12 @@ object CommsRepository {
                     val identity = identities.create()
                     identity.generateOneTimeKeys(ONE_TIME_KEYS_BATCH.toUInt())
                     identities.persist()
-                    val registered = relay.register(url, identity, secret.takeIf { invite == null }, listed, invite?.invite)
+                    transportKeys.destroy()
+                    val transportKey = runCatching { transportKeys.get().publicKey() }.getOrNull()
+                    val registered = relay.register(url, identity, secret.takeIf { invite == null }, listed, invite?.invite, transportKey)
                     identity.markKeysPublished()
                     identities.persist()
+                    if (transportKey != null) transportKeys.setPublished(true)
                     config.saveRegistration(url, registered.number, name.trim().take(40), listed)
                     refreshAlternates()
                     // Reachable from the start: the background connection is on until
@@ -494,6 +503,7 @@ object CommsRepository {
             CommsMedia.deleteAll()
             deleteVoicemailFiles()
             identities.destroy()
+            transportKeys.destroy()
             config.clear()
             syncCoverTraffic()
             // What else this phone kept about its comms: the duress phrase (it is
@@ -2858,6 +2868,12 @@ object CommsRepository {
             bundle.sealingPrekey?.let { config.setPrekeyPublished(it.createdMs) }
         }
         if (me.listed != config.listed) config.setListed(me.listed)
+        // Registered before transport keys, or the relay lost it: give it one now.
+        if (!transportKeys.published) {
+            runCatching { relay.putTransport(transportKeys.get().publicKey()) }
+                .onSuccess { transportKeys.setPublished(true) }
+                .onFailure { CommsLog.add("Could not give the relay this phone's transport key: ${it.message}") }
+        }
         _state.update { it.copy(relayOneTimeKeys = count, listed = me.listed) }
         // Delivery tokens are fetched here, ahead of need and apart from any send.
         runCatching { relay.topUpTokens() }.onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }

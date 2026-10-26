@@ -1455,6 +1455,51 @@ pub fn token_finalize(tokens: Vec<BlindedToken>, evaluated: Vec<Vec<u8>>, proof:
 }
 
 /// Verifies an Ed25519 signature (base64) over `message` with `ed25519` (base64).
+// ── Transport key ─────────────────────────────────────────────────────────
+
+/// The phone's transport key: an Ed25519 key, apart from the identity, that
+/// signs only the relay requests that collect envelopes (fetch, acknowledge,
+/// stream). Its seed is kept under a Keystore key that works while the phone
+/// is locked, which the identity's is not: a locked phone can still take in
+/// what arrives, and the transport key can neither read it nor send anything.
+#[derive(uniffi::Object)]
+pub struct TransportKey {
+    secret: vodozemac::Ed25519SecretKey,
+}
+
+#[uniffi::export]
+impl TransportKey {
+    /// A fresh random transport key.
+    #[uniffi::constructor]
+    pub fn generate() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self { secret: vodozemac::Ed25519SecretKey::new() })
+    }
+
+    /// The transport key whose 32-byte seed is `seed` (from [`TransportKey::seed`]).
+    #[uniffi::constructor]
+    pub fn from_seed(seed: Vec<u8>) -> Result<std::sync::Arc<Self>> {
+        let seed = Zeroizing::new(seed);
+        let bytes: &[u8; 32] =
+            seed.as_slice().try_into().map_err(|_| CryptoError::BadKey { reason: "transport seed must be 32 bytes".into() })?;
+        Ok(std::sync::Arc::new(Self { secret: vodozemac::Ed25519SecretKey::from_slice(bytes) }))
+    }
+
+    /// The 32-byte seed, for the app to keep wrapped under its Keystore key.
+    pub fn seed(&self) -> Vec<u8> {
+        self.secret.to_bytes().to_vec()
+    }
+
+    /// The public key, standard base64 with padding, as the relay takes it.
+    pub fn public_key(&self) -> String {
+        B64.encode(self.secret.public_key().as_bytes())
+    }
+
+    /// Ed25519 signature over `message`, standard base64 with padding.
+    pub fn sign(&self, message: Vec<u8>) -> String {
+        B64.encode(self.secret.sign(&message).to_bytes())
+    }
+}
+
 #[uniffi::export]
 pub fn verify(ed25519: String, message: Vec<u8>, signature: String) -> bool {
     match ed25519_from(&ed25519) {
@@ -2659,5 +2704,20 @@ mod tests {
         let mut dirty = inner.clone();
         dirty[INNER_V3_STEP - 1] = 1;
         assert!(parse_inner_v3(&dirty).is_err());
+    }
+
+    #[test]
+    fn a_transport_key_signs_and_comes_back_from_its_seed() {
+        let key = TransportKey::generate();
+        let again = TransportKey::from_seed(key.seed()).unwrap();
+        assert_eq!(key.public_key(), again.public_key());
+        let message = b"123456789\n1\nnonce\nGET\n/v1/inbox\nhash".to_vec();
+        let signature = key.sign(message.clone());
+        // Checked the way the relay checks it: standard base64 key and signature.
+        assert!(verify(key.public_key(), message.clone(), signature.clone()));
+        assert!(!verify(TransportKey::generate().public_key(), message, signature));
+        assert!(TransportKey::from_seed(vec![1, 2, 3]).is_err());
+        let identity = Identity::create();
+        assert_ne!(key.public_key(), identity.ed25519());
     }
 }

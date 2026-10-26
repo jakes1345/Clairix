@@ -156,6 +156,7 @@ object Wiper {
         val known = listOf(
             "prefs",            // AppSettings, onboarding
             "comms_identity",   // IdentityStore
+            "comms_transport",  // TransportKeyStore
             "comms",            // CommsConfig
             "comms_log",        // CommsLog
             "comms_ui",         // CommsScreen

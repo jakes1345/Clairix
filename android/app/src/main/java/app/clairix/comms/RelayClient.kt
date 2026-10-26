@@ -9,6 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -16,6 +17,7 @@ import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PublicBundle
 import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.SignedKey
+import uniffi.clairix_comms_crypto.TransportKey
 import uniffi.clairix_comms_crypto.tokenBlind
 import uniffi.clairix_comms_crypto.tokenFinalize
 import java.io.IOException
@@ -63,6 +65,14 @@ class RelayClient(
     private val alternates: () -> List<String> = { emptyList() },
     /** The blind-token keys seen per relay and epoch; see [TokenKeyPins]. */
     private val tokenKeys: TokenKeyPins = MemoryTokenKeyPins(),
+    /**
+     * The transport key, once the relay has it: fetching, acknowledging and
+     * streaming envelopes are signed with it, so they work while the identity
+     * is out of reach (the phone is locked). Null signs them with the identity.
+     */
+    private val transport: () -> TransportKey? = { null },
+    /** Called when the relay refused the transport key: it is then republished, and the identity signs meanwhile. */
+    private val transportRefused: () -> Unit = {},
 ) {
 
     /** The alternate address requests go to since the registered one stopped answering, if any. */
@@ -150,7 +160,7 @@ class RelayClient(
     }
 
     /** What a signed request signs. The signature headers themselves are added per attempt by [signer]. */
-    private class Signing(val method: String, val pathAndQuery: String, val bodyText: String)
+    private class Signing(val method: String, val pathAndQuery: String, val bodyText: String, val transport: TransportKey? = null)
 
     /**
      * Signs every network attempt afresh. OkHttp retries a request on a new
@@ -232,7 +242,14 @@ class RelayClient(
      * allocated. Admission is either the relay's enrollment [secret] or a
      * one-time [invite] code from someone already registered.
      */
-    fun register(relayUrl: String, identity: Identity, secret: String?, listed: Boolean, invite: String? = null): Registered {
+    fun register(
+        relayUrl: String,
+        identity: Identity,
+        secret: String?,
+        listed: Boolean,
+        invite: String? = null,
+        transportKey: String? = null
+    ): Registered {
         val bundle = identity.publicBundle()
         val body = JSONObject()
             // Dated, so a captured registration (it carries the secret) cannot be
@@ -246,6 +263,7 @@ class RelayClient(
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
             .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
+            .apply { if (transportKey != null) put("transportKey", transportKey) }
             .put("listed", listed)
             .toString()
         val request = Request.Builder()
@@ -291,6 +309,11 @@ class RelayClient(
         val signature = o.optString("signature").takeIf { it.isNotEmpty() && it.length <= 128 } ?: return null
         val created = o.opt("created") as? Number ?: return null
         return SealingPrekey(key, created.toLong(), signature)
+    }
+
+    /** Gives the relay this phone's transport key, the one that may only collect envelopes. */
+    fun putTransport(publicKey: String) {
+        signed("PUT", "/v1/transport", JSONObject().put("key", publicKey))
     }
 
     data class Invite(val code: String, val expiresAt: Long)
@@ -754,7 +777,20 @@ class RelayClient(
         // signed here, once; a refused upgrade is retried by the caller.
         val builder = signedRequest("GET", "/v1/ws", null)
         val signing = builder.build().tag(Signing::class.java) ?: throw RelayException("Not registered with a relay")
-        return http.newWebSocket(sign(builder, signing).build(), listener)
+        if (signing.transport == null) return http.newWebSocket(sign(builder, signing).build(), listener)
+        // A refused upgrade signed with the transport key means the relay does not
+        // have it: the next attempt is signed with the identity, and it is republished.
+        return http.newWebSocket(sign(builder, signing).build(), object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) = listener.onOpen(webSocket, response)
+            override fun onMessage(webSocket: WebSocket, text: String) = listener.onMessage(webSocket, text)
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) = listener.onMessage(webSocket, bytes)
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = listener.onClosing(webSocket, code, reason)
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = listener.onClosed(webSocket, code, reason)
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (response?.code == 401 || response?.code == 403) transportRefused()
+                listener.onFailure(webSocket, t, response)
+            }
+        })
     }
 
     fun parseEnvelope(o: JSONObject): Envelope = parsed {
@@ -776,19 +812,33 @@ class RelayClient(
 
     // ── Signing ───────────────────────────────────────────────────────────
 
-    private fun signed(method: String, pathAndQuery: String, body: JSONObject? = null): JSONObject =
-        execute(signedRequest(method, pathAndQuery, body))
+    private fun signed(method: String, pathAndQuery: String, body: JSONObject? = null): JSONObject {
+        val builder = signedRequest(method, pathAndQuery, body)
+        return try {
+            execute(builder)
+        } catch (e: RelayException) {
+            // The relay no longer has the transport key (or never took it): sign
+            // with the identity this once, if it is at hand, and republish.
+            val viaTransport = builder.build().tag(Signing::class.java)?.transport != null
+            if (!viaTransport || (e.code != 401 && e.code != 403)) throw e
+            transportRefused()
+            if (identity() == null) throw e
+            execute(signedRequest(method, pathAndQuery, body, allowTransport = false))
+        }
+    }
 
-    private fun signedRequest(method: String, pathAndQuery: String, body: JSONObject?): Request.Builder {
+    private fun signedRequest(method: String, pathAndQuery: String, body: JSONObject?, allowTransport: Boolean = true): Request.Builder {
         val relay = base() ?: throw RelayException("Not registered with a relay")
         val number = number() ?: throw RelayException("Not registered with a relay")
-        if (identity() == null) throw RelayException("No identity on this device")
+        val route = "${method.uppercase()} ${pathAndQuery.substringBefore('?')}"
+        val viaTransport = if (allowTransport && route in TRANSPORT_ROUTES) transport() else null
+        if (viaTransport == null && identity() == null) throw RelayException("No identity on this device")
         val bodyText = body?.toString() ?: ""
         val builder = Request.Builder()
             .url(relay + pathAndQuery)
             .header("X-Clairix-Number", number)
             .header("Accept", "application/json")
-            .tag(Signing::class.java, Signing(method.uppercase(), pathAndQuery, bodyText))
+            .tag(Signing::class.java, Signing(method.uppercase(), pathAndQuery, bodyText, viaTransport))
         when (method.uppercase()) {
             "GET" -> builder.get()
             "DELETE" -> builder.delete()
@@ -801,7 +851,8 @@ class RelayClient(
     /** Adds the signature headers for one attempt: a fresh nonce and the relay's current time. */
     private fun sign(builder: Request.Builder, s: Signing): Request.Builder {
         val number = number() ?: throw RelayException("Not registered with a relay")
-        val identity = identity() ?: throw RelayException("No identity on this device")
+        val signer: (ByteArray) -> String = s.transport?.let { t -> { bytes: ByteArray -> t.sign(bytes) } }
+            ?: (identity() ?: throw RelayException("No identity on this device")).let { id -> { bytes: ByteArray -> id.sign(bytes) } }
         // The relay rejects a timestamp more than five minutes from its own clock,
         // so a phone whose clock is off signs with the relay's time once it knows it.
         val ts = relayNow()
@@ -812,7 +863,8 @@ class RelayClient(
             .header("X-Clairix-Number", number)
             .header("X-Clairix-Ts", ts.toString())
             .header("X-Clairix-Nonce", nonce)
-            .header("X-Clairix-Sig", identity.sign(payload.toByteArray(Charsets.UTF_8)))
+            .header("X-Clairix-Sig", signer(payload.toByteArray(Charsets.UTF_8)))
+            .apply { if (s.transport != null) header("X-Clairix-Key", "transport") else removeHeader("X-Clairix-Key") }
     }
 
     /**
@@ -925,6 +977,8 @@ class RelayClient(
         const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
+        /** What the relay lets the transport key sign (comms-worker/src/index.ts TRANSPORT_ROUTES). */
+        private val TRANSPORT_ROUTES = setOf("GET /v1/inbox", "POST /v1/ack", "GET /v1/ws")
         /** Segments per /v1/traffic/typical request (the relay's limit). */
         const val TRAFFIC_TYPICAL_MAX = 500
         /** The relay refuses incident boxes larger than this in either direction. */
