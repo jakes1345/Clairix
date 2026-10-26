@@ -233,7 +233,11 @@ class RelayClient(
         val claim: String? = null
     )
 
-    data class Envelope(val id: String, val ts: Long, val data: ByteArray)
+    /**
+     * One envelope from the relay. [alert] is what its sender asked a locked
+     * phone to do with it before it can be opened: "call" (ring) or "sos".
+     */
+    data class Envelope(val id: String, val ts: Long, val data: ByteArray, val alert: String? = null)
 
     // ── Registration ──────────────────────────────────────────────────────
 
@@ -426,7 +430,7 @@ class RelayClient(
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
      */
-    fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false): String {
+    fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false, alert: String? = null): String {
         val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
         if (claim != null) body.put("claim", claim)
         // Everything but a call being set up, an SOS or a group change asks
@@ -436,6 +440,9 @@ class RelayClient(
         if (!urgent) body.put("mix", true)
         // A contact on another relay: this phone's relay forwards it there.
         if (relay != null) body.put("relay", relay)
+        // A call's offer or an SOS: a locked recipient rings or sounds the alarm
+        // before it can open the envelope.
+        if (alert != null) body.put("alert", alert)
         val json = anonymous(TokenKind.DELIVERY, "POST", "/v1/send", body)
         return parsed { json.getString("id") }
     }
@@ -794,7 +801,10 @@ class RelayClient(
     }
 
     fun parseEnvelope(o: JSONObject): Envelope = parsed {
-        Envelope(o.getString("id"), o.getLong("ts"), Base64.getDecoder().decode(o.getString("data")))
+        Envelope(
+            o.getString("id"), o.getLong("ts"), Base64.getDecoder().decode(o.getString("data")),
+            o.optString("alert").takeIf { it == ALERT_CALL || it == ALERT_SOS }
+        )
     }
 
     /**
@@ -977,6 +987,10 @@ class RelayClient(
         const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
+        /** An envelope's sender asks a locked phone to ring for it (comms-worker Alert). */
+        const val ALERT_CALL = "call"
+        /** An envelope's sender asks a locked phone to sound an SOS for it. */
+        const val ALERT_SOS = "sos"
         /** What the relay lets the transport key sign (comms-worker/src/index.ts TRANSPORT_ROUTES). */
         private val TRANSPORT_ROUTES = setOf("GET /v1/inbox", "POST /v1/ack", "GET /v1/ws")
         /** Segments per /v1/traffic/typical request (the relay's limit). */

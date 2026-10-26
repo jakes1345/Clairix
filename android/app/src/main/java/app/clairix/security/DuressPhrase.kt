@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Base64
 import app.clairix.Registry
 import app.clairix.comms.CommsRepository
-import app.clairix.comms.KeystoreBox
+import app.clairix.comms.VaultBox
 import java.security.MessageDigest
 
 /**
@@ -12,7 +12,7 @@ import java.security.MessageDigest
  * conversation. The message goes out as written, so anyone watching the screen
  * sees a normal chat; underneath, the SOS fires with the last known position.
  *
- * The phrase is kept encrypted under the comms Keystore key ([KeystoreBox]) and
+ * The phrase is kept encrypted under the comms vault key ([VaultBox]) and
  * compared in memory only. Neither it nor the SOS it raises is written to a
  * log, a toast, a notification or the timeline: a captor who later makes the
  * owner unlock the phone finds no sign that help was called.
@@ -68,7 +68,7 @@ object DuressPhrase {
         validate(phrase)?.let { throw IllegalArgumentException(it) }
         val norm = normalise(phrase)
         if (norm.isEmpty()) { clear(context); return }
-        val blob = Base64.encodeToString(KeystoreBox.encryptString(norm), Base64.NO_WRAP)
+        val blob = Base64.encodeToString(VaultBox.encrypt(norm.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
         prefs(context).edit().putString(KEY_PHRASE, blob).apply()
         cached = norm
     }
@@ -79,6 +79,9 @@ object DuressPhrase {
     }
 
     fun isConfigured(context: Context): Boolean = prefs(context).contains(KEY_PHRASE)
+
+    /** The phone locked: the phrase is forgotten from memory and read again, under the vault key, after unlock. */
+    fun forget() { cached = null }
 
     /**
      * True when a phrase is stored that fails [validate] — one saved before the
@@ -141,7 +144,11 @@ object DuressPhrase {
 
     private fun load(context: Context): String? {
         val blob = prefs(context).getString(KEY_PHRASE, null) ?: return null
-        val phrase = runCatching { KeystoreBox.decryptString(Base64.decode(blob, Base64.NO_WRAP)) }.getOrNull() ?: return null
+        val opened = runCatching { VaultBox.open(Base64.decode(blob, Base64.NO_WRAP)) }.getOrNull() ?: return null
+        val phrase = String(opened.plain, Charsets.UTF_8)
+        if (opened.legacy) {
+            runCatching { prefs(context).edit().putString(KEY_PHRASE, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).apply() }
+        }
         cached = phrase
         return phrase
     }

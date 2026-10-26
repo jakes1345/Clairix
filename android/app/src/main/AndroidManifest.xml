@@ -92,6 +92,17 @@
             to wherever the owner was. Not exported: only Clairix's own notifications
             can open it, so no other app can make Clairix answer a call.
         -->
+        <!-- A call ringing on a locked phone, before its offer can be opened. -->
+        <activity
+            android:name=".LockedRingActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity="app.clairix.call"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Clairix" />
         <activity
             android:name=".CallActivity"
             android:exported="false"

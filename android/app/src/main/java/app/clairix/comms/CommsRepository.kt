@@ -33,6 +33,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -142,7 +144,19 @@ object CommsRepository {
     private lateinit var config: CommsConfig
     private lateinit var identities: IdentityStore
     private lateinit var transportKeys: TransportKeyStore
-    private lateinit var store: CommsStore
+    /** The message database while the vault is open; null while the phone is locked. */
+    @Volatile
+    private var openStore: CommsStore? = null
+
+    /**
+     * The message database. Throws [VaultSealedException] while the phone is
+     * locked: the database is closed then, and its key out of reach.
+     */
+    private val store: CommsStore
+        get() = openStore ?: throw VaultSealedException()
+
+    /** Envelopes that arrived while the phone was locked; read once it is unlocked. */
+    private lateinit var lockedInbox: LockedInbox
     private lateinit var relay: RelayClient
 
     /** An unexpected failure in background work is recorded instead of taking the app down. */
@@ -209,6 +223,8 @@ object CommsRepository {
     private const val ONE_TIME_KEYS_MAX_WAITING = 100
     /** The fallback key is replaced daily; the previous one keeps working until the next rotation. */
     private const val FALLBACK_ROTATE_MS = 24 * 3600_000L
+    /** A call's offer that waited longer than this for the phone to be unlocked no longer rings: the caller has given up. */
+    private const val LOCKED_RING_MS = 45_000L
     /** A contact's keys are fetched for their sealing prekey at most this often when their envelopes show they have one. */
     private const val PREKEY_REFRESH_MS = 3600_000L
     /** How long the relay may hold an envelope for mixing before it shows in the inbox, with room to spare. */
@@ -250,6 +266,8 @@ object CommsRepository {
     fun init(context: Context) {
         if (initialised) return
         appContext = context.applicationContext
+        // First: whether the phone is locked decides what may be read below.
+        Vault.init(appContext)
         CommsLog.init(appContext)
         config = CommsConfig(appContext)
         // The Twilio-era module left plaintext phone numbers and Keystore-readable
@@ -258,10 +276,15 @@ object CommsRepository {
         config.purgeLegacy()
         identities = IdentityStore(appContext)
         transportKeys = TransportKeyStore(appContext)
-        store = CommsStore(appContext)
+        lockedInbox = LockedInbox(appContext)
+        // Started while the phone is locked (a push, a restart): the database
+        // opens once it is unlocked.
+        if (!Vault.sealed.value) openStore = CommsStore(appContext)
         CommsMedia.init(appContext)
         relay = RelayClient(
-            { identities.get() }, { config.relayUrl }, { config.number },
+            // Locked, there is no identity at hand: what the relay is asked then
+            // is signed with the transport key, or waits.
+            { if (Vault.sealed.value) null else identities.get() }, { config.relayUrl }, { config.number },
             tokens = StoredTokenPool(appContext),
             trafficTokens = StoredTokenPool(appContext, "traffic"),
             reportTokens = StoredTokenPool(appContext, "report"),
@@ -289,6 +312,7 @@ object CommsRepository {
             CommsLog.add("Background connection switched on (calls ring while Clairix is closed)")
         }
         initialised = true
+        watchVault()
         startExpirySweep()
         syncCoverTraffic()
         refreshAlternates()
@@ -318,6 +342,94 @@ object CommsRepository {
                 Registry.setPanicActive(false)
             }
         }
+    }
+
+    // ── The vault: what the phone being locked puts out of reach ──────────
+
+    /**
+     * Follows the [Vault]: sealed, the identity is forgotten and the database
+     * closed, under the repository's lock so nothing is half done; opened, the
+     * database comes back and what arrived meanwhile is read. A call in progress
+     * holds the vault open.
+     */
+    private fun watchVault() {
+        scope.launch {
+            CallManager.call
+                .map { it != null && it.phase != CallPhase.ENDED }
+                .distinctUntilChanged()
+                .collect { active -> if (active) Vault.hold() else Vault.release() }
+        }
+        scope.launch {
+            Vault.sealed.collect { sealed -> if (sealed) sealVault() else openVault() }
+        }
+    }
+
+    private suspend fun sealVault() {
+        lock.withLock {
+            val db = openStore
+            openStore = null
+            runCatching { db?.close() }
+            identities.seal()
+            DuressPhrase.forget()
+            meshTagCache = null
+        }
+        CommsLog.seal()
+    }
+
+    private suspend fun openVault() {
+        val opened = lock.withLock {
+            if (openStore != null) return@withLock true
+            try {
+                openStore = CommsStore(appContext)
+                true
+            } catch (e: Exception) {
+                // The Keystore can lag the unlock by a moment; the next unlock or
+                // screen-on tries again, and nothing waiting is lost meanwhile.
+                CommsLog.add("Could not open the messages after unlock: ${e.message}")
+                false
+            }
+        }
+        if (!opened) return
+        CommsLog.open()
+        CommsNotifications.cancelLocked(appContext)
+        readLockedInbox()
+        bump()
+        wakeExpiry()
+        syncInBackground()
+    }
+
+    /** How many envelopes are waiting for the phone to be unlocked. */
+    fun lockedWaiting(): Int = if (initialised) lockedInbox.count() else 0
+
+    /** Reads what arrived while the phone was locked, oldest first; one that cannot be handled yet stays for next time. */
+    private suspend fun readLockedInbox() {
+        val waiting = lockedInbox.all()
+        if (waiting.isEmpty()) return
+        CommsLog.add("${waiting.size} envelope(s) that arrived while locked are being read")
+        for (entry in waiting) {
+            if (Vault.sealed.value) return
+            if (handleEnvelope(entry.envelope)) lockedInbox.remove(entry) else return
+        }
+    }
+
+    /**
+     * Keeps an envelope that arrived while the phone is locked for after the
+     * unlock, and says so: a call rings, an SOS sounds, anything else is "a new
+     * message", with no sender, since nothing can be opened yet.
+     */
+    private fun keepForUnlock(envelope: RelayClient.Envelope): Boolean {
+        try {
+            lockedInbox.put(envelope)
+        } catch (e: Exception) {
+            CommsLog.add("Envelope ${shortId(envelope.id)} left on the relay: it could not be kept until unlock (${e.message})")
+            return false
+        }
+        when (envelope.alert) {
+            RelayClient.ALERT_CALL -> if (System.currentTimeMillis() - envelope.ts < LOCKED_RING_MS) CommsNotifications.lockedCall(appContext)
+            RelayClient.ALERT_SOS -> CommsNotifications.lockedSos(appContext)
+            else -> CommsNotifications.lockedMessages(appContext, lockedInbox.count())
+        }
+        return true
     }
 
     /**
@@ -378,6 +490,7 @@ object CommsRepository {
     }
 
     private fun refreshUnread() {
+        if (Vault.sealed.value) return
         _unread.value = runCatching { store.unreadCount() }.getOrDefault(0)
     }
 
@@ -514,9 +627,11 @@ object CommsRepository {
             KeystoreBox.destroy()
             // The database key was wrapped by the key just destroyed; the database
             // goes with it, and the next one starts clean under a new key.
-            runCatching { store.close() }
+            runCatching { openStore?.close() }
             CommsDb.reset(appContext)
-            store = CommsStore(appContext)
+            VaultBox.destroy()
+            lockedInbox.clear()
+            openStore = if (Vault.sealed.value) null else CommsStore(appContext)
             CommsLog.clear()
             publishConfig()
             _state.update { it.copy(connected = false, lastSync = 0L, relayOneTimeKeys = -1, balance = -1L) }
@@ -691,12 +806,19 @@ object CommsRepository {
 
     // ── Contacts ──────────────────────────────────────────────────────────
 
-    fun contacts(): List<Contact> = store.contacts()
-    fun contact(number: String): Contact? = store.contact(number)
-    fun threads(): List<ChatThread> = store.threads()
-    fun messages(peer: String): List<ChatMessage> = store.messages(peer)
-    fun transactions(peer: String): List<CoinTx> = store.transactions(peer)
-    fun allTransactions(): List<CoinTx> = store.allTransactions()
+    /**
+     * A read for a screen: while the phone is locked (the screen just went
+     * off under it) there is nothing to show rather than an error to crash on.
+     */
+    private inline fun <T> unlockedOr(empty: T, read: () -> T): T =
+        if (Vault.sealed.value) empty else try { read() } catch (e: VaultSealedException) { empty }
+
+    fun contacts(): List<Contact> = unlockedOr(emptyList()) { store.contacts() }
+    fun contact(number: String): Contact? = unlockedOr(null) { store.contact(number) }
+    fun threads(): List<ChatThread> = unlockedOr(emptyList()) { store.threads() }
+    fun messages(peer: String): List<ChatMessage> = unlockedOr(emptyList()) { store.messages(peer) }
+    fun transactions(peer: String): List<CoinTx> = unlockedOr(emptyList()) { store.transactions(peer) }
+    fun allTransactions(): List<CoinTx> = unlockedOr(emptyList()) { store.allTransactions() }
 
     /** This identity's pairing payload, for the QR code others scan. */
     fun pairingCode(): PairingCode? {
@@ -1007,7 +1129,7 @@ object CommsRepository {
      * network does not hold up envelopes (and call signals) coming in.
      */
     suspend fun flushOutbox() = withContext(Dispatchers.IO) {
-        if (!config.isRegistered) return@withContext
+        if (!config.isRegistered || Vault.sealed.value) return@withContext
         outboxLock.withLock {
             for (m in store.queued()) {
                 val contact = store.contact(m.peer)
@@ -1123,6 +1245,7 @@ object CommsRepository {
     private suspend fun deliver(contact: Contact, payload: JSONObject): Deliver {
         // A call being set up and an SOS skip the relay's mixing delay.
         val urgent = CommsWire.type(payload) in URGENT_TYPES
+        val alert = alertFor(payload)
         // Encryption runs under the lock; anything it needs from the network (a
         // bundle to start a session, the contact's current sealing prekey) is
         // fetched without it, once each, and encryption tried again.
@@ -1130,7 +1253,7 @@ object CommsRepository {
         var prekeyFetched = false
         while (true) {
             when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
-                is Prepared.Ready -> return transmit(contact, p.envelope, urgent)
+                is Prepared.Ready -> return transmit(contact, p.envelope, urgent, alert)
                 is Prepared.Failed -> return Deliver.Failed(p.reason)
                 is Prepared.Offline -> return Deliver.Offline(p.reason)
                 Prepared.NeedBundle -> {
@@ -1158,6 +1281,17 @@ object CommsRepository {
                 }
             }
         }
+    }
+
+    /**
+     * What a locked recipient's phone should do with [payload] before it can
+     * open it: ring for a call's offer, sound the alarm for an SOS. Nothing for
+     * the rest of a call's signals, which only matter once it is answered.
+     */
+    private fun alertFor(payload: JSONObject): String? = when (CommsWire.type(payload)) {
+        CommsWire.T_CALL -> if (payload.optString(CommsWire.F_CALL_KIND) == CommsWire.CALL_OFFER) RelayClient.ALERT_CALL else null
+        CommsWire.T_PANIC -> RelayClient.ALERT_SOS
+        else -> null
     }
 
     /** The keys envelopes to [contact] are made for, with their sealing prekey when one is known. */
@@ -1262,10 +1396,10 @@ object CommsRepository {
      * outbox's backoff retries it (fetching tokens first), and [tokenRefill]
      * retries once at once if a fetch does bring tokens. No lock is held.
      */
-    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false): Deliver {
+    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false, alert: String? = null): Deliver {
         val claim = claims.get(contact.number, System.currentTimeMillis())
         return try {
-            relay.send(contact.number, envelope, claim, contact.relay, urgent)
+            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert)
             if (claim != null) claims.accepted(contact.number, claim)
             Deliver.Sent
         } catch (e: RelayException) {
@@ -1546,7 +1680,7 @@ object CommsRepository {
     // member, and each phone applies only what it hears from someone it knows
     // to be in that group (and, for roster changes, to be an admin of it).
 
-    fun groups(): List<Group> = store.groups().map { it.copy(memberCount = store.groupMembers(it.id).size) }
+    fun groups(): List<Group> = unlockedOr(emptyList()) { store.groups().map { it.copy(memberCount = store.groupMembers(it.id).size) } }
 
     /** The owner's choice about what notifications say; see [CommsConfig.hidePreviews]. */
     fun setHidePreviews(hide: Boolean) = config.setHidePreviews(hide)
@@ -1556,20 +1690,22 @@ object CommsRepository {
 
     fun setRelayOnlyCalls(on: Boolean) = config.setRelayOnlyCalls(on)
 
-    fun group(gid: String): Group? = store.group(gid)?.let { it.copy(memberCount = store.groupMembers(gid).size) }
+    fun group(gid: String): Group? = unlockedOr(null) { store.group(gid)?.let { it.copy(memberCount = store.groupMembers(gid).size) } }
 
-    fun groupMembers(gid: String): List<GroupMember> = store.groupMembers(gid)
+    fun groupMembers(gid: String): List<GroupMember> = unlockedOr(emptyList()) { store.groupMembers(gid) }
 
     /** The newest [limit] messages in [gid], oldest first, as the conversation shows them. */
-    fun groupMessages(gid: String, limit: Int = 100): List<ChatMessage> = store.groupMessages(gid, limit).asReversed()
+    fun groupMessages(gid: String, limit: Int = 100): List<ChatMessage> = unlockedOr(emptyList()) { store.groupMessages(gid, limit).asReversed() }
 
-    fun sharedThreats(gid: String? = null): List<SharedThreat> = store.sharedThreats(gid)
+    fun sharedThreats(gid: String? = null): List<SharedThreat> = unlockedOr(emptyList()) { store.sharedThreats(gid) }
 
     /** Every group with its last message, unread count and size, most recently active first. */
-    fun groupThreads(): List<GroupThread> = store.groups().map { g ->
-        val members = store.groupMembers(g.id).size
-        GroupThread(g.copy(memberCount = members), store.groupMessages(g.id, 1).firstOrNull(), store.groupUnread(g.id), members)
-    }.sortedByDescending { it.lastMessage?.ts ?: it.group.createdTs }
+    fun groupThreads(): List<GroupThread> = unlockedOr(emptyList()) {
+        store.groups().map { g ->
+            val members = store.groupMembers(g.id).size
+            GroupThread(g.copy(memberCount = members), store.groupMessages(g.id, 1).firstOrNull(), store.groupUnread(g.id), members)
+        }.sortedByDescending { it.lastMessage?.ts ?: it.group.createdTs }
+    }
 
     /** Marks a group conversation read; group messages carry no receipts. */
     suspend fun markGroupRead(gid: String) = withContext(Dispatchers.IO) {
@@ -2088,7 +2224,7 @@ object CommsRepository {
      * that cannot go now is tried again rather than lost.
      */
     suspend fun flushReceipts() = withContext(Dispatchers.IO) {
-        if (!config.isRegistered || !store.hasPendingReceipts()) return@withContext
+        if (!config.isRegistered || Vault.sealed.value || !store.hasPendingReceipts()) return@withContext
         receiptsLock.withLock {
             for ((peer, byStatus) in store.pendingReceipts()) {
                 val contact = store.contact(peer)
@@ -2127,6 +2263,9 @@ object CommsRepository {
      * this phone takes, and so pick this phone out of a crowd.
      */
     fun meshTags(): Set<String> {
+        // Locked, nothing here can tell which bundles are this phone's: the mesh
+        // carries them all, and they are recognised after the unlock.
+        if (Vault.sealed.value) return emptySet()
         val now = System.currentTimeMillis()
         val day = MeshProtocol.day(now)
         val contacts = runCatching { store.contacts() }.getOrDefault(emptyList()).map { it.sealing }.filter { it.isNotBlank() }.toSet()
@@ -2214,6 +2353,8 @@ object CommsRepository {
      * step could not be saved or the identity could not be read.
      */
     suspend fun handleEnvelope(envelope: RelayClient.Envelope): Boolean = withContext(Dispatchers.IO) {
+        // Locked: kept as it came, to be read once the phone is unlocked.
+        if (Vault.sealed.value) return@withContext keepForUnlock(envelope)
         val handled = try {
             lock.withLock {
                 if (store.hasPending()) retryPendingLocked()
@@ -2749,6 +2890,7 @@ object CommsRepository {
     /** Pulls the whole inbox, sends what is queued (messages and receipts) and tops up keys. */
     suspend fun sync(): Result<Unit> = withContext(Dispatchers.IO) {
         if (!config.isRegistered) return@withContext Result.success(Unit)
+        if (Vault.sealed.value) return@withContext collectWhileLocked()
         setBusy(true)
         try {
             // Every sync tops up delivery tokens, ahead of the sends below.
@@ -2802,6 +2944,21 @@ object CommsRepository {
         if (gone > 0u) CommsLog.add("Deleted $gone old sealing key(s); envelopes sealed to them can no longer be opened")
     }
 
+    /**
+     * The phone is locked: takes the inbox in (signed with the transport key)
+     * and keeps every envelope for after the unlock. Nothing is sent: that
+     * needs the identity.
+     */
+    private suspend fun collectWhileLocked(): Result<Unit> = runCatching {
+        for (page in 0 until MAX_INBOX_PAGES) {
+            val envelopes = relay.inbox()
+            if (envelopes.isEmpty()) break
+            val kept = envelopes.filter { keepForUnlock(it) }.map { it.id }
+            if (kept.isNotEmpty()) relay.ack(kept)
+            if (kept.size < envelopes.size || envelopes.size < RelayClient.INBOX_PAGE) break
+        }
+    }
+
     fun syncInBackground() {
         if (!initialised || !config.isRegistered) return
         scope.launch { sync() }
@@ -2813,7 +2970,7 @@ object CommsRepository {
      * keys on the relay drained until every new session used the fallback key.
      */
     fun replenishKeysInBackground() {
-        if (!initialised || !config.isRegistered) return
+        if (!initialised || !config.isRegistered || Vault.sealed.value) return
         val now = System.currentTimeMillis()
         if (now - lastReplenishAt < REPLENISH_INTERVAL_MS) return
         lastReplenishAt = now
@@ -2895,7 +3052,7 @@ object CommsRepository {
     // ── Disappearing messages ─────────────────────────────────────────────
 
     /** The disappearing-messages timer of a conversation (contact number or group id), in seconds; 0 when off. */
-    fun timer(peer: String): Int = if (initialised) store.timer(peer) else 0
+    fun timer(peer: String): Int = if (initialised) unlockedOr(0) { store.timer(peer) } else 0
 
     /**
      * Sets a conversation's disappearing-messages timer and tells the other side
@@ -2979,7 +3136,8 @@ object CommsRepository {
     private fun startExpirySweep() {
         scope.launch {
             while (true) {
-                val next = runCatching { sweepExpired() }
+                // Locked, the database is closed: what is due goes the moment it opens.
+                val next = if (Vault.sealed.value) null else runCatching { sweepExpired() }
                     .onFailure { CommsLog.add("Deleting disappearing messages failed: ${it.message}") }
                     .getOrNull()
                 val wait = next?.let { (it - System.currentTimeMillis()).coerceIn(EXPIRY_MIN_WAIT_MS, EXPIRY_POLL_MS) } ?: EXPIRY_POLL_MS

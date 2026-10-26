@@ -64,6 +64,10 @@ object CommsNotifications {
     const val CALL_NOTIFICATION_ID = 0x5C00_0003
     /** The one "unlock to read" notification that stands in for every message notification once the app locks. */
     const val SUMMARY_NOTIFICATION_ID = 0x5C00_0004
+    /** What arrived while the phone was locked, before anything could be opened: a call, an SOS, messages. */
+    const val LOCKED_CALL_NOTIFICATION_ID = 0x5C00_0005
+    const val LOCKED_SOS_NOTIFICATION_ID = 0x5C00_0006
+    const val LOCKED_MESSAGES_NOTIFICATION_ID = 0x5C00_0007
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -168,6 +172,87 @@ object CommsNotifications {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(INCOMING_CALL_NOTIFICATION_ID, notification)
+    }
+
+    // ── Before the phone is unlocked ─────────────────────────────────────
+
+    /**
+     * A call is ringing whose offer cannot be opened until the phone is
+     * unlocked: it names no one. Answer unlocks and then answers; Decline
+     * silences it here (the caller hears it ring out).
+     */
+    fun lockedCall(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val ring = Intent(context, app.clairix.LockedRingActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val show = PendingIntent.getActivity(context, LOCKED_CALL_NOTIFICATION_ID, ring, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val answer = PendingIntent.getActivity(
+            context, LOCKED_CALL_NOTIFICATION_ID + 1,
+            Intent(ring).setAction(app.clairix.LockedRingActivity.ACTION_ANSWER),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val decline = PendingIntent.getBroadcast(
+            context, LOCKED_CALL_NOTIFICATION_ID + 2,
+            Intent(context, CallActionReceiver::class.java).setAction(CallActionReceiver.ACTION_LOCKED_DECLINE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val caller = Person.Builder().setName("Clairix call").setImportant(true).build()
+        val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
+            .setSmallIcon(android.R.drawable.sym_action_call)
+            .setContentTitle("Incoming Clairix call")
+            .setContentText("Unlock to answer")
+            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setContentIntent(show)
+            .setFullScreenIntent(show, true)
+            .setTimeoutAfter(45_000L)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(LOCKED_CALL_NOTIFICATION_ID, notification)
+        CallManager.ringLocked()
+    }
+
+    /** An SOS arrived while the phone is locked: who and where are known only once it is unlocked. */
+    fun lockedSos(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("SOS from a group member")
+            .setContentText("Unlock Clairix to see who and where")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, LOCKED_SOS_NOTIFICATION_ID))
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(LOCKED_SOS_NOTIFICATION_ID, notification)
+    }
+
+    /** [count] messages are waiting to be opened after the unlock. */
+    fun lockedMessages(context: Context, count: Int) {
+        if (!canPost(context) || count <= 0) return
+        ensureChannels(context)
+        val text = if (count == 1) "Unlock to read it" else "$count waiting · unlock to read"
+        context.getSystemService(NotificationManager::class.java)
+            ?.notify(LOCKED_MESSAGES_NOTIFICATION_ID, unlockToRead(context, "New Clairix message", text, LOCKED_MESSAGES_NOTIFICATION_ID))
+    }
+
+    /** The phone was unlocked: what stood in for the sealed envelopes goes, and the real notifications follow. */
+    fun cancelLocked(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        for (id in listOf(LOCKED_CALL_NOTIFICATION_ID, LOCKED_SOS_NOTIFICATION_ID, LOCKED_MESSAGES_NOTIFICATION_ID)) manager.cancel(id)
+    }
+
+    private fun openComms(context: Context, requestCode: Int): PendingIntent {
+        val open = Intent(context, MainActivity::class.java)
+            .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        return PendingIntent.getActivity(context, requestCode, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     fun cancelIncomingCall(context: Context) {

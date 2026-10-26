@@ -108,7 +108,7 @@ object CommsMedia {
     fun save(id: String, bytes: ByteArray) {
         val f = fileFor(id)
         val tmp = File(f.parentFile, f.name + ".tmp")
-        tmp.writeBytes(KeystoreBox.encrypt(bytes))
+        tmp.writeBytes(VaultBox.encrypt(bytes))
         if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
     }
 
@@ -116,7 +116,10 @@ object CommsMedia {
     fun load(id: String): ByteArray? {
         val f = fileFor(id)
         if (!f.isFile) return null
-        return runCatching { KeystoreBox.decrypt(f.readBytes()) }.getOrNull()
+        val opened = runCatching { VaultBox.open(f.readBytes()) }.getOrNull() ?: return null
+        // Saved before the vault key existed: kept from now on under it.
+        if (opened.legacy) runCatching { save(id, opened.plain) }
+        return opened.plain
     }
 
     fun delete(id: String) { runCatching { fileFor(id).delete() } }

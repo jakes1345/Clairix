@@ -174,6 +174,53 @@ class EndToEndTest {
     }
 
     @Test
+    fun h_aLockedPhoneKeepsWhatArrivesAndReadsItOnUnlock() = runBlocking {
+        setUp()
+        val peer = local
+        try {
+            Vault.sealForTest()
+            eventually("the vault seals") { repo.contacts().isEmpty() }
+            peer.send(app, CommsWire.message(UUID.randomUUID().toString(), System.currentTimeMillis(), "sent while locked"))
+            // Collected with the transport key, and kept as it came.
+            lockedEventually("it waits for the unlock") { repo.lockedWaiting() > 0 }
+            assertTrue("nothing can be read while locked", repo.messages(peer.number).isEmpty())
+        } finally {
+            Vault.open()
+        }
+        eventually("it is read once unlocked") {
+            repo.messages(peer.number).any { it.direction == Direction.IN && it.body == "sent while locked" }
+        }
+        assertEquals(0, repo.lockedWaiting())
+    }
+
+    @Test
+    fun i_aCallToALockedPhoneRingsAndIsReadOnUnlock() = runBlocking {
+        setUp()
+        val peer = local
+        val cid = UUID.randomUUID().toString()
+        val manager = InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.app.NotificationManager::class.java)
+        try {
+            Vault.sealForTest()
+            eventually("the vault seals") { repo.contacts().isEmpty() }
+            peer.send(app, CommsWire.callOffer(cid, repo.relayNow(), MINIMAL_OFFER))
+            lockedEventually("the locked phone rings, naming no one") {
+                manager.activeNotifications.any { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID }
+            }
+            val ring = manager.activeNotifications.first { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID }.notification
+            assertEquals("Incoming Clairix call", ring.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString())
+            assertTrue("no call is known yet", CallManager.call.value == null)
+        } finally {
+            Vault.open()
+        }
+        eventually("unlocked, the offer is read and the call rings") {
+            CallManager.call.value?.let { it.id == cid && it.phase == CallPhase.INCOMING } == true
+        }
+        assertTrue("the stand-in is gone", manager.activeNotifications.none { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID })
+        peer.send(app, CommsWire.callEnd(cid, CommsWire.END_CANCEL))
+        eventually("the ringing stops") { CallManager.call.value?.let { it.id != cid || it.phase != CallPhase.INCOMING } ?: true }
+    }
+
+    @Test
     fun z_unpairing() = runBlocking {
         setUp()
         repo.unpair()
@@ -205,6 +252,9 @@ class EndToEndTest {
 
     private fun relayAOrigin(): String = RelayClient.originOf(InstrumentationRegistry.getArguments().getString("relayA"))!!
     private fun relayBPort(): Int = java.net.URI(InstrumentationRegistry.getArguments().getString("relayB")!!).port
+
+    /** As [eventually], for a locked phone: its sync only collects. */
+    private suspend fun lockedEventually(what: String, timeoutMs: Long = 45_000, check: () -> Boolean) = eventually(what, timeoutMs, check)
 
     /** Syncs the app until [check] holds, or fails after [timeoutMs]. */
     private suspend fun eventually(what: String, timeoutMs: Long = 45_000, check: () -> Boolean) {
@@ -271,7 +321,9 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
 
     /** Encrypts and sends [payload] to [to], as the app's deliver does; [appRelay] when [to] is on another relay. */
     fun send(to: PairingCode, payload: JSONObject, appRelay: String? = null) {
-        val keys = PeerKeys(to.ed25519, to.curve25519, to.sealing, to.signature)
+        // The app's current sealing prekey, as a contact's phone fetches it: envelopes are format 3.
+        val prekey = runCatching { relay.identity(to.number, fingerprint(to.ed25519), appRelay).sealingPrekey }.getOrNull()
+        val keys = PeerKeys(to.ed25519, to.curve25519, to.sealing, to.signature, prekey)
         if (!identity.hasSession(keys.curve25519)) {
             val bundle = relay.bundle(to.number, fingerprint(to.ed25519), appRelay)
             identity.startSession(keys, bundle.sessionKey)
@@ -281,7 +333,12 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         if (foreign) full.put(CommsWire.F_RELAY, RelayClient.originOf(relayUrl))
         relay.topUpTokens()
         val urgent = CommsWire.type(payload) in setOf(CommsWire.T_CALL, CommsWire.T_PANIC, CommsWire.T_GROUP_CTRL)
-        relay.send(to.number, identity.encrypt(keys, full.toString().toByteArray(Charsets.UTF_8)), claim, relay = appRelay, urgent = urgent)
+        val alert = when (CommsWire.type(payload)) {
+            CommsWire.T_CALL -> if (payload.optString(CommsWire.F_CALL_KIND) == CommsWire.CALL_OFFER) RelayClient.ALERT_CALL else null
+            CommsWire.T_PANIC -> RelayClient.ALERT_SOS
+            else -> null
+        }
+        relay.send(to.number, identity.encrypt(keys, full.toString().toByteArray(Charsets.UTF_8)), claim, relay = appRelay, urgent = urgent, alert = alert)
         claim = null
     }
 

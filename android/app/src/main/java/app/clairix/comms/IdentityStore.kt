@@ -11,7 +11,8 @@ import java.io.File
  * sealing key pair, sessions) and keeps it on disk.
  *
  * The identity is serialised by the crate under a random 32-byte key; that key
- * is itself wrapped by the Android Keystore ([KeystoreBox]) and stored in
+ * is itself wrapped by the Android Keystore ([VaultBox], a key that works only
+ * while the phone is unlocked) and stored in
  * preferences, so the pickle on disk is useless without this device's secure
  * hardware. Every mutation is followed by a write to disk, under one lock, so
  * a ratchet step is never lost between a message and a crash. If the pickle
@@ -35,10 +36,16 @@ class IdentityStore(context: Context) {
     /** True when an identity exists on disk (or in memory). */
     fun exists(): Boolean = identity != null || (file.exists() && prefs.contains(KEY_WRAPPED))
 
-    /** The identity, restored from disk on first use, or null when none exists. */
+    /**
+     * The identity, restored from disk on first use, or null when none exists.
+     * Throws [VaultSealedException] while the phone is locked: the identity is
+     * then out of reach, which is not the same as there being none.
+     */
     fun get(): Identity? {
+        if (Vault.sealed.value) throw VaultSealedException()
         identity?.let { return it }
         synchronized(lock) {
+            if (Vault.sealed.value) throw VaultSealedException()
             identity?.let { return it }
             if (!file.exists()) return null
             val key = keyLocked() ?: return null
@@ -59,7 +66,7 @@ class IdentityStore(context: Context) {
         synchronized(lock) {
             val fresh = Identity.create()
             val key = randomKey()
-            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(KeystoreBox.encrypt(key), Base64.NO_WRAP)).commit()
+            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()
             pickleKey = key
             persistLocked(fresh, key)
             identity = fresh
@@ -99,6 +106,19 @@ class IdentityStore(context: Context) {
         }
     }
 
+    /**
+     * The phone locked: forgets the identity and its pickle key from memory.
+     * Both are read again from disk, under the vault key, once it unlocks.
+     */
+    fun seal() {
+        synchronized(lock) {
+            identity?.destroy()
+            identity = null
+            pickleKey?.fill(0)
+            pickleKey = null
+        }
+    }
+
     /** Deletes the identity, its pickle and its wrapping key. */
     fun destroy() {
         synchronized(lock) {
@@ -130,13 +150,20 @@ class IdentityStore(context: Context) {
     private fun requireKeyLocked(): ByteArray =
         keyLocked() ?: throw IllegalStateException("The identity's pickle key is unavailable; the Keystore refused to unwrap it")
 
-    /** The pickle key, unwrapped through the Keystore once and then cached. */
+    /**
+     * The pickle key, unwrapped through the vault key once and then cached. One
+     * still wrapped under [KeystoreBox] (from before the vault) is rewrapped.
+     */
     private fun keyLocked(): ByteArray? {
         pickleKey?.let { return it }
+        if (Vault.sealed.value) throw VaultSealedException()
         val wrapped = prefs.getString(KEY_WRAPPED, null) ?: return null
-        val key = runCatching { KeystoreBox.decrypt(Base64.decode(wrapped, Base64.NO_WRAP)) }.getOrNull() ?: return null
-        pickleKey = key
-        return key
+        val opened = runCatching { VaultBox.open(Base64.decode(wrapped, Base64.NO_WRAP)) }.getOrNull() ?: return null
+        if (opened.legacy) {
+            runCatching { prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).commit() }
+        }
+        pickleKey = opened.plain
+        return opened.plain
     }
 
     private companion object {
