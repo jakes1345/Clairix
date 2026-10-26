@@ -107,6 +107,29 @@ export interface SignedKey {
   signature: string;
 }
 
+/**
+ * A phone's current sealing prekey (envelope format 3): an X25519 key it
+ * replaces every week, signed with its identity key over [prekeyStatement].
+ * Envelopes to the phone are sealed to it, and once the phone deletes an old
+ * one, envelopes logged earlier no longer show who sent them.
+ */
+export interface SealingPrekey {
+  key: string;
+  /** When the phone made it, ms since the epoch. */
+  created: number;
+  signature: string;
+}
+
+/** What a sealing prekey's signature covers; the phone's crypto signs the same text. */
+export function prekeyStatement(key: string, created: number): string {
+  return `clairix-sealing-prekey-v1|${key}|${created}`;
+}
+
+/** A prekey older than this is not taken: senders would refuse to seal to it anyway. */
+export const PREKEY_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
+/** Nor one from further in the future than this. */
+export const PREKEY_FUTURE_SKEW_MS = 24 * 60 * 60_000;
+
 export interface OtkClaim {
   /** SHA-256 (hex) of the ticket handed out with the key. */
   ticket: string;

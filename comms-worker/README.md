@@ -396,7 +396,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile and one-time-key count |
 | DELETE | `/v1/me` | Wipe the mailbox |
-| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key |
+| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old) |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
 | POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |

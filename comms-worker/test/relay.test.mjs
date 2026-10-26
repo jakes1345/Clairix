@@ -794,3 +794,54 @@ test("a key registered under one spelling cannot be registered again under anoth
   raw[31] |= 0x80;
   assert.equal((await register(raw.toString("base64"), victim.sealing)).status, 400);
 });
+
+test("a phone's sealing prekey is stored, served with its keys, and only replaced by a newer one", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  // Served with the bundle and with the identity alone, and shown to its owner.
+  assert.deepEqual((await alice.bundle(bob.number)).json.bundle.sealingPrekey, bob.sealingPrekey);
+  assert.deepEqual((await alice.identity(bob.number)).json.identity.sealingPrekey, bob.sealingPrekey);
+  assert.deepEqual((await bob.signed("GET", "/v1/me")).json.profile.sealingPrekey, bob.sealingPrekey);
+
+  // A week on, the phone publishes its next one.
+  advance(7 * DAY_MS);
+  const next = await bob.signedPrekey();
+  assert.equal((await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [], sealingPrekey: next })).status, 200);
+  assert.deepEqual((await alice.identity(bob.number)).json.identity.sealingPrekey, next);
+  // The old one, sent again (a replayed request), does not take its place.
+  assert.equal((await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [], sealingPrekey: bob.sealingPrekey })).status, 200);
+  assert.deepEqual((await alice.identity(bob.number)).json.identity.sealingPrekey, next);
+});
+
+test("a sealing prekey senders would refuse is refused", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const now = Date.now();
+  const refused = async (prekey, what) => {
+    const res = await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [], sealingPrekey: prekey });
+    assert.equal(res.status, 400, `${what}: ${JSON.stringify(res.json)}`);
+  };
+  await refused(await bob.signedPrekey(now - 15 * DAY_MS), "two weeks old");
+  await refused(await bob.signedPrekey(now + 2 * DAY_MS), "from the future");
+  await refused(await mallory.signedPrekey(now), "signed by someone else");
+  const good = await bob.signedPrekey(now);
+  await refused({ ...good, created: good.created + 1 }, "time changed under the signature");
+  // A key with the top bit set is X25519's second spelling of another key.
+  const bytes = Buffer.from(good.key, "base64");
+  bytes[31] |= 0x80;
+  await refused(await bob.signedPrekey(now, bytes.toString("base64")), "not canonical");
+  await refused({ key: good.key, signature: good.signature }, "no time");
+  // Nothing refused replaced what was there.
+  assert.deepEqual((await bob.signed("GET", "/v1/me")).json.profile.sealingPrekey, bob.sealingPrekey);
+});
+
+test("a phone from before sealing prekeys registers and is served without one", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const old = await makePhone(relay, { prekey: false });
+  const bundle = (await alice.bundle(old.number)).json.bundle;
+  assert.equal(bundle.sealingPrekey, null);
+  assert.equal(bundle.sealing, old.sealing);
+});

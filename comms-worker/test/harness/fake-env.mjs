@@ -316,7 +316,7 @@ let addressCounter = 0;
  * Registers a phone with [oneTimeKeys] signed one-time keys and returns a
  * client that signs its requests the way RelayClient does.
  */
-export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {}) {
+export async function makePhone(relay, { listed = true, oneTimeKeys = 10, prekey = true } = {}) {
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const ed25519 = b64(await crypto.subtle.exportKey("raw", pair.publicKey));
   const sign = async (text) => b64(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, enc.encode(text)));
@@ -330,6 +330,13 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
   const keys = [];
   for (let i = 0; i < oneTimeKeys; i++) keys.push(await signedKey(`${tag}-otk-${i}`));
   const fallback = await signedKey(`${tag}-fallback`);
+  /** A sealing prekey signed the way the app's crypto signs one. */
+  const signedPrekey = async (created = Date.now(), key = randomCurveB64()) => ({
+    key,
+    created,
+    signature: await sign(`clairix-sealing-prekey-v1|${key}|${created}`),
+  });
+  const sealingPrekey = prekey ? await signedPrekey() : undefined;
   const body = JSON.stringify({
     ts: Date.now(),
     secret: ENROLL_SECRET,
@@ -339,6 +346,7 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
     signature: await sign(`${curve25519}|${sealing}`),
     fallback,
     oneTimeKeys: keys,
+    ...(sealingPrekey ? { sealingPrekey } : {}),
     listed,
   });
   const reg = await relay.call("POST", "/v1/register", {
@@ -369,6 +377,8 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
     ed25519,
     curve25519,
     sealing,
+    sealingPrekey: sealingPrekey ?? null,
+    signedPrekey,
     sign,
     registrationBody: body,
     keyIds: keys.map((k) => k.id),

@@ -18,7 +18,11 @@ import {
   TURN_TTL_S,
   TURN_PER_HOUR,
   TURN_BURST,
+  PREKEY_FUTURE_SKEW_MS,
+  PREKEY_MAX_AGE_MS,
+  prekeyStatement,
   type IceServer,
+  type SealingPrekey,
   type TokenKind,
 } from "./comms-logic";
 import { HttpError, base64ToBytes, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
@@ -71,7 +75,7 @@ export { IncidentCache, Mailbox, Traffic };
  * relay hands out at registration, and it works only between Clairix apps
  * paired with this relay.
  *
- *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, listed}
+ *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, sealingPrekey?, listed}
  *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}. ts is epoch millis within
  *                              five minutes, and each key may belong to one account, so a captured body cannot be
  *                              replayed into a second account.
@@ -98,7 +102,9 @@ export { IncidentCache, Mailbox, Traffic };
  *                                cached per 0.25° tile for 5 minutes in the IncidentCache object
  * Signed (see auth.ts):
  *   GET    /v1/me                                          → profile + key counts
- *   PUT    /v1/keys            {oneTimeKeys, fallback?}    → replenish
+ *   PUT    /v1/keys            {oneTimeKeys, fallback?, sealingPrekey?} → replenish; a sealing prekey ({key, created, signature},
+ *                                                            signed over clairix-sealing-prekey-v1|key|created) replaces
+ *                                                            the one held only when newer
  *   PUT    /v1/listed          {listed}
  *   PUT    /v1/push            {endpoint|null}             → UnifiedPush endpoint to wake this device: in use at
  *                                                            once on a trusted host ({verified: true}), else a code
@@ -288,10 +294,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/keys" && request.method === "PUT") {
-    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown }>(bodyText);
+    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown; sealingPrekey?: unknown }>(bodyText);
     const oneTimeKeys = await checkedKeys(profile.ed25519, body.oneTimeKeys);
     const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(profile.ed25519, [body.fallback]))[0] ?? null;
-    return json(await me.putKeys(oneTimeKeys, fallback));
+    const sealingPrekey = await checkedSealingPrekey(profile.ed25519, body.sealingPrekey);
+    return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey));
   }
 
   if (path === "/v1/listed" && request.method === "PUT") {
@@ -870,6 +877,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     signature?: unknown;
     fallback?: unknown;
     oneTimeKeys?: unknown;
+    sealingPrekey?: unknown;
     listed?: unknown;
   }>(bodyText);
   // Either the relay's enrollment secret, or an invite a registered phone made.
@@ -905,6 +913,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
   if (!(await verifyEd25519(ed25519, `${curve25519}|${sealing}`, signature))) throw new HttpError(400, "Key binding signature invalid");
   const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(ed25519, [body.fallback]))[0] ?? null;
   const oneTimeKeys = await checkedKeys(ed25519, body.oneTimeKeys ?? []);
+  const sealingPrekey = await checkedSealingPrekey(ed25519, body.sealingPrekey);
   const listed = body.listed !== false;
 
   // Used up only once everything else about the request has checked out.
@@ -919,7 +928,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(number));
     const now = Date.now();
     // Dated to the day: enough for anything that asks how old an account is.
-    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: dayFloor(now), keysClaimed: true };
+    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, sealingPrekey, listed, createdAt: dayFloor(now), keysClaimed: true };
     if (await mailbox.claim(profile, oneTimeKeys)) {
       if (!(await claimKeys(env, profile, true))) {
         // One of the keys is already another account's. The number just taken
@@ -966,6 +975,32 @@ async function checkedKeys(ed25519: string, raw: unknown): Promise<SignedKey[]> 
   return out;
 }
 
+/**
+ * A sealing prekey from its owner: absent or null is none; anything else must
+ * be a canonical X25519 key, signed by [ed25519] over [prekeyStatement], made
+ * neither more than two weeks ago nor more than a day ahead. The relay checks
+ * so it never serves a prekey senders would refuse.
+ */
+async function checkedSealingPrekey(ed25519: string, raw: unknown): Promise<SealingPrekey | null> {
+  if (raw === undefined || raw === null) return null;
+  const p = raw as Partial<SealingPrekey>;
+  if (typeof p.key !== "string" || typeof p.signature !== "string" || typeof p.created !== "number" || !Number.isSafeInteger(p.created)) {
+    throw new HttpError(400, "sealingPrekey needs key, created and signature");
+  }
+  if (p.key.length > 64 || p.signature.length > 128) throw new HttpError(400, "sealingPrekey fields too long");
+  if (keySpellings(p.key) === null || !canonicalX25519(base64ToBytes(p.key))) {
+    throw new HttpError(400, "sealingPrekey must be a Curve25519 key in canonical form, in standard base64");
+  }
+  const now = Date.now();
+  if (p.created > now + PREKEY_FUTURE_SKEW_MS || now - p.created > PREKEY_MAX_AGE_MS) {
+    throw new HttpError(400, "sealingPrekey is out of date; check the phone's clock");
+  }
+  if (!(await verifyEd25519(ed25519, prekeyStatement(p.key, p.created), p.signature))) {
+    throw new HttpError(400, "sealingPrekey is not signed by ed25519");
+  }
+  return { key: p.key, created: p.created, signature: p.signature };
+}
+
 function publicProfile(p: Profile) {
   return {
     number: p.number,
@@ -973,6 +1008,7 @@ function publicProfile(p: Profile) {
     curve25519: p.curve25519,
     sealing: p.sealing,
     signature: p.signature,
+    sealingPrekey: p.sealingPrekey ?? null,
     listed: p.listed,
     createdAt: p.createdAt,
   };
@@ -1160,7 +1196,27 @@ function checkedIdentity(value: unknown, number: string): IdentityLike | null {
   for (const k of ["ed25519", "curve25519", "sealing", "signature"] as const) {
     if (typeof v[k] !== "string" || (v[k] as string).length === 0 || (v[k] as string).length > 200) return null;
   }
-  return { number, ed25519: v.ed25519 as string, curve25519: v.curve25519 as string, sealing: v.sealing as string, signature: v.signature as string };
+  return {
+    number,
+    ed25519: v.ed25519 as string,
+    curve25519: v.curve25519 as string,
+    sealing: v.sealing as string,
+    signature: v.signature as string,
+    sealingPrekey: checkedForeignPrekey(v.sealingPrekey),
+  };
+}
+
+/**
+ * A sealing prekey in another relay's answer, kept only in its expected shape.
+ * Its signature is the phone's to check, as for every key another relay hands
+ * over; a malformed one is dropped, so a phone that relies on it fetches again.
+ */
+function checkedForeignPrekey(value: unknown): SealingPrekey | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.key !== "string" || typeof v.signature !== "string" || typeof v.created !== "number" || !Number.isSafeInteger(v.created)) return null;
+  if (v.key.length > 64 || v.signature.length > 128) return null;
+  return { key: v.key, created: v.created, signature: v.signature };
 }
 
 function checkedSignedKey(value: unknown): SignedKey | null {
@@ -1190,6 +1246,7 @@ interface IdentityLike {
   curve25519: string;
   sealing: string;
   signature: string;
+  sealingPrekey: SealingPrekey | null;
 }
 
 /**

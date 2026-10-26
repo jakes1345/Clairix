@@ -152,7 +152,8 @@ test("a lookup through the home relay claims a one-time key there, and the first
     assert.equal(bundle.ed25519, bob.ed25519);
     assert.ok(bob.keyIds.includes(bundle.oneTimeKey.id));
     assert.equal(typeof bundle.claim, "string");
-    assert.deepEqual(Object.keys(bundle).sort(), ["claim", "curve25519", "ed25519", "fallback", "number", "oneTimeKey", "sealing", "signature"]);
+    assert.deepEqual(Object.keys(bundle).sort(), ["claim", "curve25519", "ed25519", "fallback", "number", "oneTimeKey", "sealing", "sealingPrekey", "signature"]);
+    assert.deepEqual(bundle.sealingPrekey, bob.sealingPrekey, "the sealing prekey crosses relays");
     assert.equal(await bob.oneTimeKeys(), 4);
     const [token] = await alice.tokens(1);
     assert.equal((await alice.send(token, bob.number, undefined, bundle.claim, { relay: B })).status, 202);
@@ -163,6 +164,7 @@ test("a lookup through the home relay claims a one-time key there, and the first
     const identity = await alice.signed("POST", "/v1/lookup", { number: bob.number, claim: false, relay: B });
     assert.equal(identity.status, 200);
     assert.equal(identity.json.identity.sealing, bob.sealing);
+    assert.deepEqual(identity.json.identity.sealingPrekey, bob.sealingPrekey);
     assert.equal(await bob.oneTimeKeys(), 4);
   } finally {
     net.restore();

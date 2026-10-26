@@ -24,6 +24,7 @@ import {
   randomToken,
   tokenHash,
   type OtkClaim,
+  type SealingPrekey,
   type SignedKey,
 } from "./comms-logic";
 
@@ -61,6 +62,8 @@ export interface Profile {
   /** Signature by ed25519 over `curve25519|sealing`, so a relay cannot swap keys. */
   signature: string;
   fallback: SignedKey | null;
+  /** The current sealing prekey; absent for apps from before envelope format 3. */
+  sealingPrekey?: SealingPrekey | null;
   /** Whether the number can be looked up. Unlisted numbers are reached by QR only. */
   listed: boolean;
   createdAt: number;
@@ -82,6 +85,7 @@ export interface Bundle {
   curve25519: string;
   sealing: string;
   signature: string;
+  sealingPrekey: SealingPrekey | null;
   oneTimeKey: SignedKey | null;
   fallback: SignedKey | null;
   /**
@@ -287,6 +291,7 @@ export interface IdentityKeys {
   curve25519: string;
   sealing: string;
   signature: string;
+  sealingPrekey: SealingPrekey | null;
 }
 
 export class Mailbox extends DurableObject<Env> {
@@ -381,8 +386,11 @@ export class Mailbox extends DurableObject<Env> {
     return profile;
   }
 
-  /** Replaces the fallback key and adds one-time keys. */
-  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null): Promise<{ oneTimeKeys: number }> {
+  /**
+   * Replaces the fallback key, adds one-time keys, and takes a sealing prekey
+   * newer than the one held (an older one, replayed, is ignored).
+   */
+  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null, sealingPrekey: SealingPrekey | null = null): Promise<{ oneTimeKeys: number }> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) throw new Error("unregistered");
     const existing = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
@@ -393,6 +401,7 @@ export class Mailbox extends DurableObject<Env> {
     const known = new Set(existing.map((k) => k.id));
     const merged = existing.concat(oneTimeKeys.filter((k) => !known.has(k.id) && !claimed.has(k.id))).slice(-MAX_ONE_TIME_KEYS);
     if (fallback) profile.fallback = fallback;
+    if (sealingPrekey && sealingPrekey.created > (profile.sealingPrekey?.created ?? -1)) profile.sealingPrekey = sealingPrekey;
     await this.ctx.storage.put({ otks: merged, profile });
     return { oneTimeKeys: merged.length };
   }
@@ -469,6 +478,7 @@ export class Mailbox extends DurableObject<Env> {
       curve25519: profile.curve25519,
       sealing: profile.sealing,
       signature: profile.signature,
+      sealingPrekey: profile.sealingPrekey ?? null,
       oneTimeKey,
       fallback: oneTimeKey ? null : profile.fallback,
       claim,
@@ -514,6 +524,7 @@ export class Mailbox extends DurableObject<Env> {
       curve25519: profile.curve25519,
       sealing: profile.sealing,
       signature: profile.signature,
+      sealingPrekey: profile.sealingPrekey ?? null,
     };
   }
 
