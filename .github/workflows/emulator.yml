@@ -263,6 +263,19 @@ jobs:
           fi
           grep -q "^OK (" ../instrument.txt || { echo "::error::The smoke test failed; see instrument.txt"; exit 1; }
 
+      # The smoke test leaves the scanner running, and with it the GPS check's
+      # raw-measurement listener (GnssMonitor). The emulator's GNSS HAL
+      # (gnss@2.0-service.ranchu) deadlocks when Android stops and restarts
+      # measurement collection as an app's foreground state changes, and the
+      # system watchdog then kills the whole system (seen on Android 12 and 13
+      # during the soak test). Everything from here on tests messaging, so the
+      # scanner is stopped first; who held the listeners is kept for the record.
+      - name: Stop the scanner the smoke test started
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" shell dumpsys location > location-after-smoke.txt 2>&1 || true
+          "$ADB" shell am force-stop app.clairix
+
       - name: Run the end-to-end tests against the two relays
         working-directory: android
         timeout-minutes: 20
@@ -386,5 +399,6 @@ jobs:
             relay-a.log
             relay-b.log
             tor-onion.log
+            location-after-smoke.txt
             emulator.log
           if-no-files-found: warn
