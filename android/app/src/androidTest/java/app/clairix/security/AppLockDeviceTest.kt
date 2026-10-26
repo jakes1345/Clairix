@@ -4,9 +4,9 @@ import android.content.Context
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.clairix.FreshUi
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,6 +25,7 @@ class AppLockDeviceTest {
 
     private val instr = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instr)
+    private val ui = FreshUi(instr, device)
     private val context: Context get() = instr.targetContext
     private val pkg = "app.clairix"
 
@@ -40,7 +41,7 @@ class AppLockDeviceTest {
     }
 
     private fun texts(): Set<String> =
-        device.findObjects(By.pkg(pkg)).mapNotNull { runCatching { it.text }.getOrNull() }.filter { it.isNotBlank() }.toSet()
+        ui.findAll(By.pkg(pkg)).mapNotNull { runCatching { it.text }.getOrNull() }.filter { it.isNotBlank() }.toSet()
 
     /**
      * Locked, the app underneath the lock screen is drawn over and also gone from
@@ -51,7 +52,7 @@ class AppLockDeviceTest {
     fun aLockedAppShowsAccessibilityNothingButTheLockScreen() {
         val launch = context.packageManager.getLaunchIntentForPackage(pkg)!!.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(launch)
-        assertTrue("app did not come up", device.wait(Until.hasObject(By.pkg(pkg).depth(0)), 20_000))
+        assertTrue("app did not come up", ui.waitHas(By.pkg(pkg).depth(0), 20_000))
         device.waitForIdle(3_000)
         val before = texts()
         assertTrue("the app showed no text to compare with", before.isNotEmpty())
@@ -59,7 +60,7 @@ class AppLockDeviceTest {
         AppLock.setPasscode(context, "73915824").getOrThrow()
         AppLock.lock()
         device.waitForIdle(3_000)
-        assertTrue("the lock screen did not come up", device.wait(Until.hasObject(By.text("Enter your passcode to continue").pkg(pkg)), 5_000))
+        assertTrue("the lock screen did not come up", ui.waitHas(By.text("Enter your passcode to continue").pkg(pkg), 5_000))
         val after = texts()
         val digits = (0..9).map { it.toString() }.toSet()
         val leaked = (before intersect after) - digits
