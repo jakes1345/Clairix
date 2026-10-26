@@ -466,8 +466,9 @@ Done since (Beta 6):
   compute. It is now HKDF over the X25519 secret the sender's and recipient's
   sealing keys share, computed inside the crypto crate; only the two ends can
   tell whose a bundle is. Bundles between the same two people on one day
-  still share a tag. Beta 5's tag is still recognised on arrival, which
-  reveals nothing, since a phone never announces the tags it answers to.
+  still share a tag. (Beta 6 still recognised Beta 5's tag on arrival, and
+  said that revealed nothing. It did: see the second review below, which
+  dropped it.)
 - **Existence through other relays.** Several relays together could fill a
   mailbox or its allowance for other relays and learn from a 413 or 429 that
   the number exists. An envelope from another relay that would go over those
@@ -481,10 +482,137 @@ Done since (Beta 6):
 - **Pinned NDK and cargo-ndk** (27.2.12479018, 4.1.2): the build refuses any
   other version, so a release can be rebuilt with the same tools.
 
+Done since (second review, after Beta 6): four separate reviews, of the
+crypto crate, the relay, the app's messaging code and its on-device
+protection, each reporting findings with a concrete attack and, where it
+could, a reproduction. Every finding was checked before it was fixed, and
+every fix has a test (relay findings were reproduced against the real Worker
+code first, and those reproductions are now regression tests). What was
+fixed:
+
+- **A crafted link could take over a verified contact.** A pairing code is
+  only self-signed, yet one arriving by link or paste replaced an existing
+  contact's keys and marked them verified, rewriting group rosters too: a
+  full man in the middle. Codes are now trusted by where they came from:
+  scanned in person they add a verified contact, only a scan on the
+  contact's own page replaces their keys, and a link, invite or paste never
+  verifies anyone or changes a contact already held. Contacts from invites
+  start unverified (the invite page is served by the relay).
+- **The relay could tag blind tokens by epoch.** The phone took the token
+  epoch from the relay's signed answer and, for a new one, fetched the keys
+  at once, on a connection the relay could tie to the request. A relay could
+  give each account an epoch and key of its own, and every token it spent
+  would name it. The phone now accepts only epochs its own clock agrees with,
+  pins each epoch's keys ahead of time (`GET /` publishes the next epoch's
+  too), never fetches keys right after asking for tokens, and reads them at
+  a random later moment on a fresh connection. A relay that ever issued
+  blind tokens is never asked for the old linkable kind again.
+- **Anonymous requests shared a connection.** Sends to every recipient,
+  cover traffic and traffic probes (with positions) all went over one
+  long-lived connection, which grouped them for the relay into one phone's
+  contact set and drives. Each anonymous request now has its own connection
+  and TLS session.
+- **One blind token spent four times.** 43 base64url characters carry two
+  bits beyond 32 bytes and the decoder ignored them; spent tokens were
+  recorded by text. Only the canonical spelling is accepted now.
+- **One key, several spellings.** The relay's one-account-per-key record was
+  keyed by text, and padding or X25519's ignored top bit gave other texts for
+  the same key; the crate keyed sessions the same way. Both now accept only
+  canonical keys (the relay records both base64 spellings) and the crate
+  keeps sessions under the canonical text.
+- **Payments told whether an unlisted number exists**, for free: "Payment
+  refused" against "Insufficient balance". The debit now comes first, so a
+  payer who cannot cover the amount hears the same either way.
+- **The relay fetched any https address for anyone**, before checking a
+  signature, again on every request, reading the answer without a limit.
+  Relay addresses are port 443 only with no trailing-dot hosts; a failed
+  fetch is remembered for ten minutes; key fetches share one relay-wide
+  allowance; answers are read only to 4 KiB (keys) and 64 KiB (forwards).
+- **One-time keys through other relays** skipped the phone's own claim
+  limits; they now apply, and past them the other relay is asked for the
+  fallback key.
+- **Traffic.** Two made-up trips could delete any report; voting a report
+  away now costs report tokens, needs as many votes as it had confirmations,
+  and never removes a work zone. One phone could spend a provider's whole
+  daily quota in an hour; quotas are now paced over the day.
+- **The mesh singled phones out.** A phone listed bundles it had been handed
+  but never forwarded them, so a peer connecting with an empty hello learned
+  which bundles were for it; Beta 5's tag, which anyone with a public key
+  could make, let a stranger push a probe only the target would take; own
+  bundles left with the first hop count at the exact minute. Delivered
+  bundles are now carried on like any other, the old tag is no longer
+  answered, and new bundles start one to three hops along, dated to the
+  hour. A phone's own bundles cannot be pushed out by a flood, one tag holds
+  at most 50, and a meeting at most 200.
+- **The relay controlled the disappearing-messages timer.** An envelope time
+  far in the future escaped the bounds check; a timer change so dated
+  outlasted every later one. Both times are now bounded.
+- **Message ids** were global across conversations, so reusing one could
+  draw a receipt for a group message; ids must now be UUIDs, and an id used
+  elsewhere is dropped without a receipt. Media files could collide on a
+  near-identical id; they cannot now.
+- **Payment notices** were believed as sent; they now show as unconfirmed
+  until the relay's record shows the credit.
+- **One contact could use up session recovery** for everyone (ten an hour in
+  all); now three per contact out of thirty.
+- **The app lock was only drawn over the app.** Its semantics stayed in the
+  accessibility tree, so TalkBack, an accessibility service or uiautomator
+  could read and operate what was underneath, and a keyboard could move focus
+  into it. While locked the app now has no semantics, focus cannot enter it
+  and its key events are dropped. A device test checks nothing shows through.
+- **The duress wipe waited on the network** for up to six seconds before
+  deleting anything, and could be interrupted with everything intact. It now
+  deletes every Keystore key first, then everything else, and asks the relay
+  last with a deletion signed before the keys went; an interrupted wipe is
+  finished by any process start, and nothing can make a new key mid-wipe.
+- **Notifications on a locked phone** showed senders, text and SOS positions
+  unless "hide previews" was on (it was off without a passcode). Finding 8
+  claimed more than the code did. The channels are now private on the lock
+  screen, previews are hidden by default, what arrives while Clairix is
+  locked is redacted from the start, and an SOS on the lock screen names no
+  one and gives no position.
+- **A duress-phrase SOS left evidence**: a timeline entry and a comms-log
+  line a captor would find after a forced unlock. It is now recorded nowhere.
+- **The lock's settings file said whether a duress code exists.** A phone
+  with a passcode now always holds a duress salt and verifier, random ones
+  when none is set.
+- **Map tiles**, a street-level record of where the owner has been, sat in
+  shared external storage outside sealing and retention. They are now in the
+  private no-backup directory, capped, and pruned with the history.
+- Smaller: the lock comes down when the screen goes off; the relay clock
+  sample and the token-key pins are sealed; a Keystore hiccup no longer
+  deletes the message database; exported reports and plaintext play copies
+  no longer linger; the sealed box refuses low-order keys; `encrypt` keeps a
+  Curve25519 key to the identity it belongs to; the identity state is
+  serialised without leaving unwiped partial copies.
+
+Open from the second review, each a design change rather than a fix:
+
+- **The sealing key never rotates**, so sealed sender has no forward
+  secrecy: whoever logs envelopes at the relay and later seizes the phone
+  learns who sent each one and when. Needs rotating, signed sealing keys.
+- **The sender's claim is a signature**, so a relay log plus the recipient's
+  key proves to anyone that the sender sent a given ciphertext. Olm itself
+  is deniable; this layer is not. Needs a MAC both ends can compute instead.
+- **Every comms key works while the phone is locked** (after first unlock),
+  so an exploit that runs as the app reads everything (finding 7). Needs keys
+  that need an unlocked device, and a locked-state inbox for what arrives.
+- **Fake relays cost nothing.** Any https host serving a key counts as a
+  relay, so wildcard subdomains can use up a mailbox's allowance for other
+  relays and silently crowd out real cross-relay mail. Needs a cost per
+  sender, or an allowlist by default.
+- **Envelope length shows the Olm message type** (a new session is larger)
+  and roughly how many messages went unanswered. Needs padding after Olm.
+- Old pickles stay decryptable under one never-rotated key; invite trees let
+  one account multiply itself; a hello's list of carried ids fingerprints a
+  phone for up to 48 hours; the relay's clock drives the clock-integrity
+  check; the lock's failure counter and wipe threshold are in a plain file.
+
 Known and not fixed:
 
 - The mixing code, the mesh and the blind tokens have had no outside review.
-  Nothing here has had an independent audit.
+  The second review above was internal; nothing here has had an independent
+  audit.
 
 Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
 30, and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and

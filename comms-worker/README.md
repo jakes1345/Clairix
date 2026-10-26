@@ -87,6 +87,12 @@ verifiable tokens (`src/tokens.ts`).
 3. The phone checks the proof against that published key, the same for every
    caller, and against the first key it saw that epoch; a relay that gave one
    phone a key of its own (and so could recognise its tokens) is refused.
+   `GET /` also publishes the next epoch's keys (`tokens.next`), so a phone has
+   pinned them long before it is issued any tokens under them, on a request
+   that names nobody. It accepts only an epoch its own clock agrees with
+   (this one or a neighbour), never reads the keys straight after asking for
+   tokens, and never asks a relay that once issued blind tokens for the old
+   kind again.
 4. Spending a token shows `2.<epoch>.<input>.<output>` in `X-Clairix-Token`.
    The relay checks the output is what its key makes of the input and records
    the token as spent; it never saw the input before, so it cannot tell whose
@@ -216,8 +222,10 @@ standing next to you scans its QR code from COMMS setup (SCAN INVITE); someone
 far away gets a link, `https://<relay>/i#…`, which opens a page with the Clairix
 download and an OPEN IN CLAIRIX button. The invite registers exactly one phone,
 expires after seven days, and never reveals the enrollment secret. The new
-phone starts with the inviter as a verified contact, since the invite carries
-the inviter's keys, and sends them a first message. The part after `#` never
+phone starts with the inviter as a contact, since the invite carries the
+inviter's keys, and sends them a first message. Not a verified one: the link
+passed through other hands, and this relay serves the page that opens it, so
+the two compare safety numbers (or scan each other's code) to verify. The part after `#` never
 reaches the relay; the page reads it in the browser. Each identity can make
 20 invites a day.
 
@@ -376,7 +384,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | --- | --- | --- |
 | POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite`; allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
-| GET | `/` | `{service, version, alternates, relayKey, federation}`: the relay's other addresses, the public key it signs forwarded requests with, and which relays it accepts them from |
+| GET | `/` | `{service, version, alternates, relayKey, federation, tokens}`: the relay's other addresses, the public key it signs forwarded requests with, which relays it accepts them from, and its blind-token keys for this epoch and the next |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile and one-time-key count |
 | DELETE | `/v1/me` | Wipe the mailbox |
