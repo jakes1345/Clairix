@@ -374,6 +374,8 @@ object CommsRepository {
             meshTagCache = null
         }
         CommsLog.seal()
+        // Last: the log above is put away under it.
+        VaultBox.forget()
     }
 
     private suspend fun openVault() {

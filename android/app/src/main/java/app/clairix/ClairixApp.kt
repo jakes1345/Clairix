@@ -14,5 +14,7 @@ class ClairixApp : Application() {
     override fun onCreate() {
         super.onCreate()
         if (Wiper.isPending(this)) Wiper.start(this)
+        // Before anything reads the comms vault (a push, the call service).
+        app.clairix.comms.VaultBox.init(this)
     }
 }

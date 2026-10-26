@@ -2,8 +2,6 @@ package app.clairix.comms
 
 import android.app.KeyguardManager
 import android.os.ParcelFileDescriptor
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,9 +14,6 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.spec.GCMParameterSpec
 import kotlin.random.Random
 
 /**
@@ -63,67 +58,48 @@ class VaultLockScreenTest {
     }
 
     @Test
-    fun settingALockScreenMovesNewWritesToTheUnlockBoundKey() {
+    fun settingALockScreenMovesTheVaultUnderTheUnlockBoundKey() {
         val secret = Random.nextBytes(32)
         val before = VaultBox.encrypt(secret)
-        val startedOpen = !VaultBox.writesUnlockBound()
         withPin {
-            if (startedOpen) {
-                // Still readable, and reported so its owner writes it again.
-                val read = VaultBox.open(before)
-                assertArrayEquals(secret, read.plain)
-                assertTrue("a blob under the open key was not reported for rewriting", read.legacy)
-            }
-            val after = VaultBox.encrypt(secret)
-            assertTrue("a PIN is set but writes did not move to the unlock-bound key", VaultBox.writesUnlockBound())
-            val reread = VaultBox.open(after)
-            assertArrayEquals(secret, reread.plain)
-            assertFalse(reread.legacy)
+            Vault.check()
+            assertTrue("a PIN is set but the vault stayed under the open key", VaultBox.writesUnlockBound())
+            // The same data key, wrapped anew: nothing written before needs rewriting.
+            val read = VaultBox.open(before)
+            assertArrayEquals(secret, read.plain)
+            assertFalse(read.legacy)
+            // Sealed and opened again while unlocked: unwrapped by the unlock-bound key.
+            VaultBox.forget()
+            assertArrayEquals(secret, VaultBox.open(before).plain)
         }
+        Vault.check()
     }
 
     /**
-     * What Android does to an unlock-bound key when the owner removes the lock
-     * screen, on a key of the test's own so the app's are untouched: the vault
-     * has to survive it.
+     * Android 14 deletes every unlock-bound key when the lock screen is
+     * removed. The vault survives because its data key, in memory while the
+     * vault is open, is wrapped again under the open key before it is needed.
      */
     @Test
-    fun anUnlockBoundKeyAcrossRemovingTheLockScreen() {
-        val ks = KeyStore.getInstance("AndroidKeyStore").also { it.load(null) }
+    fun removingTheLockScreenKeepsTheVault() {
         val secret = Random.nextBytes(32)
         lateinit var sealed: ByteArray
-        try {
-            withPin {
-                val key = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-                    init(
-                        KeyGenParameterSpec.Builder(TEST_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                            .setKeySize(256)
-                            .setUnlockedDeviceRequired(true)
-                            .build()
-                    )
-                }.generateKey()
-                sealed = Cipher.getInstance("AES/GCM/NoPadding").run { init(Cipher.ENCRYPT_MODE, key); iv + doFinal(secret) }
-            }
-            val after = runCatching {
-                val key = (ks.getEntry(TEST_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
-                Cipher.getInstance("AES/GCM/NoPadding").run {
-                    init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, sealed, 0, 12))
-                    doFinal(sealed, 12, sealed.size - 12)
-                }
-            }
-            Log.i(TAG, "unlock-bound key after the lock screen was removed: " +
-                after.fold({ "opens" }, { "${it.javaClass.name}: ${it.message}" }) + "; alias still there: ${ks.containsAlias(TEST_ALIAS)}")
-            after.getOrNull()?.let { assertArrayEquals(secret, it) }
-        } finally {
-            runCatching { ks.deleteEntry(TEST_ALIAS) }
+        withPin {
+            Vault.check()
+            assertTrue(VaultBox.writesUnlockBound())
+            sealed = VaultBox.encrypt(secret)
         }
+        val ks = KeyStore.getInstance("AndroidKeyStore").also { it.load(null) }
+        Log.i(TAG, "unlock-bound key still there after the lock screen was removed: ${ks.containsAlias("clairix_vault_v1")}")
+        Vault.check()
+        assertFalse("no lock screen, yet the vault stayed under the unlock-bound key", VaultBox.writesUnlockBound())
+        // As after a restart: the data key comes back from the open key's wrapping.
+        VaultBox.forget()
+        assertArrayEquals(secret, VaultBox.open(sealed).plain)
     }
 
     private companion object {
         const val PIN = "1590"
-        const val TEST_ALIAS = "clairix_test_unlock_bound"
         const val TAG = "VaultLockScreenTest"
     }
 }

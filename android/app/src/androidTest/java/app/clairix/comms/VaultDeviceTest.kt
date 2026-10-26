@@ -48,6 +48,10 @@ class VaultDeviceTest {
         // Neither key opens what neither sealed.
         val tampered = sealed.copyOf().also { it[it.size - 1] = (it.last().toInt() xor 1).toByte() }
         assertTrue(runCatching { VaultBox.open(tampered) }.isFailure)
+        // Sealed (the data key dropped from memory) and opened again: the data key
+        // is unwrapped from the Keystore, and opens what it sealed before.
+        VaultBox.forget()
+        assertArrayEquals(secret, VaultBox.open(sealed).plain)
     }
 
     @Test

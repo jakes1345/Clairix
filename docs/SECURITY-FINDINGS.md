@@ -630,11 +630,15 @@ Open from the second review, each a design change rather than a fix:
   its own bundles apart until then. A phone with no secure lock screen has
   no locked state, so nothing changes there: Android 14 will not make an
   unlock-bound key without one at all, so those phones use a key with no
-  unlock condition. Setting a lock screen moves everything to the
-  unlock-bound key on its next read, and removing it moves everything back
-  on its next read, if the unlock-bound key still works then. Android may
-  disable that key when the lock screen is removed, and what is under it is
-  then lost.
+  unlock condition. Everything is encrypted with one data key, and only that
+  key is wrapped by the Keystore. Android 14 deletes unlock-bound keys the
+  moment the lock screen is removed (measured on the emulator), so the data
+  key, in memory while the vault is open, is wrapped again under the key
+  that fits whenever the lock screen changes: on every screen and unlock
+  event and whenever Clairix comes to the front. A lock screen removed while
+  Clairix's process is not running (or has not opened the vault since it
+  started) still loses the vault. The data key, like the database password,
+  stays in the process's memory after sealing until it is reused.
 - **Fake relays cost nothing.** Any https host serving a key counts as a
   relay, so wildcard subdomains can use up a mailbox's allowance for other
   relays and silently crowd out real cross-relay mail. *Since fixed:* mail

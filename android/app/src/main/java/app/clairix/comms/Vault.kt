@@ -41,6 +41,7 @@ object Vault {
         val app = context.applicationContext
         keyguard = app.getSystemService(KeyguardManager::class.java)
         power = app.getSystemService(PowerManager::class.java)
+        VaultBox.init(app)
         // A process started while the phone is locked (a push, a restart) starts sealed.
         _sealed.value = keyguard.isDeviceSecure && keyguard.isDeviceLocked
         val filter = IntentFilter().apply {
@@ -50,12 +51,25 @@ object Vault {
         }
         ContextCompat.registerReceiver(app, object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                // First, while the data key may still be in memory: a lock screen
+                // set or removed since is followed now (see VaultBox.reconcile).
+                check()
                 when (intent.action) {
                     Intent.ACTION_SCREEN_OFF -> screenOff()
                     Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> if (!keyguard.isDeviceLocked) open()
                 }
             }
         }, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    /**
+     * Wraps the vault's data key again if the lock screen has been set or
+     * removed while the vault was open. Removing it deletes the unlock-bound
+     * key, so this must happen while the data key is still in memory: on every
+     * screen and unlock event, and whenever Clairix comes to the front.
+     */
+    fun check() {
+        runCatching { VaultBox.reconcile() }.onFailure { CommsLog.add("Could not move the vault to the current lock screen: ${it.message}") }
     }
 
     /**

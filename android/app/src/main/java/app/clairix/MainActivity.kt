@@ -449,6 +449,8 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         resumed = true
         AppLock.onForeground(this)
+        // Back from Settings, perhaps having set or removed the lock screen.
+        app.clairix.comms.Vault.check()
         applyNfcMode()
         if (BuildConfig.FULL_ACCESS) refreshDeviceHealth()
         // Envelopes that arrived while the app was closed are pulled on every
