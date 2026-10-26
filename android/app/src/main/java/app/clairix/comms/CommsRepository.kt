@@ -153,7 +153,20 @@ object CommsRepository {
      * locked: the database is closed then, and its key out of reach.
      */
     private val store: CommsStore
-        get() = openStore ?: throw VaultSealedException()
+        get() = openStore ?: openNow() ?: throw VaultSealedException()
+
+    /** Guards opening and closing [openStore], so a seal never leaves one open behind it. */
+    private val storeLock = Any()
+
+    /**
+     * The database, opened now: the phone was unlocked a moment ago and
+     * [openVault] has not run yet (a photo shared as the screen comes on),
+     * so whatever needs it opens it rather than being refused. Null while
+     * sealed, or when the Keystore still lags the unlock.
+     */
+    private fun openNow(): CommsStore? = synchronized(storeLock) {
+        openStore ?: if (Vault.sealed.value) null else runCatching { CommsStore(appContext) }.getOrNull()?.also { openStore = it }
+    }
 
     /** Envelopes that arrived while the phone was locked; read once it is unlocked. */
     private lateinit var lockedInbox: LockedInbox
@@ -368,8 +381,7 @@ object CommsRepository {
 
     private suspend fun sealVault() {
         lock.withLock {
-            val db = openStore
-            openStore = null
+            val db = synchronized(storeLock) { openStore.also { openStore = null } }
             runCatching { db?.close() }
             identities.seal()
             DuressPhrase.forget()
@@ -382,10 +394,9 @@ object CommsRepository {
 
     private suspend fun openVault() {
         val opened = lock.withLock {
-            if (openStore != null) return@withLock true
             try {
-                openStore = CommsStore(appContext)
-                true
+                synchronized(storeLock) { if (openStore == null && !Vault.sealed.value) openStore = CommsStore(appContext) }
+                openStore != null
             } catch (e: Exception) {
                 // The Keystore can lag the unlock by a moment; the next unlock or
                 // screen-on tries again, and nothing waiting is lost meanwhile.
