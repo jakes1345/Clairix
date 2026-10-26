@@ -393,6 +393,9 @@ object CommsRepository {
         CommsLog.open()
         CommsNotifications.cancelLocked(appContext)
         readLockedInbox()
+        // A locked ring whose offer turned out to be over (or was not one) stops
+        // here; a live offer has taken the ring over by now.
+        CallManager.stopLockedRing()
         bump()
         wakeExpiry()
         syncInBackground()
