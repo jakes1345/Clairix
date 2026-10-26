@@ -205,6 +205,14 @@ What each side learns:
   For a contact on the same relay it learns as much from the recipient alone.
 - Each relay holds the other to a limit for all its phones together: 600
   envelopes a minute, 120 lookups a minute and 600 one-time keys an hour.
+- Each mailbox takes at most 1,800 envelopes an hour from other relays
+  together, and stops 500 short of a full queue for them. A relay no phone
+  here has written to or looked a number up on in the last 90 days is a
+  stranger: strangers together get 10 at once and 30 an hour per mailbox,
+  so relays made up to flood a mailbox cannot crowd out the relays its
+  owner's contacts are on. A relay on the `FEDERATION` list is never a
+  stranger. The relay keeps the day someone last wrote to each relay, not
+  who wrote or to whom.
 
 `FEDERATION` chooses which relays may forward to this one: `open` (the
 default), `off`, or a comma-separated list of `https://` addresses. A relay

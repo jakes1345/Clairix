@@ -63,6 +63,13 @@ export const FED_LOOKUPS_BURST = 240;
 export const FED_CLAIMS_PER_HOUR = 600;
 export const FED_CLAIMS_BURST = 120;
 
+/**
+ * How long a relay counts as one people here write to after the last time one
+ * did. Mail from relays no one here has written to in that time draws on a
+ * small allowance of its own in each mailbox (mailbox.ts).
+ */
+export const WRITTEN_TO_DAYS = 90;
+
 export type FederationPolicy = { mode: "off" } | { mode: "open" } | { mode: "allow"; origins: Set<string> };
 
 /**
@@ -257,6 +264,15 @@ export async function forward(env: Env, request: Request, target: string, path: 
     // not JSON
   }
   return { status: res.status, json };
+}
+
+/**
+ * Records that a phone here wrote to (or looked someone up on) the relay at
+ * [target], after it answered. Only that the relay was written to, on which
+ * day: not by whom, nor to which number.
+ */
+export async function noteWrittenTo(env: Env, target: string): Promise<void> {
+  await env.MAILBOX.get(env.MAILBOX.idFromName(await federationObjectName(target))).noteWrittenTo();
 }
 
 // ── Receiving ─────────────────────────────────────────────────────────────

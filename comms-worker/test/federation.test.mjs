@@ -480,7 +480,7 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   const bob = await makePhone(b);
   const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
   let federated = 0;
-  for (let i = 0; i < 400; i++) if ((await box.enqueue("c2VhbGVk", null, true, true)).ok) federated++;
+  for (let i = 0; i < 400; i++) if ((await box.enqueue("c2VhbGVk", null, true, "known")).ok) federated++;
   assert.equal(federated, 300, "other relays get their own allowance");
   // This relay's own senders are not affected.
   const carol = await makePhone(b);
@@ -489,7 +489,7 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   // And the queue keeps room for them: other relays stop 500 short of full.
   await b.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 1500);
   advance(3_600_000);
-  assert.equal((await box.enqueue("c2VhbGVk", null, true, true)).status, 404, "dropped, answered as no such number");
+  assert.equal((await box.enqueue("c2VhbGVk", null, true, "known")).status, 404, "dropped, answered as no such number");
   const [t2] = await carol.tokens(1);
   assert.equal((await carol.send(t2, bob.number)).status, 202);
 });
@@ -509,8 +509,9 @@ test("a mailbox at its limits for other relays answers them as a number that doe
     };
     const queued = async () => (await real.get(bob.number).state.storage.get("queueCount")) ?? 0;
 
-    // Allowance for other relays used up (several relays together could).
-    for (let i = 0; i < 400; i++) await box.enqueue("c2VhbGVk", null, true, true);
+    // Allowance for other relays used up (several relays together could). No
+    // one on B has written to A, so A's mail draws on the strangers' share.
+    for (let i = 0; i < 400; i++) await box.enqueue("c2VhbGVk", null, true, "stranger");
     let before = await queued();
     assert.deepEqual(await answer(bob.number), await answer("123456789"));
     assert.deepEqual(await answer(bob.number), [202, "id"]);
@@ -531,6 +532,52 @@ test("a mailbox at its limits for other relays answers them as a number that doe
     await real.get(bob.number).state.storage.put("queueCount", 2000);
     const [t2] = await carol.tokens(1);
     assert.equal((await carol.send(t2, bob.number)).status, 413);
+  } finally {
+    net.restore();
+  }
+});
+
+test("relays made up to flood a mailbox cannot use up what relays people here write to rely on", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const real = b.env.MAILBOX.objects;
+    const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
+    const queued = async () => (await real.get(bob.number).state.storage.get("queueCount")) ?? 0;
+    const fromAlice = async () => {
+      const [t] = await alice.tokens(1);
+      const before = await queued();
+      assert.equal((await sendVia(alice, t, bob.number, B)).status, 202);
+      return (await queued()) > before;
+    };
+
+    // A relay no one on B has written to gets a small share: ten at once.
+    let through = 0;
+    for (let i = 0; i < 15; i++) if (await fromAlice()) through++;
+    assert.equal(through, 10, "strangers share a burst of ten");
+
+    // Made-up relays flood the strangers' share for the hour.
+    for (let i = 0; i < 100; i++) await box.enqueue("c2VhbGVk", null, true, "stranger");
+    assert.equal(await fromAlice(), false, "A is still a stranger to B");
+
+    // Once a phone on B writes to someone on A, A's mail is no longer held to
+    // the strangers' share, however full it is.
+    const [t] = await bob.tokens(1);
+    assert.equal((await sendVia(bob, t, alice.number, A)).status, 202);
+    for (let i = 0; i < 20; i++) assert.equal(await fromAlice(), true, `known relay envelope ${i}`);
+
+    // What B keeps is the day, nothing about who wrote or to whom.
+    const kept = [...real].filter(([name]) => name.startsWith("fed:")).flatMap(([, e]) => [...e.state.storage.data.keys()]);
+    assert.ok(kept.includes("writtenToDay"));
+    const fedLines = everythingStored(b).split("\n").filter((l) => l.startsWith("fed:"));
+    assert.ok(!fedLines.some((l) => l.includes(alice.number) || l.includes(bob.number)), "no number is kept with the relay");
+
+    // It lapses after WRITTEN_TO_DAYS without anyone writing there again.
+    advance(91 * 24 * 3_600_000);
+    for (let i = 0; i < 100; i++) await box.enqueue("c2VhbGVk", null, true, "stranger");
+    assert.equal(await fromAlice(), false, "not written to for 91 days");
   } finally {
     net.restore();
   }

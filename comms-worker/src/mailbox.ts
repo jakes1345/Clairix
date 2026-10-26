@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { verifyEd25519 } from "./auth";
 import type { Env } from "./env";
 import {
+  DAY_MS,
   DELIVERY_TOKEN_TTL_MS,
   dayFloor,
   expireClaims,
@@ -108,6 +109,13 @@ export const MAX_ENVELOPE_B64 = Math.floor((MAX_ENVELOPE_BYTES * 4) / 3) + 4;
 const FED_INBOUND_PER_HOUR = 1_800;
 const FED_INBOUND_BURST = 300;
 const FED_QUEUE_RESERVE = 500;
+/**
+ * Envelopes from relays no one here has written to, per mailbox: enough for
+ * first messages from new contacts elsewhere, small enough that relays made up
+ * for a flood cannot take the allowance relays people do write to rely on.
+ */
+const FED_STRANGER_PER_HOUR = 30;
+const FED_STRANGER_BURST = 10;
 
 /** The answer to a send for a number that does not exist; the caller accepts and drops it. */
 const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
@@ -846,6 +854,23 @@ export class Mailbox extends DurableObject<Env> {
     return this.fedTargets.take(target, Date.now());
   }
 
+  /**
+   * Records that a phone here wrote to the relay this object stands for. Day
+   * precision, written at most once a day: when exactly, and by whom, is
+   * not kept.
+   */
+  async noteWrittenTo(): Promise<void> {
+    const day = Math.floor(Date.now() / DAY_MS);
+    if ((await this.ctx.storage.get<number>("writtenToDay")) === day) return;
+    await this.ctx.storage.put("writtenToDay", day);
+  }
+
+  /** Whether a phone here wrote to this relay within the last [days] days. */
+  async writtenToWithin(days: number): Promise<boolean> {
+    const day = await this.ctx.storage.get<number>("writtenToDay");
+    return day !== undefined && Math.floor(Date.now() / DAY_MS) - day <= days;
+  }
+
   /** Whether the other relay, for all its phones together, may claim one more one-time key this hour. */
   async federatedClaimOk(perHour: number, burst: number): Promise<boolean> {
     return (await this.allowanceOk("fed-claims", perHour, burst)).ok;
@@ -866,7 +891,7 @@ export class Mailbox extends DurableObject<Env> {
    * burst from one sender arrives interleaved with everyone else's. The hold
    * counts towards the queue, so a full mailbox is full either way.
    */
-  async enqueue(data: string, claim: string | null = null, urgent = false, federated = false): Promise<EnqueueResult> {
+  async enqueue(data: string, claim: string | null = null, urgent = false, federated: false | "known" | "stranger" = false): Promise<EnqueueResult> {
     // The size is checked before anything about the number, so an oversized
     // envelope is answered the same whether the number exists or not.
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
@@ -880,8 +905,14 @@ export class Mailbox extends DurableObject<Env> {
       // or its allowance and learn from the refusal that the number is real.
       // Only other relays' envelopes are dropped, and only while this mailbox
       // is being flooded from outside; this relay's own senders are untouched.
+      //
+      // Relays no one here has written to ("stranger") draw on a small
+      // allowance of their own, so made-up relays flooding a mailbox cannot use
+      // up what mail from the relays its owner's contacts are on relies on.
       if (count >= MAX_QUEUE - FED_QUEUE_RESERVE) return DROPPED;
-      if (!(await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST)).ok) return DROPPED;
+      if (federated === "stranger") {
+        if (!(await this.allowanceOk("inbound-fed-new", FED_STRANGER_PER_HOUR, FED_STRANGER_BURST)).ok) return DROPPED;
+      } else if (!(await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST)).ok) return DROPPED;
       if (!(await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST)).ok) return DROPPED;
     } else {
       if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };

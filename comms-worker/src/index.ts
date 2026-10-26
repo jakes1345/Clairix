@@ -44,6 +44,7 @@ import {
   KEY_FETCHES_PER_MINUTE,
   keyFetchFailedRecently,
   noteKeyFetchFailed,
+  noteWrittenTo,
   parseFederated,
   policyName,
   RELAY_KEY_REFETCH_MS,
@@ -52,6 +53,7 @@ import {
   RELAY_IDENTITY_NAME,
   relayOrigin,
   verifyFederated,
+  WRITTEN_TO_DAYS,
 } from "./federation";
 import { BLIND_BATCH_MAX, TOKEN_EPOCH_MS, checkBlindToken, epochExpiry, epochOf, issueBlind, tokenPublicKey } from "./tokens";
 import { INCIDENTS_NAME, IncidentCache } from "./incidents";
@@ -243,7 +245,11 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
         throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", 60);
       }
-      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, true);
+      // Allow-listed relays, and relays a phone here has written to lately,
+      // share the mailbox's allowance for other relays; any other relay draws
+      // on a small one of its own (mailbox.ts).
+      const known = federationPolicy(env).mode === "allow" || (await other.writtenToWithin(WRITTEN_TO_DAYS));
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, known ? "known" : "stranger");
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
@@ -374,6 +380,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const oneTime = body.claim && (await me.mayClaimFrom(`${body.relay} ${body.target}`));
       const res = await forward(env, request, body.relay, "/v1/federate/lookup", { number: body.target, pin: body.pin, claim: body.claim, oneTime });
       if (res.status !== 200) throw otherRelayError(res);
+      await noteWrittenTo(env, body.relay);
       if (body.claim) {
         const bundle = checkedBundle(res.json.bundle, body.target);
         if (!bundle) throw new HttpError(502, "The other relay answered with something that is not a key bundle");
@@ -1073,6 +1080,7 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     if (body.claim !== null) forwarded.claim = body.claim;
     const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
     if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
+    await noteWrittenTo(env, body.relay);
     return json({ id: res.json.id.slice(0, 80) }, 202);
   }
   return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
@@ -1224,7 +1232,7 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
 }
 
 /** Queues [envelope] for [to] on this relay. */
-async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean, federated = false): Promise<Response> {
+async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean, federated: false | "known" | "stranger" = false): Promise<Response> {
   const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to

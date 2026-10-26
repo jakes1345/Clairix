@@ -599,8 +599,13 @@ Open from the second review, each a design change rather than a fix:
   that need an unlocked device, and a locked-state inbox for what arrives.
 - **Fake relays cost nothing.** Any https host serving a key counts as a
   relay, so wildcard subdomains can use up a mailbox's allowance for other
-  relays and silently crowd out real cross-relay mail. Needs a cost per
-  sender, or an allowlist by default.
+  relays and silently crowd out real cross-relay mail. *Since fixed:* mail
+  from a relay no phone here has written to (or looked a number up on) in 90
+  days draws on a small share of its own per mailbox (10 at once, 30 an
+  hour). A made-up relay now has to be written to from here first, which
+  costs a delivery token each, before it shares the allowance relays people
+  use rely on. The relay keeps only the day someone last wrote to each
+  relay: not who, nor to which number.
 - **Envelope length shows the Olm message type** (a new session is larger)
   and roughly how many messages went unanswered. Needs padding after Olm.
 - Old pickles stay decryptable under one never-rotated key; invite trees let
