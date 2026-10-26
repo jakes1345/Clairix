@@ -11,6 +11,7 @@ import {
   randomToken,
   STUN_ONLY,
   TOKEN_KINDS,
+  tokenAllowance,
   tokenHash,
   tokenShardName,
   tokenBatchExpiry,
@@ -18,7 +19,13 @@ import {
   TURN_TTL_S,
   TURN_PER_HOUR,
   TURN_BURST,
+  ALERTS,
+  PREKEY_FUTURE_SKEW_MS,
+  PREKEY_MAX_AGE_MS,
+  prekeyStatement,
+  type Alert,
   type IceServer,
+  type SealingPrekey,
   type TokenKind,
 } from "./comms-logic";
 import { HttpError, base64ToBytes, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
@@ -40,13 +47,20 @@ import {
   forward,
   isLoopbackDev,
   isOwnOrigin,
+  KEY_FETCHES_BURST,
+  KEY_FETCHES_PER_MINUTE,
+  keyFetchFailedRecently,
+  noteKeyFetchFailed,
+  noteWrittenTo,
   parseFederated,
   policyName,
   RELAY_KEY_REFETCH_MS,
   RELAY_KEY_TTL_MS,
   relayKey,
+  RELAY_IDENTITY_NAME,
   relayOrigin,
   verifyFederated,
+  WRITTEN_TO_DAYS,
 } from "./federation";
 import { BLIND_BATCH_MAX, TOKEN_EPOCH_MS, checkBlindToken, epochExpiry, epochOf, issueBlind, tokenPublicKey } from "./tokens";
 import { INCIDENTS_NAME, IncidentCache } from "./incidents";
@@ -64,7 +78,7 @@ export { IncidentCache, Mailbox, Traffic };
  * relay hands out at registration, and it works only between Clairix apps
  * paired with this relay.
  *
- *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, listed}
+ *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, sealingPrekey?, listed}
  *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}. ts is epoch millis within
  *                              five minutes, and each key may belong to one account, so a captured body cannot be
  *                              replayed into a second account.
@@ -73,7 +87,9 @@ export { IncidentCache, Mailbox, Traffic };
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
  * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
  * account they went to:
- *   POST   /v1/send            {to, envelope, claim?, mix?}  → queue for a contact; a "delivery" token.
+ *   POST   /v1/send            {to, envelope, claim?, mix?, alert?}  → queue for a contact; a "delivery" token.
+ *                              "alert" ("call" or "sos") asks a locked recipient phone to ring or sound an SOS
+ *                              for an envelope it cannot open yet; it is delivered with the envelope.
  *                              "claim" is the ticket of the one-time key the envelope's session was built
  *                              on, which spends that key for good. With "mix" true, the envelope is held a
  *                              random few seconds and released in a shuffled batch (MIX_MAX_MS; see
@@ -91,7 +107,9 @@ export { IncidentCache, Mailbox, Traffic };
  *                                cached per 0.25° tile for 5 minutes in the IncidentCache object
  * Signed (see auth.ts):
  *   GET    /v1/me                                          → profile + key counts
- *   PUT    /v1/keys            {oneTimeKeys, fallback?}    → replenish
+ *   PUT    /v1/keys            {oneTimeKeys, fallback?, sealingPrekey?} → replenish; a sealing prekey ({key, created, signature},
+ *                                                            signed over clairix-sealing-prekey-v1|key|created) replaces
+ *                                                            the one held only when newer
  *   PUT    /v1/listed          {listed}
  *   PUT    /v1/push            {endpoint|null}             → UnifiedPush endpoint to wake this device: in use at
  *                                                            once on a trusted host ({verified: true}), else a code
@@ -110,6 +128,10 @@ export { IncidentCache, Mailbox, Traffic };
  *                                                            body, never in a URL anything might log.
  *   GET    /v1/bundle/:number[?pin=]                       → as a claiming lookup; for apps before 3.0.0-beta.3
  *   GET    /v1/identity/:number[?pin=]                     → as a non-claiming lookup; likewise
+ *   PUT    /v1/transport       {key|null}                  → the phone's transport key (Ed25519). Requests signed
+ *                                                            with it (X-Clairix-Key: transport) may only GET /v1/inbox,
+ *                                                            POST /v1/ack and GET /v1/ws: a locked phone collects what
+ *                                                            it cannot yet open, and the key reads and sends nothing
  *   GET    /v1/inbox                                       → waiting envelopes
  *   POST   /v1/ack             {ids}
  *   GET    /v1/ws                                          → live delivery (hibernatable WebSocket)
@@ -175,6 +197,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       ok: true,
       note: "Clairix numbers are not phone numbers.",
       alternates: alternates(env),
+      // Phones that connect through Tor reach the relay here instead.
+      onion: onionAddress(env),
       // Other relays verify forwarded requests from this one with relayKey;
       // federation says which relays this one accepts them from.
       relayKey: key?.publicKey ?? null,
@@ -236,20 +260,31 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
       const body = parseSendBody(bodyText, isLoopbackDev(request));
       if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
-        throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", 60);
+        // The bucket refills one envelope this often.
+        throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", Math.ceil(60 / FED_SENDS_PER_TARGET_PER_MINUTE));
       }
-      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, true);
+      // Allow-listed relays, and relays a phone here has written to lately,
+      // share the mailbox's allowance for other relays; any other relay draws
+      // on a small one of its own (mailbox.ts).
+      const known = federationPolicy(env).mode === "allow" || (await other.writtenToWithin(WRITTEN_TO_DAYS));
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, known ? "known" : "stranger", body.alert);
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
     const body = parseLookupBody(bodyText, isLoopbackDev(request));
-    return answerLookup(env, body.target, body.pin, body.claim, () => other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST));
+    return answerLookup(env, body.target, body.pin, body.claim, async () => body.oneTime && (await other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST)));
   }
 
   // ── Authenticated ─────────────────────────────────────────────────────
   const signed = await parseSigned(request, bodyText);
   const me = env.MAILBOX.get(env.MAILBOX.idFromName(signed.number));
-  const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts);
+  // Signed with the transport key, a request may only collect envelopes: the
+  // phone is locked and its identity key out of reach.
+  const transport = request.headers.get("x-clairix-key") === "transport";
+  if (transport && !TRANSPORT_ROUTES.has(`${request.method} ${path}`)) {
+    throw new HttpError(403, "The transport key only fetches, acknowledges and streams envelopes");
+  }
+  const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts, transport);
   if (!profile) throw new HttpError(401, "Signature rejected");
   // An account from before keys were recorded as their owner's records them now.
   if (!profile.keysClaimed) {
@@ -277,10 +312,18 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/keys" && request.method === "PUT") {
-    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown }>(bodyText);
+    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown; sealingPrekey?: unknown }>(bodyText);
     const oneTimeKeys = await checkedKeys(profile.ed25519, body.oneTimeKeys);
     const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(profile.ed25519, [body.fallback]))[0] ?? null;
-    return json(await me.putKeys(oneTimeKeys, fallback));
+    const sealingPrekey = await checkedSealingPrekey(profile.ed25519, body.sealingPrekey);
+    return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey));
+  }
+
+  if (path === "/v1/transport" && request.method === "PUT") {
+    const body = parseJson<{ key?: unknown }>(bodyText);
+    const key = checkedTransportKey(body.key, profile.ed25519);
+    await me.setTransportKey(key);
+    return json({ ok: true });
   }
 
   if (path === "/v1/listed" && request.method === "PUT") {
@@ -329,7 +372,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!isTokenKind(body.kind)) throw new HttpError(400, "kind must be delivery, traffic or report");
       kind = body.kind;
     }
-    const spec = TOKEN_KINDS[kind];
+    const spec = tokenAllowance(env, kind);
     if (body.blinded !== undefined) {
       // Blind tokens (tokens.ts): the relay sees blinded elements only, and
       // keeps nothing about what it issued.
@@ -364,8 +407,12 @@ async function route(request: Request, env: Env): Promise<Response> {
       // question as itself, so the other relay never learns who is asking.
       const allowed = await me.rateOk("lookup", Mailbox.LOOKUP_LIMIT);
       if (!allowed.ok) throw new HttpError(429, "Too many lookups; try again in a minute", allowed.retryAfter);
-      const res = await forward(env, request, body.relay, "/v1/federate/lookup", { number: body.target, pin: body.pin, claim: body.claim });
+      // The phone's own limits on one-time keys hold for contacts elsewhere
+      // too; past them, the other relay is asked for the fallback key only.
+      const oneTime = body.claim && (await me.mayClaimFrom(`${body.relay} ${body.target}`));
+      const res = await forward(env, request, body.relay, "/v1/federate/lookup", { number: body.target, pin: body.pin, claim: body.claim, oneTime });
       if (res.status !== 200) throw otherRelayError(res);
+      await noteWrittenTo(env, body.relay);
       if (body.claim) {
         const bundle = checkedBundle(res.json.bundle, body.target);
         if (!bundle) throw new HttpError(502, "The other relay answered with something that is not a key bundle");
@@ -436,24 +483,31 @@ async function route(request: Request, env: Env): Promise<Response> {
     const amount = coinAmount(body.amount);
     const note = coinNote(body.note);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
-    // Whether a number exists is not told to anyone; a payment to one that does not is refused like any other.
-    if (!(await them.profile())) throw new HttpError(400, "Payment refused");
     // The phone names the payment, so a request it had to repeat (the answer
     // lost on the network) is the same payment: the debit and the credit are
     // each made once per txid, and a repeat gets the balance as it stands.
     const txid = typeof body.txid === "string" && TXID_RE.test(body.txid) ? body.txid.toLowerCase() : crypto.randomUUID();
+    // The debit comes first, so a payer who cannot cover the amount hears the
+    // same thing whether or not the number exists: an unlisted number cannot
+    // be found by paying it what one does not have. Only a payment that would
+    // really have gone through tells the payer the number is real.
     const debited = await me.debit(to, amount, txid, note);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
     try {
+      if (!(await them.profile())) {
+        await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
+        throw new HttpError(400, "Payment refused");
+      }
       await them.credit(profile.number, amount, txid, note);
     } catch (e) {
+      if (e instanceof HttpError) throw e;
       // The sender has paid and the recipient has not been credited: give the
       // coins back. If even that fails the error is logged with the txid, so
       // the operator can put it right by hand.
       try {
         await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
       } catch (refund) {
-        console.error(`coin payment ${txid} from ${profile.number} to ${to} for ${amount}: credit failed and so did the refund`, e, refund);
+        console.error(`coin payment ${txid} for ${amount}: credit failed and so did the refund`, e, refund);
       }
       throw e;
     }
@@ -538,12 +592,21 @@ function parseBlinded(raw: unknown): Uint8Array[] {
 }
 
 /** What GET / says about blind tokens: the epoch and each kind's key in it. */
-async function blindTokenKeys(env: Env): Promise<{ version: number; epoch: number; epochMs: number; keys: Record<TokenKind, string> } | null> {
+/**
+ * The blind-token keys of this epoch, and of the next: a phone pins the next
+ * epoch's long before it is issued any tokens under them, on a request that
+ * names nobody and at a time of its own choosing, so a relay cannot hand one
+ * phone keys of its own at the moment it asks for tokens.
+ */
+async function blindTokenKeys(env: Env): Promise<{ version: number; epoch: number; epochMs: number; keys: Record<TokenKind, string>; next: { epoch: number; keys: Record<TokenKind, string> } } | null> {
   try {
     const epoch = epochOf(Date.now());
-    const keys = {} as Record<TokenKind, string>;
-    for (const kind of Object.keys(TOKEN_KINDS) as TokenKind[]) keys[kind] = await tokenPublicKey(env, kind, epoch);
-    return { version: 2, epoch, epochMs: TOKEN_EPOCH_MS, keys };
+    const keysFor = async (e: number) => {
+      const keys = {} as Record<TokenKind, string>;
+      for (const kind of Object.keys(TOKEN_KINDS) as TokenKind[]) keys[kind] = await tokenPublicKey(env, kind, e);
+      return keys;
+    };
+    return { version: 2, epoch, epochMs: TOKEN_EPOCH_MS, keys: await keysFor(epoch), next: { epoch: epoch + 1, keys: await keysFor(epoch + 1) } };
   } catch (e) {
     console.error("token keys unavailable", e);
     return null;
@@ -659,12 +722,14 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
   }
 
   if (path === "/v1/traffic/report/vote" && request.method === "POST") {
-    await spendToken(env, request, "traffic");
     const body = parseJson<{ region?: unknown; trip?: unknown; id?: unknown; still?: unknown }>(bodyText);
     const region = trafficRegion(body.region);
     const trip = tripPseudonym(body.trip);
     if (typeof body.id !== "string" || !INCIDENT_ID_RE.test(body.id)) throw new HttpError(400, "id must be an incident id");
     if (typeof body.still !== "boolean") throw new HttpError(400, "still must be a boolean");
+    // A trip is whatever name the phone gives it, so one phone can be many
+    // voters; voting a report away costs a report token, which are scarce.
+    await spendToken(env, request, body.still ? "traffic" : "report");
     const incident = await regionStub(region).vote(region, trip, body.id, body.still, now);
     return json({ incident });
   }
@@ -800,6 +865,17 @@ function alternates(env: Env): string[] {
     .slice(0, 8);
 }
 
+/**
+ * This relay's onion address, from RELAY_ONION: `http://<56 characters>.onion`
+ * (a v3 onion service, as selfhost/install.sh sets up), or null. Phones that
+ * connect through Tor send everything there, so their requests never leave
+ * the Tor network.
+ */
+function onionAddress(env: Env): string | null {
+  const value = (env.RELAY_ONION ?? "").trim().replace(/\/+$/, "").toLowerCase();
+  return /^http:\/\/[a-z2-7]{56}\.onion$/.test(value) ? value : null;
+}
+
 /** A payment id the phone chose: a UUID, so nothing else names two payments alike. */
 const TXID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -837,6 +913,8 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     signature?: unknown;
     fallback?: unknown;
     oneTimeKeys?: unknown;
+    sealingPrekey?: unknown;
+    transportKey?: unknown;
     listed?: unknown;
   }>(bodyText);
   // Either the relay's enrollment secret, or an invite a registered phone made.
@@ -860,12 +938,20 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
   const curve25519 = body.curve25519 as string;
   const sealing = body.sealing as string;
   const signature = body.signature as string;
+  for (const [field, key] of [["ed25519", ed25519], ["curve25519", curve25519], ["sealing", sealing]] as const) {
+    if (keySpellings(key) === null) throw new HttpError(400, `${field} must be a 32-byte key in standard base64`);
+  }
+  for (const [field, key] of [["curve25519", curve25519], ["sealing", sealing]] as const) {
+    if (!canonicalX25519(base64ToBytes(key))) throw new HttpError(400, `${field} must be a Curve25519 key in canonical form`);
+  }
 
   const bodySig = request.headers.get("x-clairix-sig") ?? "";
   if (!(await verifyEd25519(ed25519, bodyText, bodySig))) throw new HttpError(401, "Body signature does not match ed25519");
   if (!(await verifyEd25519(ed25519, `${curve25519}|${sealing}`, signature))) throw new HttpError(400, "Key binding signature invalid");
   const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(ed25519, [body.fallback]))[0] ?? null;
   const oneTimeKeys = await checkedKeys(ed25519, body.oneTimeKeys ?? []);
+  const sealingPrekey = await checkedSealingPrekey(ed25519, body.sealingPrekey);
+  const transportKey = body.transportKey === undefined ? null : checkedTransportKey(body.transportKey, ed25519);
   const listed = body.listed !== false;
 
   // Used up only once everything else about the request has checked out.
@@ -880,7 +966,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(number));
     const now = Date.now();
     // Dated to the day: enough for anything that asks how old an account is.
-    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, listed, createdAt: dayFloor(now), keysClaimed: true };
+    const profile: Profile = { number, ed25519, curve25519, sealing, signature, fallback, sealingPrekey, transportKey, listed, createdAt: dayFloor(now), keysClaimed: true };
     if (await mailbox.claim(profile, oneTimeKeys)) {
       if (!(await claimKeys(env, profile, true))) {
         // One of the keys is already another account's. The number just taken
@@ -920,10 +1006,53 @@ async function checkedKeys(ed25519: string, raw: unknown): Promise<SignedKey[]> 
     if (typeof k.id !== "string" || typeof k.key !== "string" || typeof k.signature !== "string") {
       throw new HttpError(400, "each key needs id, key and signature");
     }
+    if (k.id.length > 64 || k.key.length > 64 || k.signature.length > 128) throw new HttpError(400, "key fields too long");
     if (!(await verifyEd25519(ed25519, k.key, k.signature))) throw new HttpError(400, `key ${k.id} is not signed by ed25519`);
     out.push({ id: k.id, key: k.key, signature: k.signature });
   }
   return out;
+}
+
+/** What a request signed with the transport key may do: collect envelopes, nothing else. */
+const TRANSPORT_ROUTES = new Set(["GET /v1/inbox", "POST /v1/ack", "GET /v1/ws"]);
+
+/**
+ * A transport key: null removes it; otherwise a 32-byte Ed25519 key in standard
+ * base64 that is not the identity key itself (which would make the restricted
+ * key a full one).
+ */
+function checkedTransportKey(raw: unknown, ed25519: string): string | null {
+  if (raw === null) return null;
+  const spellings = typeof raw === "string" ? keySpellings(raw) : null;
+  if (typeof raw !== "string" || spellings === null) throw new HttpError(400, "transport key must be a 32-byte key in standard base64");
+  if (spellings.includes(ed25519)) throw new HttpError(400, "transport key must not be the identity key");
+  return raw;
+}
+
+/**
+ * A sealing prekey from its owner: absent or null is none; anything else must
+ * be a canonical X25519 key, signed by [ed25519] over [prekeyStatement], made
+ * neither more than two weeks ago nor more than a day ahead. The relay checks
+ * so it never serves a prekey senders would refuse.
+ */
+async function checkedSealingPrekey(ed25519: string, raw: unknown): Promise<SealingPrekey | null> {
+  if (raw === undefined || raw === null) return null;
+  const p = raw as Partial<SealingPrekey>;
+  if (typeof p.key !== "string" || typeof p.signature !== "string" || typeof p.created !== "number" || !Number.isSafeInteger(p.created)) {
+    throw new HttpError(400, "sealingPrekey needs key, created and signature");
+  }
+  if (p.key.length > 64 || p.signature.length > 128) throw new HttpError(400, "sealingPrekey fields too long");
+  if (keySpellings(p.key) === null || !canonicalX25519(base64ToBytes(p.key))) {
+    throw new HttpError(400, "sealingPrekey must be a Curve25519 key in canonical form, in standard base64");
+  }
+  const now = Date.now();
+  if (p.created > now + PREKEY_FUTURE_SKEW_MS || now - p.created > PREKEY_MAX_AGE_MS) {
+    throw new HttpError(400, "sealingPrekey is out of date; check the phone's clock");
+  }
+  if (!(await verifyEd25519(ed25519, prekeyStatement(p.key, p.created), p.signature))) {
+    throw new HttpError(400, "sealingPrekey is not signed by ed25519");
+  }
+  return { key: p.key, created: p.created, signature: p.signature };
 }
 
 function publicProfile(p: Profile) {
@@ -933,6 +1062,7 @@ function publicProfile(p: Profile) {
     curve25519: p.curve25519,
     sealing: p.sealing,
     signature: p.signature,
+    sealingPrekey: p.sealingPrekey ?? null,
     listed: p.listed,
     createdAt: p.createdAt,
   };
@@ -957,24 +1087,66 @@ const MAX_BODY_BYTES = 256 * 1024;
  */
 async function claimKeys(env: Env, profile: Profile, strict: boolean): Promise<boolean> {
   const claimed: string[] = [];
-  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
-    const name = `key:${await sha256Hex(key)}`;
+  for (const name of await keyRecordNames(profile)) {
     if (await env.MAILBOX.get(env.MAILBOX.idFromName(name)).claimKey(profile.number)) {
       claimed.push(name);
     } else if (strict) {
       for (const done of claimed) await env.MAILBOX.get(env.MAILBOX.idFromName(done)).releaseKey(profile.number);
       return false;
     } else {
-      console.error(`a key already registered to another number was found while recording ${profile.number}'s keys`);
+      console.error("a key already registered to another number was found while recording an account's keys");
     }
   }
   return true;
 }
 
 async function releaseKeys(env: Env, profile: Profile): Promise<void> {
-  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
-    await env.MAILBOX.get(env.MAILBOX.idFromName(`key:${await sha256Hex(key)}`)).releaseKey(profile.number);
+  for (const name of await keyRecordNames(profile)) {
+    await env.MAILBOX.get(env.MAILBOX.idFromName(name)).releaseKey(profile.number);
   }
+}
+
+/**
+ * The objects that record [profile]'s keys as its own: one per spelling of
+ * each key. Records were first named after the key as sent, which is one of
+ * the two spellings, so an account from then still holds its records.
+ */
+async function keyRecordNames(profile: Profile): Promise<string[]> {
+  const names: string[] = [];
+  for (const key of [profile.ed25519, profile.curve25519, profile.sealing]) {
+    for (const spelling of keySpellings(key) ?? [key]) names.push(`key:${await sha256Hex(spelling)}`);
+  }
+  return names;
+}
+
+/**
+ * Whether [bytes] is a Curve25519 public key in its one canonical form: top bit
+ * clear and below the field prime. X25519 ignores the top bit, so a key with it
+ * set is another account's key under a spelling no record covers.
+ */
+export function canonicalX25519(bytes: Uint8Array): boolean {
+  if (bytes.length !== 32 || (bytes[31]! & 0x80) !== 0) return false;
+  const p = new Uint8Array(32).fill(0xff);
+  p[0] = 0xed;
+  p[31] = 0x7f;
+  for (let i = 31; i >= 0; i--) if (bytes[i] !== p[i]) return bytes[i]! < p[i]!;
+  return false;
+}
+
+/**
+ * The two spellings of a 32-byte key in standard base64, without padding and
+ * with it, when [key] is one of them; otherwise null. Decoding forgives a
+ * good deal (URL-safe letters, whitespace, bits past the last byte), and
+ * every forgiven variant would be the same key under a name no record covers.
+ */
+export function keySpellings(key: string): [string, string] | null {
+  if (!/^[A-Za-z0-9+/]{43}=?$/.test(key)) return null;
+  let bin: string;
+  try { bin = atob(key.endsWith("=") ? key : `${key}=`); } catch { return null; }
+  if (bin.length !== 32) return null;
+  const padded = btoa(bin);
+  const unpadded = padded.slice(0, -1);
+  return key === padded || key === unpadded ? [unpadded, padded] : null;
 }
 
 /**
@@ -996,11 +1168,13 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     // the forwarded request names no sender, as the phone's did not.
     const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, mix: !body.urgent };
     if (body.claim !== null) forwarded.claim = body.claim;
+    if (body.alert !== null) forwarded.alert = body.alert;
     const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
     if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
+    await noteWrittenTo(env, body.relay);
     return json({ id: res.json.id.slice(0, 80) }, 202);
   }
-  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent);
+  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, false, body.alert);
 }
 
 interface SendBody {
@@ -1011,10 +1185,12 @@ interface SendBody {
   urgent: boolean;
   /** The relay the recipient is on, when it is not this one. */
   relay: string | null;
+  /** What a locked recipient phone should do with it: ring, or sound an SOS. */
+  alert: Alert | null;
 }
 
 function parseSendBody(bodyText: string, loopback = false): SendBody {
-  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown }>(bodyText);
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown; alert?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
@@ -1030,18 +1206,22 @@ function parseSendBody(bodyText: string, loopback = false): SendBody {
   if (body.mix !== undefined && typeof body.mix !== "boolean") throw new HttpError(400, "mix must be a boolean");
   // Held for mixing only when asked: an app from before mixing sends call
   // set-up and SOS without saying so, and must not have them wait.
-  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback) };
+  if (body.alert !== undefined && body.alert !== null && !ALERTS.includes(body.alert as Alert)) throw new HttpError(400, "alert must be call or sos");
+  const alert = (body.alert ?? null) as Alert | null;
+  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback), alert };
 }
 
 interface LookupBody {
   target: string;
   pin: string | null;
   claim: boolean;
+  /** From another relay: false when its phone is past its own limit for one-time keys, so the fallback key is offered instead. */
+  oneTime: boolean;
   relay: string | null;
 }
 
 function parseLookupBody(bodyText: string, loopback = false): LookupBody {
-  const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown; relay?: unknown }>(bodyText);
+  const body = parseJson<{ number?: unknown; pin?: unknown; claim?: unknown; oneTime?: unknown; relay?: unknown }>(bodyText);
   const target = typeof body.number === "string" ? normaliseNumber(body.number) : null;
   if (!target) throw new HttpError(400, "number must be a Clairix number");
   let pin: string | null = null;
@@ -1050,7 +1230,8 @@ function parseLookupBody(bodyText: string, loopback = false): LookupBody {
     pin = body.pin;
   }
   if (body.claim !== undefined && typeof body.claim !== "boolean") throw new HttpError(400, "claim must be a boolean");
-  return { target, pin, claim: body.claim !== false, relay: parseRelayField(body.relay, loopback) };
+  if (body.oneTime !== undefined && typeof body.oneTime !== "boolean") throw new HttpError(400, "oneTime must be a boolean");
+  return { target, pin, claim: body.claim !== false, oneTime: body.oneTime !== false, relay: parseRelayField(body.relay, loopback) };
 }
 
 function parseRelayField(value: unknown, loopback: boolean): string | null {
@@ -1060,11 +1241,15 @@ function parseRelayField(value: unknown, loopback: boolean): string | null {
   return origin;
 }
 
-/** What the other relay refused, passed on with its status, so the phone can tell a full mailbox from a dead relay. */
-function otherRelayError(res: { status: number; json: Record<string, unknown> }): HttpError {
+/**
+ * What the other relay refused, passed on with its status (and how long to
+ * wait, when it said), so the phone can tell a full mailbox from a dead relay
+ * and a busy one from either.
+ */
+function otherRelayError(res: { status: number; json: Record<string, unknown>; retryAfter?: number }): HttpError {
   const reason = typeof res.json.error === "string" ? res.json.error.slice(0, 200) : `status ${res.status}`;
   const status = res.status >= 400 && res.status < 600 && res.status !== 401 ? res.status : 502;
-  return new HttpError(status, `The other relay refused: ${reason}`);
+  return new HttpError(status, `The other relay refused: ${reason}`, res.retryAfter);
 }
 
 function checkedIdentity(value: unknown, number: string): IdentityLike | null {
@@ -1074,7 +1259,27 @@ function checkedIdentity(value: unknown, number: string): IdentityLike | null {
   for (const k of ["ed25519", "curve25519", "sealing", "signature"] as const) {
     if (typeof v[k] !== "string" || (v[k] as string).length === 0 || (v[k] as string).length > 200) return null;
   }
-  return { number, ed25519: v.ed25519 as string, curve25519: v.curve25519 as string, sealing: v.sealing as string, signature: v.signature as string };
+  return {
+    number,
+    ed25519: v.ed25519 as string,
+    curve25519: v.curve25519 as string,
+    sealing: v.sealing as string,
+    signature: v.signature as string,
+    sealingPrekey: checkedForeignPrekey(v.sealingPrekey),
+  };
+}
+
+/**
+ * A sealing prekey in another relay's answer, kept only in its expected shape.
+ * Its signature is the phone's to check, as for every key another relay hands
+ * over; a malformed one is dropped, so a phone that relies on it fetches again.
+ */
+function checkedForeignPrekey(value: unknown): SealingPrekey | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.key !== "string" || typeof v.signature !== "string" || typeof v.created !== "number" || !Number.isSafeInteger(v.created)) return null;
+  if (v.key.length > 64 || v.signature.length > 128) return null;
+  return { key: v.key, created: v.created, signature: v.signature };
 }
 
 function checkedSignedKey(value: unknown): SignedKey | null {
@@ -1104,6 +1309,7 @@ interface IdentityLike {
   curve25519: string;
   sealing: string;
   signature: string;
+  sealingPrekey: SealingPrekey | null;
 }
 
 /**
@@ -1118,8 +1324,17 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
   const now = Date.now();
   let cached = await box.federationKey();
   const refresh = async (): Promise<boolean> => {
+    // Nothing about the request has been checked yet but its shape, so the
+    // address it names is fetched sparingly: not again soon after a failure,
+    // and within one allowance for the whole relay.
+    if (keyFetchFailedRecently(req.origin)) return false;
+    const allowed = await env.MAILBOX.get(env.MAILBOX.idFromName(RELAY_IDENTITY_NAME)).rateOk("key-fetch", KEY_FETCHES_PER_MINUTE, KEY_FETCHES_BURST);
+    if (!allowed.ok) throw new HttpError(503, "Too many new relays at once; try again shortly", allowed.retryAfter);
     const key = await fetchRelayKey(req.origin);
-    if (!key) return false;
+    if (!key) {
+      noteKeyFetchFailed(req.origin);
+      return false;
+    }
     await box.setFederationKey(key);
     cached = { key, fetchedAt: Date.now() };
     return true;
@@ -1137,8 +1352,16 @@ async function authenticateRelay(env: Env, request: Request, bodyText: string): 
 }
 
 /** Queues [envelope] for [to] on this relay. */
-async function enqueueFor(env: Env, to: string, envelope: string, claim: string | null, urgent: boolean, federated = false): Promise<Response> {
-  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated);
+async function enqueueFor(
+  env: Env,
+  to: string,
+  envelope: string,
+  claim: string | null,
+  urgent: boolean,
+  federated: false | "known" | "stranger" = false,
+  alert: Alert | null = null,
+): Promise<Response> {
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated, alert);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to
     // one that does not is accepted and dropped, its token spent like any other.

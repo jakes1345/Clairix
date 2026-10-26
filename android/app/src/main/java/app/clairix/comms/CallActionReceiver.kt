@@ -27,6 +27,12 @@ class CallActionReceiver : BroadcastReceiver() {
         val peer = intent.getStringExtra(CommsNotifications.EXTRA_PEER)
         val action = intent.action
         if (action == ACTION_DECLINE) CommsNotifications.cancelIncomingCall(app)
+        if (action == ACTION_LOCKED_DECLINE) {
+            // Nothing can be sent while locked: the ring stops here, and the caller hears it ring out.
+            app.getSystemService(android.app.NotificationManager::class.java)?.cancel(CommsNotifications.LOCKED_CALL_NOTIFICATION_ID)
+            CallManager.stopLockedRing()
+            return
+        }
         val pending = goAsync()
         scope.launch {
             try {
@@ -47,6 +53,8 @@ class CallActionReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_DECLINE = "app.clairix.comms.CALL_DECLINE"
         const val ACTION_HANGUP = "app.clairix.comms.CALL_HANGUP"
+        /** Silences a call ringing on a locked phone whose offer is still sealed. */
+        const val ACTION_LOCKED_DECLINE = "app.clairix.comms.CALL_LOCKED_DECLINE"
         /** A broadcast gets about ten seconds before Android calls it hung. */
         private const val SIGNAL_WAIT_MS = 8_000L
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

@@ -136,6 +136,15 @@ object CommsWire {
 
     // msg
     const val F_ID = "id"
+
+    private val MESSAGE_ID = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+    /**
+     * The message id of a payload, or null when it is not one this app makes (a
+     * random UUID). Ids name files and rows, so one that only resembles another
+     * (with a stray character the file name drops) must not get that far.
+     */
+    fun messageId(json: JSONObject): String? = json.optString(F_ID).takeIf { MESSAGE_ID.matches(it) }
     const val F_TS = "ts"
     const val F_BODY = "body"
 

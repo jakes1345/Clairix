@@ -432,18 +432,8 @@ private fun NavMapLayer(
 
 // ── Map ────────────────────────────────────────────────────────────────
 
-private var navOsmConfigured = false
-
-/** Same osmdroid setup as the Map tab: identifying user agent and tiles kept a week past their expiry. */
-private fun configureNavOsm(context: Context) {
-    if (navOsmConfigured) return
-    navOsmConfigured = true
-    with(OsmConfig.getInstance()) {
-        load(context, context.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-        userAgentValue = "Clairix/${BuildConfig.VERSION_NAME}"
-        expirationExtendedDuration = 7L * 24 * 60 * 60 * 1000
-    }
-}
+/** Same osmdroid setup as the Map tab ([MapTiles]). */
+private fun configureNavOsm(context: Context) = MapTiles.configure(context)
 
 private fun LatLon.geo(): GeoPoint = GeoPoint(lat, lon)
 

@@ -13,8 +13,15 @@ name: Emulator smoke test
 # disappearing messages, a call that rings, and a contact on the other relay, every
 # envelope spending a blind token and going through the relay's mixing.
 #
+# Then, on the same emulator: an eight-minute soak (SoakTest), the app over the real
+# Tor network (TorDeviceTest), and last, since they move the app's vault keys, the
+# lock screen tests (VaultLockScreenTest).
+#
+# The APKs are built once (job build) and every step above runs on four emulators,
+# Android 12 (API 31, the oldest Clairix runs on), 13, 14 and 15 (job smoke).
+#
 # The emulator is started with the SDK's own tools rather than a third-party action:
-# every action here is pinned to a commit, and this needs none beyond the usual four.
+# every action here is pinned to a commit.
 on:
   pull_request:
     paths:
@@ -35,12 +42,10 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
+  # The app and its instrumentation tests, built once for every device below.
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-    env:
-      API: '34'
-      IMAGE: 'system-images;android-34;google_apis;x86_64'
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -75,37 +80,103 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      - name: Build the app and the smoke test
+        working-directory: android
+        run: |
+          ./gradlew assembleFullSuiteDebug assembleFullSuiteDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Keep the APKs for the devices
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apks
+          path: |
+            android/app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
+            android/app/build/outputs/apk/androidTest/fullSuite/debug/app-full-suite-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  # Every Android version from the oldest Clairix runs on (minSdk 31) to the
+  # newest: each runs the smoke test, the end-to-end tests, the soak test, the
+  # Tor tests and the lock screen tests on its own emulator.
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        api: ['31', '33', '34', '35']
+    env:
+      API: ${{ matrix.api }}
+      IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.22.0'
 
-      # Two relays side by side, each with storage of its own. A relay reached
-      # over plain http on 127.0.0.1 admits other loopback relays as addresses
-      # (federation.ts isLoopbackDev), which a deployed relay never does.
+      # A real Tor onion service in front of relay B, as selfhost/install.sh
+      # sets one up: started first, so it is published on the Tor network long
+      # before the Tor tests look for it. Relay B names it at GET / (RELAY_ONION).
+      - name: Start an onion service for relay B
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tor > /dev/null
+          mkdir -p "$RUNNER_TEMP/tor/data" "$RUNNER_TEMP/tor/relay-b"
+          chmod 700 "$RUNNER_TEMP/tor/data" "$RUNNER_TEMP/tor/relay-b"
+          cat > "$RUNNER_TEMP/tor/torrc" <<EOF
+          SocksPort 0
+          DataDirectory $RUNNER_TEMP/tor/data
+          HiddenServiceDir $RUNNER_TEMP/tor/relay-b
+          HiddenServiceVersion 3
+          HiddenServicePort 80 127.0.0.1:8788
+          EOF
+          nohup tor -f "$RUNNER_TEMP/tor/torrc" > tor-onion.log 2>&1 &
+          for i in $(seq 1 60); do [ -s "$RUNNER_TEMP/tor/relay-b/hostname" ] && break; sleep 1; done
+          ONION_HOST="$(cat "$RUNNER_TEMP/tor/relay-b/hostname")"
+          echo "$ONION_HOST" | grep -Eq '^[a-z2-7]{56}\.onion$' || { echo "::error::Tor did not make the onion service"; cat tor-onion.log; exit 1; }
+          echo "RELAY_B_ONION=http://$ONION_HOST" >> "$GITHUB_ENV"
+
+      # Two relays side by side, each with storage of its own: A under
+      # `wrangler dev`, B as the self-hosted build (selfhost/) under plain
+      # workerd, so every cross-relay test also runs a self-hosted relay. A
+      # relay reached over plain http on 127.0.0.1 admits other loopback relays
+      # as addresses (federation.ts isLoopbackDev), which a deployed relay never
+      # does; B is built --allow-loopback to reach A at all. Both issue 20,000
+      # delivery tokens an hour instead of 1,000: the soak test sends more in
+      # its eight minutes than a person does in an hour, and would otherwise
+      # wait for the next hour's allowance (correctly, but past its timeouts).
       - name: Start two local relays
         working-directory: comms-worker
         env:
           WRANGLER_SEND_METRICS: 'false'
         run: |
           npm ci --no-audit --no-fund
-          for r in a:8787:9229 b:8788:9230; do
-            name=${r%%:*}; rest=${r#*:}; port=${rest%%:*}; inspector=${rest#*:}
-            nohup npx wrangler dev --ip 127.0.0.1 --port "$port" --inspector-port "$inspector" \
-              --persist-to "$RUNNER_TEMP/relay-$name" \
-              --var ENROLL_SECRET:e2e-enrollment-secret-0123456789 --var MIX_MAX_MS:2000 \
-              > "../relay-$name.log" 2>&1 &
-          done
+          nohup npx wrangler dev --ip 127.0.0.1 --port 8787 --inspector-port 9229 \
+            --persist-to "$RUNNER_TEMP/relay-a" \
+            --var ENROLL_SECRET:e2e-enrollment-secret-0123456789 --var MIX_MAX_MS:2000 \
+            --var DELIVERY_TOKENS_PER_HOUR:20000 \
+            > ../relay-a.log 2>&1 &
+          mkdir -p "$RUNNER_TEMP/relay-b"
+          node selfhost/build.mjs --out "$RUNNER_TEMP/relay-b-build" --state "$RUNNER_TEMP/relay-b" \
+            --listen 127.0.0.1:8788 --cron-listen 127.0.0.1:8790 --allow-loopback
+          ENROLL_SECRET=e2e-enrollment-secret-0123456789 MIX_MAX_MS=2000 RELAY_ONION="$RELAY_B_ONION" DELIVERY_TOKENS_PER_HOUR=20000 \
+            nohup node_modules/.bin/workerd serve --experimental "$RUNNER_TEMP/relay-b-build/relay.capnp" \
+            > ../relay-b.log 2>&1 &
           for port in 8787 8788; do
             for i in $(seq 1 60); do curl -sf "http://127.0.0.1:$port/" > /dev/null && break; sleep 2; done
             curl -sf "http://127.0.0.1:$port/" || { echo "::error::The relay on $port did not start"; cat ../relay-*.log; exit 1; }
             echo
           done
+          curl -sf http://127.0.0.1:8788/ | grep -q "\"onion\":\"$RELAY_B_ONION\"" || { echo "::error::Relay B does not name its onion address"; exit 1; }
 
-      - name: Build the app and the smoke test
-        working-directory: android
-        run: |
-          ./gradlew assembleFullSuiteDebug assembleFullSuiteDebugAndroidTest --no-daemon --stacktrace
+      - name: Fetch the APKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apks
+          path: android/app/build/outputs/apk
 
       # Hosted Linux runners have KVM; the runner user needs access to it.
       - name: Enable KVM
@@ -161,6 +232,20 @@ jobs:
             exit 1
           fi
           echo "Booted after about $((i * 5)) s"
+          # sys.boot_completed comes before user 0 is fully unlocked, and finishing
+          # the unlock brings the home screen back to the front: an app started
+          # in between is covered at once (Android 13 on e771fa6, "app did not
+          # come up"). Wait for the unlock, then for the launcher to hold focus.
+          for i in $(seq 1 60); do
+            state="$(timeout 10 "$ADB" shell am get-started-user-state 0 2>/dev/null | tr -d '\r')"
+            case "$state" in *RUNNING_UNLOCKED*) break ;; esac
+            sleep 2
+          done
+          echo "User 0: $state"
+          for i in $(seq 1 60); do
+            timeout 10 "$ADB" shell dumpsys window 2>/dev/null | grep -E "mCurrentFocus=.*[Ll]auncher" && break
+            sleep 2
+          done
           "$ADB" shell settings put global window_animation_scale 0
           "$ADB" shell settings put global transition_animation_scale 0
           "$ADB" shell settings put global animator_duration_scale 0
@@ -174,6 +259,11 @@ jobs:
           "$ADB" logcat -c
           "$ADB" install -r -g app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
           "$ADB" install -r app/build/outputs/apk/androidTest/fullSuite/debug/app-full-suite-debug-androidTest.apk
+          # An accessibility service on, so Compose reports screen changes to
+          # UiAutomator on every version (NoopAccessibilityService, FreshUi).
+          "$ADB" shell settings put secure enabled_accessibility_services app.clairix.test/app.clairix.NoopAccessibilityService
+          "$ADB" shell settings put secure accessibility_enabled 1
+          "$ADB" shell settings get secure enabled_accessibility_services
           set +e
           timeout 1500 "$ADB" shell am instrument -w -r app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../instrument.txt
           set -e
@@ -181,13 +271,28 @@ jobs:
           mkdir -p ../screens
           "$ADB" pull /sdcard/Android/data/app.clairix/files/smoke ../screens || true
           # The instrumentation output says OK only when every test passed; a crash
-          # anywhere in the app shows as FATAL EXCEPTION in the log.
-          if grep -q "FATAL EXCEPTION" ../logcat.txt; then
+          # anywhere in the app shows as FATAL EXCEPTION in the log, with the
+          # process named on the next line (other apps on the emulator crash too:
+          # Gmail did on API 31, run 40272070286).
+          if grep -A1 "FATAL EXCEPTION" ../logcat.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the smoke test; see logcat.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat.txt | head -80
             exit 1
           fi
           grep -q "^OK (" ../instrument.txt || { echo "::error::The smoke test failed; see instrument.txt"; exit 1; }
+
+      # The smoke test leaves the scanner running, and with it the GPS check's
+      # raw-measurement listener (GnssMonitor). The emulator's GNSS HAL
+      # (gnss@2.0-service.ranchu) deadlocks when Android stops and restarts
+      # measurement collection as an app's foreground state changes, and the
+      # system watchdog then kills the whole system (seen on Android 12 and 13
+      # during the soak test). Everything from here on tests messaging, so the
+      # scanner is stopped first; who held the listeners is kept for the record.
+      - name: Stop the scanner the smoke test started
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" shell dumpsys location > location-after-smoke.txt 2>&1 || true
+          "$ADB" shell am force-stop app.clairix
 
       - name: Run the end-to-end tests against the two relays
         working-directory: android
@@ -205,28 +310,113 @@ jobs:
             app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../e2e.txt
           set -e
           "$ADB" logcat -d > ../logcat-e2e.txt
-          if grep -q "FATAL EXCEPTION" ../logcat-e2e.txt; then
+          if grep -A1 "FATAL EXCEPTION" ../logcat-e2e.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the end-to-end tests; see logcat-e2e.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat-e2e.txt | head -80
             exit 1
           fi
-          grep -q "^OK (8 tests)" ../e2e.txt || { echo "::error::The end-to-end tests failed; see e2e.txt"; exit 1; }
+          grep -q "^OK (10 tests)" ../e2e.txt || { echo "::error::The end-to-end tests failed; see e2e.txt"; exit 1; }
           # Every test must have run: a skipped one (status -4 for an unmet assumption,
           # -3 for an ignored test) means the relays were not passed through.
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
+
+      # A long conversation on the same two relays: texts both ways with a
+      # contact on each, photos, the vault sealing and opening, the socket
+      # dropped; nothing lost, nothing twice, and memory that stops growing.
+      - name: Run the soak test
+        working-directory: android
+        timeout-minutes: 20
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 1100 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.SoakTest -e soakMinutes 8 \
+            -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
+            -e secret e2e-enrollment-secret-0123456789 \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../soak.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-soak.txt
+          grep "SoakTest" ../logcat-soak.txt | tail -20 || true
+          if grep -A1 "FATAL EXCEPTION" ../logcat-soak.txt | grep -q "Process: app.clairix"; then
+            echo "::error::Clairix crashed during the soak test; see logcat-soak.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-soak.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (1 test)" ../soak.txt || { echo "::error::The soak test failed; see soak.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../soak.txt; then echo "::error::The soak test was skipped"; exit 1; fi
+
+      # The app over the real Tor network (Arti on the phone, through its own
+      # SOCKS proxy): requests come out of Tor, the listed relay answers with
+      # its listed key, the app keeps working with relay B reachable only at
+      # its onion address, and with Tor on but its proxy gone nothing goes out.
+      - name: Run the Tor tests
+        working-directory: android
+        timeout-minutes: 25
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 1400 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.TorDeviceTest -e tor true \
+            -e onionRelay http://127.0.0.1:8788 -e onion "$RELAY_B_ONION" \
+            -e secret e2e-enrollment-secret-0123456789 \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../tor.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-tor.txt
+          if grep -A1 "FATAL EXCEPTION" ../logcat-tor.txt | grep -q "Process: app.clairix"; then
+            echo "::error::Clairix crashed during the Tor tests; see logcat-tor.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-tor.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (4 tests)" ../tor.txt || { echo "::error::The Tor tests failed; see tor.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../tor.txt; then echo "::error::Tor tests were skipped"; exit 1; fi
+
+      - name: Run the lock screen tests
+        working-directory: android
+        timeout-minutes: 10
+        run: |
+          # Last of all: these set and clear a PIN, and the app's own vault keys
+          # move with it, so nothing that uses the app's data may run after them.
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 500 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.VaultLockScreenTest -e lockScreen true \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../lockscreen.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-lockscreen.txt
+          # Whatever happened, the emulator is left with no PIN.
+          "$ADB" shell locksettings clear --old 1590 >/dev/null 2>&1 || true
+          grep "VaultLockScreenTest" ../logcat-lockscreen.txt || true
+          if grep -A1 "FATAL EXCEPTION" ../logcat-lockscreen.txt | grep -q "Process: app.clairix"; then
+            echo "::error::Clairix crashed during the lock screen tests; see logcat-lockscreen.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-lockscreen.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (2 tests)" ../lockscreen.txt || { echo "::error::The lock screen tests failed; see lockscreen.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../lockscreen.txt; then echo "::error::Lock screen tests were skipped"; exit 1; fi
 
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: emulator-smoke
+          name: emulator-smoke-api${{ matrix.api }}
           path: |
             screens/
             instrument.txt
             logcat.txt
             e2e.txt
             logcat-e2e.txt
+            lockscreen.txt
+            logcat-lockscreen.txt
+            tor.txt
+            logcat-tor.txt
+            soak.txt
+            logcat-soak.txt
             relay-a.log
             relay-b.log
+            tor-onion.log
+            location-after-smoke.txt
             emulator.log
           if-no-files-found: warn

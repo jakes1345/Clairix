@@ -3,7 +3,7 @@
 // Run with `npm test`.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { advance, makePhone, makeRelay, network, resetClock } from "./harness/fake-env.mjs";
+import { advance, makePhone, makeRelay, mockFetch, network, resetClock } from "./harness/fake-env.mjs";
 import { federationPayload, federationPolicy, relayOrigin } from "../src/federation.ts";
 
 afterEach(() => resetClock());
@@ -44,8 +44,9 @@ function sendVia(phone, token, to, relay, extra = {}) {
 test("relay addresses: https origins with a host name only", () => {
   assert.equal(relayOrigin("https://relay.example.org"), "https://relay.example.org");
   assert.equal(relayOrigin("https://Relay.Example.org/"), "https://relay.example.org");
-  assert.equal(relayOrigin("https://relay.example.org:8443"), "https://relay.example.org:8443");
-  for (const bad of ["http://relay.example.org", "https://relay.example.org/v1", "https://relay.example.org?x=1", "https://u:p@relay.example.org",
+  assert.equal(relayOrigin("https://relay.example.org:443"), "https://relay.example.org", "the default port is the same address");
+  for (const bad of ["https://relay.example.org:8443", "https://relay.example.org.", "https://localhost.", "https://metadata.internal.",
+    "http://relay.example.org", "https://relay.example.org/v1", "https://relay.example.org?x=1", "https://u:p@relay.example.org",
     "https://10.0.0.1", "https://[::1]", "https://localhost", "https://box.local", "ftp://relay.example.org", "relay.example.org", "", 7, null]) {
     assert.equal(relayOrigin(bad), null, String(bad));
   }
@@ -151,7 +152,8 @@ test("a lookup through the home relay claims a one-time key there, and the first
     assert.equal(bundle.ed25519, bob.ed25519);
     assert.ok(bob.keyIds.includes(bundle.oneTimeKey.id));
     assert.equal(typeof bundle.claim, "string");
-    assert.deepEqual(Object.keys(bundle).sort(), ["claim", "curve25519", "ed25519", "fallback", "number", "oneTimeKey", "sealing", "signature"]);
+    assert.deepEqual(Object.keys(bundle).sort(), ["claim", "curve25519", "ed25519", "fallback", "number", "oneTimeKey", "sealing", "sealingPrekey", "signature"]);
+    assert.deepEqual(bundle.sealingPrekey, bob.sealingPrekey, "the sealing prekey crosses relays");
     assert.equal(await bob.oneTimeKeys(), 4);
     const [token] = await alice.tokens(1);
     assert.equal((await alice.send(token, bob.number, undefined, bundle.claim, { relay: B })).status, 202);
@@ -162,6 +164,7 @@ test("a lookup through the home relay claims a one-time key there, and the first
     const identity = await alice.signed("POST", "/v1/lookup", { number: bob.number, claim: false, relay: B });
     assert.equal(identity.status, 200);
     assert.equal(identity.json.identity.sealing, bob.sealing);
+    assert.deepEqual(identity.json.identity.sealingPrekey, bob.sealingPrekey);
     assert.equal(await bob.oneTimeKeys(), 4);
   } finally {
     net.restore();
@@ -456,19 +459,25 @@ test("another relay is held per recipient, alike for numbers that exist and ones
   try {
     const alice = await makePhone(a);
     const bob = await makePhone(b);
+    const waits = [];
     const statuses = async (to) => {
       const out = [];
-      for (let i = 0; i < 64; i++) {
+      for (let i = 0; i < 304; i++) {
         const [t] = await alice.tokens(1);
-        out.push((await sendVia(alice, t, to, B)).status);
+        const res = await sendVia(alice, t, to, B);
+        if (res.status === 429) waits.push(res.headers.get("retry-after"));
+        out.push(res.status);
       }
       return out;
     };
     const real = await statuses(bob.number);
     const made = await statuses("123456789");
     assert.deepEqual(real, made);
-    assert.equal(real.filter((s) => s === 202).length, 60);
+    // A photo of a few MB is a hundred envelopes or more: the limit lets one through at once.
+    assert.equal(real.filter((s) => s === 202).length, 300);
     assert.equal(real.filter((s) => s === 429).length, 4);
+    // The other relay's wait (until its bucket holds one again) reaches the phone, which sends again then.
+    assert.ok(waits.length === 8 && waits.every((w) => w === "2"), `waits: ${waits}`);
   } finally {
     net.restore();
   }
@@ -479,8 +488,12 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   const bob = await makePhone(b);
   const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
   let federated = 0;
-  for (let i = 0; i < 400; i++) if ((await box.enqueue("c2VhbGVk", null, true, true)).ok) federated++;
-  assert.equal(federated, 300, "other relays get their own allowance");
+  for (let i = 0; i < 6_100; i++) {
+    if ((await box.enqueue("c2VhbGVk", null, true, "known")).ok) federated++;
+    // The phone reads its mail as it comes: the queue's own limit is not what is tested here.
+    if (i % 1000 === 999) await b.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 0);
+  }
+  assert.equal(federated, 6_000, "other relays get their own allowance");
   // This relay's own senders are not affected.
   const carol = await makePhone(b);
   const [t] = await carol.tokens(1);
@@ -488,9 +501,58 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   // And the queue keeps room for them: other relays stop 500 short of full.
   await b.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 1500);
   advance(3_600_000);
-  assert.equal((await box.enqueue("c2VhbGVk", null, true, true)).status, 404, "dropped, answered as no such number");
+  assert.equal((await box.enqueue("c2VhbGVk", null, true, "known")).status, 404, "dropped, answered as no such number");
   const [t2] = await carol.tokens(1);
   assert.equal((await carol.send(t2, bob.number)).status, 202);
+});
+
+test("one relay at its limit for a recipient, hour after hour, never meets the mailbox's silent drop", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    // Several senders on A, each within its own delivery tokens; the limit is A's, per recipient.
+    const senders = [await makePhone(a), await makePhone(a), await makePhone(a), await makePhone(a)];
+    const bob = await makePhone(b);
+    // Bob has written to someone on A, so A is a relay his mailbox knows.
+    const [bt] = await bob.tokens(1);
+    assert.equal((await sendVia(bob, bt, senders[0].number, A)).status, 202);
+    let accepted = 0;
+    let refused = 0;
+    let received = 0;
+    // Bob's phone reads and acknowledges its mail, as the app does.
+    const read = async () => {
+      await b.env.MAILBOX.runDueAlarms();
+      for (;;) {
+        const envelopes = await bob.inbox();
+        if (envelopes.length === 0) return;
+        received += envelopes.length;
+        assert.equal((await bob.signed("POST", "/v1/ack", { ids: envelopes.map((e) => e.id) })).status, 200);
+      }
+    };
+    // Two clock hours and a bit, a minute at a time, sending until the
+    // per-recipient limit says wait; Bob's phone reads its mail meanwhile.
+    for (let minute = 0; minute < 125; minute++) {
+      for (;;) {
+        const alice = senders[accepted % senders.length];
+        const [t] = await alice.tokens(1);
+        const res = await sendVia(alice, t, bob.number, B);
+        if (res.status === 429) { refused++; break; }
+        assert.equal(res.status, 202);
+        accepted++;
+      }
+      advance(60_000);
+      await read();
+    }
+    advance(60_000);
+    await read();
+    // Everything the relay accepted reached Bob: nothing past the per-recipient
+    // limit was swallowed by the mailbox's.
+    assert.equal(received, accepted);
+    assert.ok(accepted >= 300 + 124 * 30, `accepted ${accepted}`);
+    assert.equal(refused, 125);
+  } finally {
+    net.restore();
+  }
 });
 
 test("a mailbox at its limits for other relays answers them as a number that does not exist", async () => {
@@ -508,8 +570,9 @@ test("a mailbox at its limits for other relays answers them as a number that doe
     };
     const queued = async () => (await real.get(bob.number).state.storage.get("queueCount")) ?? 0;
 
-    // Allowance for other relays used up (several relays together could).
-    for (let i = 0; i < 400; i++) await box.enqueue("c2VhbGVk", null, true, true);
+    // Allowance for other relays used up (several relays together could). No
+    // one on B has written to A, so A's mail draws on the strangers' share.
+    for (let i = 0; i < 400; i++) await box.enqueue("c2VhbGVk", null, true, "stranger");
     let before = await queued();
     assert.deepEqual(await answer(bob.number), await answer("123456789"));
     assert.deepEqual(await answer(bob.number), [202, "id"]);
@@ -530,6 +593,100 @@ test("a mailbox at its limits for other relays answers them as a number that doe
     await real.get(bob.number).state.storage.put("queueCount", 2000);
     const [t2] = await carol.tokens(1);
     assert.equal((await carol.send(t2, bob.number)).status, 413);
+  } finally {
+    net.restore();
+  }
+});
+
+test("relays made up to flood a mailbox cannot use up what relays people here write to rely on", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const real = b.env.MAILBOX.objects;
+    const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
+    const queued = async () => (await real.get(bob.number).state.storage.get("queueCount")) ?? 0;
+    const fromAlice = async () => {
+      const [t] = await alice.tokens(1);
+      const before = await queued();
+      assert.equal((await sendVia(alice, t, bob.number, B)).status, 202);
+      return (await queued()) > before;
+    };
+
+    // A relay no one on B has written to gets a small share: ten at once.
+    let through = 0;
+    for (let i = 0; i < 15; i++) if (await fromAlice()) through++;
+    assert.equal(through, 10, "strangers share a burst of ten");
+
+    // Made-up relays flood the strangers' share for the hour.
+    for (let i = 0; i < 100; i++) await box.enqueue("c2VhbGVk", null, true, "stranger");
+    assert.equal(await fromAlice(), false, "A is still a stranger to B");
+
+    // Once a phone on B writes to someone on A, A's mail is no longer held to
+    // the strangers' share, however full it is.
+    const [t] = await bob.tokens(1);
+    assert.equal((await sendVia(bob, t, alice.number, A)).status, 202);
+    for (let i = 0; i < 20; i++) assert.equal(await fromAlice(), true, `known relay envelope ${i}`);
+
+    // What B keeps is the day, nothing about who wrote or to whom.
+    const kept = [...real].filter(([name]) => name.startsWith("fed:")).flatMap(([, e]) => [...e.state.storage.data.keys()]);
+    assert.ok(kept.includes("writtenToDay"));
+    const fedLines = everythingStored(b).split("\n").filter((l) => l.startsWith("fed:"));
+    assert.ok(!fedLines.some((l) => l.includes(alice.number) || l.includes(bob.number)), "no number is kept with the relay");
+
+    // It lapses after WRITTEN_TO_DAYS without anyone writing there again.
+    advance(91 * 24 * 3_600_000);
+    for (let i = 0; i < 100; i++) await box.enqueue("c2VhbGVk", null, true, "stranger");
+    assert.equal(await fromAlice(), false, "not written to for 91 days");
+  } finally {
+    net.restore();
+  }
+});
+
+test("an address that served no key is not fetched again for a while, and other relays' answers are read only so far", async () => {
+  resetClock();
+  const relay = makeRelay();
+  await relay.call("GET", "/");
+  const m = mockFetch(() => new Response("nope", { status: 404 }));
+  try {
+    for (let i = 0; i < 5; i++) {
+      const r = await relay.call("POST", "/v1/federate/send", {
+        body: "{}",
+        headers: { "x-clairix-relay": "https://nokey.example.org", "x-clairix-relay-ts": String(Date.now()),
+          "x-clairix-relay-nonce": "aaaaaaaaaaaaaaaa" + i, "x-clairix-relay-sig": "x" },
+      });
+      assert.equal(r.status, 401);
+    }
+  } finally {
+    m.restore();
+  }
+  assert.equal(m.calls.length, 1, "fetched once, then remembered as failed");
+  // A key answer far larger than any key is not read to the end.
+  const huge = mockFetch(() => new Response(JSON.stringify({ relayKey: "A".repeat(100_000) }), { status: 200 }));
+  try {
+    const r = await relay.call("POST", "/v1/federate/send", {
+      body: "{}",
+      headers: { "x-clairix-relay": "https://bigkey.example.org", "x-clairix-relay-ts": String(Date.now()),
+        "x-clairix-relay-nonce": "bbbbbbbbbbbbbbbbbb", "x-clairix-relay-sig": "x" },
+    });
+    assert.equal(r.status, 401);
+  } finally {
+    huge.restore();
+  }
+});
+
+test("a sender's alert crosses relays with the envelope", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const [t] = await alice.tokens(1);
+    assert.equal((await sendVia(alice, t, bob.number, B, { alert: "sos" })).status, 202);
+    const got = await bob.inbox();
+    assert.equal(got.length, 1);
+    assert.equal(got[0].alert, "sos");
   } finally {
     net.restore();
   }

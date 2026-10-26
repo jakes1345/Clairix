@@ -49,6 +49,22 @@ export const TOKEN_KINDS: Record<TokenKind, TokenKindSpec> = {
   report: { shard: "rtok", perHour: 20, burst: 30 },
 };
 
+/**
+ * How many tokens of [kind] an account is issued an hour, and the most it
+ * saves up: [TOKEN_KINDS], with delivery tokens raised or lowered by the
+ * operator's DELIVERY_TOKENS_PER_HOUR (a whole number from 1 to 100000) when
+ * set, for a relay whose people send more (a family relay full of videos) or
+ * that wants tighter limits.
+ */
+export function tokenAllowance(env: { DELIVERY_TOKENS_PER_HOUR?: string }, kind: TokenKind): { perHour: number; burst: number } {
+  const spec = TOKEN_KINDS[kind];
+  if (kind !== "delivery") return spec;
+  const raw = (env.DELIVERY_TOKENS_PER_HOUR ?? "").trim();
+  if (!/^[0-9]{1,6}$/.test(raw)) return spec;
+  const n = Number(raw);
+  return n >= 1 && n <= 100_000 ? { perHour: n, burst: n } : spec;
+}
+
 export function isTokenKind(raw: unknown): raw is TokenKind {
   return raw === "delivery" || raw === "traffic" || raw === "report";
 }
@@ -106,6 +122,38 @@ export interface SignedKey {
   key: string;
   signature: string;
 }
+
+/**
+ * What a sender may ask a recipient's phone to do with an envelope it cannot
+ * open yet (the phone is locked, so its keys are out of reach): ring for a
+ * call, or sound the alarm for an SOS. The relay learns no more from it than
+ * the timing of a call set-up or an SOS fan-out already shows.
+ */
+export type Alert = "call" | "sos";
+export const ALERTS: readonly Alert[] = ["call", "sos"];
+
+/**
+ * A phone's current sealing prekey (envelope format 3): an X25519 key it
+ * replaces every week, signed with its identity key over [prekeyStatement].
+ * Envelopes to the phone are sealed to it, and once the phone deletes an old
+ * one, envelopes logged earlier no longer show who sent them.
+ */
+export interface SealingPrekey {
+  key: string;
+  /** When the phone made it, ms since the epoch. */
+  created: number;
+  signature: string;
+}
+
+/** What a sealing prekey's signature covers; the phone's crypto signs the same text. */
+export function prekeyStatement(key: string, created: number): string {
+  return `clairix-sealing-prekey-v1|${key}|${created}`;
+}
+
+/** A prekey older than this is not taken: senders would refuse to seal to it anyway. */
+export const PREKEY_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
+/** Nor one from further in the future than this. */
+export const PREKEY_FUTURE_SKEW_MS = 24 * 60 * 60_000;
 
 export interface OtkClaim {
   /** SHA-256 (hex) of the ticket handed out with the key. */

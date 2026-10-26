@@ -27,7 +27,13 @@ object CommsNotifications {
     /** Index of the COMMS tab in MainActivity's tab row. */
     const val COMMS_TAB_INDEX = 7
 
-    const val CHANNEL_MESSAGES = "messages"
+    /**
+     * Its lock-screen visibility is private: on a locked phone a message shows
+     * only as the redacted version, whatever Android's own lock-screen setting.
+     * A channel's lock-screen visibility cannot change once it exists, so this
+     * is a new channel; the old one ("messages") is deleted.
+     */
+    const val CHANNEL_MESSAGES = "messages_private"
     const val CHANNEL_LINK = "comms_link"
     const val CHANNEL_CALLS = "calls"
     /**
@@ -37,7 +43,8 @@ object CommsNotifications {
      */
     const val CHANNEL_RINGING = "calls_ringing"
     /** An SOS from a member of one of the owner's groups: loud, and shown on the lock screen. */
-    const val CHANNEL_SOS = "group_sos"
+    /** Private on the lock screen like messages (the old "group_sos" channel was public, and is deleted). */
+    const val CHANNEL_SOS = "group_sos_private"
 
     /** Intent extras naming the tab and conversation MainActivity should open. */
     const val EXTRA_TAB = "app.clairix.TAB"
@@ -57,12 +64,20 @@ object CommsNotifications {
     const val CALL_NOTIFICATION_ID = 0x5C00_0003
     /** The one "unlock to read" notification that stands in for every message notification once the app locks. */
     const val SUMMARY_NOTIFICATION_ID = 0x5C00_0004
+    /** What arrived while the phone was locked, before anything could be opened: a call, an SOS, messages. */
+    const val LOCKED_CALL_NOTIFICATION_ID = 0x5C00_0005
+    const val LOCKED_SOS_NOTIFICATION_ID = 0x5C00_0006
+    const val LOCKED_MESSAGES_NOTIFICATION_ID = 0x5C00_0007
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        for (old in listOf("messages", "group_sos")) runCatching { manager.deleteNotificationChannel(old) }
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH)
-                .apply { description = "Encrypted messages to your Clairix number" }
+                .apply {
+                    description = "Encrypted messages to your Clairix number"
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                }
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_LINK, "Comms connection", NotificationManager.IMPORTANCE_LOW)
@@ -98,7 +113,7 @@ object CommsNotifications {
                     description = "An SOS sent by a member of one of your groups"
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 500, 300, 500, 300, 500)
-                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
                     setBypassDnd(true)
                 }
         )
@@ -138,11 +153,15 @@ object CommsNotifications {
         )
         val answer = openCallScreen(context, call.id, accept = true, requestCode = INCOMING_CALL_NOTIFICATION_ID + 2)
         val show = openCallScreen(context, call.id, accept = false, requestCode = INCOMING_CALL_NOTIFICATION_ID + 3)
+        // The ringing card shows on the lock screen so the call can be answered;
+        // with previews hidden it does not say who is calling until unlocked.
+        val hidden = previewsHidden(context)
+        val caller = if (hidden) Person.Builder().setName("Clairix call").setImportant(true).build() else person(call.peer)
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Incoming encrypted call")
-            .setContentText(call.peer.name.ifBlank { formatClairixNumber(call.peer.number) } + if (call.peer.verified) "" else " (unverified)")
-            .setStyle(NotificationCompat.CallStyle.forIncomingCall(person(call.peer), decline, answer))
+            .setContentText(if (hidden) "Unlock to see who is calling" else call.peer.name.ifBlank { formatClairixNumber(call.peer.number) } + if (call.peer.verified) "" else " (unverified)")
+            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setOngoing(true)
@@ -153,6 +172,89 @@ object CommsNotifications {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(INCOMING_CALL_NOTIFICATION_ID, notification)
+    }
+
+    // ── Before the phone is unlocked ─────────────────────────────────────
+
+    /**
+     * A call is ringing whose offer cannot be opened until the phone is
+     * unlocked: it names no one. Answer unlocks and then answers; Decline
+     * silences it here (the caller hears it ring out).
+     */
+    fun lockedCall(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val ring = Intent(context, app.clairix.LockedRingActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val show = PendingIntent.getActivity(context, LOCKED_CALL_NOTIFICATION_ID, ring, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val answer = PendingIntent.getActivity(
+            context, LOCKED_CALL_NOTIFICATION_ID + 1,
+            Intent(ring).setAction(app.clairix.LockedRingActivity.ACTION_ANSWER),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val decline = PendingIntent.getBroadcast(
+            context, LOCKED_CALL_NOTIFICATION_ID + 2,
+            Intent(context, CallActionReceiver::class.java).setAction(CallActionReceiver.ACTION_LOCKED_DECLINE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        // CallStyle titles the notification with the caller's name, so this
+        // Person is the title: it names no one. The full-screen ring
+        // (LockedRingActivity) says "Incoming Clairix call".
+        val caller = Person.Builder().setName("Clairix call").setImportant(true).build()
+        val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
+            .setSmallIcon(android.R.drawable.sym_action_call)
+            .setContentText("Unlock to answer")
+            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setContentIntent(show)
+            .setFullScreenIntent(show, true)
+            .setTimeoutAfter(45_000L)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(LOCKED_CALL_NOTIFICATION_ID, notification)
+        CallManager.ringLocked()
+    }
+
+    /** An SOS arrived while the phone is locked: who and where are known only once it is unlocked. */
+    fun lockedSos(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("SOS from a group member")
+            .setContentText("Unlock Clairix to see who and where")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, LOCKED_SOS_NOTIFICATION_ID))
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(LOCKED_SOS_NOTIFICATION_ID, notification)
+    }
+
+    /** [count] messages are waiting to be opened after the unlock. */
+    fun lockedMessages(context: Context, count: Int) {
+        if (!canPost(context) || count <= 0) return
+        ensureChannels(context)
+        val text = if (count == 1) "Unlock to read it" else "$count waiting · unlock to read"
+        context.getSystemService(NotificationManager::class.java)
+            ?.notify(LOCKED_MESSAGES_NOTIFICATION_ID, unlockToRead(context, "New Clairix message", text, LOCKED_MESSAGES_NOTIFICATION_ID))
+    }
+
+    /** The phone was unlocked: what stood in for the sealed envelopes goes, and the real notifications follow. */
+    fun cancelLocked(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        for (id in listOf(LOCKED_CALL_NOTIFICATION_ID, LOCKED_SOS_NOTIFICATION_ID, LOCKED_MESSAGES_NOTIFICATION_ID)) manager.cancel(id)
+    }
+
+    private fun openComms(context: Context, requestCode: Int): PendingIntent {
+        val open = Intent(context, MainActivity::class.java)
+            .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        return PendingIntent.getActivity(context, requestCode, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     fun cancelIncomingCall(context: Context) {
@@ -194,7 +296,7 @@ object CommsNotifications {
     fun missedCall(context: Context, contact: Contact) {
         if (!canPost(context)) return
         ensureChannels(context)
-        if (hidePreviews(context)) {
+        if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
                 ?.notify(missedCallId(contact.number), unlockToRead(context, "Missed call", "Open Clairix to see who", contact.number.hashCode() xor 0x4D))
             return
@@ -303,9 +405,15 @@ object CommsNotifications {
             NotificationManagerCompat.from(context).areNotificationsEnabled()
         }
 
-    /** Whether notifications must name no contact and quote nothing (the owner's choice; see [CommsConfig.hidePreviews]). */
-    fun hidePreviews(context: Context): Boolean =
-        CommsConfig(context).hidePreviews(passcodeSet = AppLock.isEnabled(context))
+    /** The owner's setting: whether notifications name no contact and quote nothing (see [CommsConfig.hidePreviews]). */
+    fun hidePreviews(context: Context): Boolean = CommsConfig(context).hidePreviews()
+
+    /**
+     * Whether a notification posted now must name no one and quote nothing: the
+     * owner's setting, or the app being locked. One that arrives while Clairix is
+     * locked is redacted from the start, not only those showing when it locked.
+     */
+    private fun previewsHidden(context: Context): Boolean = hidePreviews(context) || AppLock.locked.value
 
     /** The one message notification shown while previews are hidden or the app is locked: it says only that there is something. */
     private fun unlockToRead(context: Context, title: String, text: String, requestCode: Int): Notification {
@@ -360,7 +468,7 @@ object CommsNotifications {
         if (messages.isEmpty()) return
         if (!canPost(context)) return
         ensureChannels(context)
-        if (hidePreviews(context)) {
+        if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
                 ?.notify(notificationId(contact.number), unlockToRead(context, "New message", "Open Clairix to read", contact.number.hashCode()))
             return
@@ -416,7 +524,7 @@ object CommsNotifications {
         val id = notificationId(contact.number)
         if (!alert && runCatching { manager.activeNotifications.none { it.id == id } }.getOrDefault(true)) return
         ensureChannels(context)
-        if (hidePreviews(context)) {
+        if (previewsHidden(context)) {
             manager.notify(id, unlockToRead(context, "Safety number changed", "Open Clairix to review", contact.number.hashCode()))
             return
         }
@@ -473,7 +581,7 @@ object CommsNotifications {
         if (messages.isEmpty()) return
         if (!canPost(context)) return
         ensureChannels(context)
-        if (hidePreviews(context)) {
+        if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
                 ?.notify(notificationId(group.id), unlockToRead(context, "New group message", "Open Clairix to read", group.id.hashCode()))
             return
@@ -528,7 +636,17 @@ object CommsNotifications {
             .setContentIntent(openGroup(context, group.id, panicId.hashCode()))
             .setWhen(ts)
             .setShowWhen(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // Seen on a locked phone, it says an SOS came, not from whom or where:
+            // a member's position is not for whoever holds a phone that is not theirs.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_SOS)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle("SOS from a group member")
+                    .setContentText("Unlock to see who and where")
+                    .setCategory(NotificationCompat.CATEGORY_ALARM)
+                    .build()
+            )
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(panicId(panicId), notification)
     }

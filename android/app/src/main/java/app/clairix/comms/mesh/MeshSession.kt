@@ -5,7 +5,8 @@ package app.clairix.comms.mesh
  * connected says hello with the ids it holds; the other answers with its own, then
  * sends what the first lacks and says it is done; the first sends what the second
  * lacks and says it is done. Bundles addressed to this phone's owner are handed over
- * and not carried further; the rest are kept for the next meeting.
+ * and carried on all the same, so nobody watching can tell them from the rest; all
+ * are kept for the next meeting. One meeting adds at most [MAX_ADDS] bundles.
  *
  * [send] takes a whole frame; the transport splits it. Not thread safe: the transport
  * calls it from one thread per connection.
@@ -31,6 +32,11 @@ class MeshSession(
 
     val finished: Boolean get() = sentDone && gotDone
 
+    companion object {
+        /** Bundles one peer may hand over in one meeting: past it the meeting ends. */
+        const val MAX_ADDS = 200
+    }
+
     fun start() { if (initiator) hello() }
 
     private fun hello() {
@@ -54,6 +60,7 @@ class MeshSession(
             }
             is MeshProtocol.Frame.Carry -> {
                 received++
+                if (received > MAX_ADDS) return false
                 val b = f.bundle
                 if (MeshProtocol.hex(b.tag) in ownTags()) {
                     if (store.markDelivered(b, now())) {

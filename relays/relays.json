@@ -1,0 +1,16 @@
+{
+  "type": "clairix-relay-list",
+  "version": 1,
+  "issued": 1792986900,
+  "relays": [
+    {
+      "url": "https://clairix-relay.bigjacob710.workers.dev",
+      "name": "Clairix",
+      "country": "Global",
+      "host": "Cloudflare (US company)",
+      "operator": "The Clairix project",
+      "key": "GLUhTA3fRJ9ZtWhmHLHtG4kXG4Ycf8YhtWFA7n6wZZg=",
+      "join": "By invite: someone already on this relay taps Invite in Comms."
+    }
+  ]
+}

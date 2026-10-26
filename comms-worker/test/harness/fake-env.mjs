@@ -297,6 +297,14 @@ function randomB64(n = 32) {
   return b64(crypto.getRandomValues(new Uint8Array(n)));
 }
 
+/** A random Curve25519 public key in canonical form (top bit clear), as a real phone's always is. */
+function randomCurveB64() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  bytes[31] &= 0x7f;
+  if (bytes[31] === 0x7f) bytes[31] = 0x7e; // and below the field prime
+  return b64(bytes);
+}
+
 async function sha256Hex(text) {
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
   return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -308,12 +316,12 @@ let addressCounter = 0;
  * Registers a phone with [oneTimeKeys] signed one-time keys and returns a
  * client that signs its requests the way RelayClient does.
  */
-export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {}) {
+export async function makePhone(relay, { listed = true, oneTimeKeys = 10, prekey = true } = {}) {
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const ed25519 = b64(await crypto.subtle.exportKey("raw", pair.publicKey));
   const sign = async (text) => b64(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, enc.encode(text)));
-  const curve25519 = randomB64();
-  const sealing = randomB64();
+  const curve25519 = randomCurveB64();
+  const sealing = randomCurveB64();
   const signedKey = async (id) => {
     const key = randomB64();
     return { id, key, signature: await sign(key) };
@@ -322,6 +330,13 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
   const keys = [];
   for (let i = 0; i < oneTimeKeys; i++) keys.push(await signedKey(`${tag}-otk-${i}`));
   const fallback = await signedKey(`${tag}-fallback`);
+  /** A sealing prekey signed the way the app's crypto signs one. */
+  const signedPrekey = async (created = Date.now(), key = randomCurveB64()) => ({
+    key,
+    created,
+    signature: await sign(`clairix-sealing-prekey-v1|${key}|${created}`),
+  });
+  const sealingPrekey = prekey ? await signedPrekey() : undefined;
   const body = JSON.stringify({
     ts: Date.now(),
     secret: ENROLL_SECRET,
@@ -331,6 +346,7 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
     signature: await sign(`${curve25519}|${sealing}`),
     fallback,
     oneTimeKeys: keys,
+    ...(sealingPrekey ? { sealingPrekey } : {}),
     listed,
   });
   const reg = await relay.call("POST", "/v1/register", {
@@ -340,7 +356,7 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
   if (reg.status !== 201) throw new Error(`registration failed: ${reg.status} ${JSON.stringify(reg.json)}`);
   const number = reg.json.number;
 
-  const signed = async (method, path, bodyObj) => {
+  const signedWith = (signer, extraHeaders) => async (method, path, bodyObj) => {
     const text = bodyObj === undefined ? "" : JSON.stringify(bodyObj);
     const ts = Date.now();
     const nonce = randomB64(18).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -351,22 +367,33 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
         "x-clairix-number": number,
         "x-clairix-ts": String(ts),
         "x-clairix-nonce": nonce,
-        "x-clairix-sig": await sign(payload),
+        "x-clairix-sig": await signer(payload),
+        ...extraHeaders,
       },
     });
   };
+  const signed = signedWith(sign, {});
+  // The transport key: a second Ed25519 key that may only collect envelopes.
+  const transportPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const transportKey = b64(await crypto.subtle.exportKey("raw", transportPair.publicKey));
+  const signTransport = async (text) => b64(await crypto.subtle.sign({ name: "Ed25519" }, transportPair.privateKey, enc.encode(text)));
+  const signedTransport = signedWith(signTransport, { "x-clairix-key": "transport" });
 
   return {
     number,
     ed25519,
     curve25519,
     sealing,
+    sealingPrekey: sealingPrekey ?? null,
+    signedPrekey,
     sign,
     registrationBody: body,
     keyIds: keys.map((k) => k.id),
     fallbackId: fallback.id,
     signed,
     signedKey,
+    transportKey,
+    signedTransport,
     async tokens(count, kind) {
       const res = await signed("POST", "/v1/tokens", kind === undefined ? { count } : { count, kind });
       if (res.status !== 200) throw new Error(`tokens: ${res.status} ${JSON.stringify(res.json)}`);

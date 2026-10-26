@@ -163,6 +163,10 @@ export async function checkBlindToken(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, k
   const input = base64ToBytes(m[2]!);
   const output = base64ToBytes(m[3]!);
   if (input.length !== 32 || output.length !== OUTPUT_LEN) return null;
+  // Only the one spelling: 43 characters carry two bits more than 32 bytes,
+  // and a decoder ignores them, so without this four strings would be the
+  // same token, each with a spent record of its own.
+  if (base64url(input) !== m[2] || base64url(output) !== m[3]) return null;
   const s = await secret(env);
   const w = voprf();
   const i = info(kind, epoch);

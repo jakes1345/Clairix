@@ -3,6 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_DAILY_CAP,
+  PACE_LEAD_SEC,
+  pacedCap,
   HIGH_WATER_SHARE,
   MAX_GEOM_POINTS,
   MAX_UPSTREAM_TILES_PER_REQUEST,
@@ -444,4 +446,14 @@ test("tile bodies stay under the storage limit", () => {
   assert.equal(back[0].id, "tomtom:0");
   const small = many.slice(0, 3);
   assert.equal(serializeTile(small), JSON.stringify(small));
+});
+
+test("a provider's daily cap is spread over the day, with a few hours of headroom", () => {
+  const midnight = 20_000 * 86400;
+  assert.equal(pacedCap(1000, midnight), Math.ceil((1000 * PACE_LEAD_SEC) / 86400), "at midnight, only the headroom");
+  assert.equal(pacedCap(1000, midnight + 12 * 3600), Math.ceil((1000 * (12 * 3600 + PACE_LEAD_SEC)) / 86400));
+  assert.equal(pacedCap(1000, midnight + 22 * 3600), 1000, "the whole cap before the day ends");
+  assert.equal(pacedCap(0, midnight + 3600), 0);
+  // A burst at the start of the day reaches the paced share and no further.
+  assert.equal(upstreamGate({ globalCount: pacedCap(1000, midnight), cap: 1000, paced: pacedCap(1000, midnight) }, false), "cap");
 });

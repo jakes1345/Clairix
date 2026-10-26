@@ -9,6 +9,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import app.clairix.EmulationGuard
 import app.clairix.Registry
+import app.clairix.comms.CommsMedia
 import app.clairix.comms.CommsNotifications
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +85,8 @@ object AppLock {
     private const val K_VERIFIER = "verifier"
     private const val K_DURESS_SALT = "duress_salt"
     private const val K_DURESS_VERIFIER = "duress_verifier"
+    private const val K_DURESS_TAG = "duress_tag"
+    private val DURESS_TAG_INPUT = "clairix-duress-set".toByteArray(Charsets.UTF_8)
     private const val K_FAILED = "failed"
     /** [SystemClock.elapsedRealtime] of the last wrong guess: monotonic, so the date cannot be moved to get past it. */
     private const val K_LAST_FAIL = "last_fail_elapsed"
@@ -146,6 +149,13 @@ object AppLock {
             _enabled.value = on
             _locked.value = on
             _biometricEnabled.value = on && isBiometricEnabled(context)
+            watchScreen(context)
+            // A phone with a passcode set before decoys existed, and no duress
+            // passcode: its file would still say so. Given a decoy once.
+            if (on) runCatching {
+                val p = prefs(context)
+                if (!p.contains(K_DURESS_VERIFIER)) decoyDuress(p.edit()).commit()
+            }
             if (Wiper.isPending(context)) {
                 // A wipe was started and the process died before it finished: the
                 // passcode may already be gone while data is still on disk. Finish
@@ -162,8 +172,25 @@ object AppLock {
     fun isEnabled(context: Context): Boolean =
         runCatching { prefs(context).contains(K_VERIFIER) }.getOrDefault(false)
 
-    fun hasDuress(context: Context): Boolean =
-        runCatching { prefs(context).contains(K_DURESS_VERIFIER) }.getOrDefault(false)
+    /**
+     * Whether a duress passcode is set. A phone with a passcode always holds a
+     * duress salt and verifier, random ones when none is set, so the file does
+     * not say whether one is; what tells them apart is [K_DURESS_TAG], a MAC under
+     * the lock's Keystore key that only a real one carries. Keystore work.
+     */
+    fun hasDuress(context: Context): Boolean = runCatching {
+        val p = prefs(context)
+        val salt = p.bytes(K_DURESS_SALT) ?: return@runCatching false
+        val tag = p.bytes(K_DURESS_TAG) ?: return@runCatching p.contains(K_DURESS_VERIFIER) // set before tags existed
+        val key = existingKey() ?: return@runCatching false
+        MessageDigest.isEqual(mac(key, salt, DURESS_TAG_INPUT), tag)
+    }.getOrDefault(false)
+
+    /** A duress salt, verifier and tag no passcode matches, in place of a real duress passcode. */
+    private fun decoyDuress(edit: SharedPreferences.Editor): SharedPreferences.Editor =
+        edit.putString(K_DURESS_SALT, encode(ByteArray(SALT_LEN).also { random.nextBytes(it) }))
+            .putString(K_DURESS_VERIFIER, encode(ByteArray(32).also { random.nextBytes(it) }))
+            .putString(K_DURESS_TAG, encode(ByteArray(32).also { random.nextBytes(it) }))
 
     fun isBiometricEnabled(context: Context): Boolean =
         runCatching { prefs(context).getBoolean(K_BIOMETRIC, false) }.getOrDefault(false)
@@ -297,7 +324,34 @@ object AppLock {
         appContext?.let { app ->
             EmulationGuard.disarm(app)
             runCatching { CommsNotifications.redact(app) }
+            CommsMedia.dropPlayCopies(app)
         }
+    }
+
+    private var screenOffReceiver: android.content.BroadcastReceiver? = null
+
+    /**
+     * Locks the moment the screen goes off, whatever the relock delay: the delay
+     * is for switching apps, and a phone put down or snatched with Clairix just
+     * behind the screen must not open unlocked. Registered once per process.
+     */
+    @Synchronized
+    fun watchScreen(context: Context) {
+        if (screenOffReceiver != null) return
+        val app = context.applicationContext
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: android.content.Intent) {
+                if (intent.action == android.content.Intent.ACTION_SCREEN_OFF) {
+                    lock()
+                    backgroundedAt = 0L
+                }
+            }
+        }
+        // A system broadcast, delivered only to receivers registered at run time.
+        androidx.core.content.ContextCompat.registerReceiver(
+            app, receiver, android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        screenOffReceiver = receiver
     }
 
     /** The last Clairix screen has left the foreground. */
@@ -485,6 +539,7 @@ object AppLock {
                     .remove(K_LAST_FAIL)
                 if (!p.contains(K_WIPE_AFTER)) edit.putInt(K_WIPE_AFTER, DEFAULT_WIPE_AFTER)
                 if (!p.contains(K_RELOCK_MS)) edit.putLong(K_RELOCK_MS, DEFAULT_RELOCK_MS)
+                if (duressSalt == null || duressVerifier == null) decoyDuress(edit)
                 if (!edit.commit()) throw IllegalStateException("Could not save the passcode")
             } finally {
                 input.fill(0)
@@ -503,7 +558,9 @@ object AppLock {
         synchronized(attemptLock) {
             val p = prefs(context)
             if (code == null) {
-                p.edit().remove(K_DURESS_SALT).remove(K_DURESS_VERIFIER).commit()
+                // Not removed: replaced with one no passcode matches, so the file
+                // looks the same with a duress passcode or without one.
+                decoyDuress(p.edit()).commit()
                 return@runCatching
             }
             problem(code)?.let { throw IllegalArgumentException(it) }
@@ -519,6 +576,7 @@ object AppLock {
                 val committed = p.edit()
                     .putString(K_DURESS_SALT, encode(salt))
                     .putString(K_DURESS_VERIFIER, encode(mac(key, salt, input)))
+                    .putString(K_DURESS_TAG, encode(mac(key, salt, DURESS_TAG_INPUT)))
                     .commit()
                 if (!committed) throw IllegalStateException("Could not save the duress passcode")
             } finally {

@@ -5,12 +5,14 @@ on:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'relays/**'
       - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'relays/**'
       - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
@@ -74,6 +76,14 @@ jobs:
       - name: Test the crypto crate
         working-directory: comms-crypto
         run: cargo test --release
+
+      # The Tor transport (src/tor.rs) end to end: bootstraps over the real
+      # Tor network, connects through the SOCKS proxy and checks with the Tor
+      # Project that the request came out of Tor.
+      - name: Test Tor through the Tor network
+        working-directory: comms-crypto
+        timeout-minutes: 10
+        run: cargo test --release --lib -- --ignored tor_
 
       - name: Build debug APK
         working-directory: android

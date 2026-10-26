@@ -50,14 +50,21 @@ object CommsDb {
         val app = context.applicationContext
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val file = app.getDatabasePath(name)
-        var key = prefs.getString(KEY_WRAPPED, null)
-            ?.let { wrapped -> runCatching { KeystoreBox.decrypt(Base64.decode(wrapped, Base64.NO_WRAP)) }.getOrNull() }
+        val wrapped = prefs.getString(KEY_WRAPPED, null)
+        var key: ByteArray? = null
+        if (wrapped != null) {
+            // Only a key that is really gone (deleted by a wipe or an unpair), or
+            // really another one, means the database is lost. A Keystore that
+            // failed to answer this once is not that: the open fails, and the
+            // next one tries again, rather than deleting every message.
+            key = unwrapPatiently(wrapped, prefs)
+        }
         if (key == null) {
             // No usable key. A sealed database left behind (its Keystore key
             // destroyed by a wipe or an unpair) is ciphertext nobody can open.
             if (file.exists() && !isPlain(file)) app.deleteDatabase(name)
             key = ByteArray(32).also { SecureRandom().nextBytes(it) }
-            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(KeystoreBox.encrypt(key), Base64.NO_WRAP)).commit()
+            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()
         }
         val spec = rawKey(key)
         if (file.exists() && isPlain(file)) {
@@ -68,6 +75,36 @@ object CommsDb {
             if (isPlain(file)) return ""
         }
         return spec
+    }
+
+    /**
+     * The database key unwrapped, or null when its Keystore key is gone or is
+     * another one. A Keystore failing to answer is asked again a few times over
+     * a second before the open fails outright, never taken for a lost key.
+     */
+    private fun unwrapPatiently(wrapped: String, prefs: android.content.SharedPreferences): ByteArray? {
+        // The phone is locked: the vault key refuses, which says nothing about
+        // whether the database is lost. The open waits for the unlock.
+        if (Vault.sealed.value) throw VaultSealedException()
+        var failure: Exception? = null
+        repeat(4) { attempt ->
+            if (attempt > 0) Thread.sleep(250L * attempt)
+            val existed = KeystoreBox.exists() ?: return@repeat
+            try {
+                // Under the vault key, or under KeystoreBox from before it, then rewrapped.
+                val opened = VaultBox.open(Base64.decode(wrapped, Base64.NO_WRAP))
+                if (opened.legacy) {
+                    prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).commit()
+                }
+                return opened.plain
+            } catch (e: javax.crypto.AEADBadTagException) {
+                return null
+            } catch (e: Exception) {
+                if (!existed) return null
+                failure = e
+            }
+        }
+        throw IllegalStateException("The message database's key could not be read; it is kept, and tried again on the next start", failure)
     }
 
     /** Deletes the database and its key, for an unpair: the next open starts clean under a new key. */

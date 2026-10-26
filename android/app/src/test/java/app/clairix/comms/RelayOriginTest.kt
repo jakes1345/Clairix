@@ -28,6 +28,21 @@ class RelayOriginTest {
         }
     }
 
+    /** A relay's onion address, as relays publish it and the relay list carries it: a v3 onion origin, plain http. */
+    @Test
+    fun anOnionAddressIsAV3OnionOrigin() {
+        val host = "abcdefghijklmnopqrstuvwxyz234567".repeat(2).take(56) + ".onion"
+        assertEquals("http://$host", RelayClient.onionOrigin("http://$host"))
+        assertEquals("http://$host", RelayClient.onionOrigin("  HTTP://${host.uppercase()}/ "))
+        for (bad in listOf(
+            null, "", host, "https://$host", "http://$host:80", "http://$host/v1", "http://$host/?x=1",
+            "http://user@$host", "http://short.onion", "http://" + "a".repeat(55) + ".onion",
+            "http://" + "a".repeat(56) + "1.onion", "http://relay.example.org", "http://127.0.0.1:8788"
+        )) {
+            assertNull(bad, RelayClient.onionOrigin(bad))
+        }
+    }
+
     /** A relay on the attached computer, as the end-to-end tests use: debug builds only, and only loopback. */
     @Test
     fun aLoopbackRelayIsAnAddressInDebugBuildsOnly() {

@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { verifyEd25519 } from "./auth";
 import type { Env } from "./env";
 import {
+  DAY_MS,
   DELIVERY_TOKEN_TTL_MS,
   dayFloor,
   expireClaims,
@@ -22,7 +23,9 @@ import {
   PUSH_CHALLENGE_TTL_MS,
   randomToken,
   tokenHash,
+  type Alert,
   type OtkClaim,
+  type SealingPrekey,
   type SignedKey,
 } from "./comms-logic";
 
@@ -60,6 +63,14 @@ export interface Profile {
   /** Signature by ed25519 over `curve25519|sealing`, so a relay cannot swap keys. */
   signature: string;
   fallback: SignedKey | null;
+  /** The current sealing prekey; absent for apps from before envelope format 3. */
+  sealingPrekey?: SealingPrekey | null;
+  /**
+   * The phone's transport key (Ed25519, base64): it signs only the requests
+   * that fetch, acknowledge and stream envelopes, so a locked phone can
+   * collect what it cannot yet open. It reads nothing and sends nothing.
+   */
+  transportKey?: string | null;
   /** Whether the number can be looked up. Unlisted numbers are reached by QR only. */
   listed: boolean;
   createdAt: number;
@@ -72,6 +83,8 @@ export interface Envelope {
   ts: number;
   /** Base64 of the sealed envelope bytes. */
   data: string;
+  /** Present when the sender asked a locked phone to ring or sound an SOS for it. */
+  alert?: Alert;
 }
 
 /** What a lookup returns: the identity and one key to start a session with. */
@@ -81,6 +94,7 @@ export interface Bundle {
   curve25519: string;
   sealing: string;
   signature: string;
+  sealingPrekey: SealingPrekey | null;
   oneTimeKey: SignedKey | null;
   fallback: SignedKey | null;
   /**
@@ -104,10 +118,25 @@ export const MAX_ENVELOPE_B64 = Math.floor((MAX_ENVELOPE_BYTES * 4) / 3) + 4;
  * short of full, so another relay (which spends no delivery tokens here) can
  * neither exhaust the allowance this relay's own senders draw on nor fill the
  * mailbox against them.
+ *
+ * Over what goes past it is dropped without a word (see enqueue), so it must
+ * hold everything one relay can hand one mailbox in a clock hour with room to
+ * spare: federation.ts holds each relay to FED_SENDS_PER_TARGET_BURST plus an
+ * hour of FED_SENDS_PER_TARGET_PER_MINUTE per recipient, 2,100, about a third
+ * of this. Then a contact on another relay is never silently dropped (a long
+ * video is a few hundred envelopes), and it takes several relays flooding
+ * together to crowd out the owner's other contacts.
  */
-const FED_INBOUND_PER_HOUR = 1_800;
-const FED_INBOUND_BURST = 300;
+const FED_INBOUND_PER_HOUR = 6_000;
+const FED_INBOUND_BURST = 6_000;
 const FED_QUEUE_RESERVE = 500;
+/**
+ * Envelopes from relays no one here has written to, per mailbox: enough for
+ * first messages from new contacts elsewhere, small enough that relays made up
+ * for a flood cannot take the allowance relays people do write to rely on.
+ */
+const FED_STRANGER_PER_HOUR = 30;
+const FED_STRANGER_BURST = 10;
 
 /** The answer to a send for a number that does not exist; the caller accepts and drops it. */
 const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
@@ -122,11 +151,12 @@ const LOOKUP_LIMIT_PER_MINUTE = 30;
  * Envelopes into one mailbox, from everyone together: the relay does not know
  * who sends, so the recipient is protected here and by MAX_QUEUE. A
  * reconnecting contact sends a receipt for every message it missed, so bursts
- * are normal. Stored to the hour, so the hourly refill is what the burst
- * allows in any one hour.
+ * are normal. Stored to the hour, so the burst is what any one hour allows;
+ * above FED_INBOUND_BURST, since other relays' envelopes past it are dropped
+ * without a word too.
  */
 const INBOUND_PER_HOUR = 36_000;
-const INBOUND_BURST = 1800;
+const INBOUND_BURST = 9_000;
 /** Registration attempts per client address, against guessing the enrollment secret. */
 const REGISTER_LIMIT_PER_MINUTE = 10;
 /** After one push wake, further envelopes do not wake again until the phone has fetched, or this long. */
@@ -279,6 +309,7 @@ export interface IdentityKeys {
   curve25519: string;
   sealing: string;
   signature: string;
+  sealingPrekey: SealingPrekey | null;
 }
 
 export class Mailbox extends DurableObject<Env> {
@@ -357,10 +388,11 @@ export class Mailbox extends DurableObject<Env> {
    * Checks a request signature against the owner's key and enforces the
    * single-use nonce. Returns the profile on success, null otherwise.
    */
-  async authenticate(payload: string, signature: string, nonce: string, ts: number): Promise<Profile | null> {
+  async authenticate(payload: string, signature: string, nonce: string, ts: number, transport = false): Promise<Profile | null> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
-    if (!(await verifyEd25519(profile.ed25519, payload, signature))) return null;
+    const key = transport ? profile.transportKey : profile.ed25519;
+    if (!key || !(await verifyEd25519(key, payload, signature))) return null;
     const nonces = (await this.ctx.storage.get<NonceRecord>("nonces")) ?? {};
     const now = Date.now();
     for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS) delete nonces[n];
@@ -373,8 +405,11 @@ export class Mailbox extends DurableObject<Env> {
     return profile;
   }
 
-  /** Replaces the fallback key and adds one-time keys. */
-  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null): Promise<{ oneTimeKeys: number }> {
+  /**
+   * Replaces the fallback key, adds one-time keys, and takes a sealing prekey
+   * newer than the one held (an older one, replayed, is ignored).
+   */
+  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null, sealingPrekey: SealingPrekey | null = null): Promise<{ oneTimeKeys: number }> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) throw new Error("unregistered");
     const existing = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
@@ -385,6 +420,7 @@ export class Mailbox extends DurableObject<Env> {
     const known = new Set(existing.map((k) => k.id));
     const merged = existing.concat(oneTimeKeys.filter((k) => !known.has(k.id) && !claimed.has(k.id))).slice(-MAX_ONE_TIME_KEYS);
     if (fallback) profile.fallback = fallback;
+    if (sealingPrekey && sealingPrekey.created > (profile.sealingPrekey?.created ?? -1)) profile.sealingPrekey = sealingPrekey;
     await this.ctx.storage.put({ otks: merged, profile });
     return { oneTimeKeys: merged.length };
   }
@@ -461,6 +497,7 @@ export class Mailbox extends DurableObject<Env> {
       curve25519: profile.curve25519,
       sealing: profile.sealing,
       signature: profile.signature,
+      sealingPrekey: profile.sealingPrekey ?? null,
       oneTimeKey,
       fallback: oneTimeKey ? null : profile.fallback,
       claim,
@@ -506,7 +543,16 @@ export class Mailbox extends DurableObject<Env> {
       curve25519: profile.curve25519,
       sealing: profile.sealing,
       signature: profile.signature,
+      sealingPrekey: profile.sealingPrekey ?? null,
     };
+  }
+
+  /** Sets (or with null removes) the phone's transport key. */
+  async setTransportKey(key: string | null): Promise<void> {
+    const profile = await this.ctx.storage.get<Profile>("profile");
+    if (!profile) throw new Error("unregistered");
+    profile.transportKey = key;
+    await this.ctx.storage.put("profile", profile);
   }
 
   async setListed(listed: boolean): Promise<void> {
@@ -846,6 +892,23 @@ export class Mailbox extends DurableObject<Env> {
     return this.fedTargets.take(target, Date.now());
   }
 
+  /**
+   * Records that a phone here wrote to the relay this object stands for. Day
+   * precision, written at most once a day: when exactly, and by whom, is
+   * not kept.
+   */
+  async noteWrittenTo(): Promise<void> {
+    const day = Math.floor(Date.now() / DAY_MS);
+    if ((await this.ctx.storage.get<number>("writtenToDay")) === day) return;
+    await this.ctx.storage.put("writtenToDay", day);
+  }
+
+  /** Whether a phone here wrote to this relay within the last [days] days. */
+  async writtenToWithin(days: number): Promise<boolean> {
+    const day = await this.ctx.storage.get<number>("writtenToDay");
+    return day !== undefined && Math.floor(Date.now() / DAY_MS) - day <= days;
+  }
+
   /** Whether the other relay, for all its phones together, may claim one more one-time key this hour. */
   async federatedClaimOk(perHour: number, burst: number): Promise<boolean> {
     return (await this.allowanceOk("fed-claims", perHour, burst)).ok;
@@ -866,7 +929,13 @@ export class Mailbox extends DurableObject<Env> {
    * burst from one sender arrives interleaved with everyone else's. The hold
    * counts towards the queue, so a full mailbox is full either way.
    */
-  async enqueue(data: string, claim: string | null = null, urgent = false, federated = false): Promise<EnqueueResult> {
+  async enqueue(
+    data: string,
+    claim: string | null = null,
+    urgent = false,
+    federated: false | "known" | "stranger" = false,
+    alert: Alert | null = null,
+  ): Promise<EnqueueResult> {
     // The size is checked before anything about the number, so an oversized
     // envelope is answered the same whether the number exists or not.
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
@@ -880,8 +949,14 @@ export class Mailbox extends DurableObject<Env> {
       // or its allowance and learn from the refusal that the number is real.
       // Only other relays' envelopes are dropped, and only while this mailbox
       // is being flooded from outside; this relay's own senders are untouched.
+      //
+      // Relays no one here has written to ("stranger") draw on a small
+      // allowance of their own, so made-up relays flooding a mailbox cannot use
+      // up what mail from the relays its owner's contacts are on relies on.
       if (count >= MAX_QUEUE - FED_QUEUE_RESERVE) return DROPPED;
-      if (!(await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST)).ok) return DROPPED;
+      if (federated === "stranger") {
+        if (!(await this.allowanceOk("inbound-fed-new", FED_STRANGER_PER_HOUR, FED_STRANGER_BURST)).ok) return DROPPED;
+      } else if (!(await this.allowanceOk("inbound-fed", FED_INBOUND_PER_HOUR, FED_INBOUND_BURST)).ok) return DROPPED;
       if (!(await this.allowanceOk("inbound", INBOUND_PER_HOUR, INBOUND_BURST)).ok) return DROPPED;
     } else {
       if (count >= MAX_QUEUE) return { ok: false, reason: "mailbox full", status: 413 };
@@ -892,7 +967,7 @@ export class Mailbox extends DurableObject<Env> {
     if (claim !== null) await this.confirmClaim(claim);
     const now = Date.now();
     const id = `${now.toString(36)}-${crypto.randomUUID()}`;
-    const envelope: Envelope = { id, ts: now, data };
+    const envelope: Envelope = alert ? { id, ts: now, data, alert } : { id, ts: now, data };
     const hold = urgent ? 0 : mixDelay(mixMaxMs(this.env));
     if (hold > 0) {
       const staged: StagedEnvelope = { envelope, releaseAt: now + hold };

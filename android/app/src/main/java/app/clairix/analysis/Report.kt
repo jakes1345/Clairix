@@ -29,7 +29,7 @@ object Report {
     private val sdfIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = utc }
 
     /** How long an exported report stays in the cache for a share target to read. */
-    private const val EXPORT_RETENTION_MS = 24 * 60 * 60_000L
+    const val EXPORT_RETENTION_MS = 24 * 60 * 60_000L
 
     fun share(
         context: Context,

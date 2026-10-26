@@ -9,12 +9,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PublicBundle
+import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.SignedKey
+import uniffi.clairix_comms_crypto.TransportKey
 import uniffi.clairix_comms_crypto.tokenBlind
 import uniffi.clairix_comms_crypto.tokenFinalize
 import java.io.IOException
@@ -25,7 +28,12 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** A relay call that did not succeed, with the relay's message when it gave one. */
-class RelayException(message: String, val code: Int = 0) : IOException(message)
+/**
+ * A request the relay (or the network) did not carry out. [code] is the HTTP
+ * status, 0 for no answer at all; [retryAfterSec] is how long the relay said
+ * to wait (Retry-After), when it said.
+ */
+class RelayException(message: String, val code: Int = 0, val retryAfterSec: Long? = null) : IOException(message)
 
 /**
  * HTTP and WebSocket client for the relay Worker. Every request about this
@@ -62,61 +70,138 @@ class RelayClient(
     private val alternates: () -> List<String> = { emptyList() },
     /** The blind-token keys seen per relay and epoch; see [TokenKeyPins]. */
     private val tokenKeys: TokenKeyPins = MemoryTokenKeyPins(),
+    /**
+     * The transport key, once the relay has it: fetching, acknowledging and
+     * streaming envelopes are signed with it, so they work while the identity
+     * is out of reach (the phone is locked). Null signs them with the identity.
+     */
+    private val transport: () -> TransportKey? = { null },
+    /** Called when the relay refused the transport key: it is then republished, and the identity signs meanwhile. */
+    private val transportRefused: () -> Unit = {},
+    /**
+     * The relay's onion address (`http://….onion`) while this phone connects
+     * through Tor and the relay has one; null otherwise. Requests then go
+     * there first, and to the registered address only when it does not
+     * answer: the connection never leaves Tor, so no exit relay sees it, and
+     * the onion address is its own proof of whose server answers, with no
+     * certificate authority involved. See [onionOrigin].
+     */
+    private val onion: () -> String? = { null },
 ) {
 
     /** The alternate address requests go to since the registered one stopped answering, if any. */
     @Volatile private var reachable: String? = null
 
     /**
+     * Until when the onion address is passed over, after it last failed to
+     * answer while another address did: Tor takes a while to give up on an
+     * onion service that is down, and every request would wait it out.
+     */
+    @Volatile private var onionQuietUntil = 0L
+
+    /** The onion address, when there is one to use. */
+    private fun onionBase(): String? = onionOrigin(onion())
+
+    /** The onion address requests go to first: [onionBase], unless it recently did not answer. */
+    private fun preferredOnion(): String? = onionBase()?.takeIf { System.currentTimeMillis() >= onionQuietUntil }
+
+    /**
+     * The onion address at [url] did not answer while another address did:
+     * requests (and the live socket, which reconnects through [base]) go
+     * elsewhere for a while.
+     */
+    private fun onionSilent(url: String) {
+        val o = onionBase() ?: return
+        if (url.startsWith("$o/") || url == o) onionQuietUntil = System.currentTimeMillis() + ONION_QUIET_MS
+    }
+
+    /**
      * The address requests go to: the alternate that last answered, else the
-     * one registered at. With the relay's key pinned, always the registered
-     * one: the pin is that host's key, and another host has another.
+     * onion address while Tor is on, else the one registered at. With the
+     * relay's key pinned, never an alternate: the pin is the registered host's
+     * key, and another host has another. The onion address needs no pin.
      */
     private fun base(): String? {
         val primary = relayUrl()?.trimEnd('/') ?: return null
         val current = reachable
-        return if (current != null && pin() == null && current in alternates().map { it.trimEnd('/') }) current else primary
+        if (current != null && pin() == null && current in alternates().map { it.trimEnd('/') }) return current
+        return preferredOnion() ?: primary
     }
 
     /** The addresses to try after [current] failed to answer, in order. */
     private fun otherBases(current: String): List<String> {
-        if (pin() != null) return emptyList()
         val primary = relayUrl()?.trimEnd('/') ?: return emptyList()
-        return (listOf(primary) + alternates().map { it.trimEnd('/') }).distinct().filter { it != current }
+        val others = if (pin() != null) emptyList() else alternates().map { it.trimEnd('/') }
+        return (listOfNotNull(onionBase(), primary) + others).distinct().filter { it != current }
+    }
+
+    /**
+     * Where blind-token keys seen at [base] are kept: under the registered
+     * address when it was the onion one, which is the same relay, so keys seen
+     * through either serve tokens fetched through the other.
+     */
+    private fun pinOrigin(base: String): String {
+        val origin = base.trimEnd('/')
+        return if (origin == onionBase()) relayUrl()?.trimEnd('/') ?: origin else origin
     }
 
     /** The keys a relay issues blind tokens under in [epoch], kind (wire name) to base64url. */
     data class TokenKeys(val epoch: Long, val keys: Map<String, String>)
 
-    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null)
+    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null)
 
     /**
      * The relay's description of itself: its API version, the other addresses it
-     * answers at, and its blind-token keys (null from a relay before Beta 6).
-     * Unauthenticated, on a connection of its own.
+     * answers at, its onion address if it has one, and its blind-token keys
+     * (null from a relay before Beta 6). Unauthenticated, on a connection
+     * nothing else uses.
      */
     fun info(): Info {
         val relay = base() ?: throw RelayException("Not registered with a relay")
-        val json = execute(Request.Builder().url("$relay/").header("Accept", "application/json").get(), quick)
+        val json = execute(Request.Builder().url("$relay/").header("Accept", "application/json").get(), anonymousClient(4))
         return parsed {
             val arr = json.optJSONArray("alternates")
             val urls = arr?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.startsWith("https://") } } } ?: emptyList()
             val t = json.optJSONObject("tokens")?.takeIf { it.optInt("version") == 2 }
-            val keys = t?.optJSONObject("keys")?.let { k -> k.keys().asSequence().associateWith { k.getString(it) } }
+            fun keysOf(o: JSONObject?) = o?.optJSONObject("keys")?.let { k -> k.keys().asSequence().associateWith { k.getString(it) } }
+            val keys = keysOf(t)
             val tokens = if (t != null && keys != null) TokenKeys(t.getLong("epoch"), keys) else null
-            if (tokens != null) {
-                // Seen on a request that names nobody, and as early as possible:
-                // the first keys seen for an epoch are the ones tokens are checked against.
-                val origin = relay.trimEnd('/')
+            val origin = pinOrigin(relay)
+            if (tokens != null && plausibleEpoch(tokens.epoch)) {
+                // Seen on a request that names nobody: the first keys seen for an
+                // epoch are the ones tokens are checked against. The next epoch's
+                // are pinned now too, long before any tokens are issued under them.
                 if (tokenKeys.get(origin, tokens.epoch) == null) tokenKeys.put(origin, tokens.epoch, tokens.keys)
-                blindRelay = origin
+                val next = t!!.optJSONObject("next")
+                val nextKeys = keysOf(next)
+                val nextEpoch = next?.optLong("epoch", -1L) ?: -1L
+                if (nextKeys != null && nextEpoch == tokens.epoch + 1 && tokenKeys.get(origin, nextEpoch) == null) tokenKeys.put(origin, nextEpoch, nextKeys)
             }
-            Info(json.optInt("version", 0), urls, tokens)
+            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }))
         }
     }
 
-    /** The relay [info] last found issuing blind tokens. */
-    @Volatile private var blindRelay: String? = null
+    /**
+     * Whether a token epoch the relay names is one this phone's own clock agrees
+     * with: this one or a neighbour. The relay names the epoch, and one it made
+     * up for a single phone would mark every token that phone spends.
+     */
+    private fun plausibleEpoch(epoch: Long): Boolean {
+        val mine = System.currentTimeMillis() / TOKEN_EPOCH_MS
+        return epoch in (mine - 1)..(mine + 1)
+    }
+
+    /**
+     * A client for one request that names nobody: its own connection and its own
+     * TLS session cache, both thrown away after the request. Requests sharing a
+     * connection, or resuming one TLS session, are one phone's requests as far as
+     * the relay can see, however anonymous each is on its own.
+     */
+    private fun anonymousClient(callTimeoutSec: Long): OkHttpClient =
+        RelayTls.pinned(sender.newBuilder(), pin)
+            .connectionPool(okhttp3.ConnectionPool(0, 1, TimeUnit.SECONDS))
+            .callTimeout(callTimeoutSec, TimeUnit.SECONDS)
+            .build()
 
     private fun pool(kind: TokenKind): TokenPool = when (kind) {
         TokenKind.DELIVERY -> tokens
@@ -125,7 +210,7 @@ class RelayClient(
     }
 
     /** What a signed request signs. The signature headers themselves are added per attempt by [signer]. */
-    private class Signing(val method: String, val pathAndQuery: String, val bodyText: String)
+    private class Signing(val method: String, val pathAndQuery: String, val bodyText: String, val transport: TransportKey? = null)
 
     /**
      * Signs every network attempt afresh. OkHttp retries a request on a new
@@ -142,6 +227,18 @@ class RelayClient(
         chain.proceed(sign(request.newBuilder(), signing).build())
     }
 
+    /**
+     * Through Tor a connection waits for a circuit before its first byte, and
+     * to an onion address for a rendezvous as well; Tor gives up on its own
+     * within a minute. Connecting and reading get that long while Tor is on.
+     */
+    private val torTimeouts = Interceptor { chain ->
+        if (!TorTransport.enabled) return@Interceptor chain.proceed(chain.request())
+        chain.withConnectTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .withReadTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .proceed(chain.request())
+    }
+
     /** The live socket's client: no overall call timeout, which would cut the socket itself. */
     val http: OkHttpClient = RelayTls.pinned(OkHttpClient.Builder(), pin)
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -152,8 +249,19 @@ class RelayClient(
         // the enrollment secret; neither may be re-sent to wherever a redirect points.
         .followRedirects(false)
         .followSslRedirects(false)
+        .addInterceptor(torTimeouts)
         .addNetworkInterceptor(signer)
         .build()
+
+    init {
+        // Tor turned on or off: no pooled connection keeps the old way out.
+        // An onion address that did not answer before Tor was up is tried again.
+        TorTransport.onChange {
+            http.connectionPool.evictAll()
+            sender.connectionPool.evictAll()
+            onionQuietUntil = 0L
+        }
+    }
 
     /**
      * Requests: bounded as a whole, so one stalled request (Wi-Fi that lost
@@ -175,6 +283,7 @@ class RelayClient(
             .callTimeout(12, TimeUnit.SECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
+            .addInterceptor(torTimeouts)
             .build()
     }
 
@@ -186,6 +295,8 @@ class RelayClient(
         val curve25519: String,
         val sealing: String,
         val signature: String,
+        /** Their current sealing prekey, signature not yet checked; null from an app or relay that has none. */
+        val sealingPrekey: SealingPrekey?,
         /** A one-time key, or the fallback when none is left. */
         val sessionKey: SignedKey,
         /**
@@ -196,7 +307,11 @@ class RelayClient(
         val claim: String? = null
     )
 
-    data class Envelope(val id: String, val ts: Long, val data: ByteArray)
+    /**
+     * One envelope from the relay. [alert] is what its sender asked a locked
+     * phone to do with it before it can be opened: "call" (ring) or "sos".
+     */
+    data class Envelope(val id: String, val ts: Long, val data: ByteArray, val alert: String? = null)
 
     // ── Registration ──────────────────────────────────────────────────────
 
@@ -205,7 +320,14 @@ class RelayClient(
      * allocated. Admission is either the relay's enrollment [secret] or a
      * one-time [invite] code from someone already registered.
      */
-    fun register(relayUrl: String, identity: Identity, secret: String?, listed: Boolean, invite: String? = null): Registered {
+    fun register(
+        relayUrl: String,
+        identity: Identity,
+        secret: String?,
+        listed: Boolean,
+        invite: String? = null,
+        transportKey: String? = null
+    ): Registered {
         val bundle = identity.publicBundle()
         val body = JSONObject()
             // Dated, so a captured registration (it carries the secret) cannot be
@@ -218,6 +340,8 @@ class RelayClient(
             .put("signature", bundle.signature)
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
+            .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
+            .apply { if (transportKey != null) put("transportKey", transportKey) }
             .put("listed", listed)
             .toString()
         val request = Request.Builder()
@@ -237,11 +361,37 @@ class RelayClient(
         return parsed { Me(json.getJSONObject("profile").optBoolean("listed", true), json.optInt("oneTimeKeys", 0)) }
     }
 
+    /**
+     * Uploads one-time keys and the fallback key, and the current sealing
+     * prekey, which the relay takes only when it is newer than the one it holds.
+     */
     fun putKeys(bundle: PublicBundle): Int {
         val body = JSONObject()
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
+            .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
         return signed("PUT", "/v1/keys", body).optInt("oneTimeKeys", 0)
+    }
+
+    private fun prekeyJson(p: SealingPrekey): JSONObject =
+        JSONObject().put("key", p.key).put("created", p.createdMs).put("signature", p.signature)
+
+    /**
+     * A sealing prekey in a relay's answer, in its expected shape; null when
+     * absent or malformed. Its signature is checked before it is kept
+     * ([CommsRepository]), as for every key a relay hands over.
+     */
+    private fun prekeyFrom(o: JSONObject?): SealingPrekey? {
+        if (o == null) return null
+        val key = o.optString("key").takeIf { it.isNotEmpty() && it.length <= 64 } ?: return null
+        val signature = o.optString("signature").takeIf { it.isNotEmpty() && it.length <= 128 } ?: return null
+        val created = o.opt("created") as? Number ?: return null
+        return SealingPrekey(key, created.toLong(), signature)
+    }
+
+    /** Gives the relay this phone's transport key, the one that may only collect envelopes. */
+    fun putTransport(publicKey: String) {
+        signed("PUT", "/v1/transport", JSONObject().put("key", publicKey))
     }
 
     data class Invite(val code: String, val expiresAt: Long)
@@ -267,6 +417,23 @@ class RelayClient(
 
     fun wipe() { signed("DELETE", "/v1/me") }
 
+    /**
+     * The account deletion, signed now, to be sent with [sendPrepared] after the
+     * keys that sign it are gone: a wipe destroys them first and asks the relay
+     * last, so the network never holds up what is erased on the phone. The
+     * relay accepts it for its five-minute window.
+     */
+    fun preparedWipe(): Request? = runCatching {
+        val builder = signedRequest("DELETE", "/v1/me", null)
+        val signing = builder.build().tag(Signing::class.java) ?: return@runCatching null
+        sign(builder, signing).tag(Signing::class.java, null).build()
+    }.getOrNull()
+
+    /** Sends a request [preparedWipe] made, on a connection of its own, waiting at most [timeoutSec]. */
+    fun sendPrepared(request: Request, timeoutSec: Long) {
+        runCatching { anonymousClient(timeoutSec).newCall(request).execute().close() }
+    }
+
     // ── Contacts and envelopes ────────────────────────────────────────────
 
     /**
@@ -286,6 +453,7 @@ class RelayClient(
                 curve25519 = b.getString("curve25519"),
                 sealing = b.getString("sealing"),
                 signature = b.getString("signature"),
+                sealingPrekey = prekeyFrom(b.optJSONObject("sealingPrekey")),
                 sessionKey = SignedKey(key.getString("id"), key.getString("key"), key.getString("signature")),
                 claim = if (b.optJSONObject("oneTimeKey") != null) b.optString("claim").takeIf { it.isNotEmpty() } else null
             )
@@ -293,7 +461,14 @@ class RelayClient(
     }
 
     /** A contact's public identity keys, without the one-time key a bundle claims. */
-    data class IdentityKeys(val number: String, val ed25519: String, val curve25519: String, val sealing: String, val signature: String)
+    data class IdentityKeys(
+        val number: String,
+        val ed25519: String,
+        val curve25519: String,
+        val sealing: String,
+        val signature: String,
+        val sealingPrekey: SealingPrekey? = null
+    )
 
     /**
      * Who holds [number] (unlisted numbers need their key's [pin]); claims none
@@ -304,7 +479,10 @@ class RelayClient(
         val json = signed("POST", "/v1/lookup", lookupBody(number, pin, claim = false, relay))
         return parsed {
             val o = json.getJSONObject("identity")
-            IdentityKeys(o.getString("number"), o.getString("ed25519"), o.getString("curve25519"), o.getString("sealing"), o.getString("signature"))
+            IdentityKeys(
+                o.getString("number"), o.getString("ed25519"), o.getString("curve25519"), o.getString("sealing"), o.getString("signature"),
+                prekeyFrom(o.optJSONObject("sealingPrekey"))
+            )
         }
     }
 
@@ -326,7 +504,7 @@ class RelayClient(
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
      */
-    fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false): String {
+    fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false, alert: String? = null): String {
         val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
         if (claim != null) body.put("claim", claim)
         // Everything but a call being set up, an SOS or a group change asks
@@ -336,6 +514,9 @@ class RelayClient(
         if (!urgent) body.put("mix", true)
         // A contact on another relay: this phone's relay forwards it there.
         if (relay != null) body.put("relay", relay)
+        // A call's offer or an SOS: a locked recipient rings or sounds the alarm
+        // before it can open the envelope.
+        if (alert != null) body.put("alert", alert)
         val json = anonymous(TokenKind.DELIVERY, "POST", "/v1/send", body)
         return parsed { json.getString("id") }
     }
@@ -361,7 +542,7 @@ class RelayClient(
                 else -> request.post((text ?: "{}").toRequestBody(JSON))
             }
             try {
-                return execute(request, sender)
+                return execute(request, anonymousClient(12))
             } catch (e: RelayException) {
                 if (e.code != 401 && e.code != 403) throw e
                 refused = e
@@ -413,9 +594,16 @@ class RelayClient(
     @Synchronized
     private fun fetchTokens(kind: TokenKind, count: Int) {
         val relay = base() ?: throw RelayException("Not registered with a relay")
-        if (blindRelay != relay.trimEnd('/') && info().tokens == null) {
-            fetchPlainTokens(kind, count)
-            return
+        // A relay that ever published blind-token keys gets no plain tokens from
+        // this phone again: plain ones it could match to this account, and a
+        // relay that stopped publishing would be asking for exactly that.
+        if (!tokenKeys.any(relay.trimEnd('/'))) {
+            // Never seen any: a relay from before Beta 6, or this phone's first
+            // fetch. Asked once here; a relay that publishes keys is pinned by it.
+            if (info().tokens == null && !tokenKeys.any(relay.trimEnd('/'))) {
+                fetchPlainTokens(kind, count)
+                return
+            }
         }
         fetchBlindTokens(relay, kind, count)
     }
@@ -446,12 +634,16 @@ class RelayClient(
             val arr = json.getJSONArray("evaluated")
             Quad(json.getLong("epoch"), json.getString("key"), (0 until arr.length()).map { fromB64url(arr.getString(it)) }, fromB64url(json.getString("proof")))
         }
-        val origin = relay.trimEnd('/')
-        val pinned = tokenKeys.get(origin, epoch) ?: run {
-            // A new epoch since the keys were last seen: read them anonymously, as any caller does.
-            info()
-            tokenKeys.get(origin, epoch) ?: throw RelayException("The relay issued tokens for an epoch it does not publish", MALFORMED)
+        val origin = pinOrigin(relay)
+        if (!plausibleEpoch(epoch)) {
+            throw RelayException("The relay issued tokens for epoch $epoch, which this phone's clock does not agree with; refused", TOKEN_KEY_MISMATCH)
         }
+        // Not fetched now if missing: a fetch right after this signed request
+        // would be one the relay could tell was this phone's, and answer with
+        // keys of its own. The keys are read later, at a time of the phone's
+        // choosing ([KEYS_PENDING] tells the caller to arrange it).
+        val pinned = tokenKeys.get(origin, epoch)
+            ?: throw RelayException("This phone has not yet seen the relay's keys for epoch $epoch; it will look them up and try again", KEYS_PENDING)
         if (pinned[kind.wire] != key) {
             throw RelayException("The relay issued ${kind.wire} tokens under a key it does not give everyone; refused", TOKEN_KEY_MISMATCH)
         }
@@ -666,11 +858,27 @@ class RelayClient(
         // signed here, once; a refused upgrade is retried by the caller.
         val builder = signedRequest("GET", "/v1/ws", null)
         val signing = builder.build().tag(Signing::class.java) ?: throw RelayException("Not registered with a relay")
-        return http.newWebSocket(sign(builder, signing).build(), listener)
+        if (signing.transport == null) return http.newWebSocket(sign(builder, signing).build(), listener)
+        // A refused upgrade signed with the transport key means the relay does not
+        // have it: the next attempt is signed with the identity, and it is republished.
+        return http.newWebSocket(sign(builder, signing).build(), object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) = listener.onOpen(webSocket, response)
+            override fun onMessage(webSocket: WebSocket, text: String) = listener.onMessage(webSocket, text)
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) = listener.onMessage(webSocket, bytes)
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = listener.onClosing(webSocket, code, reason)
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = listener.onClosed(webSocket, code, reason)
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (response?.code == 401 || response?.code == 403) transportRefused()
+                listener.onFailure(webSocket, t, response)
+            }
+        })
     }
 
     fun parseEnvelope(o: JSONObject): Envelope = parsed {
-        Envelope(o.getString("id"), o.getLong("ts"), Base64.getDecoder().decode(o.getString("data")))
+        Envelope(
+            o.getString("id"), o.getLong("ts"), Base64.getDecoder().decode(o.getString("data")),
+            o.optString("alert").takeIf { it == ALERT_CALL || it == ALERT_SOS }
+        )
     }
 
     /**
@@ -688,19 +896,33 @@ class RelayClient(
 
     // ── Signing ───────────────────────────────────────────────────────────
 
-    private fun signed(method: String, pathAndQuery: String, body: JSONObject? = null): JSONObject =
-        execute(signedRequest(method, pathAndQuery, body))
+    private fun signed(method: String, pathAndQuery: String, body: JSONObject? = null): JSONObject {
+        val builder = signedRequest(method, pathAndQuery, body)
+        return try {
+            execute(builder)
+        } catch (e: RelayException) {
+            // The relay no longer has the transport key (or never took it): sign
+            // with the identity this once, if it is at hand, and republish.
+            val viaTransport = builder.build().tag(Signing::class.java)?.transport != null
+            if (!viaTransport || (e.code != 401 && e.code != 403)) throw e
+            transportRefused()
+            if (identity() == null) throw e
+            execute(signedRequest(method, pathAndQuery, body, allowTransport = false))
+        }
+    }
 
-    private fun signedRequest(method: String, pathAndQuery: String, body: JSONObject?): Request.Builder {
+    private fun signedRequest(method: String, pathAndQuery: String, body: JSONObject?, allowTransport: Boolean = true): Request.Builder {
         val relay = base() ?: throw RelayException("Not registered with a relay")
         val number = number() ?: throw RelayException("Not registered with a relay")
-        if (identity() == null) throw RelayException("No identity on this device")
+        val route = "${method.uppercase()} ${pathAndQuery.substringBefore('?')}"
+        val viaTransport = if (allowTransport && route in TRANSPORT_ROUTES) transport() else null
+        if (viaTransport == null && identity() == null) throw RelayException("No identity on this device")
         val bodyText = body?.toString() ?: ""
         val builder = Request.Builder()
             .url(relay + pathAndQuery)
             .header("X-Clairix-Number", number)
             .header("Accept", "application/json")
-            .tag(Signing::class.java, Signing(method.uppercase(), pathAndQuery, bodyText))
+            .tag(Signing::class.java, Signing(method.uppercase(), pathAndQuery, bodyText, viaTransport))
         when (method.uppercase()) {
             "GET" -> builder.get()
             "DELETE" -> builder.delete()
@@ -713,7 +935,8 @@ class RelayClient(
     /** Adds the signature headers for one attempt: a fresh nonce and the relay's current time. */
     private fun sign(builder: Request.Builder, s: Signing): Request.Builder {
         val number = number() ?: throw RelayException("Not registered with a relay")
-        val identity = identity() ?: throw RelayException("No identity on this device")
+        val signer: (ByteArray) -> String = s.transport?.let { t -> { bytes: ByteArray -> t.sign(bytes) } }
+            ?: (identity() ?: throw RelayException("No identity on this device")).let { id -> { bytes: ByteArray -> id.sign(bytes) } }
         // The relay rejects a timestamp more than five minutes from its own clock,
         // so a phone whose clock is off signs with the relay's time once it knows it.
         val ts = relayNow()
@@ -724,7 +947,8 @@ class RelayClient(
             .header("X-Clairix-Number", number)
             .header("X-Clairix-Ts", ts.toString())
             .header("X-Clairix-Nonce", nonce)
-            .header("X-Clairix-Sig", identity.sign(payload.toByteArray(Charsets.UTF_8)))
+            .header("X-Clairix-Sig", signer(payload.toByteArray(Charsets.UTF_8)))
+            .apply { if (s.transport != null) header("X-Clairix-Key", "transport") else removeHeader("X-Clairix-Key") }
     }
 
     /**
@@ -743,6 +967,7 @@ class RelayClient(
             for (other in otherBases(current)) {
                 try {
                     val json = executeOnce(builder.url(other + url.removePrefix(current)), client)
+                    onionSilent(url)
                     reachable = other
                     return json
                 } catch (again: RelayException) {
@@ -760,13 +985,19 @@ class RelayClient(
         // (a network switch mid-request), surfaces as a RelayException with code
         // 0, which callers treat as "offline, retry later".
         try {
-            client.newCall(builder.build()).execute().use { res ->
+            val call = client.newCall(builder.build())
+            // The whole request too, for the same reason as [torTimeouts].
+            if (TorTransport.enabled && client.callTimeoutMillis > 0) {
+                call.timeout().timeout(client.callTimeoutMillis.toLong() * TOR_CALL_TIMEOUT_FACTOR, TimeUnit.MILLISECONDS)
+            }
+            call.execute().use { res ->
                 noteServerTime(res)
                 val text = res.body?.string().orEmpty()
                 val json = runCatching { JSONObject(text) }.getOrNull()
                 if (!res.isSuccessful) {
                     val reason = json?.optString("error")?.takeIf { it.isNotEmpty() } ?: "HTTP ${res.code}"
-                    throw RelayException(reason, res.code)
+                    val wait = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it in 1..3600 }
+                    throw RelayException(reason, res.code, wait)
                 }
                 return json ?: throw RelayException("The relay returned something that is not JSON", MALFORMED)
             }
@@ -831,13 +1062,29 @@ class RelayClient(
         const val NO_TOKENS = -2
         /** The relay's tokens were not made with the key it publishes to everyone, or the first one seen this epoch. */
         const val TOKEN_KEY_MISMATCH = -5
+        /** Tokens were issued for an epoch whose keys this phone has not pinned yet: look them up later, anonymously, and retry. */
+        const val KEYS_PENDING = -6
+        /** A token epoch: 14 days, as the relay's (comms-worker/src/tokens.ts TOKEN_EPOCH_MS). */
+        const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
+        /** An envelope's sender asks a locked phone to ring for it (comms-worker Alert). */
+        const val ALERT_CALL = "call"
+        /** An envelope's sender asks a locked phone to sound an SOS for it. */
+        const val ALERT_SOS = "sos"
+        /** What the relay lets the transport key sign (comms-worker/src/index.ts TRANSPORT_ROUTES). */
+        private val TRANSPORT_ROUTES = setOf("GET /v1/inbox", "POST /v1/ack", "GET /v1/ws")
         /** Segments per /v1/traffic/typical request (the relay's limit). */
         const val TRAFFIC_TYPICAL_MAX = 500
         /** The relay refuses incident boxes larger than this in either direction. */
         const val TRAFFIC_INCIDENTS_MAX_SPAN_DEG = 1.0
         private const val CLOCK_WARN_MS = 30_000L
+        /** Connecting, and each read, while Tor is on: about as long as Tor itself tries. */
+        private const val TOR_STEP_TIMEOUT_SEC = 60
+        /** A whole request takes up to this many times its usual limit while Tor is on. */
+        private const val TOR_CALL_TIMEOUT_FACTOR = 4
+        /** How long an onion address that did not answer is passed over. */
+        private const val ONION_QUIET_MS = 10 * 60_000L
         /** The relay mints TURN credentials per request, valid two hours; a fallback copy is kept far less. */
         private const val ICE_CACHE_MS = 10 * 60_000L
         /** Delivery tokens fetched at a time (the relay's maximum), and the level that triggers a fetch. */
@@ -876,6 +1123,23 @@ class RelayClient(
             if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
             val host = u.host?.lowercase() ?: return null
             return if (host == "127.0.0.1" || host == "localhost") "http://$host:${u.port}" else null
+        }
+
+        private val ONION_HOST = Regex("^[a-z2-7]{56}\\.onion$")
+
+        /**
+         * `http://<56 characters>.onion`, a v3 onion address as relays publish
+         * it (and the relay list carries it), in lower case; null when [url]
+         * is not one. Plain http, as Tor Browser uses for onion sites: Tor
+         * encrypts the connection end to end and the address is the server's
+         * key, so TLS would add a certificate and nothing else.
+         */
+        fun onionOrigin(url: String?): String? {
+            val u = runCatching { java.net.URI(url?.trim()?.trimEnd('/') ?: return null) }.getOrNull() ?: return null
+            if (!u.scheme.equals("http", ignoreCase = true) || u.rawUserInfo != null || u.port != -1) return null
+            if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
+            val host = u.host?.lowercase() ?: return null
+            return if (ONION_HOST.matches(host)) "http://$host" else null
         }
 
         /** Whether [url] is a relay address registration accepts: https, or loopback in a debug build. */

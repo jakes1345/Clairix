@@ -97,6 +97,13 @@ val cargoNdkBuild by tasks.registering(Exec::class) {
             "--remap-path-prefix=${fixed(cargoHome)}=/cargo"
         val flags = System.getenv("RUSTFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $remap" } ?: remap
         environment("RUSTFLAGS", flags)
+        // The same for C and assembly that crates build with the cc crate
+        // (ring's, under Tor's TLS): clang writes source paths into debug info.
+        // cargo-ndk sets CFLAGS_<target> for its own flags; cc adds CFLAGS too.
+        val prefixMap = "-ffile-prefix-map=${fixed(rustCrate)}=/comms-crypto " +
+            "-ffile-prefix-map=${fixed(cargoHome)}=/cargo"
+        val cflags = System.getenv("CFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $prefixMap" } ?: prefixMap
+        environment("CFLAGS", cflags)
     }
     commandLine(
         listOf("cargo", "ndk") + rustAbis.flatMap { listOf("-t", it) } +
@@ -120,6 +127,16 @@ val uniffiBindgen by tasks.registering(Exec::class) {
 }
 
 tasks.named("preBuild") { dependsOn(uniffiBindgen) }
+
+// The relay list the app starts with: relays/relays.json at the repository's
+// root, the same file the Relay list workflow signs and publishes. Newer
+// copies come signed from the `relays` release (comms/RelayDirectory.kt).
+val relayListAssets = layout.buildDirectory.dir("generated/relayList")
+val copyRelayList by tasks.registering(Copy::class) {
+    from(rootProject.file("../relays/relays.json"))
+    into(relayListAssets)
+}
+tasks.named("preBuild") { dependsOn(copyRelayList) }
 
 // The JVM unit tests load the same crate built for this machine, so the relay
 // round-trip tests exercise the real Olm and sealing code rather than a stand-in.
@@ -299,6 +316,7 @@ android {
         getByName("main") {
             jniLibs.srcDir(rustJniLibs)
             kotlin.srcDir(rustBindings)
+            assets.srcDir(relayListAssets)
         }
     }
 

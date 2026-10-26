@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import org.unifiedpush.android.connector.UnifiedPush
 import java.io.File
@@ -30,26 +31,32 @@ import java.security.KeyStore
  * database, everything under the private and external app directories), so a
  * store added later is wiped without anyone remembering to add it here.
  *
- * The wipe order:
- *   1. Ask the relay to delete this phone's account (CommsRepository.unpair),
- *      given a few seconds: it needs the identity keys that go next, but the
- *      network must never hold up the wipe of what is on the phone.
- *   2. What lives outside the app's files and would otherwise survive the
+ * The wipe order, fastest destruction first: nothing that can wait on the
+ * network or a lock comes before the keys are gone, so whoever pulls the
+ * power a second after the duress code is typed finds only ciphertext.
+ *   1. Sign the relay's account deletion, in memory (it needs the identity
+ *      keys that go next), to send at the very end.
+ *   2. Delete every AndroidKeyStore key. From here on, whatever survives
+ *      below by accident (the vault, cached message bodies, the identity
+ *      pickle) is ciphertext nobody holds a key to, and nothing can make a
+ *      new key ([app.clairix.comms.KeystoreBox] refuses while [isActive]).
+ *   3. Stop the foreground services, so nothing keeps writing.
+ *   4. What lives outside the app's files and would otherwise survive the
  *      process dying: every notification (a message preview or an SOS with a
  *      position stays in the shade after the app is gone), the clipboard (a
  *      safety number or invite link copied earlier), the push registration,
  *      the device-admin role (an active admin cannot be uninstalled, which is
  *      itself evidence) and an armed card's answers to NFC readers.
- *   3. Delete every AndroidKeyStore key. From here on, whatever survives
- *      below by accident (the vault, cached message bodies, the identity
- *      pickle) is ciphertext nobody holds a key to.
- *   4. Clear and delete every SharedPreferences file.
- *   5. Delete every SQLite database.
- *   6. Delete everything under filesDir, cacheDir, code_cache, no_backup, any
+ *   5. Clear and delete every SharedPreferences file.
+ *   6. Delete every SQLite database.
+ *   7. Delete everything under filesDir, cacheDir, code_cache, no_backup, any
  *      other private directory except the native-library link, and the
- *      external files and cache directories (osmdroid's map tiles live there,
- *      and tiles are a record of where the owner has been).
- *   7. Kill the process — Android restarts it to a blank slate.
+ *      external files and cache directories (map tiles, now in no_backup, were
+ *      kept there by earlier versions, and tiles are a record of where the
+ *      owner has been). The "wipe
+ *      pending" mark goes last of all, so a wipe cut short anywhere is resumed.
+ *   8. Send the signed deletion to the relay, for a few seconds at most.
+ *   9. Kill the process — Android restarts it to a blank slate.
  *
  * [isActive] is also read by the stores that buffer writes ([app.clairix.Store]):
  * a flush after step 5 would put a plaintext timeline straight back on disk.
@@ -80,23 +87,32 @@ object Wiper {
         runCatching { pendingMarker(app).createNewFile() }
         scope.launch {
             try {
-                val remote = launch { runCatching { CommsRepository.unpair() } }
-                withTimeoutOrNull(RELAY_BUDGET_MS) { remote.join() }
-                runCatching { wipeOutsideFiles(app) }
+                val farewell = runCatching { CommsRepository.preparedRelayWipe() }.getOrNull()
                 runCatching { wipeKeystore() }
+                stopServices(app)
+                runCatching { wipeOutsideFiles(app) }
                 runCatching { wipePrefs(app) }
                 runCatching { wipeDatabases(app) }
                 runCatching { wipeFiles(app) }
+                runCatching { pendingMarker(app).delete() }
+                if (farewell != null) {
+                    withTimeoutOrNull(RELAY_BUDGET_MS) {
+                        runInterruptible { CommsRepository.sendRelayWipe(farewell, RELAY_BUDGET_MS / 1000) }
+                    }
+                }
             } finally {
-                // These foreground services run START_STICKY; without stopping them
-                // Android would restart them (and the process) after the kill below.
-                runCatching { app.stopService(Intent(app, ScanService::class.java)) }
-                runCatching { app.stopService(Intent(app, CommsService::class.java)) }
-                runCatching { app.stopService(Intent(app, CallService::class.java)) }
+                stopServices(app)
                 // Last, and whatever happened above: the next launch finds nothing.
                 Process.killProcess(Process.myPid())
             }
         }
+    }
+
+    /** These foreground services run START_STICKY; without stopping them Android would restart them (and the process) after the kill. */
+    private fun stopServices(app: Context) {
+        runCatching { app.stopService(Intent(app, ScanService::class.java)) }
+        runCatching { app.stopService(Intent(app, CommsService::class.java)) }
+        runCatching { app.stopService(Intent(app, CallService::class.java)) }
     }
 
     /** The file whose presence means a wipe was started and has not been seen through. */
@@ -140,6 +156,9 @@ object Wiper {
         val known = listOf(
             "prefs",            // AppSettings, onboarding
             "comms_identity",   // IdentityStore
+            "comms_transport",  // TransportKeyStore
+            "comms_vault",      // VaultBox's wrapped data key
+            "comms_tor",        // TorTransport
             "comms",            // CommsConfig
             "comms_log",        // CommsLog
             "comms_ui",         // CommsScreen
@@ -174,10 +193,11 @@ object Wiper {
         File(context.applicationInfo.dataDir).listFiles()
             ?.filter { it.name !in setOf("lib", "shared_prefs", "databases") }
             ?.let { roots += it }
+        val marker = pendingMarker(context).canonicalFile
         for (root in roots.distinctBy { runCatching { it.canonicalPath }.getOrDefault(it.path) }) {
             runCatching {
                 val children = root.listFiles() ?: return@runCatching
-                for (child in children) runCatching { child.deleteRecursively() }
+                for (child in children) runCatching { if (child.canonicalFile != marker) child.deleteRecursively() }
             }
         }
     }

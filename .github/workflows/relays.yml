@@ -1,0 +1,87 @@
+name: Relay list
+
+# Publishes relays/relays.json, signed with the asset key (tools/signing), as
+# the `relays` release. Phones fetch it from there, refuse it unless the
+# signature checks, and refuse a list issued earlier than the one they have.
+# Pull requests only check the list; publishing happens on main.
+on:
+  pull_request:
+    paths:
+      - 'relays/**'
+      - 'tools/relays/**'
+      - '.github/workflows/relays.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'relays/**'
+      - 'tools/relays/**'
+      - '.github/workflows/relays.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relays-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytest and the signing tool
+        run: python -m pip install -r tools/signing/requirements.txt pytest==9.1.1
+
+      - name: Test the list checker
+        run: python -m pytest -q tools/relays/test_check.py
+
+      # Against the list phones have now: a new one must be issued later, and
+      # every relay on it must publish the key it is listed with.
+      - name: Check the list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p published dist
+          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern relays.json --dir published 2>/dev/null; then
+            if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+              cmp -s relays/relays.json published/relays.json && { echo "unchanged"; echo "UNCHANGED=1" >> "$GITHUB_ENV"; exit 0; }
+            fi
+            python tools/relays/check.py relays/relays.json --published published/relays.json --live
+          else
+            python tools/relays/check.py relays/relays.json --live
+          fi
+
+      - name: Sign
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.UNCHANGED != '1'
+        env:
+          ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
+        run: |
+          cp relays/relays.json dist/relays.json
+          python tools/signing/sign.py dist/relays.json
+          python tools/signing/sign.py --verify android/asset-signing.pub dist/relays.json
+
+      - name: Publish
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.UNCHANGED != '1'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: relays
+          name: Relay list
+          body: |
+            The relays Clairix offers when someone sets it up, from relays/relays.json.
+            relays.json.sig is its Ed25519 signature by the asset key (android/asset-signing.pub).
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/relays.json
+            dist/relays.json.sig

@@ -67,21 +67,35 @@ automated.
 
 ## Work to do first
 
-1. **Self-hostable relay.** Run the same Worker on our own server with
-   workerd and on-disk Durable Object storage (one machine; that is what
-   `wrangler dev --persist-to` does and what the emulator tests use). Ship a
-   setup script: automatic security updates, restart on failure, TLS
-   certificate renewal, an uptime check, and a Tor onion service in front.
-   Multi-machine Durable Objects (Deno's celld, being merged into workerd
-   after Cloudflare bought Deno) were at v0.1.0 in August 2026: too early.
+1. **Self-hostable relay.** *Done:* `comms-worker/selfhost/install.sh` runs
+   the same Worker under workerd with on-disk Durable Object storage, behind
+   Caddy (TLS) and a Tor onion service, with restart on failure, an uptime
+   check, the scheduled work, and automatic security updates. See
+   "On your own server" in `comms-worker/README.md`. The emulator tests run
+   one of their two relays this way. Multi-machine Durable Objects (Deno's
+   celld, being merged into workerd after Cloudflare bought Deno) were at
+   v0.1.0 in August 2026: too early.
 2. **Stand up relays** in the countries above, after checking each host's
    current terms, whether it really needs no ID, where the company is
    registered, and real prices.
-3. **Relay list in the app.** A published list of known relays, so a new user
-   can pick one in a country they trust, and the app can move to another when
-   one is blocked.
+3. **Relay list in the app.** *Done:* `relays/relays.json`, signed with the
+   asset key and published by the Relay list workflow; phones offer it when
+   setting up, refuse an older list than they have, and check a listed
+   relay's key before registering on it (`relays/README.md`). Still to do:
+   moving a phone to another relay when its own is blocked (a number is per
+   relay, so this needs contacts told of the new number).
 4. **The app over Tor** (Arti), so the phone's address is hidden from every
-   relay, ours or not.
+   relay, ours or not. *Done:* "Connect through Tor" in Comms settings runs
+   Arti in the app's native library behind a password-protected SOCKS5 proxy
+   on 127.0.0.1, every connection on a circuit of its own; relay traffic and
+   the relay list go through it and fail closed while it connects. Calls
+   (UDP) and push wake-ups (the distributor's own connection) do not. A
+   relay with an onion address (the relay list's, or `RELAY_ONION`, which
+   `install.sh` sets and the relay names at `GET /`) is reached there while
+   Tor is on, so requests never leave the Tor network; when the onion does
+   not answer, the registered address is used, still through Tor. The
+   emulator tests run a real onion service for the self-hosted relay and
+   require the app to work through it alone.
 
 ## Sources
 

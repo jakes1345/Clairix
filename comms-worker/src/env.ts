@@ -40,6 +40,17 @@ export interface Env {
    */
   RELAY_ALTERNATES?: string;
   /**
+   * Optional: this relay's onion address, `http://<56 characters>.onion`.
+   * Phones that connect through Tor use it instead of the https address.
+   */
+  RELAY_ONION?: string;
+  /**
+   * Optional: delivery tokens each account is issued an hour (and the most it
+   * saves up), a whole number from 1 to 100000; default 1000. Every envelope a
+   * phone sends spends one.
+   */
+  DELIVERY_TOKENS_PER_HOUR?: string;
+  /**
    * Optional: the longest an envelope sent with "mix" is held for mixing, in
    * milliseconds (default 20000; the mean hold is a fifth of it). "0" turns
    * mixing off.

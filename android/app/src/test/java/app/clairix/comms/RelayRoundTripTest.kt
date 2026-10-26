@@ -68,7 +68,7 @@ class RelayRoundTripTest {
             patiently { relay.register(relayUrl, identity, secret, listed = false) }.number
 
         val keys: PeerKeys
-            get() = identity.publicBundle().let { PeerKeys(it.ed25519, it.curve25519, it.sealing, it.signature) }
+            get() = identity.publicBundle().let { PeerKeys(it.ed25519, it.curve25519, it.sealing, it.signature, it.sealingPrekey) }
 
         private val sender: CommsWire.Sender
             get() = identity.publicBundle().let { CommsWire.Sender(number!!, label, it.ed25519, it.curve25519, it.sealing, it.signature) }
@@ -374,6 +374,19 @@ class RelayRoundTripTest {
     }
 
     @Test
+    fun theRelayServesTheSealingPrekeyAndEnvelopesAreSealedToIt() {
+        val published = bob.identity.publicBundle().sealingPrekey
+        assertNotNull("a new identity has a sealing prekey", published)
+        val id = alice.relay.identity(bob.number!!, fingerprint(bob.keys.ed25519))
+        assertEquals(published, id.sealingPrekey)
+        val envelope = alice.encryptFor(bob, msg("sealed to the prekey"))
+        assertEquals("envelope format", 3, envelope[0].toInt())
+        alice.sendRaw(bob, envelope)
+        val got = bob.receive()
+        assertEquals("sealed to the prekey", got.payload.getString(CommsWire.F_BODY))
+    }
+
+    @Test
     fun aSendNeedsADeliveryTokenAndCarriesNoIdentity() {
         val http = OkHttpClient()
         val json = "application/json".toMediaType()
@@ -435,6 +448,26 @@ class RelayRoundTripTest {
                 .post(JSONObject().put("to", bob.number).put("envelope", "AAAA").toString().toRequestBody("application/json".toMediaType())).build()
         ).execute().use { it.code }
         assertEquals("a spent blind token is refused", 403, again)
+    }
+
+    /**
+     * An onion address that does not answer (one nothing serves, which does not
+     * even resolve without Tor) costs a try and no more: the request goes to the
+     * registered address, and the keys seen are kept under that address, where
+     * tokens fetched through either address are checked.
+     */
+    @Test
+    fun anOnionAddressThatDoesNotAnswerFallsBackToTheRegisteredOne() {
+        val pins = MemoryTokenKeyPins()
+        val dead = "http://" + "a".repeat(56) + ".onion"
+        val client = RelayClient({ alice.identity }, { relayUrl }, { alice.number }, tokenKeys = pins, onion = { dead })
+        val info = client.info()
+        val keys = info.tokens!!
+        assertEquals(keys.keys, pins.get(relayUrl!!, keys.epoch))
+        assertEquals(null, pins.get(dead, keys.epoch))
+        // Signed requests too, now straight to the registered address.
+        assertTrue(client.me().oneTimeKeys >= 0)
+        assertTrue(client.createInvite().code.isNotEmpty())
     }
 
     /** A relay that issues under a key other than the one it publishes is refused, and nothing is added to the pool. */
@@ -515,7 +548,7 @@ class RelayRoundTripTest {
         val bundle = alice.relay.bundle(bob.number!!, fingerprint(bob.keys.ed25519))
         val after = bob.relay.me().oneTimeKeys
         val again = bob.identity.publicBundle().let {
-            uniffi.clairix_comms_crypto.PublicBundle(it.ed25519, it.curve25519, it.sealing, it.signature, null, listOf(bundle.sessionKey))
+            uniffi.clairix_comms_crypto.PublicBundle(it.ed25519, it.curve25519, it.sealing, it.signature, null, null, listOf(bundle.sessionKey))
         }
         assertEquals(after, bob.relay.putKeys(again))
     }

@@ -254,16 +254,10 @@ export class Traffic extends DurableObject<Env> {
       );
       if (still) this.confirm(id, voter, now);
       const net = this.sql.exec<{ net: number | null }>("SELECT SUM(CASE gone WHEN 1 THEN 1 ELSE -1 END) AS net FROM votes WHERE incident_id = ?", id).one().net ?? 0;
-      if (net >= GONE_VOTES_TO_REMOVE) {
-        // A work zone voted away would come straight back on the next feed
-        // refresh; remember the dismissal for as long as the feed says it lasts.
-        if (row.ext_id !== null) {
-          this.sql.exec(
-            "INSERT INTO wzdx_dismissed (ext_id, until) VALUES (?, ?) ON CONFLICT (ext_id) DO UPDATE SET until = excluded.until",
-            row.ext_id,
-            row.expires_at,
-          );
-        }
+      // A work zone comes from the road authority's feed, which says when it
+      // ends; votes do not remove it. Anything else needs as many votes as it
+      // had confirmations, and never fewer than GONE_VOTES_TO_REMOVE.
+      if (row.ext_id === null && net >= Math.max(GONE_VOTES_TO_REMOVE, row.confirmations)) {
         this.deleteIncident(id);
         return null;
       }

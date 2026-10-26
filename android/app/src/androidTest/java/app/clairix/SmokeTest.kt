@@ -11,7 +11,6 @@ import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
-import androidx.test.uiautomator.Until
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -30,6 +29,7 @@ class SmokeTest {
 
     private val instr = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instr)
+    private val ui = FreshUi(instr, device)
     private val pkg = "app.clairix"
     private val target: Context get() = instr.targetContext
     private val shots: File by lazy { File(target.getExternalFilesDir(null), "smoke").apply { mkdirs() } }
@@ -47,7 +47,7 @@ class SmokeTest {
         device.pressHome()
         val launch = target.packageManager.getLaunchIntentForPackage(pkg)!!.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
         target.startActivity(launch)
-        assertTrue("app did not come up", device.wait(Until.hasObject(By.pkg(pkg).depth(0)), 20_000))
+        assertTrue("app did not come up", ui.waitHas(By.pkg(pkg).depth(0), 20_000))
     }
 
     private fun shot(name: String) {
@@ -56,60 +56,77 @@ class SmokeTest {
         device.takeScreenshot(f)
         // Secure screens (Comms) come out black, so a failure also keeps the
         // window hierarchy: what was on screen, as text.
-        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE")) {
-            runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
+        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-") || name.startsWith("FROZEN")) {
+            runCatching { ui.clear(); device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
         }
     }
 
     /** Fails if the app has crashed, stopped responding or left the foreground. */
     private fun alive(step: String) {
         device.waitForIdle(2_000)
-        if (device.hasObject(By.textContains("keeps stopping")) || device.hasObject(By.textContains("has stopped"))) {
+        if (ui.has(By.textContains("keeps stopping")) || ui.has(By.textContains("has stopped"))) {
             shot("CRASH-$step"); fail("Clairix crashed at: $step")
         }
-        if (device.hasObject(By.textContains("isn't responding"))) {
+        if (ui.has(By.textContains("isn't responding"))) {
             shot("ANR-$step"); fail("Clairix stopped responding at: $step")
         }
         // A system dialog the app asked for is not a failure: a permission, or
         // Android asking whether Clairix may suggest Wi-Fi networks (the Karma trap's
         // decoy network, added when scanning starts). Answer it as an owner would and
         // carry on; the screenshot shows it was there.
-        device.findObject(By.res("com.android.permissioncontroller:id/permission_allow_foreground_only_button"))?.click()
-        device.findObject(By.res("com.android.permissioncontroller:id/permission_allow_button"))?.click()
+        ui.find(By.res("com.android.permissioncontroller:id/permission_allow_foreground_only_button"))?.click()
+        ui.find(By.res("com.android.permissioncontroller:id/permission_allow_button"))?.click()
         val current = device.currentPackageName
         if (current != pkg && current in SYSTEM_PROMPTS) {
             shot("system-prompt-$step")
-            val allow = device.findObject(By.pkg(current).text(ALLOW)) ?: device.findObject(By.pkg(current).clickable(true).text(ALLOW))
+            val allow = ui.find(By.pkg(current).text(ALLOW)) ?: ui.find(By.pkg(current).clickable(true).text(ALLOW))
             if (allow != null) allow.click() else device.pressBack()
-            device.wait(Until.hasObject(By.pkg(pkg).depth(0)), 5_000)
+            ui.waitHas(By.pkg(pkg).depth(0), 5_000)
             device.waitForIdle(2_000)
         }
         if (device.currentPackageName != pkg) { shot("LEFT-$step"); fail("Clairix left the foreground at: $step (now ${device.currentPackageName})") }
     }
 
     private companion object {
-        /** System apps that show a dialog over Clairix on its behalf. */
-        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller")
+        /** How long a Back may take to show the screen behind on CI's emulator (see backTo). */
+        const val BACK_PATIENCE_MS = 10_000L
+        /**
+         * System apps that show a dialog over Clairix on its behalf. Android 12
+         * shows the Wi-Fi suggestion prompt from the framework itself ("android").
+         */
+        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller", "android")
         val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
     }
 
-    private fun text(t: String, timeout: Long = 8_000): UiObject2? = device.wait(Until.findObject(By.text(t)), timeout)
+    private fun text(t: String, timeout: Long = 8_000): UiObject2? = ui.waitFor(By.text(t), timeout)
 
     private fun tap(t: String, step: String = t) {
-        // Live screens (Trackers refreshes as scan results arrive) can redraw
-        // between finding a button and tapping it, which leaves the object
-        // found stale; the button is then found again, a few times at most.
-        repeat(3) {
-            val o = text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
+        text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
+        if (!clickFresh(By.text(t))) { shot("STALE-$step"); fail("\"$t\" kept redrawing before it could be tapped at: $step") }
+        alive(step)
+    }
+
+    /**
+     * Taps the centre of what [selector] finds, read from a fresh lookup each
+     * try. Live screens (Trackers redraws as scan results arrive) change the
+     * window's content often enough that UiAutomator's handle on a button goes
+     * stale between finding it and clicking it, though the button itself
+     * never moves; its position, read and used at once, does not go stale.
+     */
+    private fun clickFresh(selector: BySelector, tries: Int = 10): Boolean {
+        repeat(tries) {
             try {
-                o.click()
-                alive(step)
-                return
+                val bounds = ui.find(selector)?.visibleBounds
+                if (bounds != null && !bounds.isEmpty) {
+                    device.click(bounds.centerX(), bounds.centerY())
+                    return true
+                }
             } catch (_: StaleObjectException) {
-                device.waitForIdle(1_000)
+                // Found again on the next try.
             }
+            device.waitForIdle(500)
         }
-        shot("STALE-$step"); fail("\"$t\" kept redrawing before it could be tapped at: $step")
+        return false
     }
 
     /**
@@ -119,7 +136,7 @@ class SmokeTest {
      */
     private fun tapScrolling(t: String) {
         repeat(30) {
-            device.findObject(By.text(t))?.let {
+            ui.find(By.text(t))?.let {
                 try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
             }
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
@@ -131,15 +148,17 @@ class SmokeTest {
     private fun back(step: String) { device.pressBack(); alive("back from $step") }
 
     /**
-     * Back from [step] to a screen with [expect] on it. The emulator's keyboard
-     * service sometimes takes a Back key itself (it logs "Received KEYCODE_BACK.
-     * isAllViewsInvisible=false") without the app ever seeing it, so when the
-     * page titled [step] is still open a second Back is sent, as a person would.
+     * Back from [step] to a screen with [expect] on it, pressed once: run
+     * 40258058822 pressed a second time when the first seemed not to take, and
+     * closed the app. What looked like a slow Back was UiAutomator's node
+     * cache (see FreshUi); read afresh, the screen behind shows at once, and
+     * [BACK_PATIENCE_MS] is only room for a slow emulator.
      */
     private fun backTo(step: String, expect: BySelector) {
         back(step)
-        if (device.wait(Until.hasObject(expect), 3_000)) return
-        if (device.hasObject(By.text(step))) back("$step (again)")
+        if (ui.waitHas(expect, BACK_PATIENCE_MS)) return
+        shot("FROZEN-$step")
+        fail("Clairix did not leave \"$step\" within ${BACK_PATIENCE_MS / 1000} s of Back")
     }
 
     @Test
@@ -149,7 +168,7 @@ class SmokeTest {
         text("Start scanning", 5_000)?.let {
             shot("onboarding-last")
             // Scanning can be left for later: the last page offers that too.
-            assertTrue("no Not now on the last page", device.hasObject(By.text("Not now")))
+            assertTrue("no Not now on the last page", ui.has(By.text("Not now")))
             it.click(); alive("start scanning")
         }
 
@@ -159,11 +178,11 @@ class SmokeTest {
         // Step by the tour's own counter ("Tour · 3 of 25"), waiting for each page
         // to settle: while the pager slides onto the last page, Next is still on
         // screen for a moment before it turns into Done.
-        val counter = device.findObject(By.textStartsWith("Tour · 1 of "))?.text ?: run { shot("MISSING-tour-counter"); fail("No tour page counter"); return }
+        val counter = ui.find(By.textStartsWith("Tour · 1 of "))?.text ?: run { shot("MISSING-tour-counter"); fail("No tour page counter"); return }
         val total = counter.substringAfterLast(' ').toInt()
         for (page in 2..total) {
             tap("Next", "tour page $page")
-            if (!device.wait(Until.hasObject(By.text("Tour · $page of $total")), 5_000)) {
+            if (!ui.waitHas(By.text("Tour · $page of $total"), 5_000)) {
                 shot("MISSING-tour-page-$page"); fail("The tour did not reach page $page of $total")
             }
             if (page % 4 == 2) shot("tour-page-$page")
@@ -178,14 +197,14 @@ class SmokeTest {
             shot("scan-$c")
             if (c == "Trackers") {
                 for (tool in listOf("Find a tracker", "Self-test beacon", "Bluetooth exposure")) {
-                    val b = device.wait(Until.findObject(By.text(tool)), 5_000)
+                    val b = ui.waitFor(By.text(tool), 5_000)
                         ?: run {
                             // The row scrolls sideways; the last button may be off screen.
                             device.swipe(device.displayWidth * 4 / 5, device.displayHeight / 4, device.displayWidth / 5, device.displayHeight / 4, 20)
-                            device.wait(Until.findObject(By.text(tool)), 3_000)
+                            ui.waitFor(By.text(tool), 3_000)
                         }
                     if (b == null) { shot("MISSING-$tool"); fail("No tracker tool \"$tool\"") }
-                    try { b!!.click() } catch (_: StaleObjectException) { tap(tool) }
+                    if (!clickFresh(By.text(tool))) { shot("STALE-$tool"); fail("\"$tool\" kept redrawing before it could be tapped") }
                     alive(tool)
                     device.waitForIdle(3_000)
                     shot("tool-$tool")
@@ -203,10 +222,13 @@ class SmokeTest {
         for (tab in listOf("Comms", "Drive", "Activity")) {
             tap(tab, "tab $tab"); device.waitForIdle(3_000); shot("tab-$tab")
             if (tab == "Comms") {
-                for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
-                    val more = device.wait(Until.findObject(By.desc("More options")), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
+                // Several rounds: going in and back out of these pages has failed
+                // now and then, and one round seldom shows it.
+                for (round in 1..5) for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
+                    val more = ui.waitFor(By.desc("More options"), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
                     more.click(); alive("comms menu")
-                    tap(page, "comms $page"); device.waitForIdle(2_000); shot("comms-$page")
+                    tap(page, "comms $page"); device.waitForIdle(2_000)
+                    if (round == 1) shot("comms-$page")
                     backTo(page, By.desc("More options"))
                 }
             }
@@ -216,7 +238,7 @@ class SmokeTest {
         for (sub in listOf("Radio", "Vehicle", "Navigate")) { tap(sub, "drive $sub"); device.waitForIdle(3_000); shot("drive-$sub") }
 
         // Settings, and the tour from there.
-        device.findObject(By.desc("Settings"))?.click() ?: fail("No Settings button")
+        ui.find(By.desc("Settings"))?.click() ?: fail("No Settings button")
         alive("settings"); shot("settings")
         tapScrolling("Take the tour")
         assertTrue("the tour did not reopen from Settings", text("Where everything is") != null)

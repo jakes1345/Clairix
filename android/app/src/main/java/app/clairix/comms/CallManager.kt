@@ -2,6 +2,7 @@ package app.clairix.comms
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -173,6 +174,44 @@ object CallManager {
      * microphone permission already granted.
      */
     fun accept(callId: String? = null) { serial.launch { acceptLocked(callId) } }
+
+    // ── Ringing on a locked phone ─────────────────────────────────────────
+
+    /** Until when the next offer is answered as it arrives: the owner pressed Answer on the locked ring and unlocked. */
+    @Volatile
+    private var answerOnUnlockUntil = 0L
+    private var lockedRingStop: kotlinx.coroutines.Job? = null
+
+    /**
+     * Rings for a call whose offer is still sealed: the phone is locked and the
+     * envelope said only that it is a call. The ring stops by itself after the
+     * time a caller waits, or once the offer, read after the unlock, takes over.
+     */
+    fun ringLocked() {
+        serial.launch {
+            if (_call.value != null && _call.value?.phase != CallPhase.ENDED) return@launch
+            startRinging()
+            lockedRingStop?.cancel()
+            lockedRingStop = serial.launch {
+                kotlinx.coroutines.delay(RING_TIMEOUT_MS)
+                if (_call.value?.phase != CallPhase.INCOMING) stopRinging()
+            }
+        }
+    }
+
+    /** Silences a locked ring that no call took over (declined, or the phone was unlocked and no offer was live). */
+    fun stopLockedRing() {
+        serial.launch {
+            lockedRingStop?.cancel()
+            lockedRingStop = null
+            if (_call.value?.phase != CallPhase.INCOMING) stopRinging()
+        }
+    }
+
+    /** The owner pressed Answer on the locked ring: the offer read after the unlock is answered at once. */
+    fun answerWhenUnlocked() {
+        answerOnUnlockUntil = System.currentTimeMillis() + RING_TIMEOUT_MS
+    }
 
     fun reject() { serial.launch { endLocked("declined", signal = CommsWire.END_REJECT) } }
 
@@ -506,6 +545,21 @@ object CallManager {
         _call.value = incoming
         if (autoAnswer) {
             acceptLocked()
+            return
+        }
+        if (System.currentTimeMillis() < answerOnUnlockUntil && hasMicrophone()) {
+            // Answered on the locked ring; the phone was unlocked to read the offer.
+            answerOnUnlockUntil = 0L
+            lockedRingStop?.cancel()
+            acceptLocked()
+            runCatching {
+                appContext.startActivity(
+                    Intent(appContext, app.clairix.CallActivity::class.java)
+                        .setAction("app.clairix.OPEN_CALL")
+                        .putExtra(CommsNotifications.EXTRA_CALL_ID, cid)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+            }
             return
         }
         // The in-app call screen is already up; a refused notification or a

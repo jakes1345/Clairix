@@ -14,8 +14,10 @@ import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
+import uniffi.clairix_comms_crypto.CryptoException
 import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PeerKeys
+import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.fingerprint
 import java.util.Base64
 import java.util.UUID
@@ -162,7 +164,7 @@ class EndToEndTest {
     fun g_aContactOnAnotherRelayIsReachedThroughThisOne() = runBlocking {
         setUp()
         val remote = remote
-        val contact = repo.addContactFromCode(remote.code("Remote"), "Remote").getOrThrow()
+        val contact = repo.addContactFromCode(remote.code("Remote"), "Remote", CommsRepository.CodeSource.SCANNED).getOrThrow()
         assertEquals("http://127.0.0.1:${relayBPort()}", contact.relay)
         repo.send(remote.number, "across two relays").getOrThrow()
         val got = remote.receive { CommsWire.type(it) == CommsWire.T_MSG }
@@ -171,6 +173,57 @@ class EndToEndTest {
         eventually("the reply comes back through relay B and relay A") {
             repo.messages(remote.number).any { it.direction == Direction.IN && it.body == "and back" }
         }
+    }
+
+    @Test
+    fun h_aLockedPhoneKeepsWhatArrivesAndReadsItOnUnlock() = runBlocking {
+        setUp()
+        val peer = local
+        try {
+            Vault.sealForTest()
+            eventually("the vault seals") { repo.contacts().isEmpty() }
+            peer.send(app, CommsWire.message(UUID.randomUUID().toString(), System.currentTimeMillis(), "sent while locked"))
+            // Collected with the transport key, and kept as it came.
+            lockedEventually("it waits for the unlock") { repo.lockedWaiting() > 0 }
+            assertTrue("nothing can be read while locked", repo.messages(peer.number).isEmpty())
+        } finally {
+            Vault.open()
+        }
+        eventually("it is read once unlocked") {
+            repo.messages(peer.number).any { it.direction == Direction.IN && it.body == "sent while locked" }
+        }
+        assertEquals(0, repo.lockedWaiting())
+    }
+
+    @Test
+    fun i_aCallToALockedPhoneRingsAndIsReadOnUnlock() = runBlocking {
+        setUp()
+        val peer = local
+        val cid = UUID.randomUUID().toString()
+        val manager = InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.app.NotificationManager::class.java)
+        try {
+            Vault.sealForTest()
+            eventually("the vault seals") { repo.contacts().isEmpty() }
+            peer.send(app, CommsWire.callOffer(cid, repo.relayNow(), MINIMAL_OFFER))
+            lockedEventually("the locked phone rings, naming no one") {
+                manager.activeNotifications.any { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID }
+            }
+            val ring = manager.activeNotifications.first { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID }.notification
+            // CallStyle titles it with the caller, here a stand-in that names no one.
+            assertEquals("Clairix call", ring.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString())
+            assertEquals("Unlock to answer", ring.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
+            // Not read while locked. (The call from f_ may still be on show, ended:
+            // an ended call lingers a moment before it is cleared.)
+            assertTrue("the locked offer was read", CallManager.call.value?.id != cid)
+        } finally {
+            Vault.open()
+        }
+        eventually("unlocked, the offer is read and the call rings") {
+            CallManager.call.value?.let { it.id == cid && it.phase == CallPhase.INCOMING } == true
+        }
+        assertTrue("the stand-in is gone", manager.activeNotifications.none { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID })
+        peer.send(app, CommsWire.callEnd(cid, CommsWire.END_CANCEL))
+        eventually("the ringing stops") { CallManager.call.value?.let { it.id != cid || it.phase != CallPhase.INCOMING } ?: true }
     }
 
     @Test
@@ -199,12 +252,15 @@ class EndToEndTest {
         app = me
         local = TestPeer(relayA, secret, "Peer", me)
         remote = TestPeer(relayB, secret, "Remote", me)
-        repo.addContactFromCode(local.code("Peer"), "Peer").getOrThrow()
+        repo.addContactFromCode(local.code("Peer"), "Peer", CommsRepository.CodeSource.SCANNED).getOrThrow()
         me
     }
 
     private fun relayAOrigin(): String = RelayClient.originOf(InstrumentationRegistry.getArguments().getString("relayA"))!!
     private fun relayBPort(): Int = java.net.URI(InstrumentationRegistry.getArguments().getString("relayB")!!).port
+
+    /** As [eventually], for a locked phone: its sync only collects. */
+    private suspend fun lockedEventually(what: String, timeoutMs: Long = 45_000, check: () -> Boolean) = eventually(what, timeoutMs, check)
 
     /** Syncs the app until [check] holds, or fails after [timeoutMs]. */
     private suspend fun eventually(what: String, timeoutMs: Long = 45_000, check: () -> Boolean) {
@@ -257,6 +313,8 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
     private val foreign = RelayClient.originOf(relayUrl) != RelayClient.originOf(app.relayUrl)
     private var claim: String? = null
     private val waiting = ArrayList<JSONObject>()
+    /** Each contact's sealing prekey as last fetched, kept as the app keeps its contacts'. */
+    private val prekeys = HashMap<String, SealingPrekey?>()
 
     init {
         number = relay.register(relayUrl, identity, secret, listed = true).number
@@ -269,11 +327,45 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
     private val sender: CommsWire.Sender
         get() = identity.publicBundle().let { CommsWire.Sender(number, label, it.ed25519, it.curve25519, it.sealing, it.signature) }
 
+    /**
+     * [call] to the relay, retried the way the app retries rather than given
+     * up on: a rate limit waited out for the Retry-After it sends (a peer that
+     * sends as often as the soak test's is over the relay's 30 lookups a
+     * minute, and over what one relay may forward to one recipient on
+     * another), and a relay that did not answer, or a relay it forwards to
+     * that did not ("The other relay did not answer", 502), tried again after
+     * a growing pause. The app drops an envelope that arrives twice.
+     */
+    private fun <T> politely(call: () -> T): T {
+        repeat(6) { attempt ->
+            try {
+                return call()
+            } catch (e: RelayException) {
+                when {
+                    e.code == 429 -> Thread.sleep((e.retryAfterSec ?: 30) * 1000)
+                    e.code == 0 || e.code >= 500 -> Thread.sleep(2_000L shl attempt)
+                    else -> throw e
+                }
+            }
+        }
+        return call()
+    }
+
+    /** [to]'s sealing prekey: the one kept, or (with [fresh], or none kept yet) fetched, as a contact's phone fetches it. */
+    private fun prekeyOf(to: PairingCode, appRelay: String?, fresh: Boolean): SealingPrekey? {
+        if (!fresh && prekeys.containsKey(to.number)) return prekeys[to.number]
+        val prekey = politely { relay.identity(to.number, fingerprint(to.ed25519), appRelay).sealingPrekey }
+        prekeys[to.number] = prekey
+        return prekey
+    }
+
     /** Encrypts and sends [payload] to [to], as the app's deliver does; [appRelay] when [to] is on another relay. */
     fun send(to: PairingCode, payload: JSONObject, appRelay: String? = null) {
-        val keys = PeerKeys(to.ed25519, to.curve25519, to.sealing, to.signature)
+        // With the app's sealing prekey envelopes are format 3; one that has
+        // aged out is fetched again, as the app does on StalePrekey.
+        var keys = PeerKeys(to.ed25519, to.curve25519, to.sealing, to.signature, prekeyOf(to, appRelay, fresh = false))
         if (!identity.hasSession(keys.curve25519)) {
-            val bundle = relay.bundle(to.number, fingerprint(to.ed25519), appRelay)
+            val bundle = politely { relay.bundle(to.number, fingerprint(to.ed25519), appRelay) }
             identity.startSession(keys, bundle.sessionKey)
             claim = bundle.claim
         }
@@ -281,7 +373,19 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         if (foreign) full.put(CommsWire.F_RELAY, RelayClient.originOf(relayUrl))
         relay.topUpTokens()
         val urgent = CommsWire.type(payload) in setOf(CommsWire.T_CALL, CommsWire.T_PANIC, CommsWire.T_GROUP_CTRL)
-        relay.send(to.number, identity.encrypt(keys, full.toString().toByteArray(Charsets.UTF_8)), claim, relay = appRelay, urgent = urgent)
+        val alert = when (CommsWire.type(payload)) {
+            CommsWire.T_CALL -> if (payload.optString(CommsWire.F_CALL_KIND) == CommsWire.CALL_OFFER) RelayClient.ALERT_CALL else null
+            CommsWire.T_PANIC -> RelayClient.ALERT_SOS
+            else -> null
+        }
+        val plain = full.toString().toByteArray(Charsets.UTF_8)
+        val envelope = try {
+            identity.encrypt(keys, plain)
+        } catch (e: CryptoException.StalePrekey) {
+            keys = keys.copy(sealingPrekey = prekeyOf(to, appRelay, fresh = true))
+            identity.encrypt(keys, plain)
+        }
+        politely { relay.send(to.number, envelope, claim, relay = appRelay, urgent = urgent, alert = alert) }
         claim = null
     }
 
@@ -290,17 +394,32 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         val deadline = System.currentTimeMillis() + timeoutMs
         while (true) {
             waiting.firstOrNull(matches)?.let { waiting.remove(it); return it }
-            val envelopes = relay.inbox()
+            val envelopes = politely { relay.inbox() }
             for (env in envelopes) {
                 val d = identity.decrypt(env.data)
                 CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
             }
-            if (envelopes.isNotEmpty()) relay.ack(envelopes.map { it.id })
+            if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
             if (System.currentTimeMillis() > deadline) {
                 throw AssertionError("$label: nothing matching arrived within ${timeoutMs / 1000} s; got ${waiting.map { CommsWire.type(it) }}")
             }
             if (envelopes.isEmpty()) Thread.sleep(400)
         }
+    }
+
+    /** Everything that arrives within [ms], plus anything already received and not yet matched. */
+    fun drain(ms: Long): List<JSONObject> {
+        val deadline = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < deadline) {
+            val envelopes = politely { relay.inbox() }
+            for (env in envelopes) {
+                val d = identity.decrypt(env.data)
+                CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
+            }
+            if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
+            Thread.sleep(400)
+        }
+        return waiting.toList().also { waiting.clear() }
     }
 
     fun close() {

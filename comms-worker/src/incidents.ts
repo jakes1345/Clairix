@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import {
   DEFAULT_DAILY_CAP,
+  pacedCap,
   PROVIDERS,
   TILE_ERROR_BACKOFF_SEC,
   decideTile,
@@ -131,7 +132,8 @@ export class IncidentCache extends DurableObject<Env> {
   private usage(provider: ProviderName, now: number): UpstreamUsage {
     const day = utcDay(now);
     const g = this.sql.exec<{ count: number }>("SELECT count FROM quota WHERE provider = ? AND day = ?", provider, day).toArray()[0];
-    return { globalCount: g?.count ?? 0, cap: this.cap(provider) };
+    const cap = this.cap(provider);
+    return { globalCount: g?.count ?? 0, cap, paced: pacedCap(cap, now) };
   }
 
   /** A tile's cached incidents, parsed once per stored result rather than on every request. */

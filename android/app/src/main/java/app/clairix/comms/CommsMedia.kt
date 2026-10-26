@@ -80,6 +80,23 @@ object CommsMedia {
                 else if (f.name.startsWith("vm_") && f.stale()) f.delete()
             }
             File(cache, "camera").listFiles()?.forEach { if (it.isFile && it.stale()) it.delete() }
+            // Exported reports (current position, a timeline with places) are
+            // kept a day for the app they were shared to, then go: not only when
+            // the next report happens to be exported.
+            val reportCutoff = System.currentTimeMillis() - app.clairix.analysis.Report.EXPORT_RETENTION_MS
+            File(cache, "reports").listFiles()?.forEach { if (it.isFile && it.lastModified() < reportCutoff) it.delete() }
+        }
+    }
+
+    /**
+     * Deletes the plaintext copies made to play a video or a voice note: on lock,
+     * so what was on screen does not wait on disk, unencrypted, for the next start.
+     */
+    fun dropPlayCopies(context: Context) {
+        val cache = context.applicationContext.cacheDir
+        runCatching {
+            File(cache, "comms_media_play").listFiles()?.forEach { it.delete() }
+            cache.listFiles()?.forEach { f -> if (f.isFile && f.name.startsWith("vm_play_") && f.name.endsWith(".amr")) f.delete() }
         }
     }
 
@@ -91,7 +108,7 @@ object CommsMedia {
     fun save(id: String, bytes: ByteArray) {
         val f = fileFor(id)
         val tmp = File(f.parentFile, f.name + ".tmp")
-        tmp.writeBytes(KeystoreBox.encrypt(bytes))
+        tmp.writeBytes(VaultBox.encrypt(bytes))
         if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
     }
 
@@ -99,7 +116,10 @@ object CommsMedia {
     fun load(id: String): ByteArray? {
         val f = fileFor(id)
         if (!f.isFile) return null
-        return runCatching { KeystoreBox.decrypt(f.readBytes()) }.getOrNull()
+        val opened = runCatching { VaultBox.open(f.readBytes()) }.getOrNull() ?: return null
+        // Saved before the vault key existed: kept from now on under it.
+        if (opened.legacy) runCatching { save(id, opened.plain) }
+        return opened.plain
     }
 
     fun delete(id: String) { runCatching { fileFor(id).delete() } }

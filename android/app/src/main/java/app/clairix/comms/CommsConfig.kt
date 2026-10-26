@@ -33,9 +33,9 @@ class CommsConfig(context: Context) {
     /**
      * Whether notifications say only that something arrived, naming no contact
      * and quoting nothing: for a phone that is sometimes in other hands while
-     * unlocked. Until the owner chooses, it follows the passcode: set, hide.
+     * unlocked. Hidden until the owner chooses to show them.
      */
-    fun hidePreviews(passcodeSet: Boolean): Boolean = prefs.getBoolean(KEY_HIDE_PREVIEWS, passcodeSet)
+    fun hidePreviews(): Boolean = prefs.getBoolean(KEY_HIDE_PREVIEWS, true)
 
     fun setHidePreviews(hide: Boolean) { prefs.edit().putBoolean(KEY_HIDE_PREVIEWS, hide).apply() }
 
@@ -66,6 +66,11 @@ class CommsConfig(context: Context) {
 
     fun setRelayAlternates(urls: List<String>) { prefs.edit().putString(KEY_ALTERNATES, JSONArray(urls).toString()).apply() }
 
+    /** The relay's onion address as it last told this phone (`http://….onion`), or null; see [RelayClient.info]. */
+    val relayOnion: String? get() = prefs.getString(KEY_ONION, null)
+
+    fun setRelayOnion(url: String?) { prefs.edit().putString(KEY_ONION, url).apply() }
+
     /** An endpoint the relay is checking: in use once the code it pushed through it is echoed. */
     val pendingPush: String? get() = prefs.getString(KEY_PUSH_PENDING, null)
 
@@ -83,6 +88,11 @@ class CommsConfig(context: Context) {
 
     fun setFallbackRotatedAt(ts: Long) { prefs.edit().putLong(KEY_FALLBACK_ROTATED, ts).apply() }
 
+    /** When the sealing prekey last accepted by the relay was made (0 when none was): a newer one is still to be published. */
+    val prekeyPublished: Long get() = prefs.getLong(KEY_PREKEY_PUBLISHED, 0L)
+
+    fun setPrekeyPublished(createdMs: Long) { prefs.edit().putLong(KEY_PREKEY_PUBLISHED, createdMs).apply() }
+
     fun saveRegistration(relayUrl: String, number: String, name: String, listed: Boolean) {
         prefs.edit()
             .putString(KEY_RELAY, relayUrl.trimEnd('/'))
@@ -90,6 +100,9 @@ class CommsConfig(context: Context) {
             .putString(KEY_NAME, name)
             .putBoolean(KEY_LISTED, listed)
             .remove(KEY_PUSH)
+            // Another relay's addresses are no use for this one.
+            .remove(KEY_ALTERNATES)
+            .remove(KEY_ONION)
             .apply()
     }
 
@@ -122,10 +135,12 @@ class CommsConfig(context: Context) {
         const val KEY_PUSH_PENDING = "push_endpoint_pending"
         const val KEY_ONLINE_DEFAULT = "online_default_applied"
         const val KEY_FALLBACK_ROTATED = "fallback_rotated_at"
+        const val KEY_PREKEY_PUBLISHED = "prekey_published"
         const val KEY_HIDE_PREVIEWS = "hide_previews"
         const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
         const val KEY_COVER_TRAFFIC = "cover_traffic"
         const val KEY_ALTERNATES = "relay_alternates"
+        const val KEY_ONION = "relay_onion"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"
@@ -169,11 +184,17 @@ class StoredTokenKeyPins(context: Context) : MemoryTokenKeyPins() {
     private val prefs = context.applicationContext.getSharedPreferences("comms_tokens", Context.MODE_PRIVATE)
 
     init {
-        prefs.getString(KEY, null)?.let { load(it) }
+        prefs.getString(KEY, null)?.let { stored ->
+            // Sealed under the Keystore key: the pins name the relay and show
+            // which epochs this phone was active in. One kept in the clear by
+            // an earlier version is read once and sealed on the next change.
+            val json = runCatching { KeystoreBox.decryptString(Base64.decode(stored, Base64.NO_WRAP)) }.getOrNull() ?: stored
+            load(json)
+        }
     }
 
     override fun changed() {
-        prefs.edit().putString(KEY, encode()).apply()
+        prefs.edit().putString(KEY, Base64.encodeToString(KeystoreBox.encryptString(encode()), Base64.NO_WRAP)).apply()
     }
 
     private companion object {

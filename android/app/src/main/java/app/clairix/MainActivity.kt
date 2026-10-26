@@ -127,6 +127,13 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import app.clairix.ui.theme.ClairixMotion
 import app.clairix.ui.components.*
 import app.clairix.ui.theme.monoSmall
@@ -226,6 +233,8 @@ class MainActivity : AppCompatActivity() {
      */
     private var resumed = false
 
+    // focusProperties.enter, so focus cannot move into the app while it is locked.
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -312,10 +321,33 @@ class MainActivity : AppCompatActivity() {
                     // delivered once the user unlocks. LockScreen fills the window with
                     // an opaque background, and FLAG_SECURE (set whenever a passcode is
                     // on) keeps what is underneath out of screenshots and Recents.
+                    // Locking also drops whatever had the keyboard's focus underneath.
+                    val focusManager = LocalFocusManager.current
+                    val keyboard = LocalSoftwareKeyboardController.current
+                    LaunchedEffect(locked) {
+                        if (locked) {
+                            focusManager.clearFocus(force = true)
+                            keyboard?.hide()
+                        }
+                    }
                     Box(Modifier.fillMaxSize()) {
                         Box(
                             Modifier
                                 .fillMaxSize()
+                                // Drawn over is not enough: accessibility services (and
+                                // anything reading the window, such as uiautomator) see
+                                // the semantics tree, not pixels, and could read and act
+                                // on everything underneath; a hardware keyboard could
+                                // move focus into it. While locked, the app has no
+                                // semantics at all and focus cannot enter it.
+                                .then(
+                                    if (locked) Modifier
+                                        .clearAndSetSemantics { }
+                                        .focusProperties { enter = { FocusRequester.Cancel } }
+                                        .focusGroup()
+                                        .onPreviewKeyEvent { true }
+                                    else Modifier
+                                )
                                 // Nothing underneath the lock may be tapped through it:
                                 // every pointer event is consumed at the Initial pass,
                                 // before any child sees it, for as long as locked is true.
@@ -417,6 +449,8 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         resumed = true
         AppLock.onForeground(this)
+        // Back from Settings, perhaps having set or removed the lock screen.
+        app.clairix.comms.Vault.check()
         applyNfcMode()
         if (BuildConfig.FULL_ACCESS) refreshDeviceHealth()
         // Envelopes that arrived while the app was closed are pulled on every
@@ -2008,34 +2042,8 @@ private fun trailArgb(p: MarkerPalette, threat: Threat): Int = when (threat) {
     else -> p.subtle
 }
 
-/** Keep a downloaded tile this long past whatever the tile server's headers allow. */
-private const val TILE_EXTRA_LIFETIME_MS = 7L * 24 * 60 * 60 * 1000
-
-private var osmConfigured = false
-
-/**
- * osmdroid's global configuration, applied once per process rather than on every
- * visit to the Map tab.
- *
- * The important part is the tile lifetime. osmdroid re-requests any tile that is
- * past its expiry on every single draw of the map, and the OSM tile server hands
- * out Cache-Control lifetimes as short as fifteen minutes. Left at the default,
- * a map that had been open for a while re-downloaded its whole viewport each time
- * it was redrawn. Extending every tile's lifetime by a week keeps the map on the
- * disk cache for the areas the user actually moves through. This respects the
- * server's own headers as a minimum, as the OSM tile usage policy asks.
- *
- * Main thread only (called from composition).
- */
-private fun configureOsm(context: android.content.Context) {
-    if (osmConfigured) return
-    osmConfigured = true
-    with(OsmConfig.getInstance()) {
-        load(context, context.getSharedPreferences("osmdroid", android.content.Context.MODE_PRIVATE))
-        userAgentValue = "Clairix/${BuildConfig.VERSION_NAME}"
-        expirationExtendedDuration = TILE_EXTRA_LIFETIME_MS
-    }
-}
+/** osmdroid's global configuration, once per process: see [app.clairix.nav.MapTiles]. Main thread only (called from composition). */
+private fun configureOsm(context: android.content.Context) = app.clairix.nav.MapTiles.configure(context)
 
 @Composable
 private fun MapScreen() {

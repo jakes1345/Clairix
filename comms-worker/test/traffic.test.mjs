@@ -119,6 +119,9 @@ test("a trip pseudonym must be well formed", async () => {
 });
 
 test("provider incidents are served anonymously and count only the daily cap", async () => {
+  // Late in the UTC day, when the pacing allows the whole cap.
+  const intoDay = Date.now() % 86_400_000;
+  advance((23 * 3_600_000 - intoDay + 86_400_000) % 86_400_000);
   const relay = makeRelay({ HERE_API_KEY: "here-key", HERE_DAILY_CAP: "2" });
   const alice = await makePhone(relay);
   const tokens = await alice.tokens(4, "traffic");
@@ -167,4 +170,23 @@ test("only a region Clairix has a map for can be named, and the list is the grap
   const listed = readFileSync(new URL("../../tools/graph-builder/us-regions.txt", import.meta.url), "utf8")
     .split("\n").map((l) => l.trim()).filter(Boolean).map((l) => l.replaceAll("/", "-"));
   assert.deepEqual([...KNOWN_REGIONS].sort(), listed.sort());
+});
+
+test("voting a report away costs report tokens, needs as many votes as it had confirmations, and spares work zones", async () => {
+  resetClock();
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const traffic = await alice.tokens(2, "traffic");
+  const reports = await alice.tokens(4, "report");
+  const where = { region: REGION, type: "police", lat: 39.961, lon: -83.001, seg: null };
+  const made = await alice.traffic(reports[0], "POST", "/v1/traffic/report", { ...where, trip: trip() });
+  const id = made.json.incident.id;
+  const confirmed = await alice.traffic(traffic[0], "POST", "/v1/traffic/report/vote", { region: REGION, trip: trip(), id, still: true });
+  assert.equal(confirmed.json.incident.confirmations, 2);
+  const gone = (token) => alice.traffic(token, "POST", "/v1/traffic/report/vote", { region: REGION, trip: trip(), id, still: false });
+  assert.equal((await gone(traffic[1])).status, 403, "a traffic token does not buy a vote against a report");
+  // Net votes: one still, then gone, gone, gone: net 2 is not yet its 2 confirmations plus the still vote.
+  assert.notEqual((await gone(reports[1])).json.incident, null);
+  assert.notEqual((await gone(reports[2])).json.incident, null);
+  assert.equal((await gone(reports[3])).json.incident, null);
 });

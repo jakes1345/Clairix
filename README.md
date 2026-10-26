@@ -73,9 +73,13 @@ and saved cards are sealed on disk under keys in the phone's secure hardware, so
 copy of the app's files is ciphertext. The app lock wipes after a run of wrong
 passcodes (three by default; you can choose the number, or none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
-Clairix" page wipes on demand. Locking collapses every notification into
+Clairix" page wipes on demand; a wipe deletes the keys first, so cutting it
+short leaves only ciphertext. Locking collapses every notification into
 "Unlock to read", stops read receipts, disarms a card armed for NFC readers,
-and every screen is kept out of screenshots and the recents thumbnail. History
+and hides the app from accessibility services as well as the eye; it locks the
+moment the screen goes off. On a locked phone notifications show only that
+something came (previews are hidden by default), and every screen is kept out
+of screenshots and the recents thumbnail. History
 older than the retention you choose (30 days by default) is deleted, so there
 is less to give up in the first place.
 

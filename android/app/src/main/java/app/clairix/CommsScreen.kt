@@ -90,6 +90,8 @@ import app.clairix.comms.GroupMember
 import app.clairix.comms.GroupThread
 import app.clairix.comms.MediaBody
 import app.clairix.comms.OrgRole
+import app.clairix.comms.RelayDirectory
+import app.clairix.comms.TorTransport
 import app.clairix.comms.STATUS_CALL
 import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
@@ -448,6 +450,12 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
     var name by rememberSaveable { mutableStateOf("") }
     var listed by rememberSaveable { mutableStateOf(true) }
     var inviteError by remember(linkError) { mutableStateOf(linkError) }
+    val context = LocalContext.current
+    val relayList by RelayDirectory.list.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { RelayDirectory.current(context) }
+        RelayDirectory.refreshIfStale(context)
+    }
     val takeInvite: (PairingCode?) -> Unit = { code ->
         when {
             code == null -> inviteError = "That is not a Clairix invite."
@@ -475,7 +483,8 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 Text("${formatClairixNumber(invite.number)} · ${invite.relayUrl.removePrefix("https://")}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
                 Text(
                     "This phone makes its own keys and gets its own Clairix number on their relay. " +
-                        "${invite.name.ifBlank { "They" }} will be in your contacts, verified, with a first message telling them you joined.",
+                        "${invite.name.ifBlank { "They" }} will be in your contacts, with a first message telling them you joined. " +
+                        "Compare safety numbers with them, or scan their code, to verify them.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -529,11 +538,39 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             inviteError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
 
+        relayList?.relays?.takeIf { it.isNotEmpty() }?.let { relays ->
+            ClairixCard {
+                Text("Relays you can join", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(
+                    "From the Clairix relay list. Pick one run somewhere you trust: its operator and host can be ordered " +
+                        "to hand over what the relay holds (never your messages, which it cannot read). Clairix checks the " +
+                        "relay still has the key the list gives it before registering.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                for (relay in relays) {
+                    HorizontalDivider(color = ClairixTheme.colors.border)
+                    Text(relay.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                    Text("${relay.country} · ${relay.host}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text("Run by ${relay.operator}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text(relay.url.removePrefix("https://"), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                    relay.join?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) }
+                    SecondaryButton(
+                        if (url.trim().trimEnd('/') == relay.url) "Selected below" else "Use this relay",
+                        onClick = { url = relay.url },
+                        enabled = url.trim().trimEnd('/') != relay.url,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
         ClairixCard {
-            Text("Or run your own relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            Text("Or enter a relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
-                "Deploy comms-worker from the Clairix repository to Cloudflare, then enter its URL and the enrollment " +
-                    "secret you set. This phone generates its keys here, never shares the private half, and the relay " +
+                "Run comms-worker from the Clairix repository (on Cloudflare, or on a server of your own with " +
+                    "selfhost/install.sh) or pick a relay above, then enter its URL and the enrollment " +
+                    "secret. This phone generates its keys here, never shares the private half, and the relay " +
                     "hands it a random nine-digit Clairix number. Clairix then keeps a quiet background connection to the " +
                     "relay so messages arrive and calls ring while it's closed; Online in Comms settings switches that off.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1002,7 +1039,7 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
     val scan = rememberCodeScanner { code ->
         if (code == null) { error = "That is not a Clairix code"; return@rememberCodeScanner }
         scope.launch {
-            CommsRepository.addContactFromCode(code, name.takeIf { it.isNotBlank() })
+            CommsRepository.addContactFromCode(code, name.takeIf { it.isNotBlank() }, CommsRepository.CodeSource.SCANNED)
                 .onSuccess { onAdded(it.number) }
                 .onFailure { error = it.message }
         }
@@ -1921,7 +1958,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
             code == null -> error = "That is not a Clairix code"
             code.number != c.number -> error = "That code belongs to ${formatClairixNumber(code.number)}, not this contact"
             else -> scope.launch {
-                CommsRepository.addContactFromCode(code, name).onFailure { error = it.message }
+                CommsRepository.addContactFromCode(code, name, CommsRepository.CodeSource.SCANNED_FOR_CONTACT).onFailure { error = it.message }
             }
         }
     }
@@ -2054,7 +2091,8 @@ private fun InviteScreen(onBack: () -> Unit) {
             Text("Invite someone to Clairix", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "An invite lets one person get a Clairix number on your relay without the relay URL or its enrollment secret. " +
-                    "It works once and expires after seven days. They start with you as a verified contact, and you get a message when they join.",
+                    "It works once and expires after seven days. They start with you as a contact, and you get a message when they join; " +
+                    "compare safety numbers with them to verify each other.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -2121,7 +2159,8 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
                 Text(
                     if (mine) "This invite is for someone who does not have Clairix yet. Send them the link."
                     else "This phone already has a Clairix number, so the invite is not needed. You can add " +
-                        "${formatClairixNumber(code.number)} as a verified contact from it; the invite stays unused.",
+                        "${formatClairixNumber(code.number)} as a contact from it; the invite stays unused. A link could have been changed " +
+                        "on the way, so compare safety numbers with them, or scan their code, to verify them.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -2133,7 +2172,7 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
                 "Add contact",
                 onClick = {
                     scope.launch {
-                        CommsRepository.addContactFromCode(code.copy(invite = null))
+                        CommsRepository.addContactFromCode(code.copy(invite = null), source = CommsRepository.CodeSource.LINK)
                             .onSuccess { onDone(); onAdded(it.number) }
                             .onFailure { error = it.message }
                     }
@@ -2272,6 +2311,27 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 onCheckedChange = { CommsRepository.setOnline(it) },
                 subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way."
             )
+            var tor by remember { mutableStateOf(TorTransport.enabled) }
+            val torState by TorTransport.state.collectAsStateWithLifecycle()
+            ToggleRow(
+                title = "Connect through Tor",
+                checked = tor,
+                onCheckedChange = { on -> tor = on; TorTransport.setEnabled(on) },
+                subtitle = "Everything Clairix says to relays goes through Tor, so no relay, this one or another, learns this " +
+                    "phone's network address, and the network it is on does not learn which relay it uses. Nothing goes out " +
+                    "directly while Tor is connecting. Slower, and uses more data. Calls do not go through Tor: during a call " +
+                    "the relay's call server sees this phone's address (and so does the contact, unless Relay-only calls is on)."
+            )
+            if (tor) {
+                val (line, tone) = when (val s = torState) {
+                    TorTransport.State.Off -> "Off" to ClairixTheme.colors.textSubtle
+                    is TorTransport.State.Starting -> "Connecting to Tor… ${s.percent}%" to ClairixTheme.colors.textMuted
+                    TorTransport.State.Ready -> "Connected through Tor" to ClairixTheme.colors.accent
+                    is TorTransport.State.Blocked -> "Tor is stuck at ${s.percent}%: ${s.reason}" to ClairixTheme.colors.danger
+                    is TorTransport.State.Failed -> "Tor did not start: ${s.reason}" to ClairixTheme.colors.danger
+                }
+                Text(line, style = MaterialTheme.typography.bodySmall, color = tone)
+            }
             var hidePreviews by remember { mutableStateOf(CommsNotifications.hidePreviews(context)) }
             ToggleRow(
                 title = "Hide names and previews in notifications",

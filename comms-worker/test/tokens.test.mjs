@@ -153,3 +153,21 @@ test("tokens from before Beta 6 still work alongside", async () => {
   assert.equal((await alice.send(old, bob.number)).status, 202);
   assert.equal((await alice.send(tokens[0], bob.number)).status, 202);
 });
+
+test("a blind token has one spelling: the spare bits of its last character cannot make it four", async () => {
+  resetClock();
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const { tokens } = await blindTokens(relay, alice, 1);
+  const [, epoch, input, output] = tokens[0].split(".");
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const last = alphabet.indexOf(input[42]);
+  const statuses = [];
+  for (let low = 0; low < 4; low++) {
+    const spelling = input.slice(0, 42) + alphabet[(last & ~3) | low];
+    statuses.push((await alice.send(`2.${epoch}.${spelling}.${output}`, bob.number)).status);
+  }
+  assert.equal(statuses.filter((s) => s === 202).length, 1, String(statuses));
+  assert.equal((await bob.inbox()).length, 1);
+});

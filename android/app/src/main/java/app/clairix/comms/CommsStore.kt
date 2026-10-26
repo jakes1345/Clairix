@@ -3,8 +3,11 @@ package app.clairix.comms
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import net.zetetic.database.sqlcipher.SQLiteConnection
 import net.zetetic.database.sqlcipher.SQLiteDatabase
+import net.zetetic.database.sqlcipher.SQLiteDatabaseHook
 import net.zetetic.database.sqlcipher.SQLiteOpenHelper
+import uniffi.clairix_comms_crypto.SealingPrekey
 
 /**
  * Contacts, conversations and the outbox, in the app's private database.
@@ -20,8 +23,23 @@ class CommsStore(
     /** The database file; another name only in tests, which must not touch the app's own. */
     name: String = CommsDb.NAME
 ) : SQLiteOpenHelper(
-    context.applicationContext, name, CommsDb.password(context, DB_VERSION, name), null, DB_VERSION, 0, null, null, false
+    context.applicationContext, name, CommsDb.password(context, DB_VERSION, name), null, DB_VERSION, 0, null, WaitForTheLock, false
 ) {
+
+    /**
+     * A write in flight on the store the vault just closed (the last of an
+     * envelope being handled as the screen went off) holds the file's lock
+     * for a moment. The store the unlock opens waits for it rather than fail
+     * at once: from the first statement, which is SQLCipher checking the key
+     * (`SELECT COUNT(*) FROM sqlite_schema`) right after this hook runs, so
+     * before onConfigure could set it (SoakTest, API 33: "database is locked").
+     */
+    private object WaitForTheLock : SQLiteDatabaseHook {
+        override fun preKey(connection: SQLiteConnection) {}
+        override fun postKey(connection: SQLiteConnection) {
+            connection.executeForLong("PRAGMA busy_timeout = $BUSY_TIMEOUT_MS", null, null)
+        }
+    }
 
     /**
      * Deleted rows are overwritten, not just unlinked: a disappearing message, a
@@ -32,6 +50,68 @@ class CommsStore(
         super.onConfigure(db)
         db.rawQuery("PRAGMA secure_delete = ON", null).use { it.moveToFirst() }
     }
+
+    /**
+     * Closed when the vault sealed. SQLiteOpenHelper would quietly open the
+     * file again for anyone still holding this store (a send that began just
+     * before the screen went off), alongside the store the next unlock opens:
+     * two connections, and the newer one found the file locked (SoakTest, API
+     * 33). A closed store stays closed; using it reads as the vault being
+     * sealed, which every caller already handles.
+     */
+    @Volatile
+    private var closed = false
+
+    override fun close() {
+        closed = true
+        // A transaction under way is let finish first. Closed under it, every
+        // statement after, the rollback included, failed with "attempt to
+        // re-open an already-closed object", so its connection was never let
+        // go and kept the file's write lock for good: every store opened
+        // after found the file locked (SoakTest, API 33, round 190).
+        inUse.writeLock().lock()
+        try {
+            super.close()
+        } finally {
+            inUse.writeLock().unlock()
+        }
+    }
+
+    /** Held (shared) by every transaction under way; [close] takes it whole. */
+    private val inUse = java.util.concurrent.locks.ReentrantReadWriteLock()
+
+    /** Starts a write transaction that [close] waits for; end it with [endWrite]. */
+    private fun beginWrite(): SQLiteDatabase {
+        inUse.readLock().lock()
+        try {
+            val db = writableDatabase
+            db.beginTransaction()
+            return db
+        } catch (e: Throwable) {
+            inUse.readLock().unlock()
+            throw e
+        }
+    }
+
+    private fun endWrite(db: SQLiteDatabase) {
+        try {
+            db.endTransaction()
+        } finally {
+            inUse.readLock().unlock()
+        }
+    }
+
+    override val readableDatabase: SQLiteDatabase
+        get() {
+            if (closed) throw VaultSealedException()
+            return super.readableDatabase
+        }
+
+    override val writableDatabase: SQLiteDatabase
+        get() {
+            if (closed) throw VaultSealedException()
+            return super.writableDatabase
+        }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -86,6 +166,7 @@ class CommsStore(
         createVersion6(db)
         createVersion7(db)
         createVersion8(db)
+        createVersion9(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -98,6 +179,22 @@ class CommsStore(
         if (oldVersion < 6) createVersion6(db)
         if (oldVersion < 7) createVersion7(db)
         if (oldVersion < 8) createVersion8(db)
+        if (oldVersion < 9) createVersion9(db)
+    }
+
+    /**
+     * Each contact's current sealing prekey (envelope format 3), as last
+     * fetched and checked: envelopes to them are sealed to it.
+     */
+    private fun createVersion9(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS prekeys (
+                number TEXT PRIMARY KEY,
+                key TEXT NOT NULL,
+                created INTEGER NOT NULL,
+                signature TEXT NOT NULL
+            )"""
+        )
     }
 
     /**
@@ -272,14 +369,13 @@ class CommsStore(
             put("added_ts", c.addedTs)
             if (c.relay != null) put("relay", c.relay) else putNull("relay")
         }
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val updated = db.update("contacts", values, "number = ?", arrayOf(c.number))
             if (updated == 0) db.insertOrThrow("contacts", null, values)
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -303,20 +399,45 @@ class CommsStore(
     /** Deletes everything about [number]; returns the ids of its media messages so their files can go too. */
     fun deleteContact(number: String): List<String> {
         val media = mediaIds(number)
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             db.delete("receipts", "peer = ?", arrayOf(number))
             for (id in media) db.delete("media_chunks", "id = ?", arrayOf(id))
             db.delete("messages", "peer = ?", arrayOf(number))
             db.delete("transactions", "peer = ?", arrayOf(number))
             db.delete("quarantine", "peer = ?", arrayOf(number))
+            db.delete("prekeys", "number = ?", arrayOf(number))
             db.delete("contacts", "number = ?", arrayOf(number))
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
         return media
+    }
+
+    // ── Sealing prekeys ──────────────────────────────────────────────────
+
+    /** [number]'s sealing prekey as last fetched, or null when none is known. */
+    fun prekey(number: String): SealingPrekey? =
+        readableDatabase.query("prekeys", arrayOf("key", "created", "signature"), "number = ?", arrayOf(number), null, null, null).use { c ->
+            if (!c.moveToFirst()) null else SealingPrekey(c.getString(0), c.getLong(1), c.getString(2))
+        }
+
+    /**
+     * Keeps [prekey] as [number]'s when it is newer than the one held; returns
+     * whether it was. The caller has checked its signature.
+     */
+    fun setPrekey(number: String, prekey: SealingPrekey): Boolean {
+        val held = prekey(number)
+        if (held != null && held.createdMs >= prekey.createdMs) return false
+        val values = ContentValues().apply {
+            put("number", number)
+            put("key", prekey.key)
+            put("created", prekey.createdMs)
+            put("signature", prekey.signature)
+        }
+        writableDatabase.insertWithOnConflict("prekeys", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        return true
     }
 
     // ── Messages ─────────────────────────────────────────────────────────
@@ -370,6 +491,17 @@ class CommsStore(
         }
 
     /** Whether the inbound message [id] has been read; null when there is no such message. */
+    /** Replaces the text of message [id]. */
+    fun setMessageBody(id: String, body: String) {
+        writableDatabase.update("messages", ContentValues().apply { put("body_enc", KeystoreBox.encryptString(body)) }, "id = ?", arrayOf(id))
+    }
+
+    /** Whether message [id] is here, but not as one received from [peer] in their conversation. */
+    fun belongsElsewhere(id: String, peer: String): Boolean =
+        readableDatabase.rawQuery("SELECT peer, direction FROM messages WHERE id = ?", arrayOf(id)).use { c ->
+            c.moveToFirst() && (c.getString(0) != peer || c.getString(1) != Direction.IN.name)
+        }
+
     fun isRead(id: String): Boolean? =
         readableDatabase.rawQuery("SELECT read FROM messages WHERE id = ?", arrayOf(id)).use { c ->
             if (c.moveToFirst()) c.getInt(0) != 0 else null
@@ -406,8 +538,7 @@ class CommsStore(
      * chunks go too. Returns how many.
      */
     fun expireStaleMedia(olderThan: Long): Int {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val ids = db.rawQuery(
                 "SELECT id FROM messages WHERE kind = ? AND direction = 'IN' AND status = ? AND ts < ?",
@@ -424,7 +555,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return ids.size
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -447,8 +578,7 @@ class CommsStore(
         if (ids.isEmpty()) return
         val rank = mapOf("queued" to 0, "sent" to 1, "delivered" to 2, "read" to 3)
         val target = rank[status] ?: return
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (id in ids) {
                 val current = db.rawQuery("SELECT status FROM messages WHERE id = ? AND peer = ? AND direction = 'OUT'", arrayOf(id, peer)).use { c ->
@@ -461,7 +591,7 @@ class CommsStore(
             }
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -515,8 +645,7 @@ class CommsStore(
      * neither marked read unseen nor left out of the receipt.
      */
     fun markRead(peer: String): List<String> {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             // A photo still arriving is neither shown nor receipted yet; it is read once it is whole.
             val ids = db.rawQuery(
@@ -534,7 +663,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return ids
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -582,8 +711,7 @@ class CommsStore(
     /** Deletes the group, its roster, its conversation and the threats shared in it; returns the ids of its media messages. */
     fun deleteGroup(id: String): List<String> {
         val media = mediaIds(id)
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (m in media) db.delete("media_chunks", "id = ?", arrayOf(m))
             db.delete("messages", "gid = ? OR peer = ?", arrayOf(id, id))
@@ -592,7 +720,7 @@ class CommsStore(
             db.delete("groups", "id = ?", arrayOf(id))
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
         return media
     }
@@ -706,11 +834,14 @@ class CommsStore(
      * the later). Returns true when it changed anything.
      */
     fun setTimer(peer: String, ttl: Int, ts: Long): Boolean {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
+            // A change stored with a time still ahead (dated so by a relay before
+            // times were bounded) counts as made now, so it cannot outlast the
+            // changes made after it.
+            val now = System.currentTimeMillis() + 60_000L
             val current = db.rawQuery("SELECT ttl, ts FROM timers WHERE peer = ?", arrayOf(peer)).use { c ->
-                if (c.moveToFirst()) c.getInt(0) to c.getLong(1) else null
+                if (c.moveToFirst()) c.getInt(0) to minOf(c.getLong(1), now) else null
             }
             if (current != null && (current.second > ts || (current.second == ts && current.first == ttl))) return false
             if (current == null && ttl == 0) return false
@@ -718,7 +849,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return current?.first != ttl
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -728,8 +859,7 @@ class CommsStore(
      * notifications can go too.
      */
     fun expireMessages(now: Long): List<Triple<String, String, String>> {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val gone = db.rawQuery(
                 "SELECT id, peer, kind FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?", arrayOf(now.toString())
@@ -745,7 +875,7 @@ class CommsStore(
             db.setTransactionSuccessful()
             return gone
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -917,8 +1047,7 @@ class CommsStore(
      * but unprocessed. False when it was already seen.
      */
     fun markSeenAndStage(key: String, ts: Long, senderCurve25519: String, senderEd25519: String, payload: String): Boolean {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val seen = ContentValues().apply { put("id", key); put("ts", ts) }
             if (db.insertWithOnConflict("seen_envelopes", null, seen, SQLiteDatabase.CONFLICT_IGNORE) == -1L) return false
@@ -932,7 +1061,7 @@ class CommsStore(
             db.insertWithOnConflict("pending_inbound", null, staged, SQLiteDatabase.CONFLICT_REPLACE)
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
         purgeSeen()
         return true
@@ -954,8 +1083,7 @@ class CommsStore(
     /** Records that [peer] is owed a receipt for [ids]; "read" replaces "delivered", never the reverse. */
     fun queueReceipt(peer: String, ids: List<String>, status: String) {
         if (ids.isEmpty()) return
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (id in ids) {
                 db.execSQL(
@@ -966,7 +1094,7 @@ class CommsStore(
             }
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -986,13 +1114,12 @@ class CommsStore(
 
     /** Forgets receipts that went out (or can never go); a receipt upgraded to "read" meanwhile stays. */
     fun clearReceipts(peer: String, ids: List<String>, status: String) {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             for (id in ids) db.delete("receipts", "peer = ? AND id = ? AND status = ?", arrayOf(peer, id, status))
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1039,8 +1166,7 @@ class CommsStore(
      * At most [limit] are held per contact: past that the oldest go.
      */
     fun quarantine(id: String, peer: String, curve: String, ts: Long, payload: String, limit: Int) {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             val values = ContentValues().apply {
                 put("id", id)
@@ -1056,7 +1182,7 @@ class CommsStore(
             )
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1096,8 +1222,7 @@ class CommsStore(
     }
 
     fun clearAll() {
-        val db = writableDatabase
-        db.beginTransaction()
+        val db = beginWrite()
         try {
             db.delete("quarantine", null, null)
             db.delete("messages", null, null)
@@ -1113,7 +1238,7 @@ class CommsStore(
             db.delete("timers", null, null)
             db.setTransactionSuccessful()
         } finally {
-            db.endTransaction()
+            endWrite(db)
         }
     }
 
@@ -1156,6 +1281,7 @@ class CommsStore(
     private fun alive(): String = "(expires_at IS NULL OR expires_at > ${System.currentTimeMillis()})"
 
     private companion object {
-        const val DB_VERSION = 8
+        const val DB_VERSION = 9
+        const val BUSY_TIMEOUT_MS = 10_000
     }
 }

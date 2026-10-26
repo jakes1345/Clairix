@@ -1,5 +1,6 @@
 import { verifyEd25519 } from "./auth";
 import { base64ToBytes, HttpError, sha256Hex, type Env } from "./env";
+import { readTextCapped } from "./traffic-logic";
 
 /**
  * Federation: Clairix numbers on different relays reaching each other.
@@ -41,18 +42,42 @@ export const RELAY_KEY_TTL_MS = 24 * 60 * 60_000;
 /** A key that fails to verify is fetched again, but no more often than this. */
 export const RELAY_KEY_REFETCH_MS = 10 * 60_000;
 const FORWARD_TIMEOUT_MS = 10_000;
+/** The most of another relay's answer that is read: a key, a bundle or a status is far smaller. */
+const RELAY_KEY_MAX_BYTES = 4 * 1024;
+const FORWARD_REPLY_MAX_BYTES = 64 * 1024;
+/** Fetches of relays' keys, for this whole relay: new relays are rare, and each fetch is a request to an address a stranger named. */
+export const KEY_FETCHES_PER_MINUTE = 30;
+export const KEY_FETCHES_BURST = 60;
+/** An address whose key could not be fetched is not tried again for this long. */
+export const KEY_FETCH_FAILED_MS = 10 * 60_000;
 
 /** Per other relay, for everyone on it together. */
 export const FED_SENDS_PER_MINUTE = 600;
 export const FED_SENDS_BURST = 1_200;
-/** Per other relay and recipient: one relay alone cannot reach a mailbox's allowance for other relays. */
+/**
+ * Per other relay and recipient, checked before anything about the number is
+ * looked up, so the refusal (a 429 the phone waits out) is alike for numbers
+ * that exist and ones that do not. At most the burst plus an hour of refill,
+ * 2,100, in any clock hour: about a third of what the recipient's mailbox takes
+ * from other relays (mailbox.ts FED_INBOUND_BURST), past which envelopes are
+ * dropped without a word. So one relay alone never meets that drop, nor
+ * crowds out the mailbox owner's contacts on other relays.
+ */
 export const FED_SENDS_PER_TARGET_PER_MINUTE = 30;
-export const FED_SENDS_PER_TARGET_BURST = 60;
+/** A photo is one envelope per 30 KiB chunk, a few MB a hundred of them: one goes through at once. */
+export const FED_SENDS_PER_TARGET_BURST = 300;
 export const FED_LOOKUPS_PER_MINUTE = 120;
 export const FED_LOOKUPS_BURST = 240;
 /** One-time keys any one other relay may claim, per hour across all numbers here. */
 export const FED_CLAIMS_PER_HOUR = 600;
 export const FED_CLAIMS_BURST = 120;
+
+/**
+ * How long a relay counts as one people here write to after the last time one
+ * did. Mail from relays no one here has written to in that time draws on a
+ * small allowance of its own in each mailbox (mailbox.ts).
+ */
+export const WRITTEN_TO_DAYS = 90;
 
 export type FederationPolicy = { mode: "off" } | { mode: "open" } | { mode: "allow"; origins: Set<string> };
 
@@ -101,8 +126,11 @@ export function relayOrigin(value: unknown, loopback = false): string | null {
   }
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return null;
   if ((url.pathname !== "/" && url.pathname !== "") || url.search !== "" || url.hash !== "") return null;
+  // Port 443 only: a relay is a web service, and any other port would let a
+  // request name a service that is not one (and count as another relay).
+  if (url.port !== "") return null;
   const host = url.hostname.toLowerCase();
-  if (host.length === 0 || host.startsWith("[") || /^[0-9.]+$/.test(host) || !host.includes(".")) return null;
+  if (host.length === 0 || host.startsWith("[") || /^[0-9.]+$/.test(host) || !host.includes(".") || host.endsWith(".")) return null;
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return null;
   return url.origin.toLowerCase();
 }
@@ -209,7 +237,13 @@ function randomNonce(): string {
  * Returns the other relay's status and JSON body; a relay that cannot be
  * reached is a 502.
  */
-export async function forward(env: Env, request: Request, target: string, path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+export async function forward(
+  env: Env,
+  request: Request,
+  target: string,
+  path: string,
+  body: unknown,
+): Promise<{ status: number; json: Record<string, unknown>; retryAfter?: number }> {
   const key = await relayKey(env);
   if (!key) throw new HttpError(501, "This relay does not reach other relays: its operator has turned federation off");
   const origin = ownOrigin(env, request);
@@ -236,7 +270,7 @@ export async function forward(env: Env, request: Request, target: string, path: 
   } catch {
     throw new HttpError(502, "The other relay did not answer");
   }
-  const raw = await res.text().catch(() => "");
+  const raw = (await readTextCapped(res.body, res.headers.get("content-length"), FORWARD_REPLY_MAX_BYTES).catch(() => null)) ?? "";
   let json: Record<string, unknown> = {};
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -244,7 +278,18 @@ export async function forward(env: Env, request: Request, target: string, path: 
   } catch {
     // not JSON
   }
-  return { status: res.status, json };
+  // A refusal's Retry-After is passed back to the phone, which waits that long.
+  const retryAfter = Number.parseInt(res.headers.get("retry-after") ?? "", 10);
+  return { status: res.status, json, ...(retryAfter > 0 && retryAfter <= 3600 ? { retryAfter } : {}) };
+}
+
+/**
+ * Records that a phone here wrote to (or looked someone up on) the relay at
+ * [target], after it answered. Only that the relay was written to, on which
+ * day: not by whom, nor to which number.
+ */
+export async function noteWrittenTo(env: Env, target: string): Promise<void> {
+  await env.MAILBOX.get(env.MAILBOX.idFromName(await federationObjectName(target))).noteWrittenTo();
 }
 
 // ── Receiving ─────────────────────────────────────────────────────────────
@@ -284,13 +329,34 @@ export async function fetchRelayKey(origin: string): Promise<string | null> {
       redirect: "manual",
       signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
     });
-    if (!res.ok) return null;
-    const info = (await res.json()) as { relayKey?: unknown };
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+    const text = await readTextCapped(res.body, res.headers.get("content-length"), RELAY_KEY_MAX_BYTES);
+    if (text === null) return null;
+    const info = JSON.parse(text) as { relayKey?: unknown };
     if (typeof info.relayKey !== "string") return null;
     return base64ToBytes(info.relayKey).length === 32 ? info.relayKey : null;
   } catch {
     return null;
   }
+}
+
+const failedFetches = new Map<string, number>();
+
+/** Whether fetching [origin]'s key failed within [KEY_FETCH_FAILED_MS], in this isolate. */
+export function keyFetchFailedRecently(origin: string, now = Date.now()): boolean {
+  const at = failedFetches.get(origin);
+  if (at === undefined) return false;
+  if (now - at < KEY_FETCH_FAILED_MS) return true;
+  failedFetches.delete(origin);
+  return false;
+}
+
+export function noteKeyFetchFailed(origin: string, now = Date.now()): void {
+  if (failedFetches.size >= 4096) failedFetches.clear();
+  failedFetches.set(origin, now);
 }
 
 export async function verifyFederated(publicKey: string, req: FederatedRequest): Promise<boolean> {

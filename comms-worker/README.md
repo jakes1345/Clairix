@@ -87,6 +87,12 @@ verifiable tokens (`src/tokens.ts`).
 3. The phone checks the proof against that published key, the same for every
    caller, and against the first key it saw that epoch; a relay that gave one
    phone a key of its own (and so could recognise its tokens) is refused.
+   `GET /` also publishes the next epoch's keys (`tokens.next`), so a phone has
+   pinned them long before it is issued any tokens under them, on a request
+   that names nobody. It accepts only an epoch its own clock agrees with
+   (this one or a neighbour), never reads the keys straight after asking for
+   tokens, and never asks a relay that once issued blind tokens for the old
+   kind again.
 4. Spending a token shows `2.<epoch>.<input>.<output>` in `X-Clairix-Token`.
    The relay checks the output is what its key makes of the input and records
    the token as spent; it never saw the input before, so it cannot tell whose
@@ -126,6 +132,14 @@ five minutes, and each of its keys may belong to one account at a time, so a
 captured registration (it carries the secret) cannot be replayed into a second
 account, and nobody can register someone else's key as their own. Two people pair by scanning each other's QR code in
 person, or by typing a listed Clairix number and then comparing safety numbers.
+
+### How much each account may send
+
+Every envelope a phone sends spends one delivery token, and each account is
+issued 1,000 an hour (a 5 MB video is 171 envelopes). An operator whose
+people send more, or who wants tighter limits, sets `DELIVERY_TOKENS_PER_HOUR`
+to a whole number from 1 to 100000. A phone that has spent its hour's tokens
+keeps what it sends queued and sends it when the next hour's arrive.
 
 ### Several doors to one relay
 
@@ -199,6 +213,14 @@ What each side learns:
   For a contact on the same relay it learns as much from the recipient alone.
 - Each relay holds the other to a limit for all its phones together: 600
   envelopes a minute, 120 lookups a minute and 600 one-time keys an hour.
+- Each mailbox takes at most 1,800 envelopes an hour from other relays
+  together, and stops 500 short of a full queue for them. A relay no phone
+  here has written to or looked a number up on in the last 90 days is a
+  stranger: strangers together get 10 at once and 30 an hour per mailbox,
+  so relays made up to flood a mailbox cannot crowd out the relays its
+  owner's contacts are on. A relay on the `FEDERATION` list is never a
+  stranger. The relay keeps the day someone last wrote to each relay, not
+  who wrote or to whom.
 
 `FEDERATION` chooses which relays may forward to this one: `open` (the
 default), `off`, or a comma-separated list of `https://` addresses. A relay
@@ -208,6 +230,47 @@ Clairix numbers are random per relay, so the same number can exist on two
 relays; the app refuses a second contact with a number it already has.
 ClairixCoin does not cross relays: each relay is its own coin community.
 
+### On your own server
+
+The same Worker runs on any Debian 12 or Ubuntu 24.04 server under
+[workerd](https://github.com/cloudflare/workerd), Cloudflare's open-source
+Workers runtime, with no Cloudflare account. From a checkout, on a server
+whose DNS name already points at it:
+
+```bash
+cd comms-worker
+sudo ./selfhost/install.sh --domain relay.example.org --email you@example.org
+```
+
+It builds the Worker (`selfhost/build.mjs`: the bundle `wrangler deploy`
+uploads, and a workerd config) and sets up:
+
+- **The relay** as the `clairix-relay` service, its Durable Objects in SQLite
+  files under `/var/lib/clairix-relay` (back this up: it holds the relay's keys
+  and every mailbox). It listens on `127.0.0.1:8787` only, and fetches public
+  addresses only, so nothing that gets it to fetch a URL (a relay address, a
+  push endpoint) reaches the server's own services.
+- **Settings** in `/etc/clairix-relay/relay.env`: every setting above, one
+  `NAME=value` a line. `ENROLL_SECRET` is generated on the first run,
+  `RELAY_ORIGIN` set to `https://<domain>` and `RELAY_ONION` to the onion
+  address.
+- **Caddy** in front, with HTTPS certificates it renews itself and no access
+  log. It sets `CF-Connecting-IP`, which the registration limit counts by, so
+  a client cannot choose its own.
+- **An onion service** (leave it out with `--no-onion`), through Caddy too: the
+  relay always sees the onion name as its host and never a client-supplied
+  address. The relay names it at `GET /` (`onion`), and phones with "Connect
+  through Tor" on use it instead of the https address.
+- **Upkeep**: systemd restarts the relay if it exits, a timer restarts it if it
+  stops answering for six minutes, another runs its scheduled work every 10
+  minutes (what `crons` does on Cloudflare), and security updates install
+  themselves, rebooting at 04:30 when one needs it.
+
+Run the script again after `git pull` to update: it keeps storage and
+settings, and swaps the new build in only once it has built. Logs:
+`journalctl -u clairix-relay`. One server holds all of a relay's Durable
+Objects; workerd does not spread them across machines.
+
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
@@ -216,8 +279,10 @@ standing next to you scans its QR code from COMMS setup (SCAN INVITE); someone
 far away gets a link, `https://<relay>/i#…`, which opens a page with the Clairix
 download and an OPEN IN CLAIRIX button. The invite registers exactly one phone,
 expires after seven days, and never reveals the enrollment secret. The new
-phone starts with the inviter as a verified contact, since the invite carries
-the inviter's keys, and sends them a first message. The part after `#` never
+phone starts with the inviter as a contact, since the invite carries the
+inviter's keys, and sends them a first message. Not a verified one: the link
+passed through other hands, and this relay serves the page that opens it, so
+the two compare safety numbers (or scan each other's code) to verify. The part after `#` never
 reaches the relay; the page reads it in the browser. Each identity can make
 20 invites a day.
 
@@ -376,17 +441,18 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | --- | --- | --- |
 | POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite`; allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
-| GET | `/` | `{service, version, alternates, relayKey, federation}`: the relay's other addresses, the public key it signs forwarded requests with, and which relays it accepts them from |
+| GET | `/` | `{service, version, alternates, relayKey, federation, tokens}`: the relay's other addresses, the public key it signs forwarded requests with, which relays it accepts them from, and its blind-token keys for this epoch and the next |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile and one-time-key count |
 | DELETE | `/v1/me` | Wipe the mailbox |
-| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key |
+| PUT | `/v1/transport` | `{key}` (or `null` to remove): the phone's transport key, a second Ed25519 key. Requests signed with it carry `X-Clairix-Key: transport` and may only `GET /v1/inbox`, `POST /v1/ack` and `GET /v1/ws`, so a locked phone collects envelopes it cannot yet open; the key reads and sends nothing |
+| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old) |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
 | POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
-| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there |
+| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |

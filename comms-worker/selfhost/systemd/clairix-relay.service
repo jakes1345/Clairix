@@ -1,0 +1,40 @@
+[Unit]
+Description=Clairix relay (workerd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clairix-relay
+Group=clairix-relay
+EnvironmentFile=/etc/clairix-relay/relay.env
+ExecStart=/opt/clairix-relay/workerd serve --experimental /opt/clairix-relay/build/relay.capnp
+Restart=always
+RestartSec=3
+StateDirectory=clairix-relay
+StateDirectoryMode=0700
+# Hardening. V8 compiles JavaScript at run time, so MemoryDenyWriteExecute
+# stays off.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
