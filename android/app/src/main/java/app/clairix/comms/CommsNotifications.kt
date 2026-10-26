@@ -197,10 +197,12 @@ object CommsNotifications {
             Intent(context, CallActionReceiver::class.java).setAction(CallActionReceiver.ACTION_LOCKED_DECLINE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        // CallStyle titles the notification with the caller's name, so this
+        // Person is the title: it names no one. The full-screen ring
+        // (LockedRingActivity) says "Incoming Clairix call".
         val caller = Person.Builder().setName("Clairix call").setImportant(true).build()
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentTitle("Incoming Clairix call")
             .setContentText("Unlock to answer")
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
             .setCategory(NotificationCompat.CATEGORY_CALL)

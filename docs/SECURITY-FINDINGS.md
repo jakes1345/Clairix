@@ -619,9 +619,9 @@ Open from the second review, each a design change rather than a fix:
   Envelopes that arrive meanwhile are collected with a transport key that
   can only fetch, acknowledge and stream envelopes. They wait in a locked
   inbox, still sealed to the phone, and are read on unlock. A call rings as
-  "Incoming Clairix call", naming no one: Answer unlocks and answers, Not
-  now silences it. An SOS shows as "SOS from a group member", anything else
-  as "New Clairix message".
+  "Clairix call" (full screen, "Incoming Clairix call"), naming no one:
+  Answer unlocks and answers, Not now silences it. An SOS shows as "SOS
+  from a group member", anything else as "New Clairix message".
   Limits: a call in progress keeps everything open until it ends (the screen
   goes off against a cheek). The database password lives in a Java string
   until the garbage collector reclaims it. The relay address, number and

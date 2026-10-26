@@ -207,7 +207,9 @@ class EndToEndTest {
                 manager.activeNotifications.any { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID }
             }
             val ring = manager.activeNotifications.first { it.id == CommsNotifications.LOCKED_CALL_NOTIFICATION_ID }.notification
-            assertEquals("Incoming Clairix call", ring.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString())
+            // CallStyle titles it with the caller, here a stand-in that names no one.
+            assertEquals("Clairix call", ring.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString())
+            assertEquals("Unlock to answer", ring.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
             assertTrue("no call is known yet", CallManager.call.value == null)
         } finally {
             Vault.open()
