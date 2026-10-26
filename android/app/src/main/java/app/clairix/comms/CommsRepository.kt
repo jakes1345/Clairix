@@ -222,6 +222,8 @@ object CommsRepository {
     @Volatile
     private var lastReplenishAt = 0L
     private var retryJob: Job? = null
+    /** When [retryJob] runs. */
+    @Volatile private var retryAtMs = 0L
     @Volatile private var retryBackoffMs = RETRY_MIN_MS
     private const val RETRY_MIN_MS = 5_000L
     /** The disappearing-messages sweep looks at least this often, and never sooner than [EXPIRY_MIN_WAIT_MS] apart. */
@@ -1513,16 +1515,27 @@ object CommsRepository {
      * Tries the outbox and owed receipts again after a growing pause, and on
      * every network change; after exactly [afterMs] instead when the relay said
      * how long to wait (a busy relay is not an outage, so the pause does not grow).
+     *
+     * A retry already due sooner stands; one due later gives way. The relay's
+     * "again in 2 s" used to be dropped while a retry minutes off was pending
+     * (the backoff grows to five), and a photo queued behind it waited for that
+     * one, since nothing else flushes the outbox while the owner sends nothing
+     * (SoakTest, round 330). And a retry that failed again could not schedule
+     * the next, being itself the retry still pending.
      */
+    @Synchronized
     private fun scheduleRetry(afterMs: Long? = null) {
-        if (retryJob?.isActive == true) return
-        val wait = if (afterMs != null) {
-            afterMs.coerceIn(1_000L, RETRY_MAX_MS)
-        } else {
-            retryBackoffMs.also { retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS) }
-        }
+        val wait = afterMs?.coerceIn(1_000L, RETRY_MAX_MS) ?: retryBackoffMs
+        val at = System.currentTimeMillis() + wait
+        if (retryJob?.isActive == true && retryAtMs <= at) return
+        if (afterMs == null) retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS)
+        retryJob?.cancel()
+        retryAtMs = at
         retryJob = scope.launch {
             delay(wait)
+            // Its wait is over: from here a failure schedules the next retry,
+            // which it could not while this one still counted as pending.
+            synchronized(this@CommsRepository) { if (retryJob === coroutineContext[Job]) retryJob = null }
             topUpTokens()
             flushOutbox()
             flushReceipts()

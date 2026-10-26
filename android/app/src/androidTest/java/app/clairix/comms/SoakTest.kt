@@ -59,6 +59,14 @@ class SoakTest {
                     Log.i(TAG, "to ${peer.number}: ${m.ts} ${m.status} ${m.error ?: ""} ${m.body.take(40)}")
                 }
             }
+            Log.i(TAG, "state: ${repo.state.value}")
+            // Where every thread of the app's own code stood: a send that
+            // never started is a lock or a dispatcher somebody holds.
+            for ((thread, stack) in Thread.getAllStackTraces()) {
+                if (stack.none { it.className.startsWith("app.clairix") }) continue
+                Log.i(TAG, "thread ${thread.name} ${thread.state}")
+                stack.take(25).forEach { Log.i(TAG, "    at $it") }
+            }
         }.onFailure { Log.w(TAG, "could not read the app's state: $it") }
     }
 
