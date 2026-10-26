@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Looper
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -56,7 +58,7 @@ class SmokeTest {
         device.takeScreenshot(f)
         // Secure screens (Comms) come out black, so a failure also keeps the
         // window hierarchy: what was on screen, as text.
-        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-")) {
+        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-") || name.startsWith("FROZEN")) {
             runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
         }
     }
@@ -145,25 +147,31 @@ class SmokeTest {
     /**
      * Back from [step] to a screen with [expect] on it.
      *
-     * The app always takes the Back at once (its back callback runs within
-     * 100 ms), but UiAutomator's copy of the screen can lag behind it by
-     * several seconds on a busy emulator: it went on finding the page titled
-     * [step] for four seconds after the app had left it, and a dump taken right
-     * then showed the screen behind it. Sending a second Back on that stale
-     * view took the app to the launcher. So this waits longer, and before
-     * deciding the Back was lost, takes a fresh dump and looks again.
+     * The app takes the Back at once, but going back to the Comms tab has
+     * sometimes held up its main thread: run 40258058822 drew no frame for
+     * 13.5 seconds after it (app_time_stats max=13496.96ms), while UiAutomator
+     * went on reporting the page that was left, and a second Back then closed
+     * the app. That is a freeze an owner would see, not a test problem, so
+     * nothing is pressed twice here: when the screen has not changed after
+     * three seconds, the main thread's stack is logged three times, a second
+     * apart (tag SmokeMainThread), and if the page is still up after twelve,
+     * the test fails as frozen with what the main thread was doing.
      */
     private fun backTo(step: String, expect: BySelector) {
         back(step)
-        if (device.wait(Until.hasObject(expect), 10_000)) return
+        if (device.wait(Until.hasObject(expect), 3_000)) return
+        val stacks = (1..3).map { i ->
+            val stack = Looper.getMainLooper().thread.stackTrace.joinToString("\n    at ")
+            Log.w("SmokeMainThread", "back from $step, ${2 + i}s, main thread:\n    at $stack")
+            if (i < 3) Thread.sleep(1_000)
+            stack
+        }
+        if (device.wait(Until.hasObject(expect), 7_000)) return
         // A dump reads the screen afresh; keep it either way.
         shot("BACK-SLOW-$step")
         if (device.wait(Until.hasObject(expect), 2_000)) return
-        // The page's title: drawn in capitals, described as written.
-        if (device.hasObject(By.desc(step)) || device.hasObject(By.text(step.uppercase()))) {
-            shot("BACK-IGNORED-$step")
-            back("$step (again)")
-        }
+        shot("FROZEN-$step")
+        fail("Clairix did not leave \"$step\" within 12 s of Back. Main thread, last sample:\n    at ${stacks.last()}")
     }
 
     @Test
