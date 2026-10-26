@@ -3,7 +3,9 @@ package app.clairix.comms
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import net.zetetic.database.sqlcipher.SQLiteConnection
 import net.zetetic.database.sqlcipher.SQLiteDatabase
+import net.zetetic.database.sqlcipher.SQLiteDatabaseHook
 import net.zetetic.database.sqlcipher.SQLiteOpenHelper
 import uniffi.clairix_comms_crypto.SealingPrekey
 
@@ -21,8 +23,23 @@ class CommsStore(
     /** The database file; another name only in tests, which must not touch the app's own. */
     name: String = CommsDb.NAME
 ) : SQLiteOpenHelper(
-    context.applicationContext, name, CommsDb.password(context, DB_VERSION, name), null, DB_VERSION, 0, null, null, false
+    context.applicationContext, name, CommsDb.password(context, DB_VERSION, name), null, DB_VERSION, 0, null, WaitForTheLock, false
 ) {
+
+    /**
+     * A write in flight on the store the vault just closed (the last of an
+     * envelope being handled as the screen went off) holds the file's lock
+     * for a moment. The store the unlock opens waits for it rather than fail
+     * at once: from the first statement, which is SQLCipher checking the key
+     * (`SELECT COUNT(*) FROM sqlite_schema`) right after this hook runs, so
+     * before onConfigure could set it (SoakTest, API 33: "database is locked").
+     */
+    private object WaitForTheLock : SQLiteDatabaseHook {
+        override fun preKey(connection: SQLiteConnection) {}
+        override fun postKey(connection: SQLiteConnection) {
+            connection.executeForLong("PRAGMA busy_timeout = $BUSY_TIMEOUT_MS", null, null)
+        }
+    }
 
     /**
      * Deleted rows are overwritten, not just unlinked: a disappearing message, a
@@ -32,9 +49,6 @@ class CommsStore(
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.rawQuery("PRAGMA secure_delete = ON", null).use { it.moveToFirst() }
-        // A write in flight (on the way out as the vault seals, say) holds the
-        // file's lock for a moment; wait for it rather than fail at once.
-        db.rawQuery("PRAGMA busy_timeout = $BUSY_TIMEOUT_MS", null).use { it.moveToFirst() }
     }
 
     /**
