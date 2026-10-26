@@ -196,6 +196,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       ok: true,
       note: "Clairix numbers are not phone numbers.",
       alternates: alternates(env),
+      // Phones that connect through Tor reach the relay here instead.
+      onion: onionAddress(env),
       // Other relays verify forwarded requests from this one with relayKey;
       // federation says which relays this one accepts them from.
       relayKey: key?.publicKey ?? null,
@@ -859,6 +861,17 @@ function alternates(env: Env): string[] {
     .map((s) => s.trim().replace(/\/+$/, ""))
     .filter((s) => /^https:\/\/[^\s/]+$/.test(s))
     .slice(0, 8);
+}
+
+/**
+ * This relay's onion address, from RELAY_ONION: `http://<56 characters>.onion`
+ * (a v3 onion service, as selfhost/install.sh sets up), or null. Phones that
+ * connect through Tor send everything there, so their requests never leave
+ * the Tor network.
+ */
+function onionAddress(env: Env): string | null {
+  const value = (env.RELAY_ONION ?? "").trim().replace(/\/+$/, "").toLowerCase();
+  return /^http:\/\/[a-z2-7]{56}\.onion$/.test(value) ? value : null;
 }
 
 /** A payment id the phone chose: a UUID, so nothing else names two payments alike. */

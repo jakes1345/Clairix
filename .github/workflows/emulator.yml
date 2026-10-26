@@ -101,7 +101,7 @@ jobs:
   smoke:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -116,6 +116,28 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.22.0'
+
+      # A real Tor onion service in front of relay B, as selfhost/install.sh
+      # sets one up: started first, so it is published on the Tor network long
+      # before the Tor tests look for it. Relay B names it at GET / (RELAY_ONION).
+      - name: Start an onion service for relay B
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tor > /dev/null
+          mkdir -p "$RUNNER_TEMP/tor/data" "$RUNNER_TEMP/tor/relay-b"
+          chmod 700 "$RUNNER_TEMP/tor/data" "$RUNNER_TEMP/tor/relay-b"
+          cat > "$RUNNER_TEMP/tor/torrc" <<EOF
+          SocksPort 0
+          DataDirectory $RUNNER_TEMP/tor/data
+          HiddenServiceDir $RUNNER_TEMP/tor/relay-b
+          HiddenServiceVersion 3
+          HiddenServicePort 80 127.0.0.1:8788
+          EOF
+          nohup tor -f "$RUNNER_TEMP/tor/torrc" > tor-onion.log 2>&1 &
+          for i in $(seq 1 60); do [ -s "$RUNNER_TEMP/tor/relay-b/hostname" ] && break; sleep 1; done
+          ONION_HOST="$(cat "$RUNNER_TEMP/tor/relay-b/hostname")"
+          echo "$ONION_HOST" | grep -Eq '^[a-z2-7]{56}\.onion$' || { echo "::error::Tor did not make the onion service"; cat tor-onion.log; exit 1; }
+          echo "RELAY_B_ONION=http://$ONION_HOST" >> "$GITHUB_ENV"
 
       # Two relays side by side, each with storage of its own: A under
       # `wrangler dev`, B as the self-hosted build (selfhost/) under plain
@@ -136,7 +158,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/relay-b"
           node selfhost/build.mjs --out "$RUNNER_TEMP/relay-b-build" --state "$RUNNER_TEMP/relay-b" \
             --listen 127.0.0.1:8788 --cron-listen 127.0.0.1:8790 --allow-loopback
-          ENROLL_SECRET=e2e-enrollment-secret-0123456789 MIX_MAX_MS=2000 \
+          ENROLL_SECRET=e2e-enrollment-secret-0123456789 MIX_MAX_MS=2000 RELAY_ONION="$RELAY_B_ONION" \
             nohup node_modules/.bin/workerd serve --experimental "$RUNNER_TEMP/relay-b-build/relay.capnp" \
             > ../relay-b.log 2>&1 &
           for port in 8787 8788; do
@@ -144,6 +166,7 @@ jobs:
             curl -sf "http://127.0.0.1:$port/" || { echo "::error::The relay on $port did not start"; cat ../relay-*.log; exit 1; }
             echo
           done
+          curl -sf http://127.0.0.1:8788/ | grep -q "\"onion\":\"$RELAY_B_ONION\"" || { echo "::error::Relay B does not name its onion address"; exit 1; }
 
       - name: Fetch the APKs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -294,16 +317,19 @@ jobs:
 
       # The app over the real Tor network (Arti on the phone, through its own
       # SOCKS proxy): requests come out of Tor, the listed relay answers with
-      # its listed key, and with Tor on but its proxy gone nothing goes out.
+      # its listed key, the app keeps working with relay B reachable only at
+      # its onion address, and with Tor on but its proxy gone nothing goes out.
       - name: Run the Tor tests
         working-directory: android
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: |
           ADB="$ANDROID_HOME/platform-tools/adb"
           "$ADB" logcat -c
           set +e
-          timeout 800 "$ADB" shell am instrument -w -r \
+          timeout 1400 "$ADB" shell am instrument -w -r \
             -e class app.clairix.comms.TorDeviceTest -e tor true \
+            -e onionRelay http://127.0.0.1:8788 -e onion "$RELAY_B_ONION" \
+            -e secret e2e-enrollment-secret-0123456789 \
             app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../tor.txt
           set -e
           "$ADB" logcat -d > ../logcat-tor.txt
@@ -312,7 +338,7 @@ jobs:
             grep -A 30 "FATAL EXCEPTION" ../logcat-tor.txt | head -80
             exit 1
           fi
-          grep -q "^OK (3 tests)" ../tor.txt || { echo "::error::The Tor tests failed; see tor.txt"; exit 1; }
+          grep -q "^OK (4 tests)" ../tor.txt || { echo "::error::The Tor tests failed; see tor.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../tor.txt; then echo "::error::Tor tests were skipped"; exit 1; fi
 
       - name: Run the lock screen tests
@@ -359,5 +385,6 @@ jobs:
             logcat-soak.txt
             relay-a.log
             relay-b.log
+            tor-onion.log
             emulator.log
           if-no-files-found: warn

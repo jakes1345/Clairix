@@ -296,6 +296,8 @@ object CommsRepository {
             // relay has it, so it works while the identity is locked away.
             transport = { if (transportKeys.published) runCatching { transportKeys.get() }.getOrNull() else null },
             transportRefused = { transportKeys.setPublished(false) },
+            // Through Tor, the relay is reached at its onion address when it has one.
+            onion = { if (TorTransport.enabled) relayOnion() else null },
         )
         claims = StoredPendingClaims(appContext)
         // The relay's clock, as the Device tab's clock-integrity row compares it.
@@ -754,10 +756,25 @@ object CommsRepository {
     private fun refreshAlternates() {
         if (!initialised || !config.isRegistered) return
         scope.launch {
-            runCatching { relay.info() }.onSuccess { info ->
-                if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
-            }
+            runCatching { relay.info() }.onSuccess { keepAddresses(it) }
         }
+    }
+
+    /** Keeps the other addresses the relay said it answers at, onion included. */
+    private fun keepAddresses(info: RelayClient.Info) {
+        if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
+        if (info.onion != config.relayOnion) config.setRelayOnion(info.onion)
+    }
+
+    /**
+     * The relay's onion address: the relay list's, for a relay on it (signed,
+     * so it outranks anything else), else what the relay itself says at
+     * `GET /`, read over its https address or the onion address itself.
+     */
+    fun relayOnion(): String? {
+        val url = config.relayUrl ?: return null
+        val listed = runCatching { RelayDirectory.current(appContext)?.find(url) }.getOrNull()
+        return RelayClient.onionOrigin(listed?.onion) ?: RelayClient.onionOrigin(config.relayOnion)
     }
 
     // ── Push ──────────────────────────────────────────────────────────────
@@ -1459,7 +1476,7 @@ object CommsRepository {
             delay(KEY_REFRESH_MIN_MS + SecureRandom().nextInt(KEY_REFRESH_SPREAD_MS))
             runCatching { relay.info() }
                 .onSuccess { info ->
-                    if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
+                    keepAddresses(info)
                     tokenRefill.onNoTokens()
                 }
                 .onFailure { CommsLog.add("Could not read the relay's token keys: ${it.message}") }

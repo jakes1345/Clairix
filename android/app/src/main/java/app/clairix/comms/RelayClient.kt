@@ -78,38 +78,83 @@ class RelayClient(
     private val transport: () -> TransportKey? = { null },
     /** Called when the relay refused the transport key: it is then republished, and the identity signs meanwhile. */
     private val transportRefused: () -> Unit = {},
+    /**
+     * The relay's onion address (`http://….onion`) while this phone connects
+     * through Tor and the relay has one; null otherwise. Requests then go
+     * there first, and to the registered address only when it does not
+     * answer: the connection never leaves Tor, so no exit relay sees it, and
+     * the onion address is its own proof of whose server answers, with no
+     * certificate authority involved. See [onionOrigin].
+     */
+    private val onion: () -> String? = { null },
 ) {
 
     /** The alternate address requests go to since the registered one stopped answering, if any. */
     @Volatile private var reachable: String? = null
 
     /**
+     * Until when the onion address is passed over, after it last failed to
+     * answer while another address did: Tor takes a while to give up on an
+     * onion service that is down, and every request would wait it out.
+     */
+    @Volatile private var onionQuietUntil = 0L
+
+    /** The onion address, when there is one to use. */
+    private fun onionBase(): String? = onionOrigin(onion())
+
+    /** The onion address requests go to first: [onionBase], unless it recently did not answer. */
+    private fun preferredOnion(): String? = onionBase()?.takeIf { System.currentTimeMillis() >= onionQuietUntil }
+
+    /**
+     * The onion address at [url] did not answer while another address did:
+     * requests (and the live socket, which reconnects through [base]) go
+     * elsewhere for a while.
+     */
+    private fun onionSilent(url: String) {
+        val o = onionBase() ?: return
+        if (url.startsWith("$o/") || url == o) onionQuietUntil = System.currentTimeMillis() + ONION_QUIET_MS
+    }
+
+    /**
      * The address requests go to: the alternate that last answered, else the
-     * one registered at. With the relay's key pinned, always the registered
-     * one: the pin is that host's key, and another host has another.
+     * onion address while Tor is on, else the one registered at. With the
+     * relay's key pinned, never an alternate: the pin is the registered host's
+     * key, and another host has another. The onion address needs no pin.
      */
     private fun base(): String? {
         val primary = relayUrl()?.trimEnd('/') ?: return null
         val current = reachable
-        return if (current != null && pin() == null && current in alternates().map { it.trimEnd('/') }) current else primary
+        if (current != null && pin() == null && current in alternates().map { it.trimEnd('/') }) return current
+        return preferredOnion() ?: primary
     }
 
     /** The addresses to try after [current] failed to answer, in order. */
     private fun otherBases(current: String): List<String> {
-        if (pin() != null) return emptyList()
         val primary = relayUrl()?.trimEnd('/') ?: return emptyList()
-        return (listOf(primary) + alternates().map { it.trimEnd('/') }).distinct().filter { it != current }
+        val others = if (pin() != null) emptyList() else alternates().map { it.trimEnd('/') }
+        return (listOfNotNull(onionBase(), primary) + others).distinct().filter { it != current }
+    }
+
+    /**
+     * Where blind-token keys seen at [base] are kept: under the registered
+     * address when it was the onion one, which is the same relay, so keys seen
+     * through either serve tokens fetched through the other.
+     */
+    private fun pinOrigin(base: String): String {
+        val origin = base.trimEnd('/')
+        return if (origin == onionBase()) relayUrl()?.trimEnd('/') ?: origin else origin
     }
 
     /** The keys a relay issues blind tokens under in [epoch], kind (wire name) to base64url. */
     data class TokenKeys(val epoch: Long, val keys: Map<String, String>)
 
-    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null)
+    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null)
 
     /**
      * The relay's description of itself: its API version, the other addresses it
-     * answers at, and its blind-token keys (null from a relay before Beta 6).
-     * Unauthenticated, on a connection nothing else uses.
+     * answers at, its onion address if it has one, and its blind-token keys
+     * (null from a relay before Beta 6). Unauthenticated, on a connection
+     * nothing else uses.
      */
     fun info(): Info {
         val relay = base() ?: throw RelayException("Not registered with a relay")
@@ -121,7 +166,7 @@ class RelayClient(
             fun keysOf(o: JSONObject?) = o?.optJSONObject("keys")?.let { k -> k.keys().asSequence().associateWith { k.getString(it) } }
             val keys = keysOf(t)
             val tokens = if (t != null && keys != null) TokenKeys(t.getLong("epoch"), keys) else null
-            val origin = relay.trimEnd('/')
+            val origin = pinOrigin(relay)
             if (tokens != null && plausibleEpoch(tokens.epoch)) {
                 // Seen on a request that names nobody: the first keys seen for an
                 // epoch are the ones tokens are checked against. The next epoch's
@@ -132,7 +177,7 @@ class RelayClient(
                 val nextEpoch = next?.optLong("epoch", -1L) ?: -1L
                 if (nextKeys != null && nextEpoch == tokens.epoch + 1 && tokenKeys.get(origin, nextEpoch) == null) tokenKeys.put(origin, nextEpoch, nextKeys)
             }
-            Info(json.optInt("version", 0), urls, tokens)
+            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }))
         }
     }
 
@@ -182,6 +227,18 @@ class RelayClient(
         chain.proceed(sign(request.newBuilder(), signing).build())
     }
 
+    /**
+     * Through Tor a connection waits for a circuit before its first byte, and
+     * to an onion address for a rendezvous as well; Tor gives up on its own
+     * within a minute. Connecting and reading get that long while Tor is on.
+     */
+    private val torTimeouts = Interceptor { chain ->
+        if (!TorTransport.enabled) return@Interceptor chain.proceed(chain.request())
+        chain.withConnectTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .withReadTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .proceed(chain.request())
+    }
+
     /** The live socket's client: no overall call timeout, which would cut the socket itself. */
     val http: OkHttpClient = RelayTls.pinned(OkHttpClient.Builder(), pin)
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -192,14 +249,17 @@ class RelayClient(
         // the enrollment secret; neither may be re-sent to wherever a redirect points.
         .followRedirects(false)
         .followSslRedirects(false)
+        .addInterceptor(torTimeouts)
         .addNetworkInterceptor(signer)
         .build()
 
     init {
         // Tor turned on or off: no pooled connection keeps the old way out.
+        // An onion address that did not answer before Tor was up is tried again.
         TorTransport.onChange {
             http.connectionPool.evictAll()
             sender.connectionPool.evictAll()
+            onionQuietUntil = 0L
         }
     }
 
@@ -223,6 +283,7 @@ class RelayClient(
             .callTimeout(12, TimeUnit.SECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
+            .addInterceptor(torTimeouts)
             .build()
     }
 
@@ -573,7 +634,7 @@ class RelayClient(
             val arr = json.getJSONArray("evaluated")
             Quad(json.getLong("epoch"), json.getString("key"), (0 until arr.length()).map { fromB64url(arr.getString(it)) }, fromB64url(json.getString("proof")))
         }
-        val origin = relay.trimEnd('/')
+        val origin = pinOrigin(relay)
         if (!plausibleEpoch(epoch)) {
             throw RelayException("The relay issued tokens for epoch $epoch, which this phone's clock does not agree with; refused", TOKEN_KEY_MISMATCH)
         }
@@ -906,6 +967,7 @@ class RelayClient(
             for (other in otherBases(current)) {
                 try {
                     val json = executeOnce(builder.url(other + url.removePrefix(current)), client)
+                    onionSilent(url)
                     reachable = other
                     return json
                 } catch (again: RelayException) {
@@ -923,7 +985,12 @@ class RelayClient(
         // (a network switch mid-request), surfaces as a RelayException with code
         // 0, which callers treat as "offline, retry later".
         try {
-            client.newCall(builder.build()).execute().use { res ->
+            val call = client.newCall(builder.build())
+            // The whole request too, for the same reason as [torTimeouts].
+            if (TorTransport.enabled && client.callTimeoutMillis > 0) {
+                call.timeout().timeout(client.callTimeoutMillis.toLong() * TOR_CALL_TIMEOUT_FACTOR, TimeUnit.MILLISECONDS)
+            }
+            call.execute().use { res ->
                 noteServerTime(res)
                 val text = res.body?.string().orEmpty()
                 val json = runCatching { JSONObject(text) }.getOrNull()
@@ -1012,6 +1079,12 @@ class RelayClient(
         /** The relay refuses incident boxes larger than this in either direction. */
         const val TRAFFIC_INCIDENTS_MAX_SPAN_DEG = 1.0
         private const val CLOCK_WARN_MS = 30_000L
+        /** Connecting, and each read, while Tor is on: about as long as Tor itself tries. */
+        private const val TOR_STEP_TIMEOUT_SEC = 60
+        /** A whole request takes up to this many times its usual limit while Tor is on. */
+        private const val TOR_CALL_TIMEOUT_FACTOR = 4
+        /** How long an onion address that did not answer is passed over. */
+        private const val ONION_QUIET_MS = 10 * 60_000L
         /** The relay mints TURN credentials per request, valid two hours; a fallback copy is kept far less. */
         private const val ICE_CACHE_MS = 10 * 60_000L
         /** Delivery tokens fetched at a time (the relay's maximum), and the level that triggers a fetch. */
@@ -1050,6 +1123,23 @@ class RelayClient(
             if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
             val host = u.host?.lowercase() ?: return null
             return if (host == "127.0.0.1" || host == "localhost") "http://$host:${u.port}" else null
+        }
+
+        private val ONION_HOST = Regex("^[a-z2-7]{56}\\.onion$")
+
+        /**
+         * `http://<56 characters>.onion`, a v3 onion address as relays publish
+         * it (and the relay list carries it), in lower case; null when [url]
+         * is not one. Plain http, as Tor Browser uses for onion sites: Tor
+         * encrypts the connection end to end and the address is the server's
+         * key, so TLS would add a certificate and nothing else.
+         */
+        fun onionOrigin(url: String?): String? {
+            val u = runCatching { java.net.URI(url?.trim()?.trimEnd('/') ?: return null) }.getOrNull() ?: return null
+            if (!u.scheme.equals("http", ignoreCase = true) || u.rawUserInfo != null || u.port != -1) return null
+            if (!u.rawPath.isNullOrEmpty() || u.rawQuery != null || u.rawFragment != null) return null
+            val host = u.host?.lowercase() ?: return null
+            return if (ONION_HOST.matches(host)) "http://$host" else null
         }
 
         /** Whether [url] is a relay address registration accepts: https, or loopback in a debug build. */

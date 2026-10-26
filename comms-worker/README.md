@@ -243,14 +243,16 @@ uploads, and a workerd config) and sets up:
   addresses only, so nothing that gets it to fetch a URL (a relay address, a
   push endpoint) reaches the server's own services.
 - **Settings** in `/etc/clairix-relay/relay.env`: every setting above, one
-  `NAME=value` a line. `ENROLL_SECRET` is generated on the first run and
-  `RELAY_ORIGIN` set to `https://<domain>`.
+  `NAME=value` a line. `ENROLL_SECRET` is generated on the first run,
+  `RELAY_ORIGIN` set to `https://<domain>` and `RELAY_ONION` to the onion
+  address.
 - **Caddy** in front, with HTTPS certificates it renews itself and no access
   log. It sets `CF-Connecting-IP`, which the registration limit counts by, so
   a client cannot choose its own.
 - **An onion service** (leave it out with `--no-onion`), through Caddy too: the
   relay always sees the onion name as its host and never a client-supplied
-  address.
+  address. The relay names it at `GET /` (`onion`), and phones with "Connect
+  through Tor" on use it instead of the https address.
 - **Upkeep**: systemd restarts the relay if it exits, a timer restarts it if it
   stops answering for six minutes, another runs its scheduled work every 10
   minutes (what `crons` does on Cloudflare), and security updates install

@@ -120,25 +120,6 @@ fi
 chown root:clairix-relay "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
 
-echo "== Services"
-install -m 0644 "$SRC/selfhost/systemd/"*.service "$SRC/selfhost/systemd/"*.timer /etc/systemd/system/
-install -m 0755 "$SRC/selfhost/clairix-relay-check" /usr/local/sbin/clairix-relay-check
-systemctl daemon-reload
-# Swap the new build in only now, so a failed build above leaves the running
-# relay as it was.
-rm -rf "$PREFIX/build.prev"
-[ -d "$PREFIX/build" ] && mv "$PREFIX/build" "$PREFIX/build.prev"
-mv "$PREFIX/build.next" "$PREFIX/build"
-mv "$PREFIX/workerd.next" "$PREFIX/workerd"
-systemctl enable clairix-relay.service clairix-relay-cron.timer clairix-relay-check.timer >/dev/null
-systemctl restart clairix-relay.service
-systemctl start clairix-relay-cron.timer clairix-relay-check.timer
-for _ in $(seq 1 30); do
-  curl -fsS -m 5 -o /dev/null "http://127.0.0.1:$RELAY_PORT/" && break
-  sleep 1
-done
-curl -fsS -m 5 -o /dev/null "http://127.0.0.1:$RELAY_PORT/" || { journalctl -u clairix-relay -n 50 --no-pager; die "the relay did not start"; }
-
 ONION_HOST=""
 if [ "$ONION" -eq 1 ]; then
   echo "== Onion service"
@@ -160,6 +141,30 @@ EOF
   ONION_HOST="$(cat /var/lib/tor/clairix-relay/hostname 2>/dev/null || true)"
   printf '%s' "$ONION_HOST" | grep -Eq '^[a-z2-7]{56}\.onion$' || die "Tor did not create the onion service; see journalctl -u tor"
 fi
+
+# Phones that connect through Tor learn the onion address from the relay
+# itself (GET / "onion"); without one, the line goes.
+sed -i '/^RELAY_ONION=/d' "$ENV_FILE"
+[ -n "$ONION_HOST" ] && echo "RELAY_ONION=http://$ONION_HOST" >> "$ENV_FILE"
+
+echo "== Services"
+install -m 0644 "$SRC/selfhost/systemd/"*.service "$SRC/selfhost/systemd/"*.timer /etc/systemd/system/
+install -m 0755 "$SRC/selfhost/clairix-relay-check" /usr/local/sbin/clairix-relay-check
+systemctl daemon-reload
+# Swap the new build in only now, so a failed build above leaves the running
+# relay as it was.
+rm -rf "$PREFIX/build.prev"
+[ -d "$PREFIX/build" ] && mv "$PREFIX/build" "$PREFIX/build.prev"
+mv "$PREFIX/build.next" "$PREFIX/build"
+mv "$PREFIX/workerd.next" "$PREFIX/workerd"
+systemctl enable clairix-relay.service clairix-relay-cron.timer clairix-relay-check.timer >/dev/null
+systemctl restart clairix-relay.service
+systemctl start clairix-relay-cron.timer clairix-relay-check.timer
+for _ in $(seq 1 30); do
+  curl -fsS -m 5 -o /dev/null "http://127.0.0.1:$RELAY_PORT/" && break
+  sleep 1
+done
+curl -fsS -m 5 -o /dev/null "http://127.0.0.1:$RELAY_PORT/" || { journalctl -u clairix-relay -n 50 --no-pager; die "the relay did not start"; }
 
 echo "== Caddy"
 CADDYFILE=/etc/caddy/Caddyfile

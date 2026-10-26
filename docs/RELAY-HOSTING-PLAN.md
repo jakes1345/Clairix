@@ -89,8 +89,13 @@ automated.
    Arti in the app's native library behind a password-protected SOCKS5 proxy
    on 127.0.0.1, every connection on a circuit of its own; relay traffic and
    the relay list go through it and fail closed while it connects. Calls
-   (UDP) and push wake-ups (the distributor's own connection) do not. Still
-   to do: reaching a relay at its onion address when it has one.
+   (UDP) and push wake-ups (the distributor's own connection) do not. A
+   relay with an onion address (the relay list's, or `RELAY_ONION`, which
+   `install.sh` sets and the relay names at `GET /`) is reached there while
+   Tor is on, so requests never leave the Tor network; when the onion does
+   not answer, the registered address is used, still through Tor. The
+   emulator tests run a real onion service for the self-hosted relay and
+   require the app to work through it alone.
 
 ## Sources
 

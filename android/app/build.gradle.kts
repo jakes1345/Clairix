@@ -97,6 +97,13 @@ val cargoNdkBuild by tasks.registering(Exec::class) {
             "--remap-path-prefix=${fixed(cargoHome)}=/cargo"
         val flags = System.getenv("RUSTFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $remap" } ?: remap
         environment("RUSTFLAGS", flags)
+        // The same for C and assembly that crates build with the cc crate
+        // (ring's, under Tor's TLS): clang writes source paths into debug info.
+        // cargo-ndk sets CFLAGS_<target> for its own flags; cc adds CFLAGS too.
+        val prefixMap = "-ffile-prefix-map=${fixed(rustCrate)}=/comms-crypto " +
+            "-ffile-prefix-map=${fixed(cargoHome)}=/cargo"
+        val cflags = System.getenv("CFLAGS")?.takeIf { it.isNotBlank() }?.let { "$it $prefixMap" } ?: prefixMap
+        environment("CFLAGS", cflags)
     }
     commandLine(
         listOf("cargo", "ndk") + rustAbis.flatMap { listOf("-t", it) } +

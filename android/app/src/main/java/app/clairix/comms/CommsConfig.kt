@@ -66,6 +66,11 @@ class CommsConfig(context: Context) {
 
     fun setRelayAlternates(urls: List<String>) { prefs.edit().putString(KEY_ALTERNATES, JSONArray(urls).toString()).apply() }
 
+    /** The relay's onion address as it last told this phone (`http://….onion`), or null; see [RelayClient.info]. */
+    val relayOnion: String? get() = prefs.getString(KEY_ONION, null)
+
+    fun setRelayOnion(url: String?) { prefs.edit().putString(KEY_ONION, url).apply() }
+
     /** An endpoint the relay is checking: in use once the code it pushed through it is echoed. */
     val pendingPush: String? get() = prefs.getString(KEY_PUSH_PENDING, null)
 
@@ -95,6 +100,9 @@ class CommsConfig(context: Context) {
             .putString(KEY_NAME, name)
             .putBoolean(KEY_LISTED, listed)
             .remove(KEY_PUSH)
+            // Another relay's addresses are no use for this one.
+            .remove(KEY_ALTERNATES)
+            .remove(KEY_ONION)
             .apply()
     }
 
@@ -132,6 +140,7 @@ class CommsConfig(context: Context) {
         const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
         const val KEY_COVER_TRAFFIC = "cover_traffic"
         const val KEY_ALTERNATES = "relay_alternates"
+        const val KEY_ONION = "relay_onion"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

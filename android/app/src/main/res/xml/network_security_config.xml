@@ -5,7 +5,8 @@
     and nothing added by a user. A CA installed on the phone is the usual way
     to intercept TLS without root, and it is exactly what the trust-store
     audit and the TLS canary exist to detect; trusting it anyway would make
-    both pointless. Nothing is ever sent in the clear.
+    both pointless. Nothing is sent in the clear but to onion addresses
+    (below), which Tor encrypts.
 
     The TLS canary's own probe is unaffected: it opens a raw socket with a
     recording trust manager, by design, and then asks this configuration
@@ -17,4 +18,16 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <!--
+        Onion addresses (a relay's, while "Connect through Tor" is on) are
+        plain http, as in Tor Browser: Tor encrypts the connection end to end
+        and the address is the server's own key. Nothing but Tor can reach
+        one: without it the name does not resolve.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">onion</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
 </network-security-config>

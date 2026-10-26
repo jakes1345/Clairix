@@ -25,6 +25,11 @@ import java.util.concurrent.TimeUnit
  * Needs the internet, so it runs on its own:
  *
  *   am instrument -e class app.clairix.comms.TorDeviceTest -e tor true ...
+ *
+ * With `-e onionRelay <its loopback address> -e onion http://….onion -e secret
+ * <ENROLL_SECRET>` it also registers at a relay that publishes that onion
+ * address (CI runs a real onion service for the self-hosted relay) and
+ * requires the app to keep working through it.
  */
 @RunWith(AndroidJUnit4::class)
 class TorDeviceTest {
@@ -49,7 +54,10 @@ class TorDeviceTest {
     @After
     fun tearDown() {
         TorTransport.setEnabled(false)
+        if (registered) runCatching { runBlocking { CommsRepository.unpair() } }
     }
+
+    private var registered = false
 
     @Test
     fun requestsLeaveThroughTor() {
@@ -64,6 +72,49 @@ class TorDeviceTest {
     fun theListedRelayAnswersThroughTorWithItsListedKey() {
         val listed = RelayDirectory.current(context)!!.relays.first()
         assertEquals(listed.key, RelayDirectory.liveKey(listed.url))
+    }
+
+    @Test
+    fun theRelayIsReachedAtItsOnionAddress() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        val relayUrl = args.getString("onionRelay")
+        val onion = args.getString("onion")
+        val secret = args.getString("secret")
+        assumeTrue("pass onionRelay, onion and secret to test a relay's onion address", relayUrl != null && onion != null && secret != null)
+        val repo = CommsRepository
+        // Registered at the relay's own address, with Tor off...
+        TorTransport.setEnabled(false)
+        repo.init(context)
+        if (repo.isRegistered()) repo.unpair()
+        repo.register(relayUrl!!, secret!!, "Onion", listed = false).getOrThrow()
+        registered = true
+        // ...which tells the phone its onion address.
+        val learnedBy = System.currentTimeMillis() + 60_000
+        while (repo.relayOnion() != onion) {
+            assertTrue("the relay's onion address was not learned: ${repo.relayOnion()}", System.currentTimeMillis() < learnedBy)
+            kotlinx.coroutines.delay(500)
+        }
+
+        TorTransport.setEnabled(true)
+        withTimeout(300_000) { TorTransport.state.first { it == TorTransport.State.Ready } }
+        // Arti takes nothing to 127.0.0.1 out of the Tor network, so from here
+        // the relay's registered address cannot answer: only its onion can.
+        val loopback = try {
+            client().newCall(Request.Builder().url("$relayUrl/").build()).execute().use { it.isSuccessful }
+        } catch (e: IOException) {
+            false
+        }
+        assertTrue("the relay's loopback address answered through Tor", !loopback)
+
+        // A new onion service takes a minute or two to be found on the Tor network.
+        val deadline = System.currentTimeMillis() + 300_000
+        var invite = repo.createInvite()
+        while (invite.isFailure && System.currentTimeMillis() < deadline) {
+            kotlinx.coroutines.delay(5_000)
+            invite = repo.createInvite()
+        }
+        assertTrue("signed requests did not reach the relay at its onion address: ${invite.exceptionOrNull()}", invite.isSuccess)
+        repo.sync().getOrThrow()
     }
 
     @Test

@@ -768,6 +768,15 @@ test("the relay names its alternate addresses: https origins only, trimmed, in o
   assert.deepEqual((await makeRelay().call("GET", "/")).json.alternates, []);
 });
 
+test("the relay names its onion address only when it is a v3 onion origin", async () => {
+  const onion = "http://" + "abcdefghijklmnopqrstuvwxyz234567".repeat(2).slice(0, 56) + ".onion";
+  assert.equal((await makeRelay({ RELAY_ONION: ` ${onion.toUpperCase()}/ ` }).call("GET", "/")).json.onion, onion);
+  assert.equal((await makeRelay().call("GET", "/")).json.onion, null);
+  for (const bad of ["https://" + onion.slice(7), "http://short.onion", onion + ":8080", onion + "/path", "http://example.org"]) {
+    assert.equal((await makeRelay({ RELAY_ONION: bad }).call("GET", "/")).json.onion, null, bad);
+  }
+});
+
 test("a key registered under one spelling cannot be registered again under another", async () => {
   resetClock();
   const relay = makeRelay();

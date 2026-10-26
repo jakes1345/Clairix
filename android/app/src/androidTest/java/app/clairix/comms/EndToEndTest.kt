@@ -14,8 +14,10 @@ import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
+import uniffi.clairix_comms_crypto.CryptoException
 import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PeerKeys
+import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.fingerprint
 import java.util.Base64
 import java.util.UUID
@@ -309,6 +311,8 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
     private val foreign = RelayClient.originOf(relayUrl) != RelayClient.originOf(app.relayUrl)
     private var claim: String? = null
     private val waiting = ArrayList<JSONObject>()
+    /** Each contact's sealing prekey as last fetched, kept as the app keeps its contacts'. */
+    private val prekeys = HashMap<String, SealingPrekey?>()
 
     init {
         number = relay.register(relayUrl, identity, secret, listed = true).number
@@ -321,13 +325,39 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
     private val sender: CommsWire.Sender
         get() = identity.publicBundle().let { CommsWire.Sender(number, label, it.ed25519, it.curve25519, it.sealing, it.signature) }
 
+    /**
+     * [call] to the relay, waiting out its rate limit the way the app does
+     * (the Retry-After it sends) rather than giving up: a peer that sends as
+     * often as the soak test's is over the relay's 30 lookups a minute, and
+     * over what one relay may forward to one recipient on another.
+     */
+    private fun <T> politely(call: () -> T): T {
+        repeat(4) {
+            try {
+                return call()
+            } catch (e: RelayException) {
+                if (e.code != 429) throw e
+                Thread.sleep((e.retryAfterSec ?: 30) * 1000)
+            }
+        }
+        return call()
+    }
+
+    /** [to]'s sealing prekey: the one kept, or (with [fresh], or none kept yet) fetched, as a contact's phone fetches it. */
+    private fun prekeyOf(to: PairingCode, appRelay: String?, fresh: Boolean): SealingPrekey? {
+        if (!fresh && prekeys.containsKey(to.number)) return prekeys[to.number]
+        val prekey = politely { relay.identity(to.number, fingerprint(to.ed25519), appRelay).sealingPrekey }
+        prekeys[to.number] = prekey
+        return prekey
+    }
+
     /** Encrypts and sends [payload] to [to], as the app's deliver does; [appRelay] when [to] is on another relay. */
     fun send(to: PairingCode, payload: JSONObject, appRelay: String? = null) {
-        // The app's current sealing prekey, as a contact's phone fetches it: envelopes are format 3.
-        val prekey = runCatching { relay.identity(to.number, fingerprint(to.ed25519), appRelay).sealingPrekey }.getOrNull()
-        val keys = PeerKeys(to.ed25519, to.curve25519, to.sealing, to.signature, prekey)
+        // With the app's sealing prekey envelopes are format 3; one that has
+        // aged out is fetched again, as the app does on StalePrekey.
+        var keys = PeerKeys(to.ed25519, to.curve25519, to.sealing, to.signature, prekeyOf(to, appRelay, fresh = false))
         if (!identity.hasSession(keys.curve25519)) {
-            val bundle = relay.bundle(to.number, fingerprint(to.ed25519), appRelay)
+            val bundle = politely { relay.bundle(to.number, fingerprint(to.ed25519), appRelay) }
             identity.startSession(keys, bundle.sessionKey)
             claim = bundle.claim
         }
@@ -340,7 +370,14 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
             CommsWire.T_PANIC -> RelayClient.ALERT_SOS
             else -> null
         }
-        relay.send(to.number, identity.encrypt(keys, full.toString().toByteArray(Charsets.UTF_8)), claim, relay = appRelay, urgent = urgent, alert = alert)
+        val plain = full.toString().toByteArray(Charsets.UTF_8)
+        val envelope = try {
+            identity.encrypt(keys, plain)
+        } catch (e: CryptoException.StalePrekey) {
+            keys = keys.copy(sealingPrekey = prekeyOf(to, appRelay, fresh = true))
+            identity.encrypt(keys, plain)
+        }
+        politely { relay.send(to.number, envelope, claim, relay = appRelay, urgent = urgent, alert = alert) }
         claim = null
     }
 
