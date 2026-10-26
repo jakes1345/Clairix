@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -36,6 +37,7 @@ class SmokeTest {
     private val target: Context get() = instr.targetContext
     private val shots: File by lazy { File(target.getExternalFilesDir(null), "smoke").apply { mkdirs() } }
     private var shotIndex = 0
+    private var stateDumps = 0
 
     @Before
     fun setUp() {
@@ -92,6 +94,8 @@ class SmokeTest {
     private companion object {
         /** How long a Back may take to show the screen behind on CI's emulator (see backTo). */
         const val BACK_PATIENCE_MS = 30_000L
+        /** How many stalls get their window and thread state dumped (see dumpState). */
+        const val MAX_STATE_DUMPS = 4
         /** System apps that show a dialog over Clairix on its behalf. */
         val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller")
         val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
@@ -149,19 +153,25 @@ class SmokeTest {
     /**
      * Back from [step] to a screen with [expect] on it.
      *
-     * The app takes the Back at once, but on CI's software-rendered emulator
-     * the screen behind can take many seconds to appear. Run 40259027708
-     * sampled the main thread during such waits, and every sample was idle in
-     * MessageQueue.nativePollOnce: the app had nothing left to do but draw,
-     * and the emulator delivered no frame. A Compose screen's accessibility
-     * tree is updated when a frame is laid out, so until then UiAutomator,
-     * fresh dumps included, still shows the page that was left. Run 40258058822
-     * waited 13 s and then sent a second Back, which closed the app.
+     * The app takes the Back at once, but the screen behind can take many
+     * seconds to appear. Run 40259027708 sampled the main thread during such
+     * waits, and every sample was idle in MessageQueue.nativePollOnce. A
+     * Compose screen's accessibility tree is updated when a frame is laid
+     * out, so until then UiAutomator, fresh dumps included, still shows the
+     * page that was left. Run 40258058822 waited 13 s and then sent a second
+     * Back, which closed the app.
+     *
+     * It is not the emulator: runs 40259743876 and 40259840224 stalled only
+     * on leaving "Fake call" and "Duress phrase", every round, never "Offline
+     * mesh" or "Wipe Clairix", and each stall was longer than the one before
+     * (11, 15, 18 s, then past 30). The app drew no frame at all until the
+     * screen behind appeared.
      *
      * So nothing is pressed twice. When the screen has not changed after
-     * three seconds the main thread is sampled (tag SmokeMainThread); after
-     * [BACK_PATIENCE_MS] the test fails, saying whether the app was idle (the
-     * emulator's display stalled) or busy, with the stack.
+     * three seconds the main thread is sampled (tag SmokeMainThread), and
+     * after eight the window and thread state is dumped (see dumpState); after
+     * [BACK_PATIENCE_MS] the test fails, saying whether the app was idle or
+     * busy, with the stack.
      */
     private fun backTo(step: String, expect: BySelector) {
         back(step)
@@ -172,11 +182,45 @@ class SmokeTest {
             if (i < 3) Thread.sleep(1_000)
             stack
         }
-        if (device.wait(Until.hasObject(expect), BACK_PATIENCE_MS - 5_000)) return
+        if (device.wait(Until.hasObject(expect), 3_000)) return
+        dumpState("stall-$step")
+        if (device.wait(Until.hasObject(expect), BACK_PATIENCE_MS - 8_000)) return
+        dumpState("frozen-$step")
         shot("FROZEN-$step")
         val idle = stacks.all { it.startsWith("android.os.MessageQueue.nativePollOnce") }
-        val why = if (idle) "the main thread was idle throughout, so the emulator drew no frame" else "the main thread was busy"
+        val why = if (idle) "the main thread was idle throughout and no frame was drawn" else "the main thread was busy"
         fail("Clairix did not leave \"$step\" within ${BACK_PATIENCE_MS / 1000} s of Back; $why. Last sample:\n    at ${stacks.last()}")
+    }
+
+    /**
+     * What the window system and the app held while a Back had not shown the
+     * screen behind it: the app's ViewRootImpl and Choreographer (whether a
+     * traversal or a frame was scheduled, whether it waited on a sync), the
+     * windows' draw and sync states, the frame stats, and every app thread.
+     * The first few stalls only; they land next to the screenshots.
+     */
+    private fun dumpState(label: String) {
+        if (stateDumps >= MAX_STATE_DUMPS) return
+        val base = "%02d-STATE-%d-%s".format(shotIndex, stateDumps++, label.replace(Regex("[^A-Za-z0-9]+"), "-"))
+        val commands = listOf(
+            "activity" to "dumpsys activity top",
+            "window" to "dumpsys window windows",
+            "gfx" to "dumpsys gfxinfo $pkg",
+        )
+        for ((name, command) in commands) runCatching {
+            ParcelFileDescriptor.AutoCloseInputStream(instr.uiAutomation.executeShellCommand(command)).use { input ->
+                File(shots, "$base-$name.txt").outputStream().use { input.copyTo(it) }
+            }
+        }
+        runCatching {
+            File(shots, "$base-threads.txt").printWriter().use { out ->
+                for ((thread, stack) in Thread.getAllStackTraces()) {
+                    out.println("\"${thread.name}\" ${thread.state}")
+                    for (frame in stack) out.println("    at $frame")
+                    out.println()
+                }
+            }
+        }
     }
 
     @Test

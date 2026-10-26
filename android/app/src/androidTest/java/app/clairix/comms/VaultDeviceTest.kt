@@ -1,5 +1,6 @@
 package app.clairix.comms
 
+import android.app.KeyguardManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
@@ -7,6 +8,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -14,24 +16,20 @@ import java.io.File
 import kotlin.random.Random
 
 /**
- * The vault key and the locked inbox on a real Keystore. (The emulator has no
- * secure lock screen, so the vault key works throughout; that it refuses on a
- * locked phone is Android's to enforce.)
+ * The vault key and the locked inbox on a real Keystore, on a phone with no
+ * secure lock screen as the emulator is. [VaultLockScreenTest] sets one.
  */
 @RunWith(AndroidJUnit4::class)
 class VaultDeviceTest {
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val keyguard = context.getSystemService(KeyguardManager::class.java)
     private lateinit var inbox: LockedInbox
 
     @Before
     fun setUp() {
+        Vault.init(context)
         inbox = LockedInbox(context)
-        inbox.clear()
-    }
-
-    @After
-    fun tearDown() {
         inbox.clear()
     }
 
@@ -50,6 +48,19 @@ class VaultDeviceTest {
         // Neither key opens what neither sealed.
         val tampered = sealed.copyOf().also { it[it.size - 1] = (it.last().toInt() xor 1).toByte() }
         assertTrue(runCatching { VaultBox.open(tampered) }.isFailure)
+    }
+
+    @Test
+    fun aPhoneWithNoLockScreenWritesUnderTheOpenKey() {
+        assumeFalse("needs a phone with no lock screen", keyguard.isDeviceSecure)
+        // Android 14 will not make an unlock-bound key without a lock screen
+        // ("User ECDH key missing"); before the open key, this crashed the app
+        // at launch on every such phone.
+        val secret = Random.nextBytes(32)
+        val opened = VaultBox.open(VaultBox.encrypt(secret))
+        assertArrayEquals(secret, opened.plain)
+        assertFalse(opened.legacy)
+        assertFalse("no lock screen, yet writes went to the unlock-bound key", VaultBox.writesUnlockBound())
     }
 
     @Test

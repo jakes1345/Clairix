@@ -628,7 +628,13 @@ Open from the second review, each a design change rather than a fix:
   delivery tokens stay readable, so the phone can connect. Disappearing
   messages due while locked go at the unlock. The offline mesh cannot tell
   its own bundles apart until then. A phone with no secure lock screen has
-  no locked state, so nothing changes there.
+  no locked state, so nothing changes there: Android 14 will not make an
+  unlock-bound key without one at all, so those phones use a key with no
+  unlock condition. Setting a lock screen moves everything to the
+  unlock-bound key on its next read, and removing it moves everything back
+  on its next read, if the unlock-bound key still works then. Android may
+  disable that key when the lock screen is removed, and what is under it is
+  then lost.
 - **Fake relays cost nothing.** Any https host serving a key counts as a
   relay, so wildcard subdomains can use up a mailbox's allowance for other
   relays and silently crowd out real cross-relay mail. *Since fixed:* mail

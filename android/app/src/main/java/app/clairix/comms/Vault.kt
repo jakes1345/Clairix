@@ -58,6 +58,13 @@ object Vault {
         }, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
+    /**
+     * Whether the phone has a secure lock screen (a PIN, pattern or password),
+     * asked afresh each time since the owner can set or remove one at any
+     * point. Null before [init].
+     */
+    fun deviceSecure(): Boolean? = if (::keyguard.isInitialized) keyguard.isDeviceSecure else null
+
     @Synchronized
     private fun screenOff() {
         // Without a secure lock screen nothing locks: the vault key works always.
