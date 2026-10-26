@@ -230,8 +230,10 @@ jobs:
           mkdir -p ../screens
           "$ADB" pull /sdcard/Android/data/app.clairix/files/smoke ../screens || true
           # The instrumentation output says OK only when every test passed; a crash
-          # anywhere in the app shows as FATAL EXCEPTION in the log.
-          if grep -q "FATAL EXCEPTION" ../logcat.txt; then
+          # anywhere in the app shows as FATAL EXCEPTION in the log, with the
+          # process named on the next line (other apps on the emulator crash too:
+          # Gmail did on API 31, run 40272070286).
+          if grep -A1 "FATAL EXCEPTION" ../logcat.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the smoke test; see logcat.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat.txt | head -80
             exit 1
@@ -254,7 +256,7 @@ jobs:
             app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../e2e.txt
           set -e
           "$ADB" logcat -d > ../logcat-e2e.txt
-          if grep -q "FATAL EXCEPTION" ../logcat-e2e.txt; then
+          if grep -A1 "FATAL EXCEPTION" ../logcat-e2e.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the end-to-end tests; see logcat-e2e.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat-e2e.txt | head -80
             exit 1
@@ -282,7 +284,7 @@ jobs:
           set -e
           "$ADB" logcat -d > ../logcat-soak.txt
           grep "SoakTest" ../logcat-soak.txt | tail -20 || true
-          if grep -q "FATAL EXCEPTION" ../logcat-soak.txt; then
+          if grep -A1 "FATAL EXCEPTION" ../logcat-soak.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the soak test; see logcat-soak.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat-soak.txt | head -80
             exit 1
@@ -305,7 +307,7 @@ jobs:
             app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../tor.txt
           set -e
           "$ADB" logcat -d > ../logcat-tor.txt
-          if grep -q "FATAL EXCEPTION" ../logcat-tor.txt; then
+          if grep -A1 "FATAL EXCEPTION" ../logcat-tor.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the Tor tests; see logcat-tor.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat-tor.txt | head -80
             exit 1
@@ -330,7 +332,7 @@ jobs:
           # Whatever happened, the emulator is left with no PIN.
           "$ADB" shell locksettings clear --old 1590 >/dev/null 2>&1 || true
           grep "VaultLockScreenTest" ../logcat-lockscreen.txt || true
-          if grep -q "FATAL EXCEPTION" ../logcat-lockscreen.txt; then
+          if grep -A1 "FATAL EXCEPTION" ../logcat-lockscreen.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the lock screen tests; see logcat-lockscreen.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat-lockscreen.txt | head -80
             exit 1
