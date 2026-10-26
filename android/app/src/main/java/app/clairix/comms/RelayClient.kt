@@ -28,7 +28,12 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** A relay call that did not succeed, with the relay's message when it gave one. */
-class RelayException(message: String, val code: Int = 0) : IOException(message)
+/**
+ * A request the relay (or the network) did not carry out. [code] is the HTTP
+ * status, 0 for no answer at all; [retryAfterSec] is how long the relay said
+ * to wait (Retry-After), when it said.
+ */
+class RelayException(message: String, val code: Int = 0, val retryAfterSec: Long? = null) : IOException(message)
 
 /**
  * HTTP and WebSocket client for the relay Worker. Every request about this
@@ -924,7 +929,8 @@ class RelayClient(
                 val json = runCatching { JSONObject(text) }.getOrNull()
                 if (!res.isSuccessful) {
                     val reason = json?.optString("error")?.takeIf { it.isNotEmpty() } ?: "HTTP ${res.code}"
-                    throw RelayException(reason, res.code)
+                    val wait = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it in 1..3600 }
+                    throw RelayException(reason, res.code, wait)
                 }
                 return json ?: throw RelayException("The relay returned something that is not JSON", MALFORMED)
             }

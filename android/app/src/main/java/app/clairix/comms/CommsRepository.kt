@@ -1184,7 +1184,7 @@ object CommsRepository {
                     }
                     is Deliver.Offline -> {
                         _state.update { it.copy(error = outcome.reason) }
-                        scheduleRetry()
+                        scheduleRetry(outcome.retryAfterMs)
                         // With the offline mesh on, everything still queued also travels
                         // phone to phone; the relay retry carries on regardless, and the
                         // recipient drops whichever copy arrives second.
@@ -1243,7 +1243,8 @@ object CommsRepository {
     private sealed class Deliver {
         object Sent : Deliver()
         class Failed(val reason: String) : Deliver()
-        class Offline(val reason: String) : Deliver()
+        /** Not now; try again later, or after [retryAfterMs] when the relay said how long. */
+        class Offline(val reason: String, val retryAfterMs: Long? = null) : Deliver()
         /** The relay refused the envelope as too large (413): final for this message, but the queue behind it goes on. */
         class TooLarge(val reason: String) : Deliver()
     }
@@ -1472,16 +1473,26 @@ object CommsRepository {
         e.code == 403 -> Deliver.Offline(e.message ?: "The relay refused this phone's delivery tokens; trying again later")
         e.code == 413 -> Deliver.TooLarge(e.message ?: "The relay refused the message as too large")
         e.code == RelayClient.NO_TOKENS -> Deliver.Offline("Waiting for delivery tokens from the relay")
-        e.code == 0 || e.code == 408 || e.code == 429 || e.code >= 500 || e.code == RelayClient.MALFORMED ->
+        // Busy, not down: the relay said how long to wait, and nothing is wrong
+        // with the network, so the backoff does not grow.
+        e.code == 429 -> Deliver.Offline(e.message ?: "The relay is busy; trying again shortly", (e.retryAfterSec ?: 30L) * 1000)
+        e.code == 0 || e.code == 408 || e.code >= 500 || e.code == RelayClient.MALFORMED ->
             Deliver.Offline(e.message ?: "The relay is not reachable right now")
         else -> Deliver.Failed(e.message ?: "Relay refused the message")
     }
 
-    /** Tries the outbox and owed receipts again after a growing pause, and on every network change. */
-    private fun scheduleRetry() {
+    /**
+     * Tries the outbox and owed receipts again after a growing pause, and on
+     * every network change; after exactly [afterMs] instead when the relay said
+     * how long to wait (a busy relay is not an outage, so the pause does not grow).
+     */
+    private fun scheduleRetry(afterMs: Long? = null) {
         if (retryJob?.isActive == true) return
-        val wait = retryBackoffMs
-        retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS)
+        val wait = if (afterMs != null) {
+            afterMs.coerceIn(1_000L, RETRY_MAX_MS)
+        } else {
+            retryBackoffMs.also { retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS) }
+        }
         retryJob = scope.launch {
             delay(wait)
             topUpTokens()
@@ -2264,7 +2275,7 @@ object CommsRepository {
                             CommsLog.add("Receipt to ${formatClairixNumber(peer)} dropped: ${d.reason}")
                             store.clearReceipts(peer, chunk, status)
                         }
-                        is Deliver.Offline -> { scheduleRetry(); return@withLock }
+                        is Deliver.Offline -> { scheduleRetry(d.retryAfterMs); return@withLock }
                     }
                 }
             }

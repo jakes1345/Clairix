@@ -459,19 +459,25 @@ test("another relay is held per recipient, alike for numbers that exist and ones
   try {
     const alice = await makePhone(a);
     const bob = await makePhone(b);
+    const waits = [];
     const statuses = async (to) => {
       const out = [];
-      for (let i = 0; i < 64; i++) {
+      for (let i = 0; i < 304; i++) {
         const [t] = await alice.tokens(1);
-        out.push((await sendVia(alice, t, to, B)).status);
+        const res = await sendVia(alice, t, to, B);
+        if (res.status === 429) waits.push(res.headers.get("retry-after"));
+        out.push(res.status);
       }
       return out;
     };
     const real = await statuses(bob.number);
     const made = await statuses("123456789");
     assert.deepEqual(real, made);
-    assert.equal(real.filter((s) => s === 202).length, 60);
+    // A photo of a few MB is a hundred envelopes or more: the limit lets one through at once.
+    assert.equal(real.filter((s) => s === 202).length, 300);
     assert.equal(real.filter((s) => s === 429).length, 4);
+    // The other relay's wait reaches the phone, which sends again then.
+    assert.ok(waits.length === 8 && waits.every((w) => w === "60"), `waits: ${waits}`);
   } finally {
     net.restore();
   }

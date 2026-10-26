@@ -56,7 +56,12 @@ export const FED_SENDS_PER_MINUTE = 600;
 export const FED_SENDS_BURST = 1_200;
 /** Per other relay and recipient: one relay alone cannot reach a mailbox's allowance for other relays. */
 export const FED_SENDS_PER_TARGET_PER_MINUTE = 30;
-export const FED_SENDS_PER_TARGET_BURST = 60;
+/**
+ * As much as the recipient's mailbox takes from other relays at once
+ * (mailbox.ts FED_INBOUND_BURST): a photo is one envelope per 30 KiB chunk, a
+ * few MB is a hundred of them, and 60 refused one before it was half sent.
+ */
+export const FED_SENDS_PER_TARGET_BURST = 300;
 export const FED_LOOKUPS_PER_MINUTE = 120;
 export const FED_LOOKUPS_BURST = 240;
 /** One-time keys any one other relay may claim, per hour across all numbers here. */
@@ -228,7 +233,13 @@ function randomNonce(): string {
  * Returns the other relay's status and JSON body; a relay that cannot be
  * reached is a 502.
  */
-export async function forward(env: Env, request: Request, target: string, path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+export async function forward(
+  env: Env,
+  request: Request,
+  target: string,
+  path: string,
+  body: unknown,
+): Promise<{ status: number; json: Record<string, unknown>; retryAfter?: number }> {
   const key = await relayKey(env);
   if (!key) throw new HttpError(501, "This relay does not reach other relays: its operator has turned federation off");
   const origin = ownOrigin(env, request);
@@ -263,7 +274,9 @@ export async function forward(env: Env, request: Request, target: string, path: 
   } catch {
     // not JSON
   }
-  return { status: res.status, json };
+  // A refusal's Retry-After is passed back to the phone, which waits that long.
+  const retryAfter = Number.parseInt(res.headers.get("retry-after") ?? "", 10);
+  return { status: res.status, json, ...(retryAfter > 0 && retryAfter <= 3600 ? { retryAfter } : {}) };
 }
 
 /**

@@ -32,7 +32,38 @@ class CommsStore(
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.rawQuery("PRAGMA secure_delete = ON", null).use { it.moveToFirst() }
+        // A write in flight (on the way out as the vault seals, say) holds the
+        // file's lock for a moment; wait for it rather than fail at once.
+        db.rawQuery("PRAGMA busy_timeout = $BUSY_TIMEOUT_MS", null).use { it.moveToFirst() }
     }
+
+    /**
+     * Closed when the vault sealed. SQLiteOpenHelper would quietly open the
+     * file again for anyone still holding this store (a send that began just
+     * before the screen went off), alongside the store the next unlock opens:
+     * two connections, and the newer one found the file locked (SoakTest, API
+     * 33). A closed store stays closed; using it reads as the vault being
+     * sealed, which every caller already handles.
+     */
+    @Volatile
+    private var closed = false
+
+    override fun close() {
+        closed = true
+        super.close()
+    }
+
+    override val readableDatabase: SQLiteDatabase
+        get() {
+            if (closed) throw VaultSealedException()
+            return super.readableDatabase
+        }
+
+    override val writableDatabase: SQLiteDatabase
+        get() {
+            if (closed) throw VaultSealedException()
+            return super.writableDatabase
+        }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -1216,5 +1247,6 @@ class CommsStore(
 
     private companion object {
         const val DB_VERSION = 9
+        const val BUSY_TIMEOUT_MS = 10_000
     }
 }

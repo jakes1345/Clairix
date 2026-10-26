@@ -1226,11 +1226,15 @@ function parseRelayField(value: unknown, loopback: boolean): string | null {
   return origin;
 }
 
-/** What the other relay refused, passed on with its status, so the phone can tell a full mailbox from a dead relay. */
-function otherRelayError(res: { status: number; json: Record<string, unknown> }): HttpError {
+/**
+ * What the other relay refused, passed on with its status (and how long to
+ * wait, when it said), so the phone can tell a full mailbox from a dead relay
+ * and a busy one from either.
+ */
+function otherRelayError(res: { status: number; json: Record<string, unknown>; retryAfter?: number }): HttpError {
   const reason = typeof res.json.error === "string" ? res.json.error.slice(0, 200) : `status ${res.status}`;
   const status = res.status >= 400 && res.status < 600 && res.status !== 401 ? res.status : 502;
-  return new HttpError(status, `The other relay refused: ${reason}`);
+  return new HttpError(status, `The other relay refused: ${reason}`, res.retryAfter);
 }
 
 function checkedIdentity(value: unknown, number: string): IdentityLike | null {
