@@ -90,6 +90,7 @@ import app.clairix.comms.GroupMember
 import app.clairix.comms.GroupThread
 import app.clairix.comms.MediaBody
 import app.clairix.comms.OrgRole
+import app.clairix.comms.RelayDirectory
 import app.clairix.comms.STATUS_CALL
 import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
@@ -448,6 +449,12 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
     var name by rememberSaveable { mutableStateOf("") }
     var listed by rememberSaveable { mutableStateOf(true) }
     var inviteError by remember(linkError) { mutableStateOf(linkError) }
+    val context = LocalContext.current
+    val relayList by RelayDirectory.list.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { RelayDirectory.current(context) }
+        RelayDirectory.refreshIfStale(context)
+    }
     val takeInvite: (PairingCode?) -> Unit = { code ->
         when {
             code == null -> inviteError = "That is not a Clairix invite."
@@ -530,11 +537,39 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             inviteError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
 
+        relayList?.relays?.takeIf { it.isNotEmpty() }?.let { relays ->
+            ClairixCard {
+                Text("Relays you can join", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(
+                    "From the Clairix relay list. Pick one run somewhere you trust: its operator and host can be ordered " +
+                        "to hand over what the relay holds (never your messages, which it cannot read). Clairix checks the " +
+                        "relay still has the key the list gives it before registering.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                for (relay in relays) {
+                    HorizontalDivider(color = ClairixTheme.colors.border)
+                    Text(relay.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                    Text("${relay.country} · ${relay.host}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text("Run by ${relay.operator}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text(relay.url.removePrefix("https://"), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                    relay.join?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) }
+                    SecondaryButton(
+                        if (url.trim().trimEnd('/') == relay.url) "Selected below" else "Use this relay",
+                        onClick = { url = relay.url },
+                        enabled = url.trim().trimEnd('/') != relay.url,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
         ClairixCard {
-            Text("Or run your own relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            Text("Or enter a relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
-                "Deploy comms-worker from the Clairix repository to Cloudflare, then enter its URL and the enrollment " +
-                    "secret you set. This phone generates its keys here, never shares the private half, and the relay " +
+                "Run comms-worker from the Clairix repository (on Cloudflare, or on a server of your own with " +
+                    "selfhost/install.sh) or pick a relay above, then enter its URL and the enrollment " +
+                    "secret. This phone generates its keys here, never shares the private half, and the relay " +
                     "hands it a random nine-digit Clairix number. Clairix then keeps a quiet background connection to the " +
                     "relay so messages arrive and calls ring while it's closed; Online in Comms settings switches that off.",
                 style = MaterialTheme.typography.bodyMedium,

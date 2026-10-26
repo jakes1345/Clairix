@@ -540,6 +540,23 @@ object CommsRepository {
                 if (invite == null && secret.isBlank()) return@withLock Result.failure(RelayException("Enter the enrollment secret"))
                 if (invite != null && invite.invite == null) return@withLock Result.failure(RelayException("That code is not an invite"))
                 setBusy(true)
+                // A relay on the relay list must answer with the key the list gives it.
+                // One that answers at its address with another key is a different relay
+                // (the address was taken over, or the name lapsed and was bought), and
+                // this phone would hand it its account.
+                RelayDirectory.current(appContext)?.find(url)?.let { listed ->
+                    val live = RelayDirectory.liveKey(url)
+                    if (live != listed.key) {
+                        val reason = if (live == null) {
+                            "Could not reach ${listed.name} to check it is the relay on the Clairix relay list. Try again."
+                        } else {
+                            "The relay at $url answers with a different key from the one the Clairix relay list gives ${listed.name}. " +
+                                "Someone else may have taken over its address: do not register there."
+                        }
+                        setBusy(false, reason)
+                        return@withLock Result.failure(RelayException(reason))
+                    }
+                }
                 try {
                     val identity = identities.create()
                     identity.generateOneTimeKeys(ONE_TIME_KEYS_BATCH.toUInt())

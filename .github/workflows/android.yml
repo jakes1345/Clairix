@@ -5,12 +5,14 @@ on:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'relays/**'
       - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
       - 'android/**'
       - 'comms-crypto/**'
+      - 'relays/**'
       - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:

@@ -78,9 +78,12 @@ automated.
 2. **Stand up relays** in the countries above, after checking each host's
    current terms, whether it really needs no ID, where the company is
    registered, and real prices.
-3. **Relay list in the app.** A published list of known relays, so a new user
-   can pick one in a country they trust, and the app can move to another when
-   one is blocked.
+3. **Relay list in the app.** *Done:* `relays/relays.json`, signed with the
+   asset key and published by the Relay list workflow; phones offer it when
+   setting up, refuse an older list than they have, and check a listed
+   relay's key before registering on it (`relays/README.md`). Still to do:
+   moving a phone to another relay when its own is blocked (a number is per
+   relay, so this needs contacts told of the new number).
 4. **The app over Tor** (Arti), so the phone's address is hidden from every
    relay, ours or not.
 

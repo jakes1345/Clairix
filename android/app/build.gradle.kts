@@ -121,6 +121,16 @@ val uniffiBindgen by tasks.registering(Exec::class) {
 
 tasks.named("preBuild") { dependsOn(uniffiBindgen) }
 
+// The relay list the app starts with: relays/relays.json at the repository's
+// root, the same file the Relay list workflow signs and publishes. Newer
+// copies come signed from the `relays` release (comms/RelayDirectory.kt).
+val relayListAssets = layout.buildDirectory.dir("generated/relayList")
+val copyRelayList by tasks.registering(Copy::class) {
+    from(rootProject.file("../relays/relays.json"))
+    into(relayListAssets)
+}
+tasks.named("preBuild") { dependsOn(copyRelayList) }
+
 // The JVM unit tests load the same crate built for this machine, so the relay
 // round-trip tests exercise the real Olm and sealing code rather than a stand-in.
 val rustHostLib = rustCrate.resolve("target/release")
@@ -299,6 +309,7 @@ android {
         getByName("main") {
             jniLibs.srcDir(rustJniLibs)
             kotlin.srcDir(rustBindings)
+            assets.srcDir(relayListAssets)
         }
     }
 
