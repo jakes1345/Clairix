@@ -39,7 +39,30 @@ class SoakTest {
     }
 
     @Test
-    fun aLongConversationLosesNothing() = runBlocking {
+    fun aLongConversationLosesNothing(): Unit = try {
+        conversation()
+    } catch (e: Throwable) {
+        explain()
+        throw e
+    }
+
+    /**
+     * What the app knew when the test failed, to logcat: its own delivery log
+     * and the last messages to each contact with their status. Only fake test
+     * contacts on an emulator are named, so logcat is no leak here.
+     */
+    private fun explain() {
+        runCatching {
+            CommsLog.entries.value.takeLast(80).forEach { Log.i(TAG, "comms log ${it.ts}: ${it.text}") }
+            for (peer in peers) {
+                repo.messages(peer.number).filter { it.direction == Direction.OUT }.takeLast(8).forEach { m ->
+                    Log.i(TAG, "to ${peer.number}: ${m.ts} ${m.status} ${m.error ?: ""} ${m.body.take(40)}")
+                }
+            }
+        }.onFailure { Log.w(TAG, "could not read the app's state: $it") }
+    }
+
+    private fun conversation(): Unit = runBlocking {
         val minutes = args.getString("soakMinutes")?.toLongOrNull()
         assumeTrue("pass soakMinutes, relayA, relayB and secret to run the soak test", minutes != null && args.getString("relayA") != null && args.getString("secret") != null)
         val relayA = args.getString("relayA")!!
