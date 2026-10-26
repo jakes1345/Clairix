@@ -2029,18 +2029,16 @@ object CommsRepository {
 
     // ── Offline mesh ──────────────────────────────────────────────────────
 
-    /** This phone's public sealing key, read once: Beta 5 senders' mesh tags are made from it. */
-    @Volatile private var ownSealing: String? = null
-
     /** The tags worked out for one day and one set of contacts; a carried bundle is checked against them. */
     private data class MeshTagCache(val day: Long, val contacts: Set<String>, val tags: Set<String>)
     @Volatile private var meshTagCache: MeshTagCache? = null
 
     /**
      * The routing tags this phone answers to on the mesh, yesterday, today and
-     * tomorrow: the one it shares with each contact, and Beta 5's tag from its own
-     * key for bundles from phones that have not updated. Worked out once a day,
-     * or when the contacts change.
+     * tomorrow: the one it shares with each contact. Worked out once a day, or
+     * when the contacts change. Beta 5's tag, from this phone's public key alone,
+     * is no longer answered: anyone holding that key could make a bundle only
+     * this phone takes, and so pick this phone out of a crowd.
      */
     fun meshTags(): Set<String> {
         val now = System.currentTimeMillis()
@@ -2048,9 +2046,7 @@ object CommsRepository {
         val contacts = runCatching { store.contacts() }.getOrDefault(emptyList()).map { it.sealing }.filter { it.isNotBlank() }.toSet()
         meshTagCache?.takeIf { it.day == day && it.contacts == contacts }?.let { return it.tags }
         val identity = runCatching { identities.get() }.getOrNull() ?: return emptySet()
-        val sealing = ownSealing ?: runCatching { identity.publicBundle().sealing }.getOrNull()?.also { ownSealing = it }
         val tags = HashSet<String>()
-        if (sealing != null) tags += MeshProtocol.around(now) { MeshProtocol.legacyTag(sealing, it) }
         for (peer in contacts) {
             runCatching { tags += MeshProtocol.around(now) { d -> identity.meshTag(peer, d) } }
         }

@@ -38,6 +38,7 @@ object MeshProtocol {
     const val TAG_LEN = 16
     const val ID_LEN = 16
     private const val DAY_MS = 86_400_000L
+    private const val HOUR_MS = 3_600_000L
 
     private const val T_HELLO: Byte = 1
     private const val T_BUNDLE: Byte = 2
@@ -63,28 +64,24 @@ object MeshProtocol {
 
     fun idOf(envelope: ByteArray): ByteArray = sha256(envelope).copyOf(ID_LEN)
 
-    /**
-     * Beta 5's routing tag: a hash of the recipient's public sealing key and the
-     * day, which anyone holding that public key could compute. Beta 6 sends only
-     * the pairwise tag; this one is still recognised on arrival, so bundles from
-     * phones that have not updated reach their recipient. Recognising it reveals
-     * nothing: a phone never announces the tags it answers to.
-     */
-    fun legacyTag(sealingB64: String, day: Long): ByteArray {
-        val key = Base64.getDecoder().decode(sealingB64)
-        return sha256("clairix-mesh-tag-v1".toByteArray(), key, ByteBuffer.allocate(8).putLong(day).array()).copyOf(TAG_LEN)
-    }
-
     fun day(ms: Long): Long = Math.floorDiv(ms, DAY_MS)
 
     /** A tag for yesterday, today and tomorrow around [now], for clocks that disagree. */
     fun around(now: Long, tagFor: (Long) -> ByteArray): Set<String> = (-1L..1L).map { hex(tagFor(day(now) + it)) }.toSet()
 
-    /** A bundle carrying [envelope] under [tag], today's tag for the sender and recipient. */
-    fun newBundle(envelope: ByteArray, tag: ByteArray, now: Long): Bundle? {
+    /**
+     * A bundle carrying [envelope] under [tag], today's tag for the sender and
+     * recipient. It starts a random one to three hops along and is dated to the
+     * hour: a bundle that left its writer with the first hop count, at the exact
+     * minute it was written, would say which phone wrote it.
+     */
+    fun newBundle(envelope: ByteArray, tag: ByteArray, now: Long, random: java.util.Random = java.security.SecureRandom()): Bundle? {
         if (envelope.size > MAX_ENVELOPE || tag.size != TAG_LEN) return null
-        return Bundle(idOf(envelope), tag.copyOf(), 0, now, envelope)
+        return Bundle(idOf(envelope), tag.copyOf(), 1 + random.nextInt(3), hourOf(now), envelope)
     }
+
+    /** [ms] rounded down to the hour. */
+    fun hourOf(ms: Long): Long = Math.floorDiv(ms, HOUR_MS) * HOUR_MS
 
     fun encode(frame: Frame): ByteArray = when (frame) {
         is Frame.Hello -> {

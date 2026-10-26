@@ -93,8 +93,8 @@ class MeshTest {
         meet(bob, stranger)
         assertEquals(1, bob.got.size)
         assertArrayEquals(env, bob.got[0])
-        // Delivered, so bob does not carry it on, and a second copy is not handed over again.
-        assertEquals(0, bob.store.size)
+        // Delivered, and carried on all the same; a second copy is not handed over again.
+        assertEquals(1, bob.store.size)
         meet(alice, bob)
         assertEquals(1, bob.got.size)
     }
@@ -111,8 +111,8 @@ class MeshTest {
         meet(a, b)
         assertEquals(1, a.got.size)
         assertEquals(1, b.got.size)
-        // b carries c's now, and still its own for a: nothing tells it a has it.
-        assertEquals(2, b.store.size)
+        // b carries c's now, the one it was handed, and still its own for a: nothing tells it a has it.
+        assertEquals(3, b.store.size)
         meet(a, b)
         assertEquals(1, a.got.size)
         assertEquals(1, b.got.size)
@@ -168,7 +168,7 @@ class MeshTest {
         assertTrue(seen in bob.tags(now))
         // Everything Carol can work out from Bob's public sealing key.
         assertFalse(seen in carol.tags(now))
-        assertFalse(seen in MeshProtocol.around(now) { MeshProtocol.legacyTag(bob.sealing, it) })
+        assertFalse(seen in MeshProtocol.around(now) { legacyTag(bob.sealing, it) })
         assertFalse(seen in MeshProtocol.around(now) { carol.identity.meshTag(bob.sealing, it) })
         // And Carol carries it on without recognising it.
         alice.store.addOwn("bob", "m1", bundle, now)
@@ -179,17 +179,88 @@ class MeshTest {
         assertEquals(1, bob.got.size)
     }
 
-    /** A Beta 5 phone's bundle, under the old tag, still reaches a Beta 6 recipient. */
+    /** Beta 5's tag, from the recipient's public key alone: whoever holds that key could make one. */
+    private fun legacyTag(sealingB64: String, day: Long): ByteArray {
+        val key = java.util.Base64.getDecoder().decode(sealingB64)
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        md.update("clairix-mesh-tag-v1".toByteArray()); md.update(key); md.update(java.nio.ByteBuffer.allocate(8).putLong(day).array())
+        return md.digest().copyOf(MeshProtocol.TAG_LEN)
+    }
+
+    /**
+     * Anyone holding Bob's public key (his relay, any contact) could make a bundle
+     * under Beta 5's tag and see which phone in a crowd took it. It is no longer
+     * answered: such a bundle is carried by Bob's phone like anyone's.
+     */
     @Test
-    fun aBundleUnderTheOldTagStillArrives() {
+    fun aBundleUnderTheOldPublicKeyTagSinglesNobodyOut() {
         val bob = Phone("bob", store())
-        val old = Phone("old", store())
-        val legacy = MeshProtocol.newBundle(envelope(), MeshProtocol.legacyTag(bob.sealing, MeshProtocol.day(now)), now)!!
-        old.store.addOwn("bob", "1", legacy, now)
-        val bobWithLegacy = object {
-            fun tags() = bob.tags(now) + MeshProtocol.around(now) { MeshProtocol.legacyTag(bob.sealing, it) }
+        val alice = Phone("alice", store())
+        val prober = Phone("prober", store())
+        friends(alice, bob)
+        val probe = MeshProtocol.newBundle(envelope(), legacyTag(bob.sealing, MeshProtocol.day(now)), now)!!
+        assertFalse(MeshProtocol.hex(probe.tag) in bob.tags(now))
+        prober.store.addOwn("bob", "1", probe, now)
+        meet(prober, bob)
+        assertTrue(bob.got.isEmpty())
+        assertEquals(1, bob.store.size)
+    }
+
+    /**
+     * A peer that connects with an empty hello is sent everything listed: a
+     * bundle handed to this phone's owner is listed and sent like the rest, so
+     * listing without sending cannot mark the phone it was for.
+     */
+    @Test
+    fun aBundleForThisPhoneIsPassedOnLikeAnyOther() {
+        val alice = Phone("alice", store())
+        val bob = Phone("bob", store())
+        val watcher = Phone("watcher", store())
+        friends(alice, bob)
+        alice.store.addOwn("bob", "m1", alice.bundleFor(bob, envelope(), now), now)
+        meet(alice, bob)
+        assertEquals(1, bob.got.size)
+        val listed = bob.store.knownIds(now).map { MeshProtocol.hex(it) }.toSet()
+        meet(watcher, bob)
+        val sent = watcher.store.ids(now).map { MeshProtocol.hex(it) }.toSet()
+        assertEquals(listed, sent)
+    }
+
+    /** A bundle's writer is not given away by its hop count or the minute it was written. */
+    @Test
+    fun aNewBundleDoesNotSayWhoWroteItOrWhen() {
+        val hops = (1..200).map { MeshProtocol.newBundle(envelope(), tag(), now + it)!!.hops }.toSet()
+        assertEquals(setOf(1, 2, 3), hops)
+        val b = MeshProtocol.newBundle(envelope(), tag(), now)!!
+        assertEquals(0L, b.createdMs % 3_600_000L)
+        assertTrue(b.createdMs <= now && now - b.createdMs < 3_600_000L)
+    }
+
+    /** Strangers flooding a phone push out each other's bundles, never the owner's own. */
+    @Test
+    fun aFloodDoesNotPushOutTheOwnersOwnBundles() {
+        val s = store()
+        val mine = MeshProtocol.newBundle(envelope(), tag(), now)!!
+        assertTrue(s.addOwn("bob", "sos", mine, now))
+        repeat(MeshProtocol.MAX_STORE + 50) { s.add(MeshProtocol.newBundle(envelope(64), tag(), now)!!, now) }
+        assertEquals(MeshProtocol.MAX_STORE, s.size)
+        assertTrue(s.ids(now).any { it.contentEquals(mine.id) })
+        // Nor can one tag take the store over.
+        val t = tag()
+        val s2 = store()
+        repeat(MeshStore.MAX_PER_TAG + 10) { s2.add(MeshProtocol.newBundle(envelope(64), t, now)!!, now) }
+        assertEquals(MeshStore.MAX_PER_TAG, s2.size)
+    }
+
+    /** One meeting takes at most so many bundles from a peer. */
+    @Test
+    fun oneMeetingCannotFloodAPhone() {
+        val s = store()
+        val session = MeshSession(s, { emptySet() }, {}, {}, { now }, initiator = false)
+        var accepted = true
+        for (i in 0..MeshSession.MAX_ADDS) {
+            accepted = session.onFrame(MeshProtocol.encode(MeshProtocol.Frame.Carry(MeshProtocol.newBundle(envelope(64), tag(), now)!!)))
         }
-        assertTrue(MeshProtocol.hex(legacy.tag) in bobWithLegacy.tags())
-        assertFalse(MeshProtocol.hex(legacy.tag) in bob.tags(now))
+        assertFalse("the meeting ends past the cap", accepted)
     }
 }

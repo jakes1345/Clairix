@@ -13,36 +13,59 @@ import java.util.Base64
  */
 class MeshStore(private val store: Store) {
 
+    companion object {
+        /** Bundles one tag may have here: one pair of people cannot fill the store, nor a stranger flood it under one tag. */
+        const val MAX_PER_TAG = 50
+    }
+
     private val lock = Any()
     private val bundles = LinkedHashMap<String, MeshProtocol.Bundle>()
     private val queued = HashMap<String, Long>()
     /** Bundles this phone has delivered to its owner, so another copy is not handed over again. */
     private val delivered = LinkedHashMap<String, Long>()
+    /** The owner's own bundles: never pushed out to make room for what strangers hand over. */
+    private val own = HashSet<String>()
 
     init { synchronized(lock) { load() } }
 
     val size: Int get() = synchronized(lock) { bundles.size }
 
-    /** Adds [b] unless it is known, expired, too big or has travelled too far. Returns true when it was new. */
+    /**
+     * Adds [b] unless it is known, expired, too big or has travelled too far, or
+     * its tag already has [MAX_PER_TAG] bundles here. Returns true when it was new.
+     * A bundle already handed to the owner is carried on like any other.
+     */
     fun add(b: MeshProtocol.Bundle, now: Long): Boolean = synchronized(lock) {
         if (b.data.size > MeshProtocol.MAX_ENVELOPE || b.hops > MeshProtocol.MAX_HOPS) return false
         if (now - b.createdMs > MeshProtocol.TTL_MS || b.createdMs - now > 3_600_000L) return false
         val key = b.idHex
-        if (key in bundles || key in delivered) return false
+        if (key in bundles) return false
+        if (bundles.values.count { it.tag.contentEquals(b.tag) } >= MAX_PER_TAG) return false
         bundles[key] = b
-        while (bundles.size > MeshProtocol.MAX_STORE) bundles.remove(bundles.keys.first())
+        evict()
         save()
         true
     }
 
+    /** Over [MeshProtocol.MAX_STORE]: the oldest carried bundle goes, never one of the owner's own. */
+    private fun evict() {
+        while (bundles.size > MeshProtocol.MAX_STORE) {
+            val victim = bundles.keys.firstOrNull { it !in own } ?: break
+            bundles.remove(victim)
+        }
+    }
+
     fun ids(now: Long): List<ByteArray> = synchronized(lock) { prune(now); bundles.values.map { it.id } }
 
-    /** What a hello should list: what this phone carries and what it has already been handed, so neither is sent to it again. */
+    /**
+     * What a hello should list: what this phone carries, and nothing else. A
+     * bundle handed to the owner stays among those carried and is passed on like
+     * the rest, so no peer can tell which bundles were for this phone by seeing
+     * one listed and never sent.
+     */
     fun knownIds(now: Long): List<ByteArray> = synchronized(lock) {
         prune(now)
-        (bundles.values.map { it.id } + delivered.keys.mapNotNull { k ->
-            runCatching { ByteArray(k.length / 2) { i -> k.substring(i * 2, i * 2 + 2).toInt(16).toByte() } }.getOrNull()
-        }).take(MeshProtocol.MAX_STORE * 2)
+        bundles.values.map { it.id }.take(MeshProtocol.MAX_STORE)
     }
 
     /** What this phone holds that a peer holding [theirs] lacks, with one more hop on each. */
@@ -57,10 +80,11 @@ class MeshStore(private val store: Store) {
      * stop here. Returns false when it already had been, so a second copy is not handed over.
      */
     fun markDelivered(b: MeshProtocol.Bundle, now: Long): Boolean = synchronized(lock) {
+        // Carried on either way, as if it were anyone's.
+        if (b.idHex !in bundles) add(b, now)
         if (b.idHex in delivered) return false
         delivered[b.idHex] = now
         while (delivered.size > MeshProtocol.MAX_STORE) delivered.remove(delivered.keys.first())
-        bundles.remove(b.idHex)
         save()
         true
     }
@@ -74,19 +98,21 @@ class MeshStore(private val store: Store) {
         if (key in queued) return false
         queued[key] = now
         bundles[b.idHex] = b
-        while (bundles.size > MeshProtocol.MAX_STORE) bundles.remove(bundles.keys.first())
+        own += b.idHex
+        evict()
         save()
         true
     }
 
     fun clear() = synchronized(lock) {
-        bundles.clear(); queued.clear(); delivered.clear()
+        bundles.clear(); queued.clear(); delivered.clear(); own.clear()
         store.replace(JSONObject())
     }
 
     private fun prune(now: Long) {
         val before = bundles.size + queued.size + delivered.size
         bundles.values.removeAll { now - it.createdMs > MeshProtocol.TTL_MS }
+        own.retainAll(bundles.keys)
         queued.values.removeAll { now - it > MeshProtocol.TTL_MS }
         delivered.values.removeAll { now - it > MeshProtocol.TTL_MS }
         if (bundles.size + queued.size + delivered.size != before) save()
@@ -106,6 +132,8 @@ class MeshStore(private val store: Store) {
         }
         root.optJSONObject("queued")?.let { q -> q.keys().forEach { k -> queued[k] = q.optLong(k) } }
         root.optJSONObject("delivered")?.let { q -> q.keys().forEach { k -> delivered[k] = q.optLong(k) } }
+        root.optJSONArray("own")?.let { arr -> for (i in 0 until arr.length()) own += arr.optString(i) }
+        own.retainAll(bundles.keys)
     }
 
     private fun save() {
@@ -115,6 +143,7 @@ class MeshStore(private val store: Store) {
         val root = JSONObject().put("bundles", arr)
             .put("queued", JSONObject().also { o -> queued.forEach { (k, v) -> o.put(k, v) } })
             .put("delivered", JSONObject().also { o -> delivered.forEach { (k, v) -> o.put(k, v) } })
+            .put("own", JSONArray(own.toList()))
         store.replace(root)
     }
 }
