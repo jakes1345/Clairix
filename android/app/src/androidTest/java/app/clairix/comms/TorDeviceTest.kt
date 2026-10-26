@@ -61,11 +61,23 @@ class TorDeviceTest {
 
     @Test
     fun requestsLeaveThroughTor() {
-        client().newCall(Request.Builder().url("https://check.torproject.org/api/ip").build()).execute().use { resp ->
-            assertTrue("HTTP ${resp.code}", resp.isSuccessful)
-            val body = JSONObject(resp.body!!.string())
+        // Some exit relays close the connection during the TLS handshake ("connection
+        // closed"); a Tor client goes again through another circuit, and so does this.
+        val failures = mutableListOf<String>()
+        repeat(CHECK_TRIES) {
+            val body = try {
+                client().newCall(Request.Builder().url("https://check.torproject.org/api/ip").build()).execute().use { resp ->
+                    assertTrue("HTTP ${resp.code}", resp.isSuccessful)
+                    JSONObject(resp.body!!.string())
+                }
+            } catch (e: IOException) {
+                failures += "${e.javaClass.simpleName}: ${e.message}"
+                return@repeat
+            }
             assertTrue("the request did not come out of Tor: $body", body.getBoolean("IsTor"))
+            return
         }
+        throw AssertionError("check.torproject.org was not reached through Tor in $CHECK_TRIES tries: $failures")
     }
 
     @Test
@@ -126,5 +138,9 @@ class TorDeviceTest {
             true
         }
         assertTrue("with Tor on but not running, a request went out anyway", failed)
+    }
+
+    private companion object {
+        const val CHECK_TRIES = 3
     }
 }
