@@ -124,6 +124,32 @@ test("token issuance is an hourly allowance per account", async () => {
   assert.equal((await alice.tokens(100)).length, 100);
 });
 
+test("an operator can set the hourly delivery allowance; anything but a whole number in range keeps the default", async () => {
+  const issued = async (vars) => {
+    const alice = await makePhone(makeRelay(vars));
+    let got = 0;
+    for (;;) {
+      const res = await alice.signed("POST", "/v1/tokens", { count: 100 });
+      if (res.status !== 200) return got;
+      got += res.json.tokens.length;
+    }
+  };
+  assert.equal(await issued({ DELIVERY_TOKENS_PER_HOUR: "2500" }), 2500);
+  assert.equal(await issued({ DELIVERY_TOKENS_PER_HOUR: "150" }), 150);
+  for (const bad of ["0", "100001", "-5", "1e4", "lots", ""]) {
+    assert.equal(await issued({ DELIVERY_TOKENS_PER_HOUR: bad }), 1000, bad);
+  }
+  // Other kinds keep their own.
+  const alice = await makePhone(makeRelay({ DELIVERY_TOKENS_PER_HOUR: "5000" }));
+  let traffic = 0;
+  for (;;) {
+    const res = await alice.signed("POST", "/v1/tokens", { count: 100, kind: "traffic" });
+    if (res.status !== 200) break;
+    traffic += res.json.tokens.length;
+  }
+  assert.equal(traffic, 400);
+});
+
 test("the allowance remembers the hour it was drawn on, never the moment, and is forgotten once full", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);

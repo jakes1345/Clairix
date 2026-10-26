@@ -40,7 +40,7 @@ const allowLoopback = process.argv.includes("--allow-loopback");
 export const SETTINGS = [
   "ENROLL_SECRET", "TURN_KEY_ID", "TURN_KEY_API_TOKEN", "COIN_INITIAL_BALANCE", "ADMIN_SECRET",
   "WZDX_FEEDS", "HERE_API_KEY", "TOMTOM_API_KEY", "HERE_DAILY_CAP", "TOMTOM_DAILY_CAP", "PUSH_HOSTS",
-  "RELAY_ALTERNATES", "RELAY_ONION", "MIX_MAX_MS", "RELAY_KEY", "TOKEN_KEY", "RELAY_ORIGIN", "FEDERATION",
+  "RELAY_ALTERNATES", "RELAY_ONION", "DELIVERY_TOKENS_PER_HOUR", "MIX_MAX_MS", "RELAY_KEY", "TOKEN_KEY", "RELAY_ORIGIN", "FEDERATION",
 ];
 
 // Read from wrangler.toml so the two never drift apart.

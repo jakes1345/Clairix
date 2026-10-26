@@ -133,6 +133,14 @@ captured registration (it carries the secret) cannot be replayed into a second
 account, and nobody can register someone else's key as their own. Two people pair by scanning each other's QR code in
 person, or by typing a listed Clairix number and then comparing safety numbers.
 
+### How much each account may send
+
+Every envelope a phone sends spends one delivery token, and each account is
+issued 1,000 an hour (a 5 MB video is 171 envelopes). An operator whose
+people send more, or who wants tighter limits, sets `DELIVERY_TOKENS_PER_HOUR`
+to a whole number from 1 to 100000. A phone that has spent its hour's tokens
+keeps what it sends queued and sends it when the next hour's arrive.
+
 ### Several doors to one relay
 
 A relay that lives at one name can be blocked at that name. Set

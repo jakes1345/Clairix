@@ -11,6 +11,7 @@ import {
   randomToken,
   STUN_ONLY,
   TOKEN_KINDS,
+  tokenAllowance,
   tokenHash,
   tokenShardName,
   tokenBatchExpiry,
@@ -371,7 +372,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!isTokenKind(body.kind)) throw new HttpError(400, "kind must be delivery, traffic or report");
       kind = body.kind;
     }
-    const spec = TOKEN_KINDS[kind];
+    const spec = tokenAllowance(env, kind);
     if (body.blinded !== undefined) {
       // Blind tokens (tokens.ts): the relay sees blinded elements only, and
       // keeps nothing about what it issued.

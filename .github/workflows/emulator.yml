@@ -144,7 +144,10 @@ jobs:
       # workerd, so every cross-relay test also runs a self-hosted relay. A
       # relay reached over plain http on 127.0.0.1 admits other loopback relays
       # as addresses (federation.ts isLoopbackDev), which a deployed relay never
-      # does; B is built --allow-loopback to reach A at all.
+      # does; B is built --allow-loopback to reach A at all. Both issue 20,000
+      # delivery tokens an hour instead of 1,000: the soak test sends more in
+      # its eight minutes than a person does in an hour, and would otherwise
+      # wait for the next hour's allowance (correctly, but past its timeouts).
       - name: Start two local relays
         working-directory: comms-worker
         env:
@@ -154,11 +157,12 @@ jobs:
           nohup npx wrangler dev --ip 127.0.0.1 --port 8787 --inspector-port 9229 \
             --persist-to "$RUNNER_TEMP/relay-a" \
             --var ENROLL_SECRET:e2e-enrollment-secret-0123456789 --var MIX_MAX_MS:2000 \
+            --var DELIVERY_TOKENS_PER_HOUR:20000 \
             > ../relay-a.log 2>&1 &
           mkdir -p "$RUNNER_TEMP/relay-b"
           node selfhost/build.mjs --out "$RUNNER_TEMP/relay-b-build" --state "$RUNNER_TEMP/relay-b" \
             --listen 127.0.0.1:8788 --cron-listen 127.0.0.1:8790 --allow-loopback
-          ENROLL_SECRET=e2e-enrollment-secret-0123456789 MIX_MAX_MS=2000 RELAY_ONION="$RELAY_B_ONION" \
+          ENROLL_SECRET=e2e-enrollment-secret-0123456789 MIX_MAX_MS=2000 RELAY_ONION="$RELAY_B_ONION" DELIVERY_TOKENS_PER_HOUR=20000 \
             nohup node_modules/.bin/workerd serve --experimental "$RUNNER_TEMP/relay-b-build/relay.capnp" \
             > ../relay-b.log 2>&1 &
           for port in 8787 8788; do

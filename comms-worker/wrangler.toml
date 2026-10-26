@@ -22,6 +22,8 @@
 #                        has pinned the relay's key stays on the pinned address.
 #   RELAY_ONION          Optional: the relay's onion address, http://<56 characters>.onion, for
 #                        phones that connect through Tor (selfhost/install.sh sets it up)
+#   DELIVERY_TOKENS_PER_HOUR  Optional: envelopes each account may send an hour (default 1000;
+#                        a 5 MB video is 171), from 1 to 100000
 #   PUSH_HOSTS           Optional: comma-separated push hosts (a self-hosted ntfy, say) trusted like
 #                        ntfy.sh and up.conversations.im; an endpoint on any other host is used only
 #                        after the phone echoes a one-time code pushed through it

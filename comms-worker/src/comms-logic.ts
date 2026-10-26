@@ -49,6 +49,22 @@ export const TOKEN_KINDS: Record<TokenKind, TokenKindSpec> = {
   report: { shard: "rtok", perHour: 20, burst: 30 },
 };
 
+/**
+ * How many tokens of [kind] an account is issued an hour, and the most it
+ * saves up: [TOKEN_KINDS], with delivery tokens raised or lowered by the
+ * operator's DELIVERY_TOKENS_PER_HOUR (a whole number from 1 to 100000) when
+ * set, for a relay whose people send more (a family relay full of videos) or
+ * that wants tighter limits.
+ */
+export function tokenAllowance(env: { DELIVERY_TOKENS_PER_HOUR?: string }, kind: TokenKind): { perHour: number; burst: number } {
+  const spec = TOKEN_KINDS[kind];
+  if (kind !== "delivery") return spec;
+  const raw = (env.DELIVERY_TOKENS_PER_HOUR ?? "").trim();
+  if (!/^[0-9]{1,6}$/.test(raw)) return spec;
+  const n = Number(raw);
+  return n >= 1 && n <= 100_000 ? { perHour: n, burst: n } : spec;
+}
+
 export function isTokenKind(raw: unknown): raw is TokenKind {
   return raw === "delivery" || raw === "traffic" || raw === "report";
 }
