@@ -67,13 +67,14 @@ automated.
 
 ## Work to do first
 
-1. **Self-hostable relay.** Run the same Worker on our own server with
-   workerd and on-disk Durable Object storage (one machine; that is what
-   `wrangler dev --persist-to` does and what the emulator tests use). Ship a
-   setup script: automatic security updates, restart on failure, TLS
-   certificate renewal, an uptime check, and a Tor onion service in front.
-   Multi-machine Durable Objects (Deno's celld, being merged into workerd
-   after Cloudflare bought Deno) were at v0.1.0 in August 2026: too early.
+1. **Self-hostable relay.** *Done:* `comms-worker/selfhost/install.sh` runs
+   the same Worker under workerd with on-disk Durable Object storage, behind
+   Caddy (TLS) and a Tor onion service, with restart on failure, an uptime
+   check, the scheduled work, and automatic security updates. See
+   "On your own server" in `comms-worker/README.md`. The emulator tests run
+   one of their two relays this way. Multi-machine Durable Objects (Deno's
+   celld, being merged into workerd after Cloudflare bought Deno) were at
+   v0.1.0 in August 2026: too early.
 2. **Stand up relays** in the countries above, after checking each host's
    current terms, whether it really needs no ID, where the company is
    registered, and real prices.

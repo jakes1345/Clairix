@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart the Clairix relay when it stops answering
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/clairix-relay-check

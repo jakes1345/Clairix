@@ -80,22 +80,28 @@ jobs:
         with:
           node-version: '22.22.0'
 
-      # Two relays side by side, each with storage of its own. A relay reached
-      # over plain http on 127.0.0.1 admits other loopback relays as addresses
-      # (federation.ts isLoopbackDev), which a deployed relay never does.
+      # Two relays side by side, each with storage of its own: A under
+      # `wrangler dev`, B as the self-hosted build (selfhost/) under plain
+      # workerd, so every cross-relay test also runs a self-hosted relay. A
+      # relay reached over plain http on 127.0.0.1 admits other loopback relays
+      # as addresses (federation.ts isLoopbackDev), which a deployed relay never
+      # does; B is built --allow-loopback to reach A at all.
       - name: Start two local relays
         working-directory: comms-worker
         env:
           WRANGLER_SEND_METRICS: 'false'
         run: |
           npm ci --no-audit --no-fund
-          for r in a:8787:9229 b:8788:9230; do
-            name=${r%%:*}; rest=${r#*:}; port=${rest%%:*}; inspector=${rest#*:}
-            nohup npx wrangler dev --ip 127.0.0.1 --port "$port" --inspector-port "$inspector" \
-              --persist-to "$RUNNER_TEMP/relay-$name" \
-              --var ENROLL_SECRET:e2e-enrollment-secret-0123456789 --var MIX_MAX_MS:2000 \
-              > "../relay-$name.log" 2>&1 &
-          done
+          nohup npx wrangler dev --ip 127.0.0.1 --port 8787 --inspector-port 9229 \
+            --persist-to "$RUNNER_TEMP/relay-a" \
+            --var ENROLL_SECRET:e2e-enrollment-secret-0123456789 --var MIX_MAX_MS:2000 \
+            > ../relay-a.log 2>&1 &
+          mkdir -p "$RUNNER_TEMP/relay-b"
+          node selfhost/build.mjs --out "$RUNNER_TEMP/relay-b-build" --state "$RUNNER_TEMP/relay-b" \
+            --listen 127.0.0.1:8788 --cron-listen 127.0.0.1:8790 --allow-loopback
+          ENROLL_SECRET=e2e-enrollment-secret-0123456789 MIX_MAX_MS=2000 \
+            nohup node_modules/.bin/workerd serve --experimental "$RUNNER_TEMP/relay-b-build/relay.capnp" \
+            > ../relay-b.log 2>&1 &
           for port in 8787 8788; do
             for i in $(seq 1 60); do curl -sf "http://127.0.0.1:$port/" > /dev/null && break; sleep 2; done
             curl -sf "http://127.0.0.1:$port/" || { echo "::error::The relay on $port did not start"; cat ../relay-*.log; exit 1; }

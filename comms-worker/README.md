@@ -222,6 +222,45 @@ Clairix numbers are random per relay, so the same number can exist on two
 relays; the app refuses a second contact with a number it already has.
 ClairixCoin does not cross relays: each relay is its own coin community.
 
+### On your own server
+
+The same Worker runs on any Debian 12 or Ubuntu 24.04 server under
+[workerd](https://github.com/cloudflare/workerd), Cloudflare's open-source
+Workers runtime, with no Cloudflare account. From a checkout, on a server
+whose DNS name already points at it:
+
+```bash
+cd comms-worker
+sudo ./selfhost/install.sh --domain relay.example.org --email you@example.org
+```
+
+It builds the Worker (`selfhost/build.mjs`: the bundle `wrangler deploy`
+uploads, and a workerd config) and sets up:
+
+- **The relay** as the `clairix-relay` service, its Durable Objects in SQLite
+  files under `/var/lib/clairix-relay` (back this up: it holds the relay's keys
+  and every mailbox). It listens on `127.0.0.1:8787` only, and fetches public
+  addresses only, so nothing that gets it to fetch a URL (a relay address, a
+  push endpoint) reaches the server's own services.
+- **Settings** in `/etc/clairix-relay/relay.env`: every setting above, one
+  `NAME=value` a line. `ENROLL_SECRET` is generated on the first run and
+  `RELAY_ORIGIN` set to `https://<domain>`.
+- **Caddy** in front, with HTTPS certificates it renews itself and no access
+  log. It sets `CF-Connecting-IP`, which the registration limit counts by, so
+  a client cannot choose its own.
+- **An onion service** (leave it out with `--no-onion`), through Caddy too: the
+  relay always sees the onion name as its host and never a client-supplied
+  address.
+- **Upkeep**: systemd restarts the relay if it exits, a timer restarts it if it
+  stops answering for six minutes, another runs its scheduled work every 10
+  minutes (what `crons` does on Cloudflare), and security updates install
+  themselves, rebooting at 04:30 when one needs it.
+
+Run the script again after `git pull` to update: it keeps storage and
+settings, and swaps the new build in only once it has built. Logs:
+`journalctl -u clairix-relay`. One server holds all of a relay's Durable
+Objects; workerd does not spread them across machines.
+
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else

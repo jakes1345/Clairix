@@ -1,0 +1,9 @@
+[Unit]
+Description=Every 10 minutes, as the Worker's crons = ["*/10 * * * *"]
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

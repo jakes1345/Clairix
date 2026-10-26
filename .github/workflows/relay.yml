@@ -62,3 +62,19 @@ jobs:
 
       - name: Bundle
         run: npx wrangler deploy --dry-run --outdir=dist
+
+      # The self-hosted relay (selfhost/): the same bundle under plain
+      # workerd, Durable Objects on disk, settings from the environment, and
+      # the cron worker that stands in for Cloudflare's scheduler.
+      - name: Run the self-hosted build under workerd
+        run: |
+          state="$RUNNER_TEMP/selfhost-state"
+          mkdir -p "$state"
+          node selfhost/build.mjs --out "$RUNNER_TEMP/selfhost" --state "$state"
+          ENROLL_SECRET=selfhost-check-secret-0123456789 \
+            node_modules/.bin/workerd serve --experimental "$RUNNER_TEMP/selfhost/relay.capnp" > "$RUNNER_TEMP/workerd.log" 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8787/ > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8787/ | grep -q '"service":"clairix-comms"' || { cat "$RUNNER_TEMP/workerd.log"; exit 1; }
+          test "$(curl -sf -X POST http://127.0.0.1:8789/)" = ok || { cat "$RUNNER_TEMP/workerd.log"; exit 1; }
+          test -d "$state/clairix-relay-Mailbox" || { echo "::error::no Durable Object storage on disk"; exit 1; }
+          bash -n selfhost/install.sh
