@@ -789,4 +789,8 @@ test("a key registered under one spelling cannot be registered again under anoth
   const k = victim.curve25519.includes("+") || victim.curve25519.includes("/") ? victim.curve25519 : null;
   if (k) assert.equal((await register(urlSafe(k), victim.sealing)).status, 400);
   assert.equal((await register(` ${victim.curve25519}`, victim.sealing)).status, 400);
+  // Nor is the same Curve25519 key with its top bit set, which X25519 ignores.
+  const raw = Buffer.from(victim.curve25519, "base64");
+  raw[31] |= 0x80;
+  assert.equal((await register(raw.toString("base64"), victim.sealing)).status, 400);
 });

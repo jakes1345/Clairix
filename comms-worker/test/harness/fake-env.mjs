@@ -297,6 +297,14 @@ function randomB64(n = 32) {
   return b64(crypto.getRandomValues(new Uint8Array(n)));
 }
 
+/** A random Curve25519 public key in canonical form (top bit clear), as a real phone's always is. */
+function randomCurveB64() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  bytes[31] &= 0x7f;
+  if (bytes[31] === 0x7f) bytes[31] = 0x7e; // and below the field prime
+  return b64(bytes);
+}
+
 async function sha256Hex(text) {
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
   return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -312,8 +320,8 @@ export async function makePhone(relay, { listed = true, oneTimeKeys = 10 } = {})
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const ed25519 = b64(await crypto.subtle.exportKey("raw", pair.publicKey));
   const sign = async (text) => b64(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, enc.encode(text)));
-  const curve25519 = randomB64();
-  const sealing = randomB64();
+  const curve25519 = randomCurveB64();
+  const sealing = randomCurveB64();
   const signedKey = async (id) => {
     const key = randomB64();
     return { id, key, signature: await sign(key) };

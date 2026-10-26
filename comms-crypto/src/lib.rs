@@ -290,11 +290,16 @@ fn parse_inner(bytes: &[u8]) -> Result<InnerView<'_>> {
 /// static key, HKDF over the shared secret bound to both public keys, then
 /// ChaCha20-Poly1305 with a zero nonce (the key is single-use). `inner` is
 /// handed the ephemeral public key so the sender can bind its claim to it.
-fn seal(recipient: &XPublicKey, inner: impl FnOnce(&[u8; 32]) -> Zeroizing<Vec<u8>>) -> Vec<u8> {
+fn seal(recipient: &XPublicKey, inner: impl FnOnce(&[u8; 32]) -> Zeroizing<Vec<u8>>) -> Result<Vec<u8>> {
     let eph = StaticSecret::random_from_rng(&mut rand::thread_rng());
     let eph_pub = XPublicKey::from(&eph);
-    let plaintext = inner(eph_pub.as_bytes());
     let shared = eph.diffie_hellman(recipient);
+    // A low-order recipient key makes the shared secret one anybody can compute
+    // from public values alone, the relay included.
+    if !shared.was_contributory() {
+        return Err(CryptoError::BadKey { reason: "sealing key is of low order".into() });
+    }
+    let plaintext = inner(eph_pub.as_bytes());
     let key = seal_key(shared.as_bytes(), eph_pub.as_bytes(), recipient.as_bytes());
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key.as_slice()));
     let ct = cipher
@@ -304,7 +309,7 @@ fn seal(recipient: &XPublicKey, inner: impl FnOnce(&[u8; 32]) -> Zeroizing<Vec<u
     out.push(ENVELOPE_VERSION);
     out.extend_from_slice(eph_pub.as_bytes());
     out.extend_from_slice(&ct);
-    out
+    Ok(out)
 }
 
 /// Opens a sealed box; returns the ephemeral public key with the plaintext.
@@ -320,12 +325,32 @@ fn unseal(secret: &StaticSecret, envelope: &[u8]) -> Result<([u8; 32], Zeroizing
     let eph_pub = XPublicKey::from(eph_bytes);
     let me = XPublicKey::from(secret);
     let shared = secret.diffie_hellman(&eph_pub);
+    // A low-order ephemeral key (a sender's, or a relay's forgery) gives a shared
+    // secret anyone can compute: nothing sealed under it is private.
+    if !shared.was_contributory() {
+        return Err(CryptoError::Envelope { reason: "low-order ephemeral key".into() });
+    }
     let key = seal_key(shared.as_bytes(), eph_pub.as_bytes(), me.as_bytes());
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key.as_slice()));
     let plain = cipher
         .decrypt(Nonce::from_slice(&[0u8; 12]), &envelope[33..])
         .map_err(|_| CryptoError::Envelope { reason: "not addressed to this device, or tampered".into() })?;
     Ok((eph_bytes, Zeroizing::new(plain)))
+}
+
+/// A writer that only counts what it is given: the size of a serialisation,
+/// without a copy of it.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// HKDF info prefix for the mesh routing tag; the day follows it.
@@ -507,9 +532,13 @@ impl Identity {
             used_prekeys: inner.used_prekeys.clone(),
             peers: inner.peers.clone(),
         };
-        let plain = Zeroizing::new(
-            serde_json::to_vec(&state).map_err(|e| CryptoError::BadPickle { reason: e.to_string() })?,
-        );
+        // Sized first, then written once into a buffer that never grows: a
+        // growing Vec frees each smaller copy of the plaintext state (identity
+        // keys, chain keys) unwiped as it reallocates.
+        let mut size = ByteCounter(0);
+        serde_json::to_writer(&mut size, &state).map_err(|e| CryptoError::BadPickle { reason: e.to_string() })?;
+        let mut plain = Zeroizing::new(Vec::with_capacity(size.0));
+        serde_json::to_writer(&mut *plain, &state).map_err(|e| CryptoError::BadPickle { reason: e.to_string() })?;
         let mut nonce = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
         let cipher = ChaCha20Poly1305::new(Key::from_slice(key.as_slice()));
@@ -609,30 +638,33 @@ impl Identity {
         verify_signature(&ed, signed_key.key.as_bytes(), &signed_key.signature)?;
         let their_identity = curve_from(&peer.curve25519)?;
         let their_key = curve_from(&signed_key.key)?;
+        // Kept under the key's one spelling: the one decrypt finds it under.
+        let peer_curve = their_identity.to_base64();
         let mut inner = self.inner.lock().expect("identity mutex poisoned");
         let now = now_ms();
-        if inner.sessions.get(&peer.curve25519).is_some_and(|list| at_hard_limit(list, now)) {
-            return Err(CryptoError::SessionLimit { peer_curve25519: peer.curve25519 });
+        if inner.sessions.get(&peer_curve).is_some_and(|list| at_hard_limit(list, now)) {
+            return Err(CryptoError::SessionLimit { peer_curve25519: peer_curve });
         }
         // A Curve25519 key this device already knows as one identity's is not
         // rebound to another: whoever offers it with a different Ed25519 key is
         // not its owner (the relay refuses such a registration too), and
         // accepting would make the real owner's envelopes unreadable here.
-        if inner.peers.get(&peer.curve25519).is_some_and(|known| *known != ed.to_base64()) {
+        if inner.peers.get(&peer_curve).is_some_and(|known| *known != ed.to_base64()) {
             return Err(CryptoError::BadKey { reason: "this Curve25519 key already belongs to another identity".into() });
         }
         let session = inner
             .account
             .create_outbound_session(SessionConfig::version_2(), their_identity, their_key)
             .map_err(|e| CryptoError::Encrypt { reason: e.to_string() })?;
-        inner.peers.insert(peer.curve25519.clone(), ed.to_base64());
-        push_session(&mut inner.sessions, peer.curve25519, SessionEntry { session, last_decrypt_ms: None }, now);
+        inner.peers.insert(peer_curve.clone(), ed.to_base64());
+        push_session(&mut inner.sessions, peer_curve, SessionEntry { session, last_decrypt_ms: None }, now);
         Ok(())
     }
 
     /// Forgets every session with `peer` (they re-paired, or the app is resetting).
     pub fn drop_sessions(&self, peer_curve25519: String) {
-        self.inner.lock().expect("identity mutex poisoned").sessions.remove(&peer_curve25519);
+        let name = curve_name(&peer_curve25519).unwrap_or(peer_curve25519);
+        self.inner.lock().expect("identity mutex poisoned").sessions.remove(&name);
     }
 
     /// Drops the sessions (and key bindings) of every peer not in `keep` and
@@ -641,7 +673,7 @@ impl Identity {
     /// from senders that never became contacts would otherwise pile up in every
     /// saved state.
     pub fn prune_sessions(&self, keep: Vec<String>) -> u32 {
-        let keep: HashSet<String> = keep.into_iter().collect();
+        let keep: HashSet<String> = keep.into_iter().map(|k| curve_name(&k).unwrap_or(k)).collect();
         let mut inner = self.inner.lock().expect("identity mutex poisoned");
         let before = inner.sessions.len();
         inner.sessions.retain(|peer, _| keep.contains(peer));
@@ -654,13 +686,21 @@ impl Identity {
     pub fn encrypt(&self, peer: PeerKeys, plaintext: Vec<u8>) -> Result<Vec<u8>> {
         verify_peer(&peer)?;
         let sealing = x25519_from(&peer.sealing)?;
+        let peer_curve = curve_name(&peer.curve25519)?;
+        let peer_ed = ed25519_from(&peer.ed25519)?.to_base64();
         let plaintext = Zeroizing::new(plaintext);
         let mut inner = self.inner.lock().expect("identity mutex poisoned");
+        // The session belongs to whoever this device learned owns that Curve25519
+        // key; keys that pair it with another identity (and so another sealing
+        // key) would seal what goes over it for someone else.
+        if inner.peers.get(&peer_curve).is_some_and(|known| *known != peer_ed) {
+            return Err(CryptoError::BadKey { reason: "this Curve25519 key belongs to another identity".into() });
+        }
         let my_curve = inner.account.curve25519_key();
         let my_ed = inner.account.ed25519_key();
         let session = inner
             .sessions
-            .get_mut(&peer.curve25519)
+            .get_mut(&peer_curve)
             .and_then(|s| s.first_mut())
             .ok_or(CryptoError::NoSession)?;
         let message = session
@@ -671,7 +711,7 @@ impl Identity {
         let message_type = message_type as u8;
         let sent_at = now_ms();
         let account = &inner.account;
-        Ok(seal(&sealing, |eph_pub| {
+        seal(&sealing, |eph_pub| {
             let claim = sender_claim(eph_pub, sealing.as_bytes(), message_type, my_curve.as_bytes(), sent_at, &ciphertext);
             let signature = account.sign(&claim).to_bytes();
             let mut out = Zeroizing::new(Vec::with_capacity(INNER_HEADER + ciphertext.len()));
@@ -682,7 +722,7 @@ impl Identity {
             out.extend_from_slice(&signature);
             out.extend_from_slice(&ciphertext);
             out
-        }))
+        })
     }
 
     /// Opens an envelope addressed to this device. The sender claim inside is
@@ -700,6 +740,9 @@ impl Identity {
         let my_sealing = XPublicKey::from(&inner.sealing_secret);
 
         // The claim: who says they sent this, and their proof.
+        if !canonical_x25519(&view.sender_curve) {
+            return Err(CryptoError::Envelope { reason: "sender key is not in canonical form".into() });
+        }
         let sender_identity =
             Curve25519PublicKey::from_slice(&view.sender_curve).map_err(|e| CryptoError::Envelope { reason: e.to_string() })?;
         let sender_ed = Ed25519PublicKey::from_slice(&view.sender_ed).map_err(|_| CryptoError::BadSignature)?;
@@ -1035,8 +1078,38 @@ fn key_from(key: Zeroizing<Vec<u8>>) -> Result<Zeroizing<[u8; 32]>> {
     Ok(Zeroizing::new(arr))
 }
 
+/// Whether `bytes` is a Curve25519 public key in its one canonical form: the top
+/// bit clear and the value below the field prime 2^255 - 19. X25519 ignores the
+/// top bit and reduces the rest, so without this one key has several spellings,
+/// and every map keyed by a key's text could hold it twice (a second spelling
+/// of someone's key would not be recognised as theirs).
+fn canonical_x25519(bytes: &[u8; 32]) -> bool {
+    if bytes[31] & 0x80 != 0 {
+        return false;
+    }
+    // p, little-endian: ed ff ff ... ff 7f. Canonical means bytes < p.
+    let mut p = [0xffu8; 32];
+    p[0] = 0xed;
+    p[31] = 0x7f;
+    for i in (0..32).rev() {
+        if bytes[i] != p[i] {
+            return bytes[i] < p[i];
+        }
+    }
+    false
+}
+
 fn curve_from(b64: &str) -> Result<Curve25519PublicKey> {
-    Curve25519PublicKey::from_base64(b64).map_err(|e| CryptoError::BadKey { reason: e.to_string() })
+    let key = Curve25519PublicKey::from_base64(b64).map_err(|e| CryptoError::BadKey { reason: e.to_string() })?;
+    if !canonical_x25519(key.as_bytes()) {
+        return Err(CryptoError::BadKey { reason: "Curve25519 key is not in canonical form".into() });
+    }
+    Ok(key)
+}
+
+/// The one spelling of a Curve25519 key, under which sessions and bindings are kept.
+fn curve_name(b64: &str) -> Result<String> {
+    Ok(curve_from(b64)?.to_base64())
 }
 
 fn ed25519_from(b64: &str) -> Result<Ed25519PublicKey> {
@@ -1047,6 +1120,9 @@ fn x25519_from(b64: &str) -> Result<XPublicKey> {
     let bytes = B64.decode(b64).map_err(|e| CryptoError::BadKey { reason: e.to_string() })?;
     let arr: [u8; 32] =
         bytes.try_into().map_err(|_| CryptoError::BadKey { reason: "sealing key must be 32 bytes".into() })?;
+    if !canonical_x25519(&arr) {
+        return Err(CryptoError::BadKey { reason: "sealing key is not in canonical form".into() });
+    }
     Ok(XPublicKey::from(arr))
 }
 
@@ -1100,6 +1176,7 @@ mod tests {
             out.extend_from_slice(ciphertext);
             out
         })
+        .unwrap()
     }
 
     fn curve_bytes(id: &Identity) -> [u8; 32] {
@@ -1771,5 +1848,57 @@ mod tests {
         let mut s = SecretBytes([0xAB; 32]);
         s.zeroize();
         assert_eq!(s.0, [0u8; 32]);
+    }
+
+    /// One Curve25519 key has one spelling here: X25519 ignores the top bit and
+    /// base64 forgives padding, and either would let a key be bound twice.
+    #[test]
+    fn a_curve_key_has_one_spelling() {
+        let (alice, bob) = paired();
+        let mut keys = peer_keys(&alice);
+        // Padded: the same key, under the same name.
+        let mut raw = B64.decode(format!("{}=", keys.curve25519)).unwrap();
+        assert_eq!(curve_name(&format!("{}=", keys.curve25519)).unwrap(), keys.curve25519);
+        // The top bit set: refused outright.
+        raw[31] |= 0x80;
+        assert!(curve_from(&B64.encode(&raw)).is_err());
+        assert!(curve_from(&B64.encode(&raw).trim_end_matches('=')).is_err());
+        // The field prime and above: refused.
+        let mut p = [0xffu8; 32];
+        p[0] = 0xed;
+        p[31] = 0x7f;
+        assert!(!canonical_x25519(&p));
+        p[0] = 0xec;
+        assert!(canonical_x25519(&p));
+        // Sessions are kept under the one spelling, so either spelling finds them.
+        bob.drop_sessions(format!("{}=", keys.curve25519));
+        keys.curve25519 = alice.curve25519();
+        assert!(matches!(bob.encrypt(keys, b"gone".to_vec()), Err(CryptoError::NoSession)));
+    }
+
+    /// Mallory offering Alice's Curve25519 key with her own identity and sealing
+    /// key gets nothing sealed for her over Bob's session with Alice.
+    #[test]
+    fn encrypt_keeps_a_curve_key_to_the_identity_it_belongs_to() {
+        let (alice, bob) = paired();
+        let mallory = Identity::create();
+        let m = mallory.public_bundle();
+        let a = alice.public_bundle();
+        let signature = mallory.sign(format!("{}|{}", a.curve25519, m.sealing).into_bytes());
+        let mixed = PeerKeys { ed25519: m.ed25519, curve25519: a.curve25519, sealing: m.sealing, signature };
+        assert!(matches!(bob.encrypt(mixed, b"for alice".to_vec()), Err(CryptoError::BadKey { .. })));
+    }
+
+    /// A low-order sealing key, or a low-order ephemeral key in an envelope,
+    /// would make the box's key one anyone can compute.
+    #[test]
+    fn low_order_points_are_refused_by_the_sealed_box() {
+        let low = XPublicKey::from([0u8; 32]);
+        assert!(seal(&low, |_| Zeroizing::new(vec![1, 2, 3])).is_err());
+        let bob = Identity::create();
+        let mut envelope = vec![ENVELOPE_VERSION];
+        envelope.extend_from_slice(&[0u8; 32]);
+        envelope.extend_from_slice(&[0u8; 64]);
+        assert!(matches!(bob.decrypt(envelope), Err(CryptoError::Envelope { .. })));
     }
 }

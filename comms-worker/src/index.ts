@@ -889,6 +889,9 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
   for (const [field, key] of [["ed25519", ed25519], ["curve25519", curve25519], ["sealing", sealing]] as const) {
     if (keySpellings(key) === null) throw new HttpError(400, `${field} must be a 32-byte key in standard base64`);
   }
+  for (const [field, key] of [["curve25519", curve25519], ["sealing", sealing]] as const) {
+    if (!canonicalX25519(base64ToBytes(key))) throw new HttpError(400, `${field} must be a Curve25519 key in canonical form`);
+  }
 
   const bodySig = request.headers.get("x-clairix-sig") ?? "";
   if (!(await verifyEd25519(ed25519, bodyText, bodySig))) throw new HttpError(401, "Body signature does not match ed25519");
@@ -1017,6 +1020,20 @@ async function keyRecordNames(profile: Profile): Promise<string[]> {
     for (const spelling of keySpellings(key) ?? [key]) names.push(`key:${await sha256Hex(spelling)}`);
   }
   return names;
+}
+
+/**
+ * Whether [bytes] is a Curve25519 public key in its one canonical form: top bit
+ * clear and below the field prime. X25519 ignores the top bit, so a key with it
+ * set is another account's key under a spelling no record covers.
+ */
+export function canonicalX25519(bytes: Uint8Array): boolean {
+  if (bytes.length !== 32 || (bytes[31]! & 0x80) !== 0) return false;
+  const p = new Uint8Array(32).fill(0xff);
+  p[0] = 0xed;
+  p[31] = 0x7f;
+  for (let i = 31; i >= 0; i--) if (bytes[i] !== p[i]) return bytes[i]! < p[i]!;
+  return false;
 }
 
 /**
