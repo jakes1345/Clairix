@@ -212,7 +212,9 @@ class EndToEndTest {
             // CallStyle titles it with the caller, here a stand-in that names no one.
             assertEquals("Clairix call", ring.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString())
             assertEquals("Unlock to answer", ring.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
-            assertTrue("no call is known yet", CallManager.call.value == null)
+            // Not read while locked. (The call from f_ may still be on show, ended:
+            // an ended call lingers a moment before it is cleared.)
+            assertTrue("the locked offer was read", CallManager.call.value?.id != cid)
         } finally {
             Vault.open()
         }
