@@ -56,7 +56,7 @@ class SmokeTest {
         device.takeScreenshot(f)
         // Secure screens (Comms) come out black, so a failure also keeps the
         // window hierarchy: what was on screen, as text.
-        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE")) {
+        if (name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-IGNORED")) {
             runCatching { device.dumpWindowHierarchy(File(shots, f.nameWithoutExtension + ".xml")) }
         }
     }
@@ -139,7 +139,12 @@ class SmokeTest {
     private fun backTo(step: String, expect: BySelector) {
         back(step)
         if (device.wait(Until.hasObject(expect), 3_000)) return
-        if (device.hasObject(By.text(step))) back("$step (again)")
+        if (device.hasObject(By.text(step))) {
+            // Keep what was on screen when the first Back did nothing: the cause
+            // of this has not been found yet.
+            shot("BACK-IGNORED-$step")
+            back("$step (again)")
+        }
     }
 
     @Test
@@ -203,10 +208,13 @@ class SmokeTest {
         for (tab in listOf("Comms", "Drive", "Activity")) {
             tap(tab, "tab $tab"); device.waitForIdle(3_000); shot("tab-$tab")
             if (tab == "Comms") {
-                for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
+                // Several rounds: going in and back out of these pages has failed
+                // now and then, and one round seldom shows it.
+                for (round in 1..5) for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
                     val more = device.wait(Until.findObject(By.desc("More options")), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
                     more.click(); alive("comms menu")
-                    tap(page, "comms $page"); device.waitForIdle(2_000); shot("comms-$page")
+                    tap(page, "comms $page"); device.waitForIdle(2_000)
+                    if (round == 1) shot("comms-$page")
                     backTo(page, By.desc("More options"))
                 }
             }
