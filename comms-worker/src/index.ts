@@ -553,12 +553,21 @@ function parseBlinded(raw: unknown): Uint8Array[] {
 }
 
 /** What GET / says about blind tokens: the epoch and each kind's key in it. */
-async function blindTokenKeys(env: Env): Promise<{ version: number; epoch: number; epochMs: number; keys: Record<TokenKind, string> } | null> {
+/**
+ * The blind-token keys of this epoch, and of the next: a phone pins the next
+ * epoch's long before it is issued any tokens under them, on a request that
+ * names nobody and at a time of its own choosing, so a relay cannot hand one
+ * phone keys of its own at the moment it asks for tokens.
+ */
+async function blindTokenKeys(env: Env): Promise<{ version: number; epoch: number; epochMs: number; keys: Record<TokenKind, string>; next: { epoch: number; keys: Record<TokenKind, string> } } | null> {
   try {
     const epoch = epochOf(Date.now());
-    const keys = {} as Record<TokenKind, string>;
-    for (const kind of Object.keys(TOKEN_KINDS) as TokenKind[]) keys[kind] = await tokenPublicKey(env, kind, epoch);
-    return { version: 2, epoch, epochMs: TOKEN_EPOCH_MS, keys };
+    const keysFor = async (e: number) => {
+      const keys = {} as Record<TokenKind, string>;
+      for (const kind of Object.keys(TOKEN_KINDS) as TokenKind[]) keys[kind] = await tokenPublicKey(env, kind, e);
+      return keys;
+    };
+    return { version: 2, epoch, epochMs: TOKEN_EPOCH_MS, keys: await keysFor(epoch), next: { epoch: epoch + 1, keys: await keysFor(epoch + 1) } };
   } catch (e) {
     console.error("token keys unavailable", e);
     return null;

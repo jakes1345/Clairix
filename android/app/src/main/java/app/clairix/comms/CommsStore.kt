@@ -370,6 +370,17 @@ class CommsStore(
         }
 
     /** Whether the inbound message [id] has been read; null when there is no such message. */
+    /** Replaces the text of message [id]. */
+    fun setMessageBody(id: String, body: String) {
+        writableDatabase.update("messages", ContentValues().apply { put("body_enc", KeystoreBox.encryptString(body)) }, "id = ?", arrayOf(id))
+    }
+
+    /** Whether message [id] is here, but not as one received from [peer] in their conversation. */
+    fun belongsElsewhere(id: String, peer: String): Boolean =
+        readableDatabase.rawQuery("SELECT peer, direction FROM messages WHERE id = ?", arrayOf(id)).use { c ->
+            c.moveToFirst() && (c.getString(0) != peer || c.getString(1) != Direction.IN.name)
+        }
+
     fun isRead(id: String): Boolean? =
         readableDatabase.rawQuery("SELECT read FROM messages WHERE id = ?", arrayOf(id)).use { c ->
             if (c.moveToFirst()) c.getInt(0) != 0 else null
@@ -709,8 +720,12 @@ class CommsStore(
         val db = writableDatabase
         db.beginTransaction()
         try {
+            // A change stored with a time still ahead (dated so by a relay before
+            // times were bounded) counts as made now, so it cannot outlast the
+            // changes made after it.
+            val now = System.currentTimeMillis() + 60_000L
             val current = db.rawQuery("SELECT ttl, ts FROM timers WHERE peer = ?", arrayOf(peer)).use { c ->
-                if (c.moveToFirst()) c.getInt(0) to c.getLong(1) else null
+                if (c.moveToFirst()) c.getInt(0) to minOf(c.getLong(1), now) else null
             }
             if (current != null && (current.second > ts || (current.second == ts && current.first == ttl))) return false
             if (current == null && ttl == 0) return false

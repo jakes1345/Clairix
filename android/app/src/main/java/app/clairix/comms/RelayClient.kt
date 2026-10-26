@@ -93,30 +93,54 @@ class RelayClient(
     /**
      * The relay's description of itself: its API version, the other addresses it
      * answers at, and its blind-token keys (null from a relay before Beta 6).
-     * Unauthenticated, on a connection of its own.
+     * Unauthenticated, on a connection nothing else uses.
      */
     fun info(): Info {
         val relay = base() ?: throw RelayException("Not registered with a relay")
-        val json = execute(Request.Builder().url("$relay/").header("Accept", "application/json").get(), quick)
+        val json = execute(Request.Builder().url("$relay/").header("Accept", "application/json").get(), anonymousClient(4))
         return parsed {
             val arr = json.optJSONArray("alternates")
             val urls = arr?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.startsWith("https://") } } } ?: emptyList()
             val t = json.optJSONObject("tokens")?.takeIf { it.optInt("version") == 2 }
-            val keys = t?.optJSONObject("keys")?.let { k -> k.keys().asSequence().associateWith { k.getString(it) } }
+            fun keysOf(o: JSONObject?) = o?.optJSONObject("keys")?.let { k -> k.keys().asSequence().associateWith { k.getString(it) } }
+            val keys = keysOf(t)
             val tokens = if (t != null && keys != null) TokenKeys(t.getLong("epoch"), keys) else null
-            if (tokens != null) {
-                // Seen on a request that names nobody, and as early as possible:
-                // the first keys seen for an epoch are the ones tokens are checked against.
-                val origin = relay.trimEnd('/')
+            val origin = relay.trimEnd('/')
+            if (tokens != null && plausibleEpoch(tokens.epoch)) {
+                // Seen on a request that names nobody: the first keys seen for an
+                // epoch are the ones tokens are checked against. The next epoch's
+                // are pinned now too, long before any tokens are issued under them.
                 if (tokenKeys.get(origin, tokens.epoch) == null) tokenKeys.put(origin, tokens.epoch, tokens.keys)
-                blindRelay = origin
+                val next = t!!.optJSONObject("next")
+                val nextKeys = keysOf(next)
+                val nextEpoch = next?.optLong("epoch", -1L) ?: -1L
+                if (nextKeys != null && nextEpoch == tokens.epoch + 1 && tokenKeys.get(origin, nextEpoch) == null) tokenKeys.put(origin, nextEpoch, nextKeys)
             }
             Info(json.optInt("version", 0), urls, tokens)
         }
     }
 
-    /** The relay [info] last found issuing blind tokens. */
-    @Volatile private var blindRelay: String? = null
+    /**
+     * Whether a token epoch the relay names is one this phone's own clock agrees
+     * with: this one or a neighbour. The relay names the epoch, and one it made
+     * up for a single phone would mark every token that phone spends.
+     */
+    private fun plausibleEpoch(epoch: Long): Boolean {
+        val mine = System.currentTimeMillis() / TOKEN_EPOCH_MS
+        return epoch in (mine - 1)..(mine + 1)
+    }
+
+    /**
+     * A client for one request that names nobody: its own connection and its own
+     * TLS session cache, both thrown away after the request. Requests sharing a
+     * connection, or resuming one TLS session, are one phone's requests as far as
+     * the relay can see, however anonymous each is on its own.
+     */
+    private fun anonymousClient(callTimeoutSec: Long): OkHttpClient =
+        RelayTls.pinned(sender.newBuilder(), pin)
+            .connectionPool(okhttp3.ConnectionPool(0, 1, TimeUnit.SECONDS))
+            .callTimeout(callTimeoutSec, TimeUnit.SECONDS)
+            .build()
 
     private fun pool(kind: TokenKind): TokenPool = when (kind) {
         TokenKind.DELIVERY -> tokens
@@ -361,7 +385,7 @@ class RelayClient(
                 else -> request.post((text ?: "{}").toRequestBody(JSON))
             }
             try {
-                return execute(request, sender)
+                return execute(request, anonymousClient(12))
             } catch (e: RelayException) {
                 if (e.code != 401 && e.code != 403) throw e
                 refused = e
@@ -413,9 +437,16 @@ class RelayClient(
     @Synchronized
     private fun fetchTokens(kind: TokenKind, count: Int) {
         val relay = base() ?: throw RelayException("Not registered with a relay")
-        if (blindRelay != relay.trimEnd('/') && info().tokens == null) {
-            fetchPlainTokens(kind, count)
-            return
+        // A relay that ever published blind-token keys gets no plain tokens from
+        // this phone again: plain ones it could match to this account, and a
+        // relay that stopped publishing would be asking for exactly that.
+        if (!tokenKeys.any(relay.trimEnd('/'))) {
+            // Never seen any: a relay from before Beta 6, or this phone's first
+            // fetch. Asked once here; a relay that publishes keys is pinned by it.
+            if (info().tokens == null && !tokenKeys.any(relay.trimEnd('/'))) {
+                fetchPlainTokens(kind, count)
+                return
+            }
         }
         fetchBlindTokens(relay, kind, count)
     }
@@ -447,11 +478,15 @@ class RelayClient(
             Quad(json.getLong("epoch"), json.getString("key"), (0 until arr.length()).map { fromB64url(arr.getString(it)) }, fromB64url(json.getString("proof")))
         }
         val origin = relay.trimEnd('/')
-        val pinned = tokenKeys.get(origin, epoch) ?: run {
-            // A new epoch since the keys were last seen: read them anonymously, as any caller does.
-            info()
-            tokenKeys.get(origin, epoch) ?: throw RelayException("The relay issued tokens for an epoch it does not publish", MALFORMED)
+        if (!plausibleEpoch(epoch)) {
+            throw RelayException("The relay issued tokens for epoch $epoch, which this phone's clock does not agree with; refused", TOKEN_KEY_MISMATCH)
         }
+        // Not fetched now if missing: a fetch right after this signed request
+        // would be one the relay could tell was this phone's, and answer with
+        // keys of its own. The keys are read later, at a time of the phone's
+        // choosing ([KEYS_PENDING] tells the caller to arrange it).
+        val pinned = tokenKeys.get(origin, epoch)
+            ?: throw RelayException("This phone has not yet seen the relay's keys for epoch $epoch; it will look them up and try again", KEYS_PENDING)
         if (pinned[kind.wire] != key) {
             throw RelayException("The relay issued ${kind.wire} tokens under a key it does not give everyone; refused", TOKEN_KEY_MISMATCH)
         }
@@ -831,6 +866,10 @@ class RelayClient(
         const val NO_TOKENS = -2
         /** The relay's tokens were not made with the key it publishes to everyone, or the first one seen this epoch. */
         const val TOKEN_KEY_MISMATCH = -5
+        /** Tokens were issued for an epoch whose keys this phone has not pinned yet: look them up later, anonymously, and retry. */
+        const val KEYS_PENDING = -6
+        /** A token epoch: 14 days, as the relay's (comms-worker/src/tokens.ts TOKEN_EPOCH_MS). */
+        const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
         /** Segments per /v1/traffic/typical request (the relay's limit). */

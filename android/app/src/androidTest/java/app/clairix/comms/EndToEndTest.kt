@@ -162,7 +162,7 @@ class EndToEndTest {
     fun g_aContactOnAnotherRelayIsReachedThroughThisOne() = runBlocking {
         setUp()
         val remote = remote
-        val contact = repo.addContactFromCode(remote.code("Remote"), "Remote").getOrThrow()
+        val contact = repo.addContactFromCode(remote.code("Remote"), "Remote", CommsRepository.CodeSource.SCANNED).getOrThrow()
         assertEquals("http://127.0.0.1:${relayBPort()}", contact.relay)
         repo.send(remote.number, "across two relays").getOrThrow()
         val got = remote.receive { CommsWire.type(it) == CommsWire.T_MSG }
@@ -199,7 +199,7 @@ class EndToEndTest {
         app = me
         local = TestPeer(relayA, secret, "Peer", me)
         remote = TestPeer(relayB, secret, "Remote", me)
-        repo.addContactFromCode(local.code("Peer"), "Peer").getOrThrow()
+        repo.addContactFromCode(local.code("Peer"), "Peer", CommsRepository.CodeSource.SCANNED).getOrThrow()
         me
     }
 

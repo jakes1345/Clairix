@@ -20,18 +20,32 @@ class ResyncLimiterTest {
     }
 
     @Test
-    fun atMostTenAnHourInAll() {
+    fun aCapAnHourInAll() {
         val l = ResyncLimiter()
         for (i in 0 until ResyncLimiter.MAX_PER_HOUR) {
-            assertSame(ResyncLimiter.Decision.Allowed, l.tryAcquire("10000000$i", t0, t0 + i * 1000L))
+            assertSame(ResyncLimiter.Decision.Allowed, l.tryAcquire("1000000%02d".format(i), t0, t0 + i * 1000L))
         }
-        val refused = l.tryAcquire("999999999", t0, t0 + 20_000)
+        val refused = l.tryAcquire("999999999", t0, t0 + 40_000)
         assertTrue(refused is ResyncLimiter.Decision.HourlyCapReached)
         assertEquals(t0 + ResyncLimiter.HOUR_MS, (refused as ResyncLimiter.Decision.HourlyCapReached).retryAtMs)
-        assertEquals(10, l.usedThisHour(t0 + 20_000))
+        assertEquals(ResyncLimiter.MAX_PER_HOUR, l.usedThisHour(t0 + 40_000))
         // The window slides: once the first is an hour old, one slot frees.
         assertSame(ResyncLimiter.Decision.Allowed, l.tryAcquire("999999999", t0, t0 + ResyncLimiter.HOUR_MS))
         assertTrue(l.tryAcquire("888888888", t0, t0 + ResyncLimiter.HOUR_MS) is ResyncLimiter.Decision.HourlyCapReached)
+    }
+
+    @Test
+    fun oneContactCannotUseUpTheRecoveriesOthersNeed() {
+        val l = ResyncLimiter()
+        for (i in 0 until ResyncLimiter.MAX_PER_CONTACT_PER_HOUR) {
+            assertSame(ResyncLimiter.Decision.Allowed, l.tryAcquire("111111111", t0, t0 + i * 60_000L))
+        }
+        val refused = l.tryAcquire("111111111", t0, t0 + 10 * 60_000L)
+        assertTrue(refused is ResyncLimiter.Decision.HourlyCapReached)
+        assertEquals(t0 + ResyncLimiter.HOUR_MS, (refused as ResyncLimiter.Decision.HourlyCapReached).retryAtMs)
+        // Everyone else still has theirs.
+        assertSame(ResyncLimiter.Decision.Allowed, l.tryAcquire("222222222", t0, t0 + 10 * 60_000L))
+        assertTrue(ResyncLimiter.MAX_PER_CONTACT_PER_HOUR * 5 <= ResyncLimiter.MAX_PER_HOUR)
     }
 
     @Test

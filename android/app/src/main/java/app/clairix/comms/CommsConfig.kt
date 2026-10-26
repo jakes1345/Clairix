@@ -169,11 +169,17 @@ class StoredTokenKeyPins(context: Context) : MemoryTokenKeyPins() {
     private val prefs = context.applicationContext.getSharedPreferences("comms_tokens", Context.MODE_PRIVATE)
 
     init {
-        prefs.getString(KEY, null)?.let { load(it) }
+        prefs.getString(KEY, null)?.let { stored ->
+            // Sealed under the Keystore key: the pins name the relay and show
+            // which epochs this phone was active in. One kept in the clear by
+            // an earlier version is read once and sealed on the next change.
+            val json = runCatching { KeystoreBox.decryptString(Base64.decode(stored, Base64.NO_WRAP)) }.getOrNull() ?: stored
+            load(json)
+        }
     }
 
     override fun changed() {
-        prefs.edit().putString(KEY, encode()).apply()
+        prefs.edit().putString(KEY, Base64.encodeToString(KeystoreBox.encryptString(encode()), Base64.NO_WRAP)).apply()
     }
 
     private companion object {

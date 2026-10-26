@@ -199,6 +199,9 @@ object CommsRepository {
     private const val EXPIRY_POLL_MS = 60_000L
     private const val EXPIRY_MIN_WAIT_MS = 250L
     private const val RETRY_MAX_MS = 5 * 60_000L
+    /** A key refresh after tokens came for keys not yet pinned: half a minute to five minutes later, at random. */
+    private const val KEY_REFRESH_MIN_MS = 30_000L
+    private const val KEY_REFRESH_SPREAD_MS = 270_000
     private const val RECEIPT_BATCH = 100
     private const val MAX_INBOX_PAGES = 25
     private const val ONE_TIME_KEYS_MAX_WAITING = 100
@@ -438,11 +441,12 @@ object CommsRepository {
                     Result.failure(e)
                 }
             }
-            // The inviter's keys came in the invite itself, so they are pinned as a
-            // verified contact, and a first message tells them who joined; their
-            // phone adds this number when it arrives.
+            // The inviter's keys came in the invite link, so they are pinned, but
+            // not verified: the link passed through other hands (and the relay's
+            // invite page) on the way. A first message tells them who joined;
+            // their phone adds this number when it arrives.
             if (invite != null && result.isSuccess) {
-                addContactFromCode(invite.copy(invite = null))
+                addContactFromCode(invite.copy(invite = null), source = CodeSource.LINK)
                     .onSuccess { contact -> send(contact.number, "Joined Clairix with your invite.") }
                     .onFailure { CommsLog.add("Could not add ${formatClairixNumber(invite.number)} from the invite: ${it.message}") }
             }
@@ -684,11 +688,26 @@ object CommsRepository {
 
     fun myEd25519(): String? = runCatching { identities.get()?.ed25519() }.getOrNull()
 
+    /** Where a pairing code came from, which decides how far it is trusted. */
+    enum class CodeSource {
+        /** Scanned from the other person's screen, adding someone new: a verified contact. */
+        SCANNED,
+        /** Scanned from the other person's screen on their own contact page: may replace the keys held for them. */
+        SCANNED_FOR_CONTACT,
+        /**
+         * A link, an invite or pasted text: anyone could have made it, or changed it
+         * on the way (a relay serving the invite page among them). The contact is
+         * not verified, and a contact already held keeps the keys it has.
+         */
+        LINK
+    }
+
     /**
-     * Adds (or re-verifies) a contact from a scanned QR code. The code carries
-     * the contact's keys, so nothing about their identity is taken from the relay.
+     * Adds (or re-verifies) a contact from a pairing code. A code is self-signed,
+     * which proves only that its keys belong together, not whose they are; how
+     * much it is trusted follows [source].
      */
-    suspend fun addContactFromCode(code: PairingCode, name: String? = null): Result<Contact> = withContext(Dispatchers.IO) {
+    suspend fun addContactFromCode(code: PairingCode, name: String? = null, source: CodeSource): Result<Contact> = withContext(Dispatchers.IO) {
         lock.withLock {
             if (config.relayUrl == null) return@withLock Result.failure(RelayException("Not registered"))
             // A contact on another relay is reached through this phone's own,
@@ -714,8 +733,27 @@ object CommsRepository {
             if (existingByCurve != null && existingByCurve.number != code.number) {
                 return@withLock Result.failure(RelayException("Those keys already belong to ${existingByCurve.name.ifBlank { formatClairixNumber(existingByCurve.number) }}"))
             }
-            if (existing != null && existing.curve25519 != code.curve25519) {
-                identities.update { it.dropSessions(existing.curve25519) }
+            val sameKeys = existing != null && existing.curve25519 == code.curve25519 && existing.ed25519 == code.ed25519 && existing.sealing == code.sealing
+            if (existing != null && !sameKeys) {
+                // Someone already in contacts, with other keys. Only their code,
+                // scanned on their own page, replaces them: a link could come
+                // from anyone, and replacing a contact's keys from one would let
+                // whoever made it take over the conversation.
+                when (source) {
+                    CodeSource.LINK -> return@withLock Result.failure(RelayException(
+                        "${contactLabel(existing)} is already a contact, with other keys than this link has. It was not used. " +
+                            "If their keys really changed, scan their code in person on their contact page."
+                    ))
+                    CodeSource.SCANNED -> return@withLock Result.failure(RelayException(
+                        "${contactLabel(existing)} is already a contact, with other keys than this code has. " +
+                            "To replace them, open their contact page and scan the code there."
+                    ))
+                    CodeSource.SCANNED_FOR_CONTACT -> identities.update { it.dropSessions(existing.curve25519) }
+                }
+            }
+            if (existing != null && sameKeys && source == CodeSource.LINK) {
+                // The keys already held: nothing to change, and a link adds no trust.
+                return@withLock Result.success(existing)
             }
             val contact = Contact(
                 number = code.number,
@@ -724,7 +762,7 @@ object CommsRepository {
                 curve25519 = code.curve25519,
                 sealing = code.sealing,
                 signature = code.signature,
-                verified = true,
+                verified = source != CodeSource.LINK,
                 addedTs = existing?.addedTs ?: System.currentTimeMillis(),
                 keyChanged = false,
                 relay = theirRelay
@@ -1164,8 +1202,31 @@ object CommsRepository {
     private fun topUpTokens(): Int {
         if (!config.isRegistered) return 0
         return runCatching { relay.topUpTokens() }
-            .onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
+            .onFailure {
+                if ((it as? RelayException)?.code == RelayClient.KEYS_PENDING) scheduleKeyRefresh()
+                else CommsLog.add("Could not fetch delivery tokens: ${it.message}")
+            }
             .getOrDefault(0)
+    }
+
+    private var keyRefreshJob: Job? = null
+
+    /**
+     * Reads the relay's blind-token keys (and so its alternates) at a random
+     * moment a little later, apart from any signed request: what the relay
+     * answers a request it cannot tie to this phone is what everyone gets.
+     */
+    private fun scheduleKeyRefresh() {
+        if (keyRefreshJob?.isActive == true) return
+        keyRefreshJob = scope.launch {
+            delay(KEY_REFRESH_MIN_MS + SecureRandom().nextInt(KEY_REFRESH_SPREAD_MS))
+            runCatching { relay.info() }
+                .onSuccess { info ->
+                    if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
+                    tokenRefill.onNoTokens()
+                }
+                .onFailure { CommsLog.add("Could not read the relay's token keys: ${it.message}") }
+        }
     }
 
     /** Which relay errors are worth retrying later (Offline) and which are final (Failed). */
@@ -1365,6 +1426,34 @@ object CommsRepository {
     }
 
     /** The line a payment shows as in the conversation. */
+    private fun paymentClaimLine(amount: Long, note: String?): String =
+        "$amount $COIN_SYMBOL payment, not yet confirmed by the relay" + (if (!note.isNullOrBlank()) " · $note" else "")
+
+    /**
+     * Checks a payment notice against the relay's record of this account: a
+     * credit under [txid] from [from] for [amount]. Found, it is recorded and
+     * shown as received; not found, the conversation says so.
+     */
+    private suspend fun confirmPayment(from: String, id: String, txid: String, amount: Long, ts: Long, note: String) {
+        val history = runCatching { relay.coinHistory() }.getOrElse {
+            CommsLog.add("Could not check a payment notice from ${formatClairixNumber(from)} with the relay: ${it.message}")
+            return
+        }
+        val found = history.any { it.id == txid && it.direction == "in" && it.from == from && it.amount == amount }
+        lock.withLock {
+            if (found) {
+                if (!store.hasTransaction(id)) store.insertTransaction(CoinTx(id, from, Direction.IN, amount, ts, note, txid))
+                store.setMessageBody(id, paymentLine(amount, note, sent = false))
+                CommsLog.add("Received $amount $COIN_SYMBOL from ${formatClairixNumber(from)}")
+            } else {
+                store.setMessageBody(id, "Says they sent $amount $COIN_SYMBOL, but the relay has no such payment")
+                CommsLog.add("A payment notice from ${formatClairixNumber(from)} for $amount $COIN_SYMBOL is not in the relay's record; not counted")
+            }
+            bump()
+        }
+        refreshBalance()
+    }
+
     private fun paymentLine(amount: Long, note: String?, sent: Boolean): String =
         "$amount $COIN_SYMBOL ${if (sent) "sent" else "received"}" + (if (!note.isNullOrBlank()) " · $note" else "")
 
@@ -1723,7 +1812,7 @@ object CommsRepository {
         }
         when (type) {
             CommsWire.T_GROUP_MSG -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
                 if (store.hasMessage(id)) return
                 val body = json.optString(CommsWire.F_BODY).take(MAX_BODY)
                 if (body.isEmpty()) return
@@ -1738,7 +1827,7 @@ object CommsRepository {
             CommsWire.T_GROUP_CTRL -> applyGroupCtrl(contact, group, sender, json)
             CommsWire.T_TIMER -> applyTimer(gid, envelopeTs, json, memberName(gid, from), group = true)
             CommsWire.T_THREAT -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
                 if (store.hasSharedThreat(id)) return
                 val kind = json.optString(CommsWire.F_KIND).takeIf { it in THREAT_KINDS } ?: run {
                     CommsLog.add("Shared threat from $label dropped: kind \"${json.optString(CommsWire.F_KIND)}\" not understood")
@@ -1769,7 +1858,7 @@ object CommsRepository {
                 scope.launch { runCatching { TimelineLog.record(appContext, event) } }
             }
             CommsWire.T_PANIC -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 val lat = json.optDouble(CommsWire.F_LAT, Double.NaN).takeIf { !it.isNaN() && it in -90.0..90.0 }
                 val lon = json.optDouble(CommsWire.F_LON, Double.NaN).takeIf { !it.isNaN() && it in -180.0..180.0 }
@@ -2192,7 +2281,7 @@ object CommsRepository {
                 return
             }
             is ResyncLimiter.Decision.HourlyCapReached -> {
-                CommsLog.add("$what from $label; ${ResyncLimiter.MAX_PER_HOUR} new sessions were already started this hour, so not another until ${java.text.DateFormat.getTimeInstance().format(java.util.Date(d.retryAtMs))}")
+                CommsLog.add("$what from $label; as many new sessions as are allowed were already started this hour, so not another until ${java.text.DateFormat.getTimeInstance().format(java.util.Date(d.retryAtMs))}")
                 return
             }
             ResyncLimiter.Decision.StaleHint -> {
@@ -2249,7 +2338,11 @@ object CommsRepository {
     private fun processPayload(contact: Contact, envelopeTs: Long, json: JSONObject) {
         when (CommsWire.type(json)) {
             CommsWire.T_MSG -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
+                // An id already used in another conversation, or for this phone's
+                // own message: dropped, and never receipted, so nobody can learn
+                // what this phone has read elsewhere by reusing an id.
+                if (store.belongsElsewhere(id, contact.number)) return
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null) {
                     // A copy of a message already here (they re-sent it after a network
@@ -2294,7 +2387,7 @@ object CommsRepository {
             CommsWire.T_PAYMENT -> {
                 // The coins were moved by the relay when the payer paid; this is
                 // the payer telling us, with the note only we can read.
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
                 val txid = json.optString(CommsWire.F_TXID).takeIf { it.isNotBlank() } ?: return
                 val amount = json.optLong(CommsWire.F_AMOUNT, 0L).takeIf { it > 0 } ?: return
                 if (!BuildConfig.CLAIRIX_COIN) {
@@ -2304,6 +2397,10 @@ object CommsRepository {
                     CommsLog.add("A ClairixCoin payment notice from ${formatClairixNumber(contact.number)} was not shown: this edition has no ClairixCoin")
                     return
                 }
+                // An id already used in another conversation, or for this phone's
+                // own message: dropped, and never receipted, so nobody can learn
+                // what this phone has read elsewhere by reusing an id.
+                if (store.belongsElsewhere(id, contact.number)) return
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null || store.hasTransaction(id)) {
                     // A re-sent notice: receipt it again, count nothing twice.
@@ -2312,25 +2409,28 @@ object CommsRepository {
                 }
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
                 val note = json.optString(CommsWire.F_NOTE, "").take(MAX_COIN_NOTE)
-                store.insertTransaction(CoinTx(id, contact.number, Direction.IN, amount, ts, note, txid))
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
-                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, paymentLine(amount, note, sent = false), ts, STATUS_PAYMENT, read = onScreen))
+                // The notice is only the payer's word: anyone can send one. It is
+                // shown as unconfirmed, and becomes a payment received only once
+                // the relay, which moved the coins, shows it in this account's history.
+                store.insertMessage(ChatMessage(id, contact.number, Direction.IN, paymentClaimLine(amount, note), ts, STATUS_PAYMENT, read = onScreen))
                 store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                 if (!onScreen) {
                     CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
                 }
-                CommsLog.add("Received $amount $COIN_SYMBOL from ${formatClairixNumber(contact.number)}")
-                // Shown at once; the relay's figure replaces it as soon as it answers.
-                _state.update { if (it.balance >= 0) it.copy(balance = it.balance + amount) else it }
-                scope.launch { refreshBalance() }
+                scope.launch { confirmPayment(contact.number, id, txid, amount, ts, note) }
             }
             CommsWire.T_VOICEMAIL -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
                 val audioB64 = json.optString(CommsWire.F_AUDIO).takeIf { it.isNotBlank() } ?: return
                 if (audioB64.length > MAX_VOICEMAIL_B64) {
                     CommsLog.add("Voicemail from ${formatClairixNumber(contact.number)} dropped: too large")
                     return
                 }
+                // An id already used in another conversation, or for this phone's
+                // own message: dropped, and never receipted, so nobody can learn
+                // what this phone has read elsewhere by reusing an id.
+                if (store.belongsElsewhere(id, contact.number)) return
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null) {
                     store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
@@ -2349,7 +2449,11 @@ object CommsRepository {
                 CommsLog.add("Voicemail (${durationLabel(durationMs)}) from ${formatClairixNumber(contact.number)}")
             }
             CommsWire.T_MEDIA -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
+                // An id already used in another conversation, or for this phone's
+                // own message: dropped, and never receipted, so nobody can learn
+                // what this phone has read elsewhere by reusing an id.
+                if (store.belongsElsewhere(id, contact.number)) return
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null) {
                     // The header again (they resent after a network error). A file
@@ -2384,7 +2488,7 @@ object CommsRepository {
                 completeMediaIfWhole(contact, id, body)
             }
             CommsWire.T_MEDIA_CHUNK -> {
-                val id = json.optString(CommsWire.F_ID).takeIf { it.isNotBlank() } ?: return
+                val id = CommsWire.messageId(json) ?: return
                 val index = json.optInt(CommsWire.F_INDEX, -1)
                 val data = json.optString(CommsWire.F_DATA).takeIf { it.isNotBlank() } ?: return
                 if (index < 0 || index >= CommsMedia.MAX_CHUNKS || data.length > CommsWire.MEDIA_CHUNK_BYTES * 4 / 3 + 4) return
@@ -2459,9 +2563,14 @@ object CommsRepository {
      * put its message at the top or the bottom of the conversation.
      */
     private fun claimedTs(envelopeTs: Long, claimed: Long): Long {
-        val earliest = envelopeTs - 7L * 24 * 3600_000L
-        val latest = System.currentTimeMillis() + 60_000L
-        return if (latest >= earliest) claimed.coerceIn(earliest, latest) else envelopeTs
+        // The envelope's own time comes from the relay, so it is bounded too: a
+        // relay that dated one far ahead would otherwise pass the claim through
+        // unchecked, and a timer change dated in the future outlasts every
+        // change made after it.
+        val now = System.currentTimeMillis()
+        val earliest = minOf(envelopeTs, now) - 7L * 24 * 3600_000L
+        val latest = now + 60_000L
+        return claimed.coerceIn(earliest, latest)
     }
 
     private sealed class Resolution {

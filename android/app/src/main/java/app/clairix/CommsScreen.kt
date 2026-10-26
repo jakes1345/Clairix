@@ -475,7 +475,8 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 Text("${formatClairixNumber(invite.number)} · ${invite.relayUrl.removePrefix("https://")}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
                 Text(
                     "This phone makes its own keys and gets its own Clairix number on their relay. " +
-                        "${invite.name.ifBlank { "They" }} will be in your contacts, verified, with a first message telling them you joined.",
+                        "${invite.name.ifBlank { "They" }} will be in your contacts, with a first message telling them you joined. " +
+                        "Compare safety numbers with them, or scan their code, to verify them.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -1002,7 +1003,7 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
     val scan = rememberCodeScanner { code ->
         if (code == null) { error = "That is not a Clairix code"; return@rememberCodeScanner }
         scope.launch {
-            CommsRepository.addContactFromCode(code, name.takeIf { it.isNotBlank() })
+            CommsRepository.addContactFromCode(code, name.takeIf { it.isNotBlank() }, CommsRepository.CodeSource.SCANNED)
                 .onSuccess { onAdded(it.number) }
                 .onFailure { error = it.message }
         }
@@ -1921,7 +1922,7 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
             code == null -> error = "That is not a Clairix code"
             code.number != c.number -> error = "That code belongs to ${formatClairixNumber(code.number)}, not this contact"
             else -> scope.launch {
-                CommsRepository.addContactFromCode(code, name).onFailure { error = it.message }
+                CommsRepository.addContactFromCode(code, name, CommsRepository.CodeSource.SCANNED_FOR_CONTACT).onFailure { error = it.message }
             }
         }
     }
@@ -2054,7 +2055,8 @@ private fun InviteScreen(onBack: () -> Unit) {
             Text("Invite someone to Clairix", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
                 "An invite lets one person get a Clairix number on your relay without the relay URL or its enrollment secret. " +
-                    "It works once and expires after seven days. They start with you as a verified contact, and you get a message when they join.",
+                    "It works once and expires after seven days. They start with you as a contact, and you get a message when they join; " +
+                    "compare safety numbers with them to verify each other.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -2121,7 +2123,8 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
                 Text(
                     if (mine) "This invite is for someone who does not have Clairix yet. Send them the link."
                     else "This phone already has a Clairix number, so the invite is not needed. You can add " +
-                        "${formatClairixNumber(code.number)} as a verified contact from it; the invite stays unused.",
+                        "${formatClairixNumber(code.number)} as a contact from it; the invite stays unused. A link could have been changed " +
+                        "on the way, so compare safety numbers with them, or scan their code, to verify them.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -2133,7 +2136,7 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
                 "Add contact",
                 onClick = {
                     scope.launch {
-                        CommsRepository.addContactFromCode(code.copy(invite = null))
+                        CommsRepository.addContactFromCode(code.copy(invite = null), source = CommsRepository.CodeSource.LINK)
                             .onSuccess { onDone(); onAdded(it.number) }
                             .onFailure { error = it.message }
                     }

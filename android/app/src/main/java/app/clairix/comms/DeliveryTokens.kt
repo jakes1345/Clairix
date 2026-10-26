@@ -128,6 +128,8 @@ interface TokenKeyPins {
     /** The keys (kind to base64url) pinned for [relay] in [epoch], or null if none yet. */
     fun get(relay: String, epoch: Long): Map<String, String>?
     fun put(relay: String, epoch: Long, keys: Map<String, String>)
+    /** Whether any keys were ever pinned for [relay]: it issues blind tokens, and is not let off doing so. */
+    fun any(relay: String): Boolean
 }
 
 /** [TokenKeyPins] in memory, with an encoding for a store that keeps it. Only the last few epochs are kept. */
@@ -138,6 +140,9 @@ open class MemoryTokenKeyPins : TokenKeyPins {
 
     @Synchronized
     override fun get(relay: String, epoch: Long): Map<String, String>? = pins["$relay|$epoch"]
+
+    @Synchronized
+    override fun any(relay: String): Boolean = pins.keys.any { it.startsWith("$relay|") }
 
     @Synchronized
     override fun put(relay: String, epoch: Long, keys: Map<String, String>) {
