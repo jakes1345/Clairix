@@ -118,9 +118,17 @@ export const MAX_ENVELOPE_B64 = Math.floor((MAX_ENVELOPE_BYTES * 4) / 3) + 4;
  * short of full, so another relay (which spends no delivery tokens here) can
  * neither exhaust the allowance this relay's own senders draw on nor fill the
  * mailbox against them.
+ *
+ * Over what goes past it is dropped without a word (see enqueue), so it must
+ * hold everything one relay can hand one mailbox in a clock hour with room to
+ * spare: federation.ts holds each relay to FED_SENDS_PER_TARGET_BURST plus an
+ * hour of FED_SENDS_PER_TARGET_PER_MINUTE per recipient, 2,100, about a third
+ * of this. Then a contact on another relay is never silently dropped (a long
+ * video is a few hundred envelopes), and it takes several relays flooding
+ * together to crowd out the owner's other contacts.
  */
-const FED_INBOUND_PER_HOUR = 1_800;
-const FED_INBOUND_BURST = 300;
+const FED_INBOUND_PER_HOUR = 6_000;
+const FED_INBOUND_BURST = 6_000;
 const FED_QUEUE_RESERVE = 500;
 /**
  * Envelopes from relays no one here has written to, per mailbox: enough for
@@ -143,11 +151,12 @@ const LOOKUP_LIMIT_PER_MINUTE = 30;
  * Envelopes into one mailbox, from everyone together: the relay does not know
  * who sends, so the recipient is protected here and by MAX_QUEUE. A
  * reconnecting contact sends a receipt for every message it missed, so bursts
- * are normal. Stored to the hour, so the hourly refill is what the burst
- * allows in any one hour.
+ * are normal. Stored to the hour, so the burst is what any one hour allows;
+ * above FED_INBOUND_BURST, since other relays' envelopes past it are dropped
+ * without a word too.
  */
 const INBOUND_PER_HOUR = 36_000;
-const INBOUND_BURST = 1800;
+const INBOUND_BURST = 9_000;
 /** Registration attempts per client address, against guessing the enrollment secret. */
 const REGISTER_LIMIT_PER_MINUTE = 10;
 /** After one push wake, further envelopes do not wake again until the phone has fetched, or this long. */

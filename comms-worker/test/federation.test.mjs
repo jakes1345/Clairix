@@ -476,8 +476,8 @@ test("another relay is held per recipient, alike for numbers that exist and ones
     // A photo of a few MB is a hundred envelopes or more: the limit lets one through at once.
     assert.equal(real.filter((s) => s === 202).length, 300);
     assert.equal(real.filter((s) => s === 429).length, 4);
-    // The other relay's wait reaches the phone, which sends again then.
-    assert.ok(waits.length === 8 && waits.every((w) => w === "60"), `waits: ${waits}`);
+    // The other relay's wait (until its bucket holds one again) reaches the phone, which sends again then.
+    assert.ok(waits.length === 8 && waits.every((w) => w === "2"), `waits: ${waits}`);
   } finally {
     net.restore();
   }
@@ -488,8 +488,12 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   const bob = await makePhone(b);
   const box = b.env.MAILBOX.get(b.env.MAILBOX.idFromName(bob.number));
   let federated = 0;
-  for (let i = 0; i < 400; i++) if ((await box.enqueue("c2VhbGVk", null, true, "known")).ok) federated++;
-  assert.equal(federated, 300, "other relays get their own allowance");
+  for (let i = 0; i < 6_100; i++) {
+    if ((await box.enqueue("c2VhbGVk", null, true, "known")).ok) federated++;
+    // The phone reads its mail as it comes: the queue's own limit is not what is tested here.
+    if (i % 1000 === 999) await b.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 0);
+  }
+  assert.equal(federated, 6_000, "other relays get their own allowance");
   // This relay's own senders are not affected.
   const carol = await makePhone(b);
   const [t] = await carol.tokens(1);
@@ -500,6 +504,55 @@ test("other relays together cannot fill a mailbox or use up what this relay's ow
   assert.equal((await box.enqueue("c2VhbGVk", null, true, "known")).status, 404, "dropped, answered as no such number");
   const [t2] = await carol.tokens(1);
   assert.equal((await carol.send(t2, bob.number)).status, 202);
+});
+
+test("one relay at its limit for a recipient, hour after hour, never meets the mailbox's silent drop", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    // Several senders on A, each within its own delivery tokens; the limit is A's, per recipient.
+    const senders = [await makePhone(a), await makePhone(a), await makePhone(a), await makePhone(a)];
+    const bob = await makePhone(b);
+    // Bob has written to someone on A, so A is a relay his mailbox knows.
+    const [bt] = await bob.tokens(1);
+    assert.equal((await sendVia(bob, bt, senders[0].number, A)).status, 202);
+    let accepted = 0;
+    let refused = 0;
+    let received = 0;
+    // Bob's phone reads and acknowledges its mail, as the app does.
+    const read = async () => {
+      await b.env.MAILBOX.runDueAlarms();
+      for (;;) {
+        const envelopes = await bob.inbox();
+        if (envelopes.length === 0) return;
+        received += envelopes.length;
+        assert.equal((await bob.signed("POST", "/v1/ack", { ids: envelopes.map((e) => e.id) })).status, 200);
+      }
+    };
+    // Two clock hours and a bit, a minute at a time, sending until the
+    // per-recipient limit says wait; Bob's phone reads its mail meanwhile.
+    for (let minute = 0; minute < 125; minute++) {
+      for (;;) {
+        const alice = senders[accepted % senders.length];
+        const [t] = await alice.tokens(1);
+        const res = await sendVia(alice, t, bob.number, B);
+        if (res.status === 429) { refused++; break; }
+        assert.equal(res.status, 202);
+        accepted++;
+      }
+      advance(60_000);
+      await read();
+    }
+    advance(60_000);
+    await read();
+    // Everything the relay accepted reached Bob: nothing past the per-recipient
+    // limit was swallowed by the mailbox's.
+    assert.equal(received, accepted);
+    assert.ok(accepted >= 300 + 124 * 30, `accepted ${accepted}`);
+    assert.equal(refused, 125);
+  } finally {
+    net.restore();
+  }
 });
 
 test("a mailbox at its limits for other relays answers them as a number that does not exist", async () => {

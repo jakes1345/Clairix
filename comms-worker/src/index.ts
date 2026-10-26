@@ -259,7 +259,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
       const body = parseSendBody(bodyText, isLoopbackDev(request));
       if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
-        throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", 60);
+        // The bucket refills one envelope this often.
+        throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", Math.ceil(60 / FED_SENDS_PER_TARGET_PER_MINUTE));
       }
       // Allow-listed relays, and relays a phone here has written to lately,
       // share the mailbox's allowance for other relays; any other relay draws

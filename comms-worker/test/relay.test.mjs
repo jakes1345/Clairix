@@ -179,12 +179,14 @@ test("each mailbox caps what it accepts from everyone together", async () => {
   const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
   let accepted = 0;
   let last;
-  for (let i = 0; i < 2500; i++) {
+  for (let i = 0; i < 9_100; i++) {
     last = await box.enqueue("AAAA");
     if (last.ok) accepted++;
     else break;
+    // Bob reads his mail as it comes: the queue's own limit is not what is tested here.
+    if (i % 1000 === 999) await relay.env.MAILBOX.objects.get(bob.number).state.storage.put("queueCount", 0);
   }
-  assert.equal(accepted, 1800);
+  assert.equal(accepted, 9_000);
   assert.equal(last.status, 429);
   // Through the Worker the same limit is a 429 with Retry-After.
   const alice = await makePhone(relay);

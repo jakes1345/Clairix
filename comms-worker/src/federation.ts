@@ -54,13 +54,17 @@ export const KEY_FETCH_FAILED_MS = 10 * 60_000;
 /** Per other relay, for everyone on it together. */
 export const FED_SENDS_PER_MINUTE = 600;
 export const FED_SENDS_BURST = 1_200;
-/** Per other relay and recipient: one relay alone cannot reach a mailbox's allowance for other relays. */
-export const FED_SENDS_PER_TARGET_PER_MINUTE = 30;
 /**
- * As much as the recipient's mailbox takes from other relays at once
- * (mailbox.ts FED_INBOUND_BURST): a photo is one envelope per 30 KiB chunk, a
- * few MB is a hundred of them, and 60 refused one before it was half sent.
+ * Per other relay and recipient, checked before anything about the number is
+ * looked up, so the refusal (a 429 the phone waits out) is alike for numbers
+ * that exist and ones that do not. At most the burst plus an hour of refill,
+ * 2,100, in any clock hour: about a third of what the recipient's mailbox takes
+ * from other relays (mailbox.ts FED_INBOUND_BURST), past which envelopes are
+ * dropped without a word. So one relay alone never meets that drop, nor
+ * crowds out the mailbox owner's contacts on other relays.
  */
+export const FED_SENDS_PER_TARGET_PER_MINUTE = 30;
+/** A photo is one envelope per 30 KiB chunk, a few MB a hundred of them: one goes through at once. */
 export const FED_SENDS_PER_TARGET_BURST = 300;
 export const FED_LOOKUPS_PER_MINUTE = 120;
 export const FED_LOOKUPS_BURST = 240;
