@@ -135,11 +135,14 @@ class SmokeTest {
      * service sometimes takes a Back key itself (it logs "Received KEYCODE_BACK.
      * isAllViewsInvisible=false") without the app ever seeing it, so when the
      * page titled [step] is still open a second Back is sent, as a person would.
+     * (That log line turned out to appear on Back presses that worked too; the
+     * cause is still being looked for, and the screen is kept when it happens.)
      */
     private fun backTo(step: String, expect: BySelector) {
         back(step)
         if (device.wait(Until.hasObject(expect), 3_000)) return
-        if (device.hasObject(By.text(step))) {
+        // The page's title: drawn in capitals, described as written.
+        if (device.hasObject(By.desc(step)) || device.hasObject(By.text(step.uppercase()))) {
             // Keep what was on screen when the first Back did nothing: the cause
             // of this has not been found yet.
             shot("BACK-IGNORED-$step")
