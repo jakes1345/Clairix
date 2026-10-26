@@ -228,6 +228,20 @@ jobs:
             exit 1
           fi
           echo "Booted after about $((i * 5)) s"
+          # sys.boot_completed comes before user 0 is fully unlocked, and finishing
+          # the unlock brings the home screen back to the front: an app started
+          # in between is covered at once (Android 13 on e771fa6, "app did not
+          # come up"). Wait for the unlock, then for the launcher to hold focus.
+          for i in $(seq 1 60); do
+            state="$(timeout 10 "$ADB" shell am get-started-user-state 0 2>/dev/null | tr -d '\r')"
+            case "$state" in *RUNNING_UNLOCKED*) break ;; esac
+            sleep 2
+          done
+          echo "User 0: $state"
+          for i in $(seq 1 60); do
+            timeout 10 "$ADB" shell dumpsys window 2>/dev/null | grep -E "mCurrentFocus=.*[Ll]auncher" && break
+            sleep 2
+          done
           "$ADB" shell settings put global window_animation_scale 0
           "$ADB" shell settings put global transition_animation_scale 0
           "$ADB" shell settings put global animator_duration_scale 0
