@@ -54,6 +54,13 @@ object TorTransport {
     /** Where connections go while Tor is on but its proxy is not up: nothing listens on port 1. */
     private const val CLOSED_PORT = 1
 
+    /**
+     * 127.0.0.1, where the proxy listens (comms-crypto/src/tor.rs binds IPv4
+     * loopback only). Not InetAddress.getLoopbackAddress(), which on Android
+     * is ::1: every connection was refused there (TorDeviceTest, Android 14).
+     */
+    private val LOOPBACK: InetAddress = InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1))
+
     sealed interface State {
         data object Off : State
         data class Starting(val percent: Int, val summary: String) : State
@@ -182,7 +189,7 @@ object TorTransport {
      */
     val proxySelector: ProxySelector = object : ProxySelector() {
         override fun select(uri: URI?): List<Proxy> =
-            if (enabled) listOf(Proxy(Proxy.Type.SOCKS, InetSocketAddress(InetAddress.getLoopbackAddress(), port.takeIf { it > 0 } ?: CLOSED_PORT)))
+            if (enabled) listOf(Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, port.takeIf { it > 0 } ?: CLOSED_PORT)))
             else listOf(Proxy.NO_PROXY)
 
         override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) {
