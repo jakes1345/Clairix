@@ -276,6 +276,19 @@ object LiveLink {
         kicks.trySend(Unit)
     }
 
+    init {
+        TorTransport.onChange { onTransportChanged() }
+    }
+
+    /** Tor was turned on or off: the socket goes out the old way, so reconnect. */
+    fun onTransportChanged() {
+        socket?.let {
+            CommsLog.add("Reconnecting to the relay " + if (TorTransport.enabled) "through Tor" else "directly")
+            it.cancel()
+        }
+        kicks.trySend(Unit)
+    }
+
     /** Closes the socket now, whatever holds exist (the identity is going away). */
     fun disconnect() {
         synchronized(this) { stopLocked() }

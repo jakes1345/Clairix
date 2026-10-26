@@ -221,6 +221,29 @@ jobs:
           # -3 for an ignored test) means the relays were not passed through.
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
 
+      # The app over the real Tor network (Arti on the phone, through its own
+      # SOCKS proxy): requests come out of Tor, the listed relay answers with
+      # its listed key, and with Tor on but its proxy gone nothing goes out.
+      - name: Run the Tor tests
+        working-directory: android
+        timeout-minutes: 15
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 800 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.TorDeviceTest -e tor true \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../tor.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-tor.txt
+          if grep -q "FATAL EXCEPTION" ../logcat-tor.txt; then
+            echo "::error::Clairix crashed during the Tor tests; see logcat-tor.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-tor.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (3 tests)" ../tor.txt || { echo "::error::The Tor tests failed; see tor.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../tor.txt; then echo "::error::Tor tests were skipped"; exit 1; fi
+
       - name: Run the lock screen tests
         working-directory: android
         timeout-minutes: 10
@@ -259,6 +282,8 @@ jobs:
             logcat-e2e.txt
             lockscreen.txt
             logcat-lockscreen.txt
+            tor.txt
+            logcat-tor.txt
             relay-a.log
             relay-b.log
             emulator.log

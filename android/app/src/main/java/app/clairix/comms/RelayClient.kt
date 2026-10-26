@@ -190,6 +190,14 @@ class RelayClient(
         .addNetworkInterceptor(signer)
         .build()
 
+    init {
+        // Tor turned on or off: no pooled connection keeps the old way out.
+        TorTransport.onChange {
+            http.connectionPool.evictAll()
+            sender.connectionPool.evictAll()
+        }
+    }
+
     /**
      * Requests: bounded as a whole, so one stalled request (Wi-Fi that lost
      * its internet, say) cannot hold up everything queued behind it.

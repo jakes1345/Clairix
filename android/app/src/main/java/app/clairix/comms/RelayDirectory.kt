@@ -158,6 +158,7 @@ object RelayDirectory {
             .callTimeout(40, TimeUnit.SECONDS)
             .followRedirects(true) // release assets redirect to GitHub's object storage
             .followSslRedirects(false)
+            .proxySelector(TorTransport.proxySelector)
             .build()
     }
 

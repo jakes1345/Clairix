@@ -46,7 +46,9 @@ object RelayTls {
     fun pinned(builder: OkHttpClient.Builder, pin: () -> String?): OkHttpClient.Builder {
         val manager = PinningTrustManager(platformTrustManager(), pin)
         val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), null) }
-        return builder.sslSocketFactory(context.socketFactory, manager)
+        // Every relay client is made here, so every one goes through Tor while
+        // that setting is on (TorTransport).
+        return builder.sslSocketFactory(context.socketFactory, manager).proxySelector(TorTransport.proxySelector)
     }
 }
 

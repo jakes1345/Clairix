@@ -85,7 +85,12 @@ automated.
    moving a phone to another relay when its own is blocked (a number is per
    relay, so this needs contacts told of the new number).
 4. **The app over Tor** (Arti), so the phone's address is hidden from every
-   relay, ours or not.
+   relay, ours or not. *Done:* "Connect through Tor" in Comms settings runs
+   Arti in the app's native library behind a password-protected SOCKS5 proxy
+   on 127.0.0.1, every connection on a circuit of its own; relay traffic and
+   the relay list go through it and fail closed while it connects. Calls
+   (UDP) and push wake-ups (the distributor's own connection) do not. Still
+   to do: reaching a relay at its onion address when it has one.
 
 ## Sources
 

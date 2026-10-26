@@ -91,6 +91,7 @@ import app.clairix.comms.GroupThread
 import app.clairix.comms.MediaBody
 import app.clairix.comms.OrgRole
 import app.clairix.comms.RelayDirectory
+import app.clairix.comms.TorTransport
 import app.clairix.comms.STATUS_CALL
 import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
@@ -2310,6 +2311,27 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 onCheckedChange = { CommsRepository.setOnline(it) },
                 subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way."
             )
+            var tor by remember { mutableStateOf(TorTransport.enabled) }
+            val torState by TorTransport.state.collectAsStateWithLifecycle()
+            ToggleRow(
+                title = "Connect through Tor",
+                checked = tor,
+                onCheckedChange = { on -> tor = on; TorTransport.setEnabled(on) },
+                subtitle = "Everything Clairix says to relays goes through Tor, so no relay, this one or another, learns this " +
+                    "phone's network address, and the network it is on does not learn which relay it uses. Nothing goes out " +
+                    "directly while Tor is connecting. Slower, and uses more data. Calls do not go through Tor: during a call " +
+                    "the relay's call server sees this phone's address (and so does the contact, unless Relay-only calls is on)."
+            )
+            if (tor) {
+                val (line, tone) = when (val s = torState) {
+                    TorTransport.State.Off -> "Off" to ClairixTheme.colors.textSubtle
+                    is TorTransport.State.Starting -> "Connecting to Tor… ${s.percent}%" to ClairixTheme.colors.textMuted
+                    TorTransport.State.Ready -> "Connected through Tor" to ClairixTheme.colors.accent
+                    is TorTransport.State.Blocked -> "Tor is stuck at ${s.percent}%: ${s.reason}" to ClairixTheme.colors.danger
+                    is TorTransport.State.Failed -> "Tor did not start: ${s.reason}" to ClairixTheme.colors.danger
+                }
+                Text(line, style = MaterialTheme.typography.bodySmall, color = tone)
+            }
             var hidePreviews by remember { mutableStateOf(CommsNotifications.hidePreviews(context)) }
             ToggleRow(
                 title = "Hide names and previews in notifications",

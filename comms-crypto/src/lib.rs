@@ -54,6 +54,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 uniffi::setup_scaffolding!();
 
+pub mod tor;
+
 // ── Errors ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]

@@ -158,6 +158,7 @@ object Wiper {
             "comms_identity",   // IdentityStore
             "comms_transport",  // TransportKeyStore
             "comms_vault",      // VaultBox's wrapped data key
+            "comms_tor",        // TorTransport
             "comms",            // CommsConfig
             "comms_log",        // CommsLog
             "comms_ui",         // CommsScreen
