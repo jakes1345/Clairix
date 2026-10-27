@@ -133,7 +133,9 @@ findings are resolved.
     real relays. These cover messaging, calls, groups, disappearing messages,
     an eight-minute soak, Tor, moving relays, and the lock screen.
 - **Reproducible builds:** CI builds every change twice on two machines and
-  fails unless the builds match.
+  fails unless the builds match. The published Beta 7 APKs have been rebuilt
+  from their tag and match, and every release is now rebuilt and compared
+  as it is published.
 
 ## Materials for the auditors
 

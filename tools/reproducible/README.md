@@ -42,6 +42,12 @@ cargo install cargo-ndk --version 4.1.2 --locked
 From 3.0.0 Beta 6 the build checks both versions and stops on any other, so a
 rebuild cannot quietly use a different NDK. Releases up to Beta 5 were built
 with whichever NDK the CI runner had installed as its latest, so a rebuild of
-one of those may differ in the native library. No published release has yet
-been rebuilt and matched this way; until one has, the comparison is a check,
-not a promise.
+one of those may differ in the native library.
+
+3.0.0 Beta 7 is the first published release rebuilt and matched: the tag
+`v3.0.0-beta.7`, built away from CI (another machine, another directory), gave
+both `clairix-v3.0.0-beta.7.apk` and `clairix-comms-v3.0.0-beta.7.apk` entry
+for entry, signature files aside. `.github/workflows/verify-release.yml` now
+does the same for every release as it is published: it rebuilds the tag on a
+runner that never saw the release made, checks `SHA256SUMS.txt` and its
+signature, and fails unless both APKs match.

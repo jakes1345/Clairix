@@ -113,7 +113,10 @@ adb shell am instrument -w -r -e class app.clairix.comms.EndToEndTest \
 ## Checking a release against the source
 
 CI builds every change twice, on two machines, and fails unless the builds
-match (`tools/reproducible/compare-builds.sh`). To check a published APK:
+match (`tools/reproducible/compare-builds.sh`). Every published release is
+also rebuilt from its tag and compared with its APKs
+(`.github/workflows/verify-release.yml`); Beta 7 matches. To check a
+published APK yourself:
 
 ```sh
 git checkout v3.0.0-beta.7

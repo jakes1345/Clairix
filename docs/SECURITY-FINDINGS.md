@@ -692,10 +692,9 @@ Known and not fixed:
   audit.
 
 Still open after PR #15: 4, 5, 7 (by decision), 23 (since done, Beta 8), 25 (coin farming),
-30, and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
-matched (CI now requires two builds of every change to agree, and from
-Beta 6 the NDK and cargo-ndk are pinned; `tools/reproducible/` says how to
-compare a release), an audit.
+30 (since done, Beta 8), and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
+matched (since done: Beta 7 rebuilt from its tag matches both published APKs,
+and `verify-release.yml` checks every release as it is published), an audit.
 
 ## Not re-tested
 
