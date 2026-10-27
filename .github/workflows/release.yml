@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.7'
+        default: 'v3.0.0-beta.8'
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -36,6 +36,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -267,7 +269,34 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 7: your relay, your way out, and a phone that keeps quiet when locked"
+            echo "### What's new in Beta 8: harder to flood, safer invites, a release you can check"
+            echo
+            echo "- **Nobody can fill your mailbox against your contacts.** Your phone gives each"
+            echo "  contact a pass, inside your encrypted messages, and gives your relay the key it"
+            echo "  is checked with. Messages from people you have never written to share a small"
+            echo "  part of your mailbox (300 at a time, 300 an hour), so a stranger with any number"
+            echo "  of accounts can no longer fill it and have it refuse everyone. Deleting a"
+            echo "  contact replaces the pass, so someone flooding you is a stranger from then on."
+            echo "  The relay learns whether a message came from someone you wrote to, never who."
+            echo "- **Invite links only Clairix can open.** Invites are now https://clairix.app/i links."
+            echo "  Android checks that the site names Clairix and its signing key, so the link opens"
+            echo "  in Clairix and no other app can take it. Without Clairix it opens a page on"
+            echo "  clairix.app, never one the inviter's relay serves. Links from earlier versions"
+            echo "  still work."
+            echo "- **You see which relay an invite puts you on.** Before you register, setup names"
+            echo "  the relay and says whether it is on the signed relay list. For one that is not,"
+            echo "  it says what that relay's operator would see, and Register waits until you"
+            echo "  confirm you know who runs it."
+            echo "- **This release is checked against its source.** Beta 7 was rebuilt from its tag"
+            echo "  on another machine and matched both published APKs file for file. From now on"
+            echo "  every release is rebuilt and compared the same way as soon as it is published."
+            echo "- **Licence:** Clairix is now free software under the GNU GPL version 3, and the"
+            echo "  repository has a security policy and an audit pack for independent reviewers."
+            echo "- **Relay operators:** run this release's relay; it checks contacts' passes. Your"
+            echo "  contacts need Beta 8 for their messages to count as from a contact."
+            echo "- The COMMS database is upgraded once, on first start (version 11)."
+            echo
+            echo "### What was new in Beta 7: your relay, your way out, and a phone that keeps quiet when locked"
             echo
             echo "- **Move to another relay.** If your relay is blocked where you are, shut down, or no"
             echo "  longer one you trust, Comms settings → Move to another relay takes you to another"
@@ -528,3 +557,15 @@ jobs:
             android/app/build/outputs/release-files/SHA256SUMS.txt.sig
           draft: false
           prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
+
+  # A release published with this workflow's own token starts no other
+  # workflow, so the rebuild-and-compare check is called from here: a runner
+  # that never saw this build makes it again from the tag and requires the
+  # published APKs to match (verify-release.yml).
+  verify:
+    needs: release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
