@@ -195,7 +195,9 @@ class SmokeTest {
         tapScrolling("I know who runs this relay")
         if (scrollTo(registerButton().enabled(true)) == null) { shot("MISSING-register-enabled"); fail("Register stayed off after the owner confirmed") }
         tapScrolling("Use a relay URL and secret instead")
-        if (ui.waitFor(By.text("Have an invite?"), 5_000) == null && scrollTo(By.text("Have an invite?")) == null) {
+        // Back to the ordinary setup, wherever the list is scrolled to: the
+        // secret field is there, and nothing of the invite is.
+        if (scrollTo(By.text("Enrollment secret")) == null || ui.has(By.text("Join with an invite"))) {
             shot("MISSING-invite-cleared"); fail("The invite was not cleared")
         }
     }
