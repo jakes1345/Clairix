@@ -222,6 +222,7 @@ object CommsRepository {
     private val outboxLock = Mutex()
     private val receiptsLock = Mutex()
     private val moveNoticesLock = Mutex()
+    private val passNoticesLock = Mutex()
     private val keysLock = Mutex()
     /** When keys were last topped up from the live connection; see [replenishKeysInBackground]. */
     @Volatile
@@ -787,6 +788,53 @@ object CommsRepository {
                 }
             }
         }
+    }
+
+    /**
+     * Gives this phone's pass to each contact still owed it, once the relay
+     * holds it: a payload with nothing in it but the sender fields, which carry
+     * the pass ([putSelf]). Until a contact has it, what they send counts
+     * against the strangers' share of the mailbox.
+     */
+    suspend fun flushPassNotices() = withContext(Dispatchers.IO) {
+        if (!config.isRegistered || Vault.sealed.value || !config.passPublished) return@withContext
+        passNoticesLock.withLock {
+            for (peer in store.passNotices()) {
+                val contact = store.contact(peer)
+                if (contact == null) { store.clearPassNotice(peer); continue }
+                when (val d = deliver(contact, CommsWire.pass())) {
+                    Deliver.Sent -> store.clearPassNotice(peer)
+                    is Deliver.Failed -> {
+                        store.clearPassNotice(peer)
+                        CommsLog.add("Could not give ${contactLabel(contact)} this phone's pass: ${d.reason}")
+                    }
+                    is Deliver.TooLarge -> store.clearPassNotice(peer)
+                    is Deliver.Offline -> { scheduleRetry(d.retryAfterMs); return@withLock }
+                }
+            }
+        }
+    }
+
+    /**
+     * Makes a new pass key and owes it to every contact. The relay is given it
+     * by [publishPass]; until then contacts' passes made with the old key still
+     * count, and the new one goes out to no one.
+     */
+    private fun newPassKey() {
+        val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        config.setPassKey(key, System.currentTimeMillis())
+        store.owePassToAll()
+    }
+
+    /** Gives the relay the current pass key, then gives it to the contacts still owed it. */
+    private suspend fun publishPass() {
+        val key = config.passKey ?: return
+        runCatching { relay.putPass(key) }
+            .onSuccess {
+                config.setPassPublished()
+                scope.launch { flushPassNotices() }
+            }
+            .onFailure { CommsLog.add("Could not give the relay this phone's pass key: ${it.message}") }
     }
 
     /** The relay this phone moved away from and its number there, while that mailbox is still emptied; null otherwise. */
@@ -1392,8 +1440,13 @@ object CommsRepository {
             store.contact(number)?.let { c -> identities.update { it.dropSessions(c.curve25519) } }
             store.deleteContact(number).forEach { CommsMedia.delete(it) }
             CommsNotifications.cancel(appContext, number)
+            // The pass they were given stops working: a new key goes to the
+            // relay and to everyone else, so someone deleted for flooding this
+            // phone is a stranger to the mailbox from now on.
+            if (config.isRegistered && config.passKey != null) newPassKey()
             bump()
         }
+        if (config.isRegistered && !config.passPublished) scope.launch { keysLock.withLock { publishPass() } }
     }
 
     /** The 60-digit safety number shared with [contact]; identical on both phones. */
@@ -1740,7 +1793,7 @@ object CommsRepository {
     private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false, alert: String? = null): Deliver {
         val claim = claims.get(contact.number, System.currentTimeMillis())
         return try {
-            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert)
+            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert, store.pass(contact.number))
             if (claim != null) claims.accepted(contact.number, claim)
             Deliver.Sent
         } catch (e: RelayException) {
@@ -1826,6 +1879,7 @@ object CommsRepository {
             synchronized(this@CommsRepository) { if (retryJob === coroutineContext[Job]) retryJob = null }
             topUpTokens()
             flushMoveNotices()
+            flushPassNotices()
             flushOutbox()
             flushReceipts()
         }
@@ -1838,6 +1892,7 @@ object CommsRepository {
         retryJob?.cancel()
         scope.launch {
             flushMoveNotices()
+            flushPassNotices()
             flushOutbox()
             flushReceipts()
         }
@@ -1854,6 +1909,12 @@ object CommsRepository {
      * from, name, k, c, s, g are reserved for the sender's identity".
      */
     private fun putSelf(o: JSONObject) {
+        // This phone's pass key, once the relay holds it: what the contact
+        // sends back then carries passes made with it (RelayClient.send).
+        val passKey = config.passKey
+        if (passKey != null && config.passPublished) {
+            o.put(CommsWire.F_PASS, java.util.Base64.getEncoder().encodeToString(passKey)).put(CommsWire.F_PASS_TS, config.passCreated)
+        }
         if (CommsWire.SENDER_FIELDS.all { o.has(it) }) return
         val bundle = identities.get()?.publicBundle() ?: return
         val number = config.number ?: return
@@ -2931,8 +2992,20 @@ object CommsRepository {
         for (p in store.pending()) if (!processStagedLocked(p)) return
     }
 
+    /**
+     * Keeps the pass key [contact] gave with [json], unless one they made
+     * later is held: envelopes to them then carry passes made with it.
+     */
+    private fun notePass(contact: Contact, json: JSONObject) {
+        val encoded = json.optString(CommsWire.F_PASS).takeIf { it.isNotEmpty() && it.length <= 64 } ?: return
+        val created = json.optLong(CommsWire.F_PASS_TS, 0L).takeIf { it > 0L } ?: return
+        val key = runCatching { java.util.Base64.getDecoder().decode(encoded) }.getOrNull()?.takeIf { it.size == 32 } ?: return
+        store.setPass(contact.number, key, created)
+    }
+
     /** Acts on a decrypted payload from a known contact. Caller holds [lock]. */
     private fun processPayload(contact: Contact, envelopeTs: Long, json: JSONObject) {
+        notePass(contact, json)
         when (CommsWire.type(json)) {
             CommsWire.T_MSG -> {
                 val id = CommsWire.messageId(json) ?: return
@@ -3116,6 +3189,8 @@ object CommsRepository {
                 if (json.has(CommsWire.F_GID)) processGroupPayload(contact, envelopeTs, json)
                 else applyTimer(contact.number, envelopeTs, json, contact.name.ifBlank { formatClairixNumber(contact.number) }, group = false)
             CommsWire.T_MOVED -> applyMove(contact, json)
+            // Nothing but their pass, kept above.
+            CommsWire.T_PASS -> Unit
             // Cover traffic: nothing is kept, shown or acknowledged.
             CommsWire.T_NOISE -> Unit
             else -> CommsLog.add("Payload of type \"${CommsWire.type(json)}\" from ${formatClairixNumber(contact.number)} not understood; ignored")
@@ -3291,6 +3366,7 @@ object CommsRepository {
             val emptied = if (config.previousRelay != null) minOf(drainedAt, config.previousEmptied) else drainedAt
             if (emptied > 0L) pruneSealingPrekeys(emptied)
             flushMoveNotices()
+            flushPassNotices()
             flushOutbox()
             flushReceipts()
             replenishKeys()
@@ -3402,6 +3478,10 @@ object CommsRepository {
                 .onSuccess { transportKeys.setPublished(true) }
                 .onFailure { CommsLog.add("Could not give the relay this phone's transport key: ${it.message}") }
         }
+        // The key contacts' passes are made with: made once and owed to every
+        // contact, and given to the relay again after a move or if it lost it.
+        if (config.passKey == null) newPassKey()
+        if (!config.passPublished || !me.pass) publishPass()
         _state.update { it.copy(relayOneTimeKeys = count, listed = me.listed) }
         // Delivery tokens are fetched here, ahead of need and apart from any send.
         runCatching { relay.topUpTokens() }.onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }

@@ -118,7 +118,6 @@ findings are resolved.
   2022 ([announcement](https://matrix.org/blog/2022/05/16/independent-public-audit-of-vodozemac-a-native-rust-reference-implementation-of-matrix-end-to-end-encryption/)).
 - Clairix has had two internal security reviews. Every finding, fixed or open,
   is published in `docs/SECURITY-FINDINGS.md`. The open ones include:
-  - delivery tokens not tied to a recipient (mailbox flooding);
   - coin farming;
   - the custom invite link scheme;
   - release signing on the CI runner.

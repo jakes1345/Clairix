@@ -103,7 +103,7 @@ adb shell am instrument -w -r -e class app.clairix.comms.EndToEndTest \
 | Suite | What it does |
 |---|---|
 | `SmokeTest` (33) | Every screen, through UI Automator, as a person would |
-| `EndToEndTest` (10) | Covers: <ul><li>texts with receipts, a voice note, a photo in chunks, a group;</li><li>disappearing messages;</li><li>a call that rings, including on a locked phone;</li><li>a contact on the other relay.</li></ul> |
+| `EndToEndTest` (11) | Covers: <ul><li>texts with receipts, a voice note, a photo in chunks, a group;</li><li>disappearing messages;</li><li>a call that rings, including on a locked phone;</li><li>a contact on the other relay;</li><li>contacts holding the phone's pass, and the pass replaced when a contact is deleted.</li></ul> |
 | `SoakTest` (1, `-e soakMinutes 8`) | An eight-minute conversation with a contact on each relay. Photos, the vault sealing and opening, the socket dropped; nothing lost, nothing twice |
 | `RelayMoveTest` (4) | The app moves and both contacts follow; mail to the old number is collected; a contact moves; the app moves back |
 | `TorDeviceTest` (4, `-e tor true`) | Requests leave through Tor; a listed relay answers through Tor; a relay is reached at its onion address; nothing goes out directly when Tor is down |

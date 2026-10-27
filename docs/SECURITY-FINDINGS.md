@@ -283,6 +283,19 @@ twice on two machines in CI, which fails unless the two builds agree.
     own rate limiting is the right layer for a flood.
 23. **Tokens are not recipient-bound**; `MAX_QUEUE=2000` then 413 for all
     senders. One account fills any mailbox in about 25 minutes. *Reported.*
+    **Done (Beta 8), with contacts' passes:** each phone gives its relay a
+    pass key (`PUT /v1/pass`) and gives its contacts the key inside their
+    end-to-end encrypted messages. Their envelopes carry a pass, HMAC-SHA256
+    under that key over `clairix-pass-v1|number|envelope`, so it is bound to
+    the envelope and a relay forwarding one cannot reuse it. A mailbox with a
+    pass key gives envelopes without a good pass 300 places in the queue and
+    300 an hour, and drops what goes past them as it drops a send to a number
+    that does not exist. Deleting a contact makes a new key, given to the
+    relay and sent to every other contact, so a contact deleted for flooding
+    is a stranger from then on. Left: a stranger can still use up the
+    strangers' share, holding up first messages from other new contacts for
+    up to an hour; contacts are unaffected. The relay learns whether an
+    envelope came from someone the owner wrote to, not who.
 24. **Existence oracle**: send and `coin/pay` return 404 for unknown numbers
     (`mailbox.ts:608`, `index.ts:335`), undoing what the bundle endpoint
     hides. *Reported.* **Done:** a send to a number that does not exist is
@@ -664,7 +677,7 @@ Known and not fixed:
   The second review above was internal; nothing here has had an independent
   audit.
 
-Still open after PR #15: 4, 5, 7 (by decision), 23, 25 (coin farming),
+Still open after PR #15: 4, 5, 7 (by decision), 23 (since done, Beta 8), 25 (coin farming),
 30, and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
 matched (CI now requires two builds of every change to agree, and from
 Beta 6 the NDK and cargo-ndk are pinned; `tools/reproducible/` says how to

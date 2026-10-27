@@ -230,6 +230,46 @@ class EndToEndTest {
         eventually("the ringing stops") { CallManager.call.value?.let { it.id != cid || it.phase != CallPhase.INCOMING } ?: true }
     }
 
+    /**
+     * Mailbox flooding (finding 23): the app gives its relay a pass key and its
+     * contacts the key inside their messages, and deleting a contact replaces
+     * the key: the relay is given the new one, and every other contact is
+     * sent it, so only the deleted contact's passes stop counting.
+     */
+    @Test
+    fun j_contactsHoldThePhonesPassAndDeletingOneReplacesIt() = runBlocking {
+        setUp()
+        val peer = local
+        val client = repo.relayClient()
+        eventually("the relay holds the app's pass key") { client.me().pass }
+        repo.send(peer.number, "with the pass").getOrThrow()
+        peer.receive { CommsWire.type(it) == CommsWire.T_MSG && it.optString(CommsWire.F_BODY) == "with the pass" }
+        val first = peer.appPass
+        assertNotNull("the app's message carried its pass key", first)
+        peer.send(app, CommsWire.message(UUID.randomUUID().toString(), System.currentTimeMillis(), "back, with a pass"))
+        eventually("the reply made with the pass arrives") {
+            repo.messages(peer.number).any { it.direction == Direction.IN && it.body == "back, with a pass" }
+        }
+
+        val args = InstrumentationRegistry.getArguments()
+        val spare = TestPeer(args.getString("relayA")!!, args.getString("secret")!!, "Spare", app)
+        try {
+            repo.addContactFromCode(spare.code("Spare"), "Spare", CommsRepository.CodeSource.SCANNED).getOrThrow()
+            repo.deleteContact(spare.number)
+        } finally {
+            spare.close()
+        }
+        eventually("the peer is given the new pass key", 90_000) {
+            peer.collect()
+            peer.appPass?.contentEquals(first) == false
+        }
+        assertTrue("the relay holds the new key", client.me().pass)
+        peer.send(app, CommsWire.message(UUID.randomUUID().toString(), System.currentTimeMillis(), "with the new pass"))
+        eventually("the reply made with the new pass arrives") {
+            repo.messages(peer.number).any { it.direction == Direction.IN && it.body == "with the new pass" }
+        }
+    }
+
     @Test
     fun z_unpairing() = runBlocking {
         setUp()
@@ -324,6 +364,10 @@ class TestPeer(relayUrl: String, private val secret: String, private val label: 
     private val waiting = ArrayList<JSONObject>()
     /** Each contact's sealing prekey as last fetched, kept as the app keeps its contacts'. */
     private val prekeys = HashMap<String, SealingPrekey?>()
+    /** The app's pass key, the newest given in its payloads, used on every envelope to it as the app uses its contacts'. */
+    @Volatile var appPass: ByteArray? = null
+        private set
+    private var appPassCreated = 0L
 
     init {
         number = relay.register(relayUrl, identity, secret, listed = true).number
@@ -394,8 +438,27 @@ class TestPeer(relayUrl: String, private val secret: String, private val label: 
             keys = keys.copy(sealingPrekey = prekeyOf(to, appRelay, fresh = true))
             identity.encrypt(keys, plain)
         }
-        politely { relay.send(to.number, envelope, claim, relay = appRelay, urgent = urgent, alert = alert) }
+        politely { relay.send(to.number, envelope, claim, relay = appRelay, urgent = urgent, alert = alert, passKey = appPass) }
         claim = null
+    }
+
+    /** Keeps the app's pass key from [payload] when it is newer than the one held, as the app keeps its contacts'. */
+    private fun notePass(payload: JSONObject) {
+        val created = payload.optLong(CommsWire.F_PASS_TS, 0L)
+        val key = payload.optString(CommsWire.F_PASS).takeIf { it.isNotEmpty() } ?: return
+        if (created <= appPassCreated) return
+        appPass = Base64.getDecoder().decode(key)
+        appPassCreated = created
+    }
+
+    /** Reads this peer's inbox once, keeping what arrived for [receive]. */
+    fun collect() {
+        val envelopes = politely { relay.inbox() }
+        for (env in envelopes) {
+            val d = identity.decrypt(env.data)
+            CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { notePass(it); waiting += it }
+        }
+        if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
     }
 
     /** The next payload that [matches], polling this peer's inbox; anything else that arrives is kept for later. */
@@ -406,7 +469,7 @@ class TestPeer(relayUrl: String, private val secret: String, private val label: 
             val envelopes = politely { relay.inbox() }
             for (env in envelopes) {
                 val d = identity.decrypt(env.data)
-                CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
+                CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { notePass(it); waiting += it }
             }
             if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
             if (System.currentTimeMillis() > deadline) {
@@ -423,7 +486,7 @@ class TestPeer(relayUrl: String, private val secret: String, private val label: 
             val envelopes = politely { relay.inbox() }
             for (env in envelopes) {
                 val d = identity.decrypt(env.data)
-                CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { waiting += it }
+                CommsWire.parse(String(d.plaintext, Charsets.UTF_8))?.let { notePass(it); waiting += it }
             }
             if (envelopes.isNotEmpty()) politely { relay.ack(envelopes.map { it.id }) }
             Thread.sleep(400)

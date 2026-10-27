@@ -11,6 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -21,6 +22,7 @@ import uniffi.clairix_comms_crypto.CryptoException
 import uniffi.clairix_comms_crypto.Identity
 import uniffi.clairix_comms_crypto.PeerKeys
 import uniffi.clairix_comms_crypto.fingerprint
+import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -97,7 +99,7 @@ class RelayRoundTripTest {
         }
 
         /** Encrypts [payload] for [peer] exactly as CommsRepository.deliver does, starting a session if needed. */
-        fun send(peer: Phone, payload: JSONObject) {
+        fun send(peer: Phone, payload: JSONObject, passKey: ByteArray? = null) {
             val peerKeys = peer.keys
             if (!identity.hasSession(peerKeys.curve25519)) {
                 val bundle = relay.bundle(peer.number!!, fingerprint(peerKeys.ed25519))
@@ -111,7 +113,7 @@ class RelayRoundTripTest {
             // As CommsRepository.deliver: what must not wait or be reordered skips
             // the relay's mixing; everything else may arrive in any order.
             val urgent = CommsWire.type(payload) in setOf(CommsWire.T_CALL, CommsWire.T_PANIC, CommsWire.T_GROUP_CTRL)
-            relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext), pendingClaim, urgent = urgent)
+            relay.send(peer.number!!, identity.encrypt(peerKeys, plaintext), pendingClaim, urgent = urgent, passKey = passKey)
             pendingClaim = null
         }
 
@@ -149,6 +151,13 @@ class RelayRoundTripTest {
         }
 
         class Received(val senderCurve: String, val senderEd: String, val payload: JSONObject, val newSession: Boolean)
+
+        /** How many envelopes arrive on the live socket before none has for [quietSeconds]; they are not opened. */
+        fun countArrivals(quietSeconds: Long): Int {
+            var n = 0
+            while (inbox.poll(quietSeconds, TimeUnit.SECONDS) != null) n++
+            return n
+        }
 
         /** The next envelope off the live socket, decrypted and parsed. */
         fun receive(): Received {
@@ -208,6 +217,10 @@ class RelayRoundTripTest {
     private companion object {
         /** Longer than the relay's longest mixing hold (20 s), with room for its alarm. */
         const val RECEIVE_S = 45L
+        /** Quiet for longer than the relay's longest mixing hold: nothing more is coming. */
+        const val QUIET_S = 25L
+        /** What envelopes without a pass may bring one mailbox in an hour (the relay's STRANGER_BURST). */
+        const val STRANGERS_PER_HOUR = 300
 
         /**
          * Runs a registration, waiting out the relay's limit of ten a minute from
@@ -227,6 +240,37 @@ class RelayRoundTripTest {
     }
 
     private fun msg(body: String) = CommsWire.message(UUID.randomUUID().toString(), System.currentTimeMillis(), body)
+
+    /**
+     * Mailbox flooding (finding 23): once Bob's relay holds his pass key,
+     * envelopes without a pass share an hourly allowance of their own. Mallory,
+     * whom Bob never wrote to, spends it; Alice, who holds Bob's pass, still
+     * gets through, and without the pass she would not have.
+     */
+    @Test
+    fun aStrangerCannotUseUpWhatTheOwnersContactsRelyOn() {
+        // The allowance refills on the hour; the test must not straddle one.
+        val toNextHour = 3_600_000L - System.currentTimeMillis() % 3_600_000L
+        if (toNextHour < 4 * 60_000L) Thread.sleep(toNextHour + 5_000L)
+        val mallory = Phone(relayUrl!!, secret!!, "Mallory")
+        try {
+            val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            assertFalse(bob.relay.me().pass)
+            bob.relay.putPass(key)
+            assertTrue(bob.relay.me().pass)
+            val random = SecureRandom()
+            repeat(STRANGERS_PER_HOUR + 10) { mallory.sendRaw(bob, ByteArray(600).also { random.nextBytes(it) }) }
+            assertEquals(STRANGERS_PER_HOUR, bob.countArrivals(QUIET_S))
+
+            alice.send(bob, msg("still here"), passKey = key)
+            assertEquals("still here", bob.receive().payload.getString(CommsWire.F_BODY))
+
+            alice.send(bob, msg("without the pass"))
+            assertEquals(0, bob.countArrivals(QUIET_S))
+        } finally {
+            mallory.close()
+        }
+    }
 
     @Test
     fun severalMessagesBeforeAnyReplyAllArriveAndReceiptsComeBack() {
