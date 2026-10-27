@@ -28,6 +28,7 @@
 # The invite page: the invite is in the URL fragment, which no request carries;
 # nothing about the page that sent someone here is passed on either.
 /i
+  ! Referrer-Policy
   Referrer-Policy: no-referrer
   Cache-Control: public, max-age=3600
 

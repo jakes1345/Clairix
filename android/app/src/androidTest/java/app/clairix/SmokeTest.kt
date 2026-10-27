@@ -188,10 +188,12 @@ class SmokeTest {
         target.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(code.inviteLink())).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         alive("invite link")
         if (text("Join with an invite", 10_000) == null) { shot("MISSING-invite"); fail("The invite link did not open the setup") }
+        // The button is the clickable node; its label is a separate one that is always enabled.
+        fun registerButton() = By.clickable(true).hasDescendant(By.text("Register"))
         if (scrollTo(By.text("A relay not on Clairix's list")) == null) { shot("MISSING-invite-warning"); fail("No warning for a relay off the list") }
-        if (scrollTo(By.text("Register").enabled(false)) == null) { shot("MISSING-register-disabled"); fail("Register was not waiting for the owner") }
+        if (scrollTo(registerButton().enabled(false)) == null) { shot("MISSING-register-disabled"); fail("Register was not waiting for the owner") }
         tapScrolling("I know who runs this relay")
-        if (scrollTo(By.text("Register").enabled(true)) == null) { shot("MISSING-register-enabled"); fail("Register stayed off after the owner confirmed") }
+        if (scrollTo(registerButton().enabled(true)) == null) { shot("MISSING-register-enabled"); fail("Register stayed off after the owner confirmed") }
         tapScrolling("Use a relay URL and secret instead")
         if (ui.waitFor(By.text("Have an invite?"), 5_000) == null && scrollTo(By.text("Have an invite?")) == null) {
             shot("MISSING-invite-cleared"); fail("The invite was not cleared")
