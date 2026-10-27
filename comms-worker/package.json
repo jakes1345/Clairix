@@ -2,6 +2,7 @@
   "name": "clairix-relay",
   "version": "2.0.0",
   "private": true,
+  "license": "GPL-3.0-only",
   "description": "Cloudflare Worker relay for Clairix comms: store-and-forward of end-to-end encrypted envelopes between Clairix apps, addressed by Clairix number.",
   "type": "module",
   "scripts": {

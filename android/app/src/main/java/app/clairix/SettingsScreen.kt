@@ -722,6 +722,17 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     }
 
                     Hairline(Modifier.padding(vertical = 4.dp))
+                    Text("License", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(
+                        "Copyright © 2026 the Clairix authors. Clairix is free software under the GNU General Public " +
+                            "License, version 3, with an additional permission to combine it with Google Play services. " +
+                            "It comes with absolutely no warranty. Its source code, and the licence in full, are at " +
+                            "github.com/jakes1345/Clairix. The Archivo and JetBrains Mono fonts are under the SIL Open Font License 1.1.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+
+                    Hairline(Modifier.padding(vertical = 4.dp))
                     Text("Privacy", style = MaterialTheme.typography.titleSmall, color = c.text)
                     Text(
                         if (BuildConfig.FULL_ACCESS)

@@ -161,10 +161,12 @@ Read this part twice.
   them.
 - **Detection is best-effort.** No app finds every camera, tracker or piece
   of spyware. A finding is a reason to look, not proof.
-- **The keys are not bound to the phone being unlocked.** The scanner has
-  to write while the keyguard is up, so the keys that seal the records work
-  while the phone is locked; code running as the app on an unlocked phone
-  can read what the app can. The settings files (thresholds, the sleep
+- **The scanner's keys work while the phone is locked.** The scanner has
+  to write while the keyguard is up, so the keys that seal its records work
+  while the phone is locked. Comms is different: since Beta 7 what reads
+  conversations needs the phone unlocked, and what arrives while it is
+  locked waits sealed until then. Code running as the app on an unlocked
+  phone can read what the app can. The settings files (thresholds, the sleep
   window, the passcode's verifier, TLS pins) are not encrypted; they hold
   settings, not records.
 - **No independent audit.** vodozemac has been audited. Clairix has not.
@@ -307,7 +309,35 @@ maps and work-zones workflows fail on purpose.
 
 Write to **security@clairix.app** first. Give us enough to reproduce it; a
 proof of concept is welcome, other people's data is not. We will acknowledge
-the report, keep you informed and credit you if you want to be credited.
+the report, keep you informed and credit you if you want to be credited. See
+[SECURITY.md](SECURITY.md), and [docs/audit/](docs/audit/README.md) for
+auditors.
+
+## License
+
+Copyright © 2026 the Clairix authors.
+
+Clairix (the Android app, the Rust crypto crate, the relay, the website and
+the tools in this repository) is free software: you can redistribute it and/or
+modify it under the terms of the GNU General Public License, version 3, as
+published by the Free Software Foundation. It is distributed in the hope that
+it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE)
+for the full text.
+
+**Additional permission under GNU GPL version 3 section 7.** If you modify
+this program, or any covered work, by linking or combining it with Google Play
+services libraries (or a modified version of those libraries), containing
+parts covered by the terms of the Android Software Development Kit License
+Agreement, the licensors of this program grant you additional permission to
+convey the resulting work. Every edition includes Google Play services'
+location library, used by the scanner and navigation; messaging uses no Google
+service.
+
+The fonts the app ships with keep their own licence, the SIL Open Font License
+1.1: Archivo ([licenses/OFL-1.1-Archivo.txt](licenses/OFL-1.1-Archivo.txt))
+and JetBrains Mono ([licenses/OFL-1.1-JetBrains-Mono.txt](licenses/OFL-1.1-JetBrains-Mono.txt)).
+Libraries the app and the relay depend on keep theirs.
 
 ---
 

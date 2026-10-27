@@ -141,8 +141,12 @@ class EndToEndTest {
         }
 
         peer.send(app, CommsWire.timer(UUID.randomUUID().toString(), System.currentTimeMillis(), 0))
-        eventually("they turned it off") { repo.timer(peer.number) == 0 }
-        assertTrue(repo.messages(peer.number).any { it.status == STATUS_SYSTEM && it.body.endsWith("turned disappearing messages off") })
+        // The timer and the line that says it changed are two writes; an envelope
+        // taken in over the live connection can land between them and this check.
+        eventually("they turned it off, and the conversation says so") {
+            repo.timer(peer.number) == 0 &&
+                repo.messages(peer.number).any { it.status == STATUS_SYSTEM && it.body.endsWith("turned disappearing messages off") }
+        }
     }
 
     @Test

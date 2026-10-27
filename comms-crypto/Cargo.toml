@@ -3,7 +3,7 @@ name = "clairix_comms_crypto"
 version = "1.0.0"
 edition = "2021"
 description = "End-to-end encryption for Clairix comms: vodozemac (Olm double ratchet) identities and sessions, plus a sealed-sender envelope layer, exposed to Kotlin through UniFFI."
-license = "MIT"
+license = "GPL-3.0-only"
 publish = false
 
 [lib]
