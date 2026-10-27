@@ -26,7 +26,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.6'
+        default: 'v3.0.0-beta.7'
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -267,7 +267,48 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 6: blind tokens, disappearing messages"
+            echo "### What's new in Beta 7: your relay, your way out, and a phone that keeps quiet when locked"
+            echo
+            echo "- **Move to another relay.** If your relay is blocked where you are, shut down, or no"
+            echo "  longer one you trust, Comms settings → Move to another relay takes you to another"
+            echo "  one (from the relay list, an address and secret, or an invite). You keep your keys,"
+            echo "  contacts, conversations and verified contacts and get a new number there; every"
+            echo "  contact is sent it over the encrypted session you already share, and their phones"
+            echo "  switch over by themselves. What they send to your old number before then is"
+            echo "  collected from the old relay whenever it can be reached, for 30 days. Moving back"
+            echo "  gives you your old number again. Your contacts need Beta 7 to follow a move."
+            echo "- **Connect through Tor.** One switch in Comms settings sends everything Clairix says"
+            echo "  to relays through Tor, built into the app: no relay learns your network address,"
+            echo "  and your network does not learn which relay you use. A relay with an onion"
+            echo "  address is reached there, so the connection never leaves Tor. Calls do not go"
+            echo "  through Tor."
+            echo "- **Run your own relay.** One script sets up a relay on a server of your own, behind"
+            echo "  HTTPS and its own onion address, with updates and restarts looked after. Setup in"
+            echo "  the app now offers a signed list of relays, and checks a listed relay still has"
+            echo "  the key the list gives it before registering."
+            echo "- **A locked phone gives nothing away.** What reads your conversations now needs the"
+            echo "  phone unlocked. While it is locked, messages are collected but stay sealed until"
+            echo "  you unlock; a call rings as \"Clairix call\", naming no one, and Answer unlocks"
+            echo "  and answers. Lock-screen notifications name no one and show no text or position."
+            echo "- **Forward secrecy for who sent what.** Envelopes are sealed to a key each phone"
+            echo "  replaces every week, so someone who logs a relay's traffic and takes your phone"
+            echo "  weeks later cannot work out who sent you each one. The sender's claim inside is now"
+            echo "  deniable, and short messages are padded so a first message and a reply look alike."
+            echo "- **Security fixes from a second full review**, among them:"
+            echo "  - a crafted invite or link could have replaced a verified contact's keys;"
+            echo "  - the relay could have tagged blind tokens;"
+            echo "  - the app lock did not stop accessibility services reading what was behind it;"
+            echo "  - the duress wipe waited on the network before deleting anything."
+            echo "  The full list is in docs/SECURITY-FINDINGS.md."
+            echo "- **Fixes found by long tests on Android 12 to 15:** messages that could stay queued,"
+            echo "  a locked screen at the wrong moment leaving messages unopenable until a restart,"
+            echo "  photos to contacts on other relays stalling, and a call that rang \"Unlock to"
+            echo "  answer\" again after you had unlocked."
+            echo "- **Relay operators:** run this release's relay. Beta 7 phones keep their weekly"
+            echo "  sealing keys and their locked-phone collection key there."
+            echo "- The COMMS database is upgraded once, on first start (version 10)."
+            echo
+            echo "### What was new in Beta 6: blind tokens, disappearing messages"
             echo
             echo "- **Blind send tokens.** Every message spends a single-use token, and the relay"
             echo "  could once have matched a token to the account it handed it to. Tokens are now"
