@@ -119,7 +119,6 @@ findings are resolved.
 - Clairix has had two internal security reviews. Every finding, fixed or open,
   is published in `docs/SECURITY-FINDINGS.md`. The open ones include:
   - coin farming;
-  - the custom invite link scheme;
   - release signing on the CI runner.
 
 ## Project maturity

@@ -343,7 +343,21 @@ twice on two machines in CI, which fails unless the two builds agree.
     still go out while dialing, as the protocol needs.
 30. `clairix://invite` is a custom scheme any app can claim; the invite link
     dictates the relay URL at registration (`CommsRepository.kt:365`).
-    *Verified for the URL; interception reported.*
+    *Verified for the URL; interception reported.* **Done (Beta 8):** invite
+    links are `https://clairix.app/i#…`, a verified App Link: the site
+    publishes `/.well-known/assetlinks.json` naming `app.clairix` and the
+    release signing key, so Android opens the link in Clairix alone. Off the
+    phone the link opens the project's page rather than the relay's, so a
+    relay named in a crafted invite cannot serve its own page (or its own
+    download) to the person invited; that page opens Clairix with an intent
+    naming its package, as the relay's page already did. Before registering
+    from an invite the app names the relay and says whether it is on the
+    signed relay list; for one that is not, it says what the operator would
+    see and Register waits until the owner confirms they know who runs it.
+    The `clairix://invite` filter stays for links made before Beta 8 (the
+    relay's page reaches it only by an intent naming the package); a link
+    still only fills in the setup screen. The Play edition, when published,
+    needs Play's app signing key added to `assetlinks.json`.
 31. The duress phrase sends nothing when the phone is in no group
     (`CommsRepository.kt:1459-1468`) and the UI does not warn. *Reported.*
     **Done:** the Duress phrase page says so, in red, while the owner is in

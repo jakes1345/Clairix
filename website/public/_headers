@@ -24,3 +24,14 @@
 
 /theme-init.js
   Cache-Control: public, max-age=3600, must-revalidate
+
+# The invite page: the invite is in the URL fragment, which no request carries;
+# nothing about the page that sent someone here is passed on either.
+/i
+  Referrer-Policy: no-referrer
+  Cache-Control: public, max-age=3600
+
+# Android reads this to confirm Clairix may open https://clairix.app/i links.
+/.well-known/assetlinks.json
+  Content-Type: application/json
+  Cache-Control: public, max-age=3600

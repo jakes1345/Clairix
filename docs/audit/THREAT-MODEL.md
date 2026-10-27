@@ -81,6 +81,5 @@ These are stated to users in the README and are not findings:
 ## Known open issues
 
 See the "Still open" items in [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md):
-among them, new registrations can farm ClairixCoin (25); the
-`clairix://invite` scheme can be claimed by another app (30); release signing
+among them, new registrations can farm ClairixCoin (25), and release signing
 runs on the CI runner.

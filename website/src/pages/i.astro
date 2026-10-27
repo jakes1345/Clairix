@@ -1,0 +1,98 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { pages } from '../config/site';
+---
+
+<BaseLayout meta={pages.invite} index={false}>
+  <section class="page-hero">
+    <div class="wrap invite">
+      <p class="label">Clairix invite</p>
+      <h1 class="display">You’re invited<em>.</em></h1>
+      <p class="lede">End-to-end encrypted messages and calls between Clairix apps.</p>
+
+      <div id="invite-bad" class="panel cham invite-card" hidden>
+        <p><strong>This invite link is incomplete.</strong> Ask for it to be sent again, and open the whole link.</p>
+      </div>
+
+      <noscript>
+        <div class="panel cham invite-card">
+          <p>This page reads the invite in your browser. With scripts off, copy the whole link you were sent and paste it in
+            Clairix: Comms, then Paste invite.</p>
+        </div>
+      </noscript>
+
+      <div id="invite-good" hidden>
+        <div class="panel cham invite-card">
+          <p class="muted">You were invited by</p>
+          <p class="invite-from" id="invite-from"></p>
+          <p class="mono subtle"><span id="invite-number"></span> · <span id="invite-relay"></span></p>
+          <p class="muted">
+            Joining gives you your own Clairix number on that relay, with <span id="invite-who"></span> already in your contacts.
+            The invite works once and expires seven days after it was made. Before you register, Clairix shows whether the
+            relay is on its published list.
+          </p>
+        </div>
+
+        <ol class="invite-steps">
+          <li>
+            <strong>Install Clairix</strong> (Android 12 or newer). Skip this if you have it.
+            <div class="btn-row"><a class="btn btn--ghost cham" href="/download">Download Clairix</a></div>
+          </li>
+          <li>
+            <strong>Open the invite in Clairix.</strong> It fills everything in; tap Register.
+            <div class="btn-row"><a class="btn cham" id="invite-open" href="#">Open in Clairix</a></div>
+          </li>
+        </ol>
+
+        <div class="panel cham invite-card">
+          <p class="muted">If the button does nothing, or opens this page again (an older Clairix): copy the invite, then in
+            Clairix go to Comms, Have an invite?, Paste invite.</p>
+          <textarea id="invite-text" class="mono" readonly rows="4" aria-label="The invite"></textarea>
+          <div class="btn-row"><button class="btn btn--ghost cham" id="invite-copy" type="button">Copy invite</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<script>
+  import '../scripts/invite.ts';
+</script>
+
+<style>
+  .invite {
+    max-width: 40rem;
+  }
+  .invite-card {
+    margin-top: 1.5rem;
+    padding: 1.25rem;
+  }
+  .invite-card p {
+    margin: 0.25rem 0;
+  }
+  .invite-from {
+    font-size: 1.5rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+  .invite-steps {
+    margin: 1.5rem 0 0;
+    padding-left: 1.25rem;
+  }
+  .invite-steps li {
+    margin: 1rem 0;
+  }
+  textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0.5rem;
+    resize: none;
+    word-break: break-all;
+    background: transparent;
+    color: inherit;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-size: 0.75rem;
+  }
+</style>

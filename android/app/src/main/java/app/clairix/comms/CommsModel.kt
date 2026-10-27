@@ -320,12 +320,19 @@ data class PairingCode(
     }
 
     /**
-     * The link to send someone: the relay's invite page, with this payload in
-     * the fragment, which the browser keeps to itself.
+     * The link to send someone: https://clairix.app/i with this payload in the
+     * fragment, which the browser keeps to itself. On a phone with Clairix it
+     * opens Clairix directly (a verified App Link: no other app can claim it);
+     * elsewhere it opens the invite page there, with the download. The link
+     * names the project's site rather than the relay's, so a relay cannot
+     * serve a page of its own to the person invited.
      */
-    fun inviteLink(): String = "$relayUrl/i#" + java.net.URLEncoder.encode(encode(), "UTF-8")
+    fun inviteLink(): String = "https://$INVITE_HOST$INVITE_PATH#" + java.net.URLEncoder.encode(encode(), "UTF-8")
 
     companion object {
+        const val INVITE_HOST = "clairix.app"
+        const val INVITE_PATH = "/i"
+
         fun decode(text: String): PairingCode? {
             val t = text.trim()
             if (!t.startsWith("clairix:v1?")) return null

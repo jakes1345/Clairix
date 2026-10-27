@@ -90,6 +90,7 @@ import app.clairix.comms.CommsNotifications
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.CommsSecureWindow
 import app.clairix.comms.KeepOffScreen
+import app.clairix.comms.PairingCode
 import android.nfc.cardemulation.CardEmulation
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -489,15 +490,26 @@ class MainActivity : AppCompatActivity() {
      * not exported.
      */
     private fun handleOpenThreadIntent(intent: Intent?) {
-        // An invite link (the relay's invite page opens clairix://invite?c=…). It
-        // only fills in the COMMS setup or offers to add the inviter; nothing is
-        // registered or added until the owner confirms on screen.
+        // An invite link: https://clairix.app/i#<invite>, opened directly or by
+        // the page there (the invite then in the "c" extra), or clairix://invite?c=…
+        // from a relay's invite page before Beta 8. It only fills in the COMMS
+        // setup or offers to add the inviter; nothing is registered or added
+        // until the owner confirms on screen.
         val data = intent?.data
-        if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "clairix" && data.host == "invite") {
-            data.getQueryParameter("c")?.let { Registry.requestInvite(it) }
-            intent.data = null
-            Registry.requestTab(CommsNotifications.COMMS_TAB_INDEX)
-            return
+        if (intent?.action == Intent.ACTION_VIEW && data != null) {
+            val text = when {
+                data.scheme == "https" && data.host == PairingCode.INVITE_HOST && data.path == PairingCode.INVITE_PATH ->
+                    intent.getStringExtra("c") ?: data.toString()
+                data.scheme == "clairix" && data.host == "invite" -> data.getQueryParameter("c")
+                else -> null
+            }
+            if (text != null) {
+                Registry.requestInvite(text)
+                intent.data = null
+                intent.removeExtra("c")
+                Registry.requestTab(CommsNotifications.COMMS_TAB_INDEX)
+                return
+            }
         }
         if (intent == null || !intent.hasExtra(CommsNotifications.EXTRA_TAB)) return
         val tab = intent.getIntExtra(CommsNotifications.EXTRA_TAB, -1)

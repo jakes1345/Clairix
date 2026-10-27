@@ -300,15 +300,21 @@ Objects; workerd does not spread them across machines.
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
 joins by invite: in Clairix, COMMS → INVITE makes a one-time invite. Someone
 standing next to you scans its QR code from COMMS setup (SCAN INVITE); someone
-far away gets a link, `https://<relay>/i#…`, which opens a page with the Clairix
-download and an OPEN IN CLAIRIX button. The invite registers exactly one phone,
+far away gets a link, `https://clairix.app/i#…`. On a phone with Clairix it
+opens Clairix straight away: the site names the app and its signing key, so
+Android hands the link to Clairix alone (a verified App Link). Elsewhere it
+opens a page on clairix.app with the download and an OPEN IN CLAIRIX button.
+Links made before Beta 8 open this relay's own page at `/i`, which still works.
+Before registering, the app shows the relay the invite names and whether it is
+on the signed relay list; for one that is not, it says what that relay's
+operator would see and asks the owner to confirm they know who runs it.
+The invite registers exactly one phone,
 expires after seven days, and never reveals the enrollment secret. The new
 phone starts with the inviter as a contact, since the invite carries the
 inviter's keys, and sends them a first message. Not a verified one: the link
-passed through other hands, and this relay serves the page that opens it, so
-the two compare safety numbers (or scan each other's code) to verify. The part after `#` never
-reaches the relay; the page reads it in the browser. Each identity can make
-20 invites a day.
+passed through other hands, so the two compare safety numbers (or scan each
+other's code) to verify. The part after `#` never reaches any server; the page
+reads it in the browser. Each identity can make 20 invites a day.
 
 ### Calls (optional TURN)
 

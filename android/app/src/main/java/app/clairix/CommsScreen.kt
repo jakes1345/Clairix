@@ -90,6 +90,7 @@ import app.clairix.comms.GroupMember
 import app.clairix.comms.GroupThread
 import app.clairix.comms.MediaBody
 import app.clairix.comms.OrgRole
+import app.clairix.comms.ListedRelay
 import app.clairix.comms.RelayClient
 import app.clairix.comms.RelayDirectory
 import app.clairix.comms.TorTransport
@@ -480,6 +481,8 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
         )
 
         if (invite != null) {
+            val listedRelay = relayList?.find(RelayClient.originOf(invite.relayUrl) ?: invite.relayUrl)
+            var trustRelay by remember(invite) { mutableStateOf(false) }
             ClairixCard {
                 Text("Join with an invite", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text("Invited by", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
@@ -492,6 +495,15 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
+                InviteRelayNotice(invite, listedRelay)
+                if (listedRelay == null) {
+                    ToggleRow(
+                        title = "I know who runs this relay",
+                        checked = trustRelay,
+                        onCheckedChange = { trustRelay = it },
+                        subtitle = "Register only if ${invite.name.ifBlank { "the person who invited you" }} told you about this relay themselves."
+                    )
+                }
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
                     label = { Text("Your name shown to contacts (optional)", style = MaterialTheme.typography.bodyMedium) },
@@ -509,7 +521,7 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                     onClick = {
                         scope.launch { CommsRepository.register(invite.relayUrl, "", name, listed, invite) }
                     },
-                    enabled = !state.busy,
+                    enabled = !state.busy && (listedRelay != null || trustRelay),
                     modifier = Modifier.fillMaxWidth()
                 )
                 GhostButton("Use a relay URL and secret instead", onClick = { onInvite(null) }, tone = Tone.Neutral)
@@ -2119,8 +2131,8 @@ private fun InviteScreen(onBack: () -> Unit) {
             ClairixCard {
                 Text("Far away: send them the link", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "The link opens a page with the Clairix download and an Open in Clairix button. Anyone who gets the link can use it, " +
-                        "so send it only to the person you mean. Works once, until $until.",
+                    "On a phone with Clairix the link opens it straight away; otherwise it opens a page on clairix.app with the download. " +
+                        "Anyone who gets the link can use it, so send it only to the person you mean. Works once, until $until.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -2510,6 +2522,31 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
 // ── Moving to another relay ──────────────────────────────────────────────────
 
 /** A relay's host, as the owner reads it. */
+/**
+ * Which relay an invite would put this phone on, and whether that relay is on
+ * the signed relay list. An invite link names its relay, and anyone can make
+ * one that names a relay of their own: unlisted, the owner is told plainly
+ * what its operator would see.
+ */
+@Composable
+private fun InviteRelayNotice(invite: PairingCode, listed: ListedRelay?) {
+    if (listed != null) {
+        Notice(
+            Tone.Info,
+            "${listed.name}, on the Clairix relay list: run by ${listed.operator}, hosted by ${listed.host}.",
+            title = relayHost(invite.relayUrl)
+        )
+    } else {
+        Notice(
+            Tone.Caution,
+            "This invite is for ${relayHost(invite.relayUrl)}, which is not on the list of relays Clairix publishes. Anyone can run a " +
+                "relay, and an invite link can name any of them. The relay cannot read your messages or tell who sent them, but it " +
+                "sees when your phone sends and receives, and from which network address unless Tor is on.",
+            title = "A relay not on Clairix's list"
+        )
+    }
+}
+
 private fun relayHost(url: String?): String =
     url?.let { runCatching { java.net.URI(it).host }.getOrNull() ?: it.removePrefix("https://") } ?: "—"
 
@@ -2697,6 +2734,7 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.accent
                 )
+                InviteRelayNotice(code, relayList?.find(RelayClient.originOf(code.relayUrl) ?: code.relayUrl))
                 GhostButton("Clear the invite", onClick = { invite = null; url = "" }, tone = Tone.Neutral)
             } ?: run {
                 Text(

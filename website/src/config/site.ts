@@ -158,6 +158,13 @@ export const pages = {
     ogImage: '/og/press.png',
     ogImageAlt: 'Clairix press kit',
   },
+  invite: {
+    title: 'Clairix invite',
+    description: 'An invite to Clairix: end-to-end encrypted messages and calls. Open it in Clairix on Android to join.',
+    ogTitle: 'You are invited to Clairix',
+    ogImage: '/og/home.png',
+    ogImageAlt: 'Clairix. Know what’s watching.',
+  },
   notFound: {
     title: 'Not found – Clairix',
     description: 'This page does not exist. Head back to Clairix, personal security for Android.',
