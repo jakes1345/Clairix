@@ -161,10 +161,12 @@ Read this part twice.
   them.
 - **Detection is best-effort.** No app finds every camera, tracker or piece
   of spyware. A finding is a reason to look, not proof.
-- **The keys are not bound to the phone being unlocked.** The scanner has
-  to write while the keyguard is up, so the keys that seal the records work
-  while the phone is locked; code running as the app on an unlocked phone
-  can read what the app can. The settings files (thresholds, the sleep
+- **The scanner's keys work while the phone is locked.** The scanner has
+  to write while the keyguard is up, so the keys that seal its records work
+  while the phone is locked. Comms is different: since Beta 7 what reads
+  conversations needs the phone unlocked, and what arrives while it is
+  locked waits sealed until then. Code running as the app on an unlocked
+  phone can read what the app can. The settings files (thresholds, the sleep
   window, the passcode's verifier, TLS pins) are not encrypted; they hold
   settings, not records.
 - **No independent audit.** vodozemac has been audited. Clairix has not.
