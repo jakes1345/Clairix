@@ -202,8 +202,8 @@ android {
         // downloaded maps, work zones and release checksums against. Empty in
         // a checkout that has not run keygen; a release build refuses that below.
         buildConfigField("String", "ASSET_PUBKEY", "\"$assetPublicKey\"")
-        versionCode = 26
-        versionName = "3.0.0-beta.6"
+        versionCode = 27
+        versionName = "3.0.0-beta.7"
         // The emulator smoke test (src/androidTest, run by .github/workflows/emulator.yml).
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
