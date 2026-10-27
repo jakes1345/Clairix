@@ -28,10 +28,18 @@ class PairingCodeTest {
     @Test
     fun theInviteLinkRoundTrips() {
         val link = code.inviteLink()
-        assertEquals(true, link.startsWith("https://relay.example.com/i#"))
+        // The project's site, which Android verifies as Clairix's: never the relay's own page.
+        assertEquals(true, link.startsWith("https://clairix.app/i#"))
         assertEquals(code, PairingCode.fromText(link))
         // Pasted as part of the shared message.
         assertEquals(code, PairingCode.fromText("Join me on Clairix: $link"))
+    }
+
+    @Test
+    fun anInviteLinkFromBeforeBeta8StillOpens() {
+        // Beta 7 and earlier sent people to the relay's own invite page.
+        val old = "https://relay.example.com/i#" + URLEncoder.encode(code.encode(), "UTF-8")
+        assertEquals(code, PairingCode.fromText(old))
     }
 
     @Test

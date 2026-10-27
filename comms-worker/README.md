@@ -46,6 +46,20 @@ giving them your real number or your identity key.
   built on, which the relay handed to the sender's account with the key; that
   envelope is linkable to that lookup, as the lookup itself already showed who
   wanted to reach whom. None of this is written down.
+- Whether an envelope came from someone the recipient has written to, though
+  not who. The phone gives its relay a pass key and gives its contacts the same
+  key inside their end-to-end encrypted messages; their envelopes then carry a
+  pass, an HMAC under that key over the recipient's number and the envelope.
+  Once a mailbox has a pass key, envelopes without a good pass (from people the
+  owner has never written to, contacts on apps from before passes, anyone the
+  owner has deleted) share 300 places in the queue and 300 envelopes an hour.
+  What goes past that is dropped and answered as a send to a number that does
+  not exist, so the limit tells nobody whether the number is real. One account
+  with a supply of delivery tokens can no longer fill a mailbox against
+  everyone; at worst it holds up other first messages for an hour. The phone
+  makes a new pass key when its owner deletes a contact and sends it to every
+  other contact, so a pass taken from that contact stops working. A pass is
+  bound to its envelope, so a relay that forwards one cannot reuse it.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
   "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
   up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
@@ -286,15 +300,21 @@ Objects; workerd does not spread them across machines.
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
 joins by invite: in Clairix, COMMS → INVITE makes a one-time invite. Someone
 standing next to you scans its QR code from COMMS setup (SCAN INVITE); someone
-far away gets a link, `https://<relay>/i#…`, which opens a page with the Clairix
-download and an OPEN IN CLAIRIX button. The invite registers exactly one phone,
+far away gets a link, `https://clairix.app/i#…`. On a phone with Clairix it
+opens Clairix straight away: the site names the app and its signing key, so
+Android hands the link to Clairix alone (a verified App Link). Elsewhere it
+opens a page on clairix.app with the download and an OPEN IN CLAIRIX button.
+Links made before Beta 8 open this relay's own page at `/i`, which still works.
+Before registering, the app shows the relay the invite names and whether it is
+on the signed relay list; for one that is not, it says what that relay's
+operator would see and asks the owner to confirm they know who runs it.
+The invite registers exactly one phone,
 expires after seven days, and never reveals the enrollment secret. The new
 phone starts with the inviter as a contact, since the invite carries the
 inviter's keys, and sends them a first message. Not a verified one: the link
-passed through other hands, and this relay serves the page that opens it, so
-the two compare safety numbers (or scan each other's code) to verify. The part after `#` never
-reaches the relay; the page reads it in the browser. Each identity can make
-20 invites a day.
+passed through other hands, so the two compare safety numbers (or scan each
+other's code) to verify. The part after `#` never reaches any server; the page
+reads it in the browser. Each identity can make 20 invites a day.
 
 ### Calls (optional TURN)
 
@@ -453,7 +473,8 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
 | GET | `/` | `{service, version, alternates, relayKey, federation, tokens}`: the relay's other addresses, the public key it signs forwarded requests with, which relays it accepts them from, and its blind-token keys for this epoch and the next |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
-| GET | `/v1/me` | Own profile and one-time-key count |
+| GET | `/v1/me` | Own profile, one-time-key count, and whether a pass key is set (`pass`) |
+| PUT | `/v1/pass` | `{key}` (32 bytes, base64; or `null`): the key contacts' passes are made with. 20 an hour |
 | DELETE | `/v1/me` | Wipe the mailbox |
 | PUT | `/v1/transport` | `{key}` (or `null` to remove): the phone's transport key, a second Ed25519 key. Requests signed with it carry `X-Clairix-Key: transport` and may only `GET /v1/inbox`, `POST /v1/ack` and `GET /v1/ws`, so a locked phone collects envelopes it cannot yet open; the key reads and sends nothing |
 | PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old) |
@@ -462,7 +483,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
-| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
+| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |

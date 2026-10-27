@@ -101,6 +101,20 @@ object CommsWire {
      * sessions they already have, so only they can say it.
      */
     const val T_MOVED = "moved"
+    /**
+     * Carries nothing but the sender fields, and with them the sender's pass
+     * key: sent to every contact when the key is first made or replaced.
+     */
+    const val T_PASS = "pass"
+    /**
+     * The sender's pass key (32 bytes, base64), on every payload once their
+     * relay holds it, and when they made it ("pts"), so an older key arriving
+     * late does not replace a newer one. Envelopes to them then carry a pass
+     * made with it, which tells their relay they are from someone they wrote
+     * to without saying who.
+     */
+    const val F_PASS = "pass"
+    const val F_PASS_TS = "pts"
     /** Seconds a message lasts once read; on a timer payload, the conversation's new timer. */
     const val F_TTL = "ttl"
     /** The longest a disappearing-messages timer can be: four weeks. */
@@ -245,6 +259,9 @@ object CommsWire {
 
     /** This phone moved to another relay at [ts]; the sender fields added on sending say where. */
     fun moved(ts: Long): JSONObject = base(T_MOVED).put(F_TS, ts)
+
+    /** Nothing but this phone's pass key, which the sender fields added on sending carry. */
+    fun pass(): JSONObject = base(T_PASS)
 
     /** Cover traffic: [fill] is random filler, so the padded envelope is sized like a text. */
     fun noise(fill: String): JSONObject = base(T_NOISE).put(F_BODY, fill)

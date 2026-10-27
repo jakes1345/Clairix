@@ -20,7 +20,7 @@ import { readTextCapped } from "./traffic-logic";
  * Neither learns who the sender is: a forwarded send carries no identity, just
  * as a local one does.
  *
- *   POST /v1/federate/send    {to, envelope, claim?, mix?}     → as /v1/send
+ *   POST /v1/federate/send    {to, envelope, claim?, mix?, pass?} → as /v1/send
  *   POST /v1/federate/lookup  {number, pin?, claim}            → as /v1/lookup
  *
  * both signed with the headers below over

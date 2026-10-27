@@ -47,7 +47,7 @@ export default defineConfig({
   integrations: [
     playRedirect,
     sitemap({
-      filter: (page) => !page.endsWith('/404'),
+      filter: (page) => !page.endsWith('/404') && !page.endsWith('/i'),
     }),
   ],
   devToolbar: { enabled: false },

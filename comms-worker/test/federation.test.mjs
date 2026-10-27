@@ -691,3 +691,29 @@ test("a sender's alert crosses relays with the envelope", async () => {
     net.restore();
   }
 });
+
+test("a contact's pass crosses relays with the envelope, and a forwarding relay cannot reuse it", async () => {
+  const { a, b } = relays();
+  const net = network([a, b]);
+  try {
+    const alice = await makePhone(a);
+    const bob = await makePhone(b);
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const key = Buffer.from(keyBytes).toString("base64");
+    assert.equal((await bob.signed("PUT", "/v1/pass", { key })).status, 200);
+    const hmac = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const passFor = async (envelope) =>
+      Buffer.from(await crypto.subtle.sign("HMAC", hmac, new TextEncoder().encode(`clairix-pass-v1|${bob.number}|${envelope}`))).toString("base64");
+    const [t1, t2] = await alice.tokens(2);
+    assert.equal((await sendVia(alice, t1, bob.number, B, { envelope: "QUFBQQ==", pass: await passFor("QUFBQQ==") })).status, 202);
+    const forwarded = net.requests.find((r) => r.url === `${B}/v1/federate/send`);
+    assert.equal(JSON.parse(forwarded.body).pass, await passFor("QUFBQQ=="));
+    // It was counted as a contact's, not a stranger's.
+    assert.equal(b.env.MAILBOX.storageOf(bob.number).get("strangerCount"), undefined);
+    // The same pass on another envelope counts for nothing.
+    assert.equal((await sendVia(alice, t2, bob.number, B, { envelope: "QkJCQg==", pass: await passFor("QUFBQQ==") })).status, 202);
+    assert.equal(b.env.MAILBOX.storageOf(bob.number).get("strangerCount"), 1);
+  } finally {
+    net.restore();
+  }
+});

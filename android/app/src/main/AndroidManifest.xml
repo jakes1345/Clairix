@@ -75,7 +75,22 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- COMMS invites: the relay's invite page opens clairix://invite?c=… -->
+            <!--
+                COMMS invites: https://clairix.app/i#<invite>. The domain names this
+                app and its signing key (/.well-known/assetlinks.json), so Android
+                opens these links in Clairix alone; no other app can claim them.
+                The page there opens Clairix with an intent naming this package.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="clairix.app" android:path="/i" />
+            </intent-filter>
+            <!--
+                Invite links made before Beta 8 open the inviter's relay's page,
+                which opens clairix://invite?c=… with an intent naming this package.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

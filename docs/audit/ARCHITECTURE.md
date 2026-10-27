@@ -132,7 +132,7 @@ A contact on another relay carries that relay's origin (`Contact.relay`).
    the long-term sealing key with a signed claim, and only for a peer never
    seen with a prekey. Once a peer has published a prekey, format 2 is refused
    to them (`StalePrekey`).
-4. It posts `POST /v1/send` with `{to, envelope, claim?, mix, relay?, alert?}`
+4. It posts `POST /v1/send` with `{to, envelope, claim?, mix, relay?, alert?, pass?}`
    and a delivery token. The request is not signed and goes on a connection
    and TLS session of its own, through Tor when Tor is on.
    - `relay` names the recipient's relay when it is not this one: the home
@@ -140,8 +140,15 @@ A contact on another relay carries that relay's origin (`Contact.relay`).
    - `alert` (`call` or `sos`) is visible to the relay. It lets a locked phone
      ring or sound an SOS before it can open the envelope.
    - `mix: false` (call set-up, SOS, group changes) skips the mixing delay.
+   - `pass` is HMAC-SHA256 over `clairix-pass-v1|to|envelope` under the
+     recipient's pass key, which the recipient gave the sender inside a
+     payload (`pass`, `pts`) and gave its relay (`PUT /v1/pass`).
 5. The mailbox queues the envelope with its recipient, size and time. A send
-   to a number that does not exist is answered the same and dropped. Mixing
+   to a number that does not exist is answered the same and dropped. Once the
+   mailbox has a pass key, an envelope without a good pass is a stranger's:
+   strangers share 300 places and 300 envelopes an hour, and what goes past
+   that is dropped the same way. Deleting a contact makes a new pass key,
+   given to the relay and sent to every other contact (`T_PASS`). Mixing
    holds envelopes a random few seconds and releases them in shuffled batches.
 6. The recipient collects envelopes over the live WebSocket or `GET
    /v1/inbox`, and acknowledges them. An acknowledged envelope is deleted;

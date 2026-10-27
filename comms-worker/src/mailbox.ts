@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { verifyEd25519 } from "./auth";
-import type { Env } from "./env";
+import { timingSafeEqual, type Env } from "./env";
 import {
   DAY_MS,
   DELIVERY_TOKEN_TTL_MS,
@@ -138,6 +138,23 @@ const FED_QUEUE_RESERVE = 500;
 const FED_STRANGER_PER_HOUR = 30;
 const FED_STRANGER_BURST = 10;
 
+/**
+ * Envelopes for a mailbox whose owner has set a pass key, from senders who
+ * present no pass made with it: people the owner has never written to,
+ * contacts on apps from before passes, and anyone the owner has since deleted.
+ * The relay cannot tell senders apart, so before passes one account with a
+ * supply of delivery tokens could fill any mailbox and have it refuse everyone.
+ * Now such envelopes share a small part of the queue and an hourly allowance
+ * of their own, and what goes past them is dropped as a send to a number that
+ * does not exist is, so the limit cannot be used to learn that a number is
+ * real. Contacts who present the owner's pass are not counted against either.
+ */
+const STRANGER_QUEUE = 300;
+const STRANGER_PER_HOUR = 300;
+const STRANGER_BURST = 300;
+/** What a pass is made over, before the recipient's number and the envelope. */
+const PASS_CONTEXT = "clairix-pass-v1";
+
 /** The answer to a send for a number that does not exist; the caller accepts and drops it. */
 const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
 /** An envelope from another relay dropped at a limit: answered as NO_SUCH_NUMBER is. */
@@ -231,6 +248,37 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 /** The storage key of an envelope held for mixing: sorts by release time. */
+/** Marks a queued envelope as a stranger's (see STRANGER_QUEUE). */
+function strangerKey(id: string): string {
+  return `sq:${id}`;
+}
+
+/**
+ * Whether [pass] was made with [key] for this envelope to [number]: HMAC-SHA256
+ * over the context, the number and the envelope. A pass is bound to its
+ * envelope, so one seen in transit (by a relay forwarding it) is no use for
+ * any other.
+ */
+export async function passValid(key: string, number: string, data: string, pass: string | null): Promise<boolean> {
+  if (pass === null) return false;
+  const expected = await passFor(key, number, data);
+  return expected !== null && timingSafeEqual(expected, pass);
+}
+
+/** The pass for [data] to [number] under [key] (base64), or null when [key] is not a 32-byte key. */
+export async function passFor(key: string, number: string, data: string): Promise<string | null> {
+  let raw: Uint8Array;
+  try {
+    raw = Uint8Array.from(atob(key), (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+  if (raw.length !== 32) return null;
+  const hmac = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", hmac, new TextEncoder().encode(`${PASS_CONTEXT}|${number}|${data}`));
+  return btoa(String.fromCharCode(...new Uint8Array(mac)));
+}
+
 function stagedKey(releaseAt: number, id: string): string {
   return `m:${releaseAt.toString(36).padStart(10, "0")}:${id}`;
 }
@@ -935,6 +983,7 @@ export class Mailbox extends DurableObject<Env> {
     urgent = false,
     federated: false | "known" | "stranger" = false,
     alert: Alert | null = null,
+    pass: string | null = null,
   ): Promise<EnqueueResult> {
     // The size is checked before anything about the number, so an oversized
     // envelope is answered the same whether the number exists or not.
@@ -942,6 +991,15 @@ export class Mailbox extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return NO_SUCH_NUMBER;
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
+    // Checked before any allowance is drawn on, so envelopes past the
+    // strangers' share never use up what contacts' envelopes rely on.
+    const passKey = await this.ctx.storage.get<string>("passKey");
+    const stranger = passKey !== undefined && !(await passValid(passKey, profile.number, data, pass));
+    const strangers = stranger ? ((await this.ctx.storage.get<number>("strangerCount")) ?? 0) : 0;
+    if (stranger) {
+      if (strangers >= STRANGER_QUEUE) return DROPPED;
+      if (!(await this.allowanceOk("inbound-stranger", STRANGER_PER_HOUR, STRANGER_BURST)).ok) return DROPPED;
+    }
     if (federated) {
       // Envelopes from other relays that would go over this mailbox's limits
       // are dropped and answered exactly as a send to a number that does not
@@ -968,14 +1026,17 @@ export class Mailbox extends DurableObject<Env> {
     const now = Date.now();
     const id = `${now.toString(36)}-${crypto.randomUUID()}`;
     const envelope: Envelope = alert ? { id, ts: now, data, alert } : { id, ts: now, data };
+    // A stranger's envelope is marked, so the strangers' share is given back
+    // as it is acknowledged or expires.
+    const counts: Record<string, number> = stranger ? { queueCount: count + 1, [strangerKey(id)]: 1, strangerCount: strangers + 1 } : { queueCount: count + 1 };
     const hold = urgent ? 0 : mixDelay(mixMaxMs(this.env));
     if (hold > 0) {
       const staged: StagedEnvelope = { envelope, releaseAt: now + hold };
-      await this.ctx.storage.put({ [stagedKey(staged.releaseAt, id)]: staged, queueCount: count + 1 });
+      await this.ctx.storage.put({ [stagedKey(staged.releaseAt, id)]: staged, ...counts });
       await this.scheduleAlarm();
       return { ok: true, id };
     }
-    await this.ctx.storage.put({ [`q:${id}`]: envelope, queueCount: count + 1 });
+    await this.ctx.storage.put({ [`q:${id}`]: envelope, ...counts });
     await this.handOver([envelope], true);
     return { ok: true, id };
   }
@@ -1099,7 +1160,31 @@ export class Mailbox extends DurableObject<Env> {
     const removed = await this.deleteKeys(keys);
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
     await this.ctx.storage.put("queueCount", Math.max(0, count - removed));
+    await this.forgetStrangers(ids);
     return removed;
+  }
+
+  /** Gives back the strangers' share held by those of [ids] that were strangers' envelopes. */
+  private async forgetStrangers(ids: string[]): Promise<void> {
+    const removed = await this.deleteKeys(ids.map(strangerKey));
+    if (removed === 0) return;
+    const strangers = (await this.ctx.storage.get<number>("strangerCount")) ?? 0;
+    await this.ctx.storage.put("strangerCount", Math.max(0, strangers - removed));
+  }
+
+  /**
+   * Sets the key contacts' passes are made with, or with null stops telling
+   * contacts from strangers. The owner's phone shares the key only inside
+   * end-to-end encrypted messages, and replaces it when the owner deletes a
+   * contact, so a pass taken from that contact stops working.
+   */
+  async setPassKey(key: string | null): Promise<void> {
+    if (key) await this.ctx.storage.put("passKey", key);
+    else await this.ctx.storage.delete("passKey");
+  }
+
+  async hasPassKey(): Promise<boolean> {
+    return (await this.ctx.storage.get<string>("passKey")) !== undefined;
   }
 
   /**
@@ -1173,7 +1258,10 @@ export class Mailbox extends DurableObject<Env> {
         if (page.size === 0) break;
         const keys = [...page.keys()];
         const stale = [...page].filter(([, e]) => e.ts < cutoff).map(([key]) => key);
-        if (stale.length > 0) removed += await this.deleteKeys(stale);
+        if (stale.length > 0) {
+          removed += await this.deleteKeys(stale);
+          await this.forgetStrangers(stale.map((key) => key.slice(2)));
+        }
         startAfter = keys[keys.length - 1];
       }
       if (removed > 0) {

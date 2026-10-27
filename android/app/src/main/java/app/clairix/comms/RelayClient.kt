@@ -354,11 +354,22 @@ class RelayClient(
 
     // ── Own mailbox ───────────────────────────────────────────────────────
 
-    data class Me(val listed: Boolean, val oneTimeKeys: Int)
+    /** [pass]: whether the relay holds a pass key for this mailbox (false from a relay before passes, which has no use for one). */
+    data class Me(val listed: Boolean, val oneTimeKeys: Int, val pass: Boolean = false)
 
     fun me(): Me {
         val json = signed("GET", "/v1/me")
-        return parsed { Me(json.getJSONObject("profile").optBoolean("listed", true), json.optInt("oneTimeKeys", 0)) }
+        return parsed { Me(json.getJSONObject("profile").optBoolean("listed", true), json.optInt("oneTimeKeys", 0), json.optBoolean("pass", false)) }
+    }
+
+    /**
+     * Gives the relay the key contacts' passes are made with ([pass]), or with
+     * null takes it away. Once it has one, envelopes for this phone that carry
+     * no pass made with it share a small part of the mailbox (see the relay's
+     * Mailbox.enqueue), so a stranger cannot fill it against contacts.
+     */
+    fun putPass(key: ByteArray?) {
+        signed("PUT", "/v1/pass", JSONObject().put("key", key?.let { Base64.getEncoder().encodeToString(it) } ?: JSONObject.NULL))
     }
 
     /**
@@ -504,9 +515,22 @@ class RelayClient(
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
      */
-    fun send(to: String, envelope: ByteArray, claim: String? = null, relay: String? = null, urgent: Boolean = false, alert: String? = null): String {
-        val body = JSONObject().put("to", to).put("envelope", Base64.getEncoder().encodeToString(envelope))
+    fun send(
+        to: String,
+        envelope: ByteArray,
+        claim: String? = null,
+        relay: String? = null,
+        urgent: Boolean = false,
+        alert: String? = null,
+        passKey: ByteArray? = null,
+    ): String {
+        val data = Base64.getEncoder().encodeToString(envelope)
+        val body = JSONObject().put("to", to).put("envelope", data)
         if (claim != null) body.put("claim", claim)
+        // The recipient's pass key, which they gave this phone inside an
+        // end-to-end encrypted message: the pass says the envelope is from
+        // someone they have written to, without saying who.
+        if (passKey != null) body.put("pass", pass(passKey, to, data))
         // Everything but a call being set up, an SOS or a group change asks
         // the relay to hold it a random few seconds and release it shuffled
         // with whatever else is due (mixing). The relay holds only what asks,
@@ -1056,6 +1080,19 @@ class RelayClient(
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
     companion object {
+        /**
+         * The pass for envelope [data] (base64) to [to] under [key]: HMAC-SHA256
+         * over clairix-pass-v1|number|envelope, the number in the digits-only form
+         * the relay keeps. Bound to the envelope, so a relay that forwards it
+         * cannot use it on another.
+         */
+        fun pass(key: ByteArray, to: String, data: String): String {
+            val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+            mac.init(javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"))
+            val digits = to.filter { it in '0'..'9' }
+            return Base64.getEncoder().encodeToString(mac.doFinal("clairix-pass-v1|$digits|$data".toByteArray(Charsets.UTF_8)))
+        }
+
         /** [RelayException.code] for a response the client could not parse; not a network failure. */
         const val MALFORMED = -1
         /** [RelayException.code] for a send with no delivery token left: retry after [topUpTokens]. */

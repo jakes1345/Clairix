@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.clairix",
+      "sha256_cert_fingerprints": [
+        "47:1C:09:CD:79:2F:FF:0B:F7:57:24:BB:B8:EE:2D:13:CC:67:4E:3F:51:D1:E1:FD:E2:8A:25:00:93:2A:52:CC"
+      ]
+    }
+  }
+]

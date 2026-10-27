@@ -931,3 +931,134 @@ test("a sender's alert travels with the envelope, and nothing else is accepted a
   const got = await bob.inbox();
   assert.deepEqual(got.map((e) => e.alert ?? null).sort(), ["call", null].sort());
 });
+
+// ── Contacts' passes ───────────────────────────────────────────────────────
+
+/** A pass as the app makes one: HMAC-SHA256 under the recipient's pass key over clairix-pass-v1|number|envelope. */
+async function passFor(keyB64, number, envelope) {
+  const key = await crypto.subtle.importKey("raw", Buffer.from(keyB64, "base64"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`clairix-pass-v1|${number}|${envelope}`));
+  return Buffer.from(mac).toString("base64");
+}
+
+/** Every envelope queued for [number], past the 200 one inbox page holds. */
+function queued(relay, number) {
+  return [...relay.env.MAILBOX.storageOf(number)].filter(([k]) => k.startsWith("q:")).map(([, e]) => e);
+}
+
+const randomKey = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
+
+test("a pass key is set with the identity key only, must be 32 bytes, and can be removed", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  assert.equal((await bob.signed("GET", "/v1/me")).json.pass, false);
+  for (const key of ["", "short", randomKey().slice(0, -1), `${randomKey()}AA`, 42]) {
+    assert.equal((await bob.signed("PUT", "/v1/pass", { key })).status, 400, String(key));
+  }
+  assert.equal((await bob.signed("PUT", "/v1/transport", { key: bob.transportKey })).status, 200);
+  assert.equal((await bob.signedTransport("PUT", "/v1/pass", { key: randomKey() })).status, 403);
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key: randomKey() })).status, 200);
+  assert.equal((await bob.signed("GET", "/v1/me")).json.pass, true);
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key: null })).status, 200);
+  assert.equal((await bob.signed("GET", "/v1/me")).json.pass, false);
+});
+
+test("without a pass key a mailbox takes everyone alike, as before passes", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
+  for (let i = 0; i < 400; i++) assert.ok((await box.enqueue("AAAA", null, true)).ok);
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).get("strangerCount"), undefined);
+});
+
+test("one sender without the owner's pass cannot fill a mailbox against the owner's contacts", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const key = randomKey();
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key })).status, 200);
+  const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
+
+  // Strangers share 300 places; past them envelopes are dropped without a word.
+  for (let i = 0; i < 300; i++) assert.ok((await box.enqueue("AAAA", null, true)).ok, `stranger ${i}`);
+  const [t1, t2, t3] = await mallory.tokens(3);
+  const dropped = await mallory.send(t1, bob.number, "QkJCQg==");
+  assert.equal(dropped.status, 202);
+  // A made-up pass is no better than none.
+  assert.equal((await mallory.send(t2, bob.number, "QkJCQg==", undefined, { pass: randomKey() })).status, 202);
+  assert.equal(queued(relay, bob.number).length, 300);
+
+  // Alice, whom Bob has written to, still gets through.
+  const envelope = "Q0NDQw==";
+  const [ta] = await alice.tokens(1);
+  const res = await alice.send(ta, bob.number, envelope, undefined, { pass: await passFor(key, bob.number, envelope) });
+  assert.equal(res.status, 202);
+  const inbox = queued(relay, bob.number);
+  assert.equal(inbox.length, 301);
+  assert.ok(inbox.some((e) => e.data === envelope));
+  // And what she sent took nothing from the strangers' share.
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).get("strangerCount"), 300);
+
+  // A pass is bound to its envelope: Mallory, having seen Alice's, cannot use it on another.
+  const stolen = await passFor(key, bob.number, envelope);
+  assert.equal((await mallory.send(t3, bob.number, "RERERA==", undefined, { pass: stolen })).status, 202);
+  assert.ok(!queued(relay, bob.number).some((e) => e.data === "RERERA=="));
+});
+
+test("the strangers' share comes back as their envelopes are collected, within an hourly allowance", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key: randomKey() })).status, 200);
+  const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
+  for (let i = 0; i < 300; i++) assert.ok((await box.enqueue("AAAA", null, true)).ok);
+  const ids = queued(relay, bob.number).map((e) => e.id);
+  assert.equal((await bob.signed("POST", "/v1/ack", { ids })).json.removed, 300);
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).get("strangerCount"), 0);
+  assert.equal([...relay.env.MAILBOX.storageOf(bob.number).keys()].filter((k) => k.startsWith("sq:")).length, 0);
+  // The queue has room again, but the hour's allowance of 300 is spent until the next hour.
+  assert.equal((await box.enqueue("AAAA", null, true)).status, 404);
+  advance(HOUR_MS);
+  let accepted = 0;
+  for (let i = 0; i < 400; i++) if ((await box.enqueue("AAAA", null, true)).ok) accepted++;
+  assert.equal(accepted, 300);
+});
+
+test("strangers' envelopes that expire give their share back", async () => {
+  const relay = makeRelay();
+  const bob = await makePhone(relay);
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key: randomKey() })).status, 200);
+  const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
+  for (let i = 0; i < 10; i++) assert.ok((await box.enqueue("AAAA", null, true)).ok);
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).get("strangerCount"), 10);
+  for (let day = 0; day < 32; day++) {
+    advance(DAY_MS);
+    await relay.env.MAILBOX.runDueAlarms();
+  }
+  assert.equal((await bob.inbox()).length, 0);
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).get("strangerCount"), 0);
+});
+
+test("a held envelope counts against the strangers' share from the moment it is accepted", async () => {
+  const relay = makeRelay({ MIX_MAX_MS: "5000" });
+  const bob = await makePhone(relay);
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key: randomKey() })).status, 200);
+  const box = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(bob.number));
+  for (let i = 0; i < 300; i++) assert.ok((await box.enqueue("AAAA", null, false)).ok);
+  assert.equal((await box.enqueue("AAAA", null, false)).status, 404);
+  advance(10_000);
+  await relay.env.MAILBOX.runDueAlarms();
+  const ids = queued(relay, bob.number).map((e) => e.id);
+  assert.equal(ids.length, 300);
+  await bob.signed("POST", "/v1/ack", { ids });
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).get("strangerCount"), 0);
+});
+
+test("a pass in the wrong form is refused before a token is spent", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const [t] = await alice.tokens(1);
+  assert.equal((await alice.send(t, bob.number, undefined, undefined, { pass: "nope" })).status, 400);
+  assert.equal((await alice.send(t, bob.number)).status, 202);
+});

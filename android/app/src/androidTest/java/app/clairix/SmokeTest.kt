@@ -3,6 +3,7 @@ package app.clairix
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -11,6 +12,7 @@ import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import app.clairix.comms.PairingCode
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -161,6 +163,45 @@ class SmokeTest {
         fail("Clairix did not leave \"$step\" within ${BACK_PATIENCE_MS / 1000} s of Back")
     }
 
+    /** Scrolls the main list until [selector] is on screen; null if 30 swipes do not bring it. */
+    private fun scrollTo(selector: BySelector): UiObject2? {
+        repeat(30) {
+            ui.find(selector)?.let { return it }
+            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
+            device.waitForIdle(1_000)
+        }
+        return null
+    }
+
+    /**
+     * An invite link as Android hands it over (finding 30): https://clairix.app/i,
+     * the invite in the fragment, naming a relay that is not on the signed list.
+     * It fills in the setup, warns about the relay, and Register waits until the
+     * owner says they know who runs it. Nothing is registered: the invite is
+     * cleared again.
+     */
+    private fun inviteLinkToAnUnlistedRelay() {
+        val code = PairingCode(
+            relayUrl = "https://relay.unlisted.example", number = "482913605", ed25519 = "ed", curve25519 = "curve",
+            sealing = "seal", signature = "sig", name = "Smoke", invite = "AbCdEfGhIjKlMnOpQrStUv"
+        )
+        target.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(code.inviteLink())).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        alive("invite link")
+        if (text("Join with an invite", 10_000) == null) { shot("MISSING-invite"); fail("The invite link did not open the setup") }
+        // The button is the clickable node; its label is a separate one that is always enabled.
+        fun registerButton() = By.clickable(true).hasDescendant(By.text("Register"))
+        if (scrollTo(By.text("A relay not on Clairix's list")) == null) { shot("MISSING-invite-warning"); fail("No warning for a relay off the list") }
+        if (scrollTo(registerButton().enabled(false)) == null) { shot("MISSING-register-disabled"); fail("Register was not waiting for the owner") }
+        tapScrolling("I know who runs this relay")
+        if (scrollTo(registerButton().enabled(true)) == null) { shot("MISSING-register-enabled"); fail("Register stayed off after the owner confirmed") }
+        tapScrolling("Use a relay URL and secret instead")
+        // Back to the ordinary setup, wherever the list is scrolled to: the
+        // secret field is there, and nothing of the invite is.
+        if (scrollTo(By.text("Enrollment secret")) == null || ui.has(By.text("Join with an invite"))) {
+            shot("MISSING-invite-cleared"); fail("The invite was not cleared")
+        }
+    }
+
     @Test
     fun everyScreenOpensWithoutCrashing() {
         // Onboarding.
@@ -231,6 +272,7 @@ class SmokeTest {
                     if (round == 1) shot("comms-$page")
                     backTo(page, By.desc("More options"))
                 }
+                inviteLinkToAnUnlistedRelay()
             }
         }
         for (sub in listOf("Patterns", "Unlocks", "Timeline")) { tap(sub, "activity $sub"); shot("activity-$sub") }

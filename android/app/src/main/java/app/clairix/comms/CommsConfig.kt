@@ -93,6 +93,30 @@ class CommsConfig(context: Context) {
 
     fun setPrekeyPublished(createdMs: Long) { prefs.edit().putLong(KEY_PREKEY_PUBLISHED, createdMs).apply() }
 
+    /**
+     * The key contacts' passes are made with (32 bytes), given to contacts
+     * inside end-to-end encrypted messages; null until first made.
+     */
+    val passKey: ByteArray?
+        get() = prefs.getString(KEY_PASS, null)?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }?.takeIf { it.size == 32 }
+
+    /** Whether the relay holds the current [passKey]. */
+    val passPublished: Boolean get() = prefs.getBoolean(KEY_PASS_PUBLISHED, false)
+
+    /** When [passKey] was made; contacts keep the newest key they are given. */
+    val passCreated: Long get() = prefs.getLong(KEY_PASS_CREATED, 0L)
+
+    /** Makes [key], made at [created], the pass key, not yet given to the relay. */
+    fun setPassKey(key: ByteArray, created: Long) {
+        prefs.edit()
+            .putString(KEY_PASS, java.util.Base64.getEncoder().encodeToString(key))
+            .putLong(KEY_PASS_CREATED, created)
+            .putBoolean(KEY_PASS_PUBLISHED, false)
+            .apply()
+    }
+
+    fun setPassPublished() { prefs.edit().putBoolean(KEY_PASS_PUBLISHED, true).apply() }
+
     fun saveRegistration(relayUrl: String, number: String, name: String, listed: Boolean) {
         prefs.edit()
             .putString(KEY_RELAY, relayUrl.trimEnd('/'))
@@ -100,6 +124,7 @@ class CommsConfig(context: Context) {
             .putString(KEY_NAME, name)
             .putBoolean(KEY_LISTED, listed)
             .remove(KEY_PUSH)
+            .remove(KEY_PASS_PUBLISHED)
             // Another relay's addresses are no use for this one.
             .remove(KEY_ALTERNATES)
             .remove(KEY_ONION)
@@ -120,6 +145,7 @@ class CommsConfig(context: Context) {
             .remove(KEY_ALTERNATES)
             .remove(KEY_ONION)
             .putLong(KEY_PREKEY_PUBLISHED, 0L)
+            .remove(KEY_PASS_PUBLISHED)
             .putString(KEY_PREVIOUS_RELAY, previousRelay.trimEnd('/'))
             .putString(KEY_PREVIOUS_NUMBER, previousNumber)
             .putLong(KEY_MOVED_AT, movedAt)
@@ -186,6 +212,9 @@ class CommsConfig(context: Context) {
         const val KEY_PREVIOUS_NUMBER = "previous_number"
         const val KEY_PREVIOUS_EMPTIED = "previous_emptied"
         const val KEY_MOVED_AT = "moved_at"
+        const val KEY_PASS = "pass_key"
+        const val KEY_PASS_PUBLISHED = "pass_published"
+        const val KEY_PASS_CREATED = "pass_created"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

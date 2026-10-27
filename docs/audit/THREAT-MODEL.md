@@ -36,6 +36,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | The phone under duress | Everything gone fast, without signs | L | Wrong-passcode limit and duress passcode start a wipe that deletes Keystore keys first |
 | Releases, map files, the relay list | Only the project's signed artifacts are accepted | S, N | Ed25519 signatures checked by the app; pinned workflow actions; reproducible builds |
 | Being reachable | Messages keep moving when a relay is blocked | N, R | Alternate relay addresses; onion addresses; moving to another relay with contacts told; the offline mesh |
+| A mailbox's room for contacts | One sender cannot fill it against the people the owner writes to | U, F | Contacts' passes: envelopes without one share a small part of the queue and an hourly allowance |
 
 ## Assumptions
 
@@ -80,7 +81,5 @@ These are stated to users in the README and are not findings:
 ## Known open issues
 
 See the "Still open" items in [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md):
-among them, delivery tokens are not bound to a recipient, so one account can
-fill a mailbox (finding 23); new registrations can farm ClairixCoin (25); the
-`clairix://invite` scheme can be claimed by another app (30); release signing
+among them, new registrations can farm ClairixCoin (25), and release signing
 runs on the CI runner.

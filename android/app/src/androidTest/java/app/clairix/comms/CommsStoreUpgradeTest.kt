@@ -102,4 +102,48 @@ class CommsStoreUpgradeTest {
             reopened.close()
         }
     }
+
+    @Test
+    fun aVersion10DatabaseGainsPassesThatFollowAContactAndGoWithThem() {
+        val old = CommsStore(context, name)
+        try {
+            old.upsertContact(ana)
+            val db = old.writableDatabase
+            db.execSQL("DROP TABLE passes")
+            db.execSQL("DROP TABLE pass_notices")
+            db.version = 10
+        } finally {
+            old.close()
+        }
+
+        val store = CommsStore(context, name)
+        try {
+            assertNull(store.pass(ana.number))
+            // Every contact is owed the phone's pass once it is made.
+            store.owePassToAll()
+            assertEquals(listOf(ana.number), store.passNotices())
+
+            val first = ByteArray(32) { 1 }
+            val second = ByteArray(32) { 2 }
+            assertTrue(store.setPass(ana.number, second, 2_000L))
+            // An older key arriving late does not replace the newer one.
+            assertTrue(!store.setPass(ana.number, first, 1_000L))
+            assertTrue(store.pass(ana.number)!!.contentEquals(second))
+
+            // A contact who moves keeps their pass and what they are owed.
+            assertTrue(store.renumberContact(ana.number, "555000111", null, ana.ed25519, 3_000L))
+            assertNull(store.pass(ana.number))
+            assertTrue(store.pass("555000111")!!.contentEquals(second))
+            assertEquals(listOf("555000111"), store.passNotices())
+
+            store.clearPassNotice("555000111")
+            assertTrue(store.passNotices().isEmpty())
+
+            // Deleting the contact deletes their pass.
+            store.deleteContact("555000111")
+            assertNull(store.pass("555000111"))
+        } finally {
+            store.close()
+        }
+    }
 }

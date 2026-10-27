@@ -176,7 +176,9 @@ Read this part twice.
 ### What the relay keeps
 
 Per Clairix number: the public keys; envelopes waiting for the phone, deleted
-when collected or after 30 days; a UnifiedPush endpoint if you set one;
+when collected or after 30 days, each marked if it came without a contact's
+pass; the pass key your contacts' passes are made with; a UnifiedPush endpoint
+if you set one;
 unused invite codes for 7 days; the hashes of unspent tokens for about 14
 days; a note that each key belongs to that number, so nobody else can
 register it. For traffic: anonymous speed samples for 2 hours, learned

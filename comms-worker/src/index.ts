@@ -87,7 +87,11 @@ export { IncidentCache, Mailbox, Traffic };
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
  * the right kind in X-Clairix-Token (see /v1/tokens); the relay keeps only token hashes, apart from the
  * account they went to:
- *   POST   /v1/send            {to, envelope, claim?, mix?, alert?}  → queue for a contact; a "delivery" token.
+ *   POST   /v1/send            {to, envelope, claim?, mix?, alert?, pass?}  → queue for a contact; a "delivery" token.
+ *                              "pass" (HMAC-SHA256 under the recipient's pass key over
+ *                              clairix-pass-v1|to|envelope) says the sender is someone the recipient has
+ *                              written to. Once a mailbox has a pass key, envelopes without a good pass share
+ *                              a small part of its queue and an allowance of their own (Mailbox.enqueue).
  *                              "alert" ("call" or "sos") asks a locked recipient phone to ring or sound an SOS
  *                              for an envelope it cannot open yet; it is delivered with the envelope.
  *                              "claim" is the ticket of the one-time key the envelope's session was built
@@ -106,11 +110,14 @@ export { IncidentCache, Mailbox, Traffic };
  *                              → {now, incidents, providers: {here, tomtom}}: HERE / TomTom incidents,
  *                                cached per 0.25° tile for 5 minutes in the IncidentCache object
  * Signed (see auth.ts):
- *   GET    /v1/me                                          → profile + key counts
+ *   GET    /v1/me                                          → profile + key counts, and whether a pass key is set
  *   PUT    /v1/keys            {oneTimeKeys, fallback?, sealingPrekey?} → replenish; a sealing prekey ({key, created, signature},
  *                                                            signed over clairix-sealing-prekey-v1|key|created) replaces
  *                                                            the one held only when newer
  *   PUT    /v1/listed          {listed}
+ *   PUT    /v1/pass            {key|null}                  → the key contacts' passes are made with (32 bytes,
+ *                                                            base64); the phone shares it only inside end-to-end
+ *                                                            encrypted messages
  *   PUT    /v1/push            {endpoint|null}             → UnifiedPush endpoint to wake this device: in use at
  *                                                            once on a trusted host ({verified: true}), else a code
  *                                                            is pushed through it first ({verified: false})
@@ -146,7 +153,7 @@ export { IncidentCache, Mailbox, Traffic };
  * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
  * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
  * one through:
- *   POST   /v1/federate/send   {to, envelope, claim?, mix?}    → as /v1/send     (signed by the forwarding relay)
+ *   POST   /v1/federate/send   {to, envelope, claim?, mix?, pass?} → as /v1/send (signed by the forwarding relay)
  *   POST   /v1/federate/lookup {number, pin?, claim}           → as /v1/lookup   (likewise)
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
  */
@@ -267,7 +274,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       // share the mailbox's allowance for other relays; any other relay draws
       // on a small one of its own (mailbox.ts).
       const known = federationPolicy(env).mode === "allow" || (await other.writtenToWithin(WRITTEN_TO_DAYS));
-      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, known ? "known" : "stranger", body.alert);
+      return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, known ? "known" : "stranger", body.alert, body.pass);
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
@@ -293,7 +300,16 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/me" && request.method === "GET") {
-    return json({ profile: publicProfile(profile), oneTimeKeys: await me.oneTimeKeyCount() });
+    return json({ profile: publicProfile(profile), oneTimeKeys: await me.oneTimeKeyCount(), pass: await me.hasPassKey() });
+  }
+
+  if (path === "/v1/pass" && request.method === "PUT") {
+    const body = parseJson<{ key?: unknown }>(bodyText);
+    if (body.key !== null && (typeof body.key !== "string" || !PASS_RE.test(body.key))) throw new HttpError(400, "key must be 32 bytes of base64, or null");
+    const allowed = await me.allowanceOk("pass", PASS_KEYS_PER_HOUR, PASS_KEYS_BURST);
+    if (!allowed.ok) throw new HttpError(429, "Too many pass keys; try again later", allowed.retryAfter);
+    await me.setPassKey(body.key);
+    return json({ ok: true });
   }
 
   if (path === "/v1/me" && request.method === "DELETE") {
@@ -1015,6 +1031,11 @@ async function checkedKeys(ed25519: string, raw: unknown): Promise<SignedKey[]> 
 
 /** What a request signed with the transport key may do: collect envelopes, nothing else. */
 const TRANSPORT_ROUTES = new Set(["GET /v1/inbox", "POST /v1/ack", "GET /v1/ws"]);
+/** A pass key or a pass: 32 bytes in padded base64. */
+const PASS_RE = /^[A-Za-z0-9+/]{43}=$/;
+/** Pass keys an owner may set in an hour: a new one only on deleting a contact. */
+const PASS_KEYS_PER_HOUR = 20;
+const PASS_KEYS_BURST = 20;
 
 /**
  * A transport key: null removes it; otherwise a 32-byte Ed25519 key in standard
@@ -1169,12 +1190,13 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     const forwarded: Record<string, unknown> = { to: body.to, envelope: body.envelope, mix: !body.urgent };
     if (body.claim !== null) forwarded.claim = body.claim;
     if (body.alert !== null) forwarded.alert = body.alert;
+    if (body.pass !== null) forwarded.pass = body.pass;
     const res = await forward(env, request, body.relay, "/v1/federate/send", forwarded);
     if (res.status !== 202 || typeof res.json.id !== "string") throw otherRelayError(res);
     await noteWrittenTo(env, body.relay);
     return json({ id: res.json.id.slice(0, 80) }, 202);
   }
-  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, false, body.alert);
+  return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, false, body.alert, body.pass);
 }
 
 interface SendBody {
@@ -1187,10 +1209,12 @@ interface SendBody {
   relay: string | null;
   /** What a locked recipient phone should do with it: ring, or sound an SOS. */
   alert: Alert | null;
+  /** Made with the recipient's pass key, from a sender the recipient has written to. */
+  pass: string | null;
 }
 
 function parseSendBody(bodyText: string, loopback = false): SendBody {
-  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown; alert?: unknown }>(bodyText);
+  const body = parseJson<{ to?: unknown; envelope?: unknown; claim?: unknown; mix?: unknown; relay?: unknown; alert?: unknown; pass?: unknown }>(bodyText);
   const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
   if (!to) throw new HttpError(400, "to must be a Clairix number");
   if (typeof body.envelope !== "string" || body.envelope.length === 0 || !/^[A-Za-z0-9+/=]+$/.test(body.envelope)) {
@@ -1208,7 +1232,9 @@ function parseSendBody(bodyText: string, loopback = false): SendBody {
   // set-up and SOS without saying so, and must not have them wait.
   if (body.alert !== undefined && body.alert !== null && !ALERTS.includes(body.alert as Alert)) throw new HttpError(400, "alert must be call or sos");
   const alert = (body.alert ?? null) as Alert | null;
-  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback), alert };
+  if (body.pass !== undefined && body.pass !== null && (typeof body.pass !== "string" || !PASS_RE.test(body.pass))) throw new HttpError(400, "pass must be 32 bytes of base64");
+  const pass = (body.pass ?? null) as string | null;
+  return { to, envelope: body.envelope, claim, urgent: body.mix !== true, relay: parseRelayField(body.relay, loopback), alert, pass };
 }
 
 interface LookupBody {
@@ -1360,8 +1386,9 @@ async function enqueueFor(
   urgent: boolean,
   federated: false | "known" | "stranger" = false,
   alert: Alert | null = null,
+  pass: string | null = null,
 ): Promise<Response> {
-  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated, alert);
+  const result = await env.MAILBOX.get(env.MAILBOX.idFromName(to)).enqueue(envelope, claim, urgent, federated, alert, pass);
   if (!result.ok) {
     // Whether a number exists is not told to anyone, listed or not: a send to
     // one that does not is accepted and dropped, its token spent like any other.

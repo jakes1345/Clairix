@@ -168,6 +168,7 @@ class CommsStore(
         createVersion8(db)
         createVersion9(db)
         createVersion10(db)
+        createVersion11(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -182,6 +183,18 @@ class CommsStore(
         if (oldVersion < 8) createVersion8(db)
         if (oldVersion < 9) createVersion9(db)
         if (oldVersion < 10) createVersion10(db)
+        if (oldVersion < 11) createVersion11(db)
+    }
+
+    /**
+     * Contacts' passes: the key each contact makes passes with (given inside
+     * their messages) and when they made it, so an older one arriving late
+     * does not replace a newer; and the contacts not yet given this phone's
+     * pass since it was last replaced.
+     */
+    private fun createVersion11(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS passes (number TEXT PRIMARY KEY, key TEXT NOT NULL, created INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS pass_notices (peer TEXT PRIMARY KEY)")
     }
 
     /**
@@ -421,6 +434,8 @@ class CommsStore(
             db.delete("quarantine", "peer = ?", arrayOf(number))
             db.delete("prekeys", "number = ?", arrayOf(number))
             db.delete("move_notices", "peer = ?", arrayOf(number))
+            db.delete("passes", "number = ?", arrayOf(number))
+            db.delete("pass_notices", "peer = ?", arrayOf(number))
             db.delete("contacts", "number = ?", arrayOf(number))
             db.setTransactionSuccessful()
         } finally {
@@ -452,7 +467,7 @@ class CommsStore(
                 val taken = db.rawQuery("SELECT 1 FROM contacts WHERE number = ?", arrayOf(new)).use { it.moveToFirst() }
                 if (taken) return false
                 if (db.update("contacts", values, "number = ?", arrayOf(old)) == 0) return false
-                for ((table, column) in listOf("messages" to "peer", "receipts" to "peer", "transactions" to "peer", "quarantine" to "peer", "prekeys" to "number", "timers" to "peer", "move_notices" to "peer")) {
+                for ((table, column) in listOf("messages" to "peer", "receipts" to "peer", "transactions" to "peer", "quarantine" to "peer", "prekeys" to "number", "timers" to "peer", "move_notices" to "peer", "passes" to "number", "pass_notices" to "peer")) {
                     db.execSQL("UPDATE OR IGNORE $table SET $column = ? WHERE $column = ?", arrayOf(new, old))
                     db.delete(table, "$column = ?", arrayOf(old))
                 }
@@ -521,6 +536,60 @@ class CommsStore(
         val db = beginWrite()
         try {
             db.delete("move_notices", "peer = ?", arrayOf(peer))
+            db.setTransactionSuccessful()
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    // ── Passes ───────────────────────────────────────────────────────────
+
+    /** The key [number] makes passes with, as they last gave it; null when they have not (or are on an app from before passes). */
+    fun pass(number: String): ByteArray? =
+        readableDatabase.query("passes", arrayOf("key"), "number = ?", arrayOf(number), null, null, null).use { c ->
+            if (!c.moveToFirst()) null else runCatching { java.util.Base64.getDecoder().decode(c.getString(0)) }.getOrNull()?.takeIf { it.size == 32 }
+        }
+
+    /** Keeps [key] (made at [created]) as [number]'s pass key unless a newer one is held; returns whether it was kept. */
+    fun setPass(number: String, key: ByteArray, created: Long): Boolean {
+        val db = beginWrite()
+        try {
+            val held = db.rawQuery("SELECT created FROM passes WHERE number = ?", arrayOf(number)).use { if (it.moveToFirst()) it.getLong(0) else null }
+            if (held != null && held >= created) return false
+            val values = ContentValues().apply {
+                put("number", number)
+                put("key", java.util.Base64.getEncoder().encodeToString(key))
+                put("created", created)
+            }
+            db.insertWithOnConflict("passes", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+            return true
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    /** Every contact is owed this phone's new pass. */
+    fun owePassToAll() {
+        val db = beginWrite()
+        try {
+            db.execSQL("INSERT OR IGNORE INTO pass_notices (peer) SELECT number FROM contacts")
+            db.setTransactionSuccessful()
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    /** The contacts still owed this phone's current pass. */
+    fun passNotices(): List<String> =
+        readableDatabase.rawQuery("SELECT peer FROM pass_notices", null).use { c ->
+            generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList()
+        }
+
+    fun clearPassNotice(peer: String) {
+        val db = beginWrite()
+        try {
+            db.delete("pass_notices", "peer = ?", arrayOf(peer))
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
@@ -1350,6 +1419,8 @@ class CommsStore(
             db.delete("timers", null, null)
             db.delete("prekeys", null, null)
             db.delete("move_notices", null, null)
+            db.delete("passes", null, null)
+            db.delete("pass_notices", null, null)
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
@@ -1395,7 +1466,7 @@ class CommsStore(
     private fun alive(): String = "(expires_at IS NULL OR expires_at > ${System.currentTimeMillis()})"
 
     private companion object {
-        const val DB_VERSION = 10
+        const val DB_VERSION = 11
         const val BUSY_TIMEOUT_MS = 10_000
     }
 }

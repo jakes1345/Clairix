@@ -81,8 +81,10 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
      safe to keep?
 5. **Limits and denial of service.** Allowances per account, per mailbox, per
    relay and per recipient.
-   - Finding 23 (tokens are not tied to a recipient, so one account can fill a
-     mailbox) is known; we would like a recommendation.
+   - Finding 23 (one account could fill a mailbox) is answered by contacts'
+     passes (`Mailbox.enqueue`, `passValid`; `PUT /v1/pass`). Can a stranger
+     still crowd out contacts, forge or replay a pass, or learn from the
+     strangers' limit that a number exists?
    - Is anything else cheap for an attacker and expensive for the relay?
 6. **Storage.** Does the relay's storage hold anything the README's "What the
    relay keeps" does not list? Check timestamps, senders, lookups and
