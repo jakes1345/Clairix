@@ -521,6 +521,57 @@ class RelayRoundTripTest {
         }
     }
 
+    /**
+     * Moving to another relay, as CommsRepository.moveTo does it: Alice
+     * registers the identity she has on a second relay and is given a number
+     * there. Bob, who already has a session with her, finds the same keys
+     * under the new number and writes to it over that session; what is sent
+     * to her old number still waits on the first relay; and the account there
+     * is still hers to collect from, or to take up again.
+     */
+    @Test
+    fun anIdentityMovesToAnotherRelayAndKeepsItsSessions() {
+        val other = System.getenv("CLAIRIX_RELAY_B_URL")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        assumeTrue("set CLAIRIX_RELAY_B_URL to a second relay", other != null)
+        alice.send(bob, msg("before the move")); bob.receive()
+        bob.send(alice, msg("a reply")); alice.receive()
+
+        alice.identity.generateOneTimeKeys(20u)
+        val newNumber = alice.relay.register(other!!, alice.identity, secret!!, listed = false).number
+        alice.identity.markKeysPublished()
+        val there = RelayClient({ alice.identity }, { other }, { newNumber })
+        try {
+            val origin = RelayClient.originOf(other)!!
+            val keys = bob.relay.identity(newNumber, fingerprint(alice.keys.ed25519), origin)
+            assertEquals("the same keys, under the new number", alice.keys.ed25519, keys.ed25519)
+            assertEquals(alice.keys.curve25519, keys.curve25519)
+            assertEquals(alice.keys.sealing, keys.sealing)
+
+            // Over the session Bob already has: no new one is needed.
+            assertTrue(bob.identity.hasSession(alice.keys.curve25519))
+            val sender = bob.identity.publicBundle().let { CommsWire.Sender(bob.number!!, "Bob", it.ed25519, it.curve25519, it.sealing, it.signature) }
+            val plain = CommsWire.withSender(msg("to your new number"), sender).toString().toByteArray(Charsets.UTF_8)
+            bob.relay.topUpTokens()
+            bob.relay.send(newNumber, bob.identity.encrypt(alice.keys, plain), relay = origin)
+            val deadline = System.currentTimeMillis() + RECEIVE_S * 1000
+            var envelopes = there.inbox()
+            while (envelopes.isEmpty() && System.currentTimeMillis() < deadline) { Thread.sleep(500); envelopes = there.inbox() }
+            assertEquals(1, envelopes.size)
+            there.ack(envelopes.map { it.id })
+            val opened = alice.identity.decrypt(envelopes.single().data)
+            assertTrue("read on the session the two already had", !opened.newSession)
+            assertEquals("to your new number", CommsWire.parse(String(opened.plaintext, Charsets.UTF_8))!!.getString(CommsWire.F_BODY))
+
+            // A contact who has not heard yet writes to the old number: it waits on the old relay.
+            bob.send(alice, msg("to the old number"))
+            assertEquals("to the old number", alice.receive().payload.getString(CommsWire.F_BODY))
+            // And the old account is still Alice's.
+            alice.relay.me()
+        } finally {
+            runCatching { there.wipe() }
+        }
+    }
+
     @Test
     fun shortPayloadsMakeEnvelopesOfOneSize() {
         alice.send(bob, msg("one")); bob.receive()

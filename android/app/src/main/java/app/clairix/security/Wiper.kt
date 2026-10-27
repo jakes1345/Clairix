@@ -87,7 +87,7 @@ object Wiper {
         runCatching { pendingMarker(app).createNewFile() }
         scope.launch {
             try {
-                val farewell = runCatching { CommsRepository.preparedRelayWipe() }.getOrNull()
+                val farewells = runCatching { CommsRepository.preparedRelayWipes() }.getOrDefault(emptyList())
                 runCatching { wipeKeystore() }
                 stopServices(app)
                 runCatching { wipeOutsideFiles(app) }
@@ -95,9 +95,9 @@ object Wiper {
                 runCatching { wipeDatabases(app) }
                 runCatching { wipeFiles(app) }
                 runCatching { pendingMarker(app).delete() }
-                if (farewell != null) {
+                if (farewells.isNotEmpty()) {
                     withTimeoutOrNull(RELAY_BUDGET_MS) {
-                        runInterruptible { CommsRepository.sendRelayWipe(farewell, RELAY_BUDGET_MS / 1000) }
+                        runInterruptible { for (farewell in farewells) runCatching { CommsRepository.sendRelayWipe(farewell, RELAY_BUDGET_MS / 1000) } }
                     }
                 }
             } finally {

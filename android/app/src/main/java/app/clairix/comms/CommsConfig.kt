@@ -106,6 +106,47 @@ class CommsConfig(context: Context) {
             .apply()
     }
 
+    /**
+     * This phone moved to the relay at [relayUrl], where it is [number]: the
+     * registration there replaces the old one, which is kept as the previous
+     * relay ([previousRelay]) while its mailbox is still emptied.
+     */
+    fun saveMove(relayUrl: String, number: String, previousRelay: String, previousNumber: String, movedAt: Long) {
+        prefs.edit()
+            .putString(KEY_RELAY, relayUrl.trimEnd('/'))
+            .putString(KEY_NUMBER, number)
+            .remove(KEY_PUSH)
+            .remove(KEY_PUSH_PENDING)
+            .remove(KEY_ALTERNATES)
+            .remove(KEY_ONION)
+            .putLong(KEY_PREKEY_PUBLISHED, 0L)
+            .putString(KEY_PREVIOUS_RELAY, previousRelay.trimEnd('/'))
+            .putString(KEY_PREVIOUS_NUMBER, previousNumber)
+            .putLong(KEY_MOVED_AT, movedAt)
+            .remove(KEY_PREVIOUS_EMPTIED)
+            .apply()
+    }
+
+    /**
+     * The relay this phone moved away from, and its number there, for as long
+     * as envelopes sent there before contacts heard of the move are still
+     * collected; null otherwise.
+     */
+    val previousRelay: String? get() = prefs.getString(KEY_PREVIOUS_RELAY, null)
+    val previousNumber: String? get() = prefs.getString(KEY_PREVIOUS_NUMBER, null)
+
+    /** When this phone last moved to another relay (the date its move notices carry); 0 if it never has. */
+    val movedAt: Long get() = prefs.getLong(KEY_MOVED_AT, 0L)
+
+    /** When the previous relay's mailbox was last found empty, since the move; 0 until it has been. */
+    val previousEmptied: Long get() = prefs.getLong(KEY_PREVIOUS_EMPTIED, 0L)
+
+    fun setPreviousEmptied(ts: Long) { prefs.edit().putLong(KEY_PREVIOUS_EMPTIED, ts).apply() }
+
+    fun forgetPreviousRelay() {
+        prefs.edit().remove(KEY_PREVIOUS_RELAY).remove(KEY_PREVIOUS_NUMBER).remove(KEY_PREVIOUS_EMPTIED).apply()
+    }
+
     fun setDisplayName(name: String) { prefs.edit().putString(KEY_NAME, name).apply() }
     fun setListed(listed: Boolean) { prefs.edit().putBoolean(KEY_LISTED, listed).apply() }
     fun setOnline(online: Boolean) { prefs.edit().putBoolean(KEY_ONLINE, online).apply() }
@@ -141,6 +182,10 @@ class CommsConfig(context: Context) {
         const val KEY_COVER_TRAFFIC = "cover_traffic"
         const val KEY_ALTERNATES = "relay_alternates"
         const val KEY_ONION = "relay_onion"
+        const val KEY_PREVIOUS_RELAY = "previous_relay"
+        const val KEY_PREVIOUS_NUMBER = "previous_number"
+        const val KEY_PREVIOUS_EMPTIED = "previous_emptied"
+        const val KEY_MOVED_AT = "moved_at"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

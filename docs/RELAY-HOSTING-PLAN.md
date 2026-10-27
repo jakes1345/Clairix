@@ -81,9 +81,24 @@ automated.
 3. **Relay list in the app.** *Done:* `relays/relays.json`, signed with the
    asset key and published by the Relay list workflow; phones offer it when
    setting up, refuse an older list than they have, and check a listed
-   relay's key before registering on it (`relays/README.md`). Still to do:
-   moving a phone to another relay when its own is blocked (a number is per
-   relay, so this needs contacts told of the new number).
+   relay's key before registering on it (`relays/README.md`). *Also done:*
+   moving a phone to another relay when its own is blocked, gone or no
+   longer trusted ("Move to another relay" in Comms settings). The phone
+   registers the identity it has on the new relay (with its secret, an
+   invite there, or a listed relay checked against the list) and keeps its
+   keys, sessions, contacts and conversations under the number that relay
+   gives. Each contact is sent a notice over the session they already share
+   (payload type `moved`, dated, carrying the new number and relay in its
+   sender fields), so only that phone can send it; their phones move the
+   contact, conversation, receipts, coin history, held payloads, prekey,
+   timer and group places to the new number, keep it verified, and ignore a
+   notice older than the last one applied. Notices owed are kept until they
+   go. What contacts send to the old number before their phones follow is
+   collected from the old relay whenever it answers, for 30 days, after
+   which the old account is deleted; replaced sealing prekeys are kept until
+   that mailbox has been emptied too. Moving back to the relay just left
+   takes up the old number again. ClairixCoin stays on the relay it was
+   earned on. Unpairing and the duress wipe delete the old account as well.
 4. **The app over Tor** (Arti), so the phone's address is hidden from every
    relay, ours or not. *Done:* "Connect through Tor" in Comms settings runs
    Arti in the app's native library behind a password-protected SOCKS5 proxy

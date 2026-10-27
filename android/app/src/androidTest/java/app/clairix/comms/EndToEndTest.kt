@@ -305,12 +305,17 @@ class EndToEndTest {
  * [relayUrl]. It addresses the app by its pairing code, as a contact who
  * scanned it would, and reads its own inbox by polling.
  */
-class TestPeer(private val relayUrl: String, secret: String, private val label: String, app: PairingCode) {
+class TestPeer(relayUrl: String, private val secret: String, private val label: String, app: PairingCode) {
     private val identity: Identity = Identity.create().also { it.generateOneTimeKeys(20u) }
+    /** The relay this peer is on; it changes when it [moveTo]s another. */
+    @Volatile var relayUrl: String = relayUrl
+        private set
     @Volatile var number: String = ""
         private set
-    private val relay = RelayClient({ identity }, { relayUrl }, { number.ifEmpty { null } })
-    private val foreign = RelayClient.originOf(relayUrl) != RelayClient.originOf(app.relayUrl)
+    private val relay = RelayClient({ identity }, { this.relayUrl }, { number.ifEmpty { null } })
+    private var foreign = RelayClient.originOf(relayUrl) != RelayClient.originOf(app.relayUrl)
+    /** The accounts this peer moved away from, deleted with the current one in [close]. */
+    private val left = ArrayList<RelayClient>()
     private var claim: String? = null
     private val waiting = ArrayList<JSONObject>()
     /** Each contact's sealing prekey as last fetched, kept as the app keeps its contacts'. */
@@ -422,7 +427,32 @@ class TestPeer(private val relayUrl: String, secret: String, private val label: 
         return waiting.toList().also { waiting.clear() }
     }
 
+    /**
+     * Registers this peer's identity, as it is, on [newRelayUrl] and moves
+     * there, as the app's move does: same keys and sessions, the number that
+     * relay gives. [appRelayUrl] is the relay the app is on now. Returns the
+     * new number; the old account stays until [close].
+     */
+    fun moveTo(newRelayUrl: String, appRelayUrl: String): String {
+        val oldUrl = relayUrl
+        val oldNumber = number
+        left += RelayClient({ identity }, { oldUrl }, { oldNumber })
+        identity.generateOneTimeKeys(20u)
+        val registered = relay.register(newRelayUrl, identity, secret, listed = true)
+        identity.markKeysPublished()
+        relayUrl = newRelayUrl
+        number = registered.number
+        foreign = RelayClient.originOf(newRelayUrl) != RelayClient.originOf(appRelayUrl)
+        // Prekeys, the claim ticket and delivery tokens were the old relay's.
+        prekeys.clear()
+        claim = null
+        relay.clearTokens()
+        relay.topUpTokens()
+        return number
+    }
+
     fun close() {
         runCatching { relay.wipe() }
+        for (old in left) runCatching { old.wipe() }
     }
 }

@@ -171,6 +171,10 @@ object CommsRepository {
     /** Envelopes that arrived while the phone was locked; read once it is unlocked. */
     private lateinit var lockedInbox: LockedInbox
     private lateinit var relay: RelayClient
+    /** The relay this phone moved away from, while what waits there is still collected; see [drainPreviousRelay]. */
+    private lateinit var previousRelay: RelayClient
+    /** Until when the old relay is not asked again, after it last did not answer. */
+    @Volatile private var previousQuietUntil = 0L
 
     /** An unexpected failure in background work is recorded instead of taking the app down. */
     private val crashGuard = CoroutineExceptionHandler { _, e ->
@@ -217,6 +221,7 @@ object CommsRepository {
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
     private val receiptsLock = Mutex()
+    private val moveNoticesLock = Mutex()
     private val keysLock = Mutex()
     /** When keys were last topped up from the live connection; see [replenishKeysInBackground]. */
     @Volatile
@@ -247,6 +252,13 @@ object CommsRepository {
     private const val REPLENISH_INTERVAL_MS = 3600_000L
     /** How far back unconfirmed messages are sent again when a contact asks for a new session. */
     private const val RESEND_WINDOW_MS = 7L * 24 * 3600_000L
+    /**
+     * How long after a move what waits on the old relay is still collected:
+     * long enough for a contact who is away to come back and follow the move.
+     */
+    private const val PREVIOUS_RELAY_KEEP_MS = 30L * 24 * 3600_000L
+    /** How long the old relay is left alone after it did not answer (it may be the one that is blocked). */
+    private const val PREVIOUS_RELAY_QUIET_MS = 15 * 60_000L
 
     @Volatile
     private var initialised = false
@@ -314,6 +326,8 @@ object CommsRepository {
             // Through Tor, the relay is reached at its onion address when it has one.
             onion = { if (TorTransport.enabled) relayOnion() else null },
         )
+        // Only the mailbox there is asked for, and only while the vault is open.
+        previousRelay = RelayClient({ if (Vault.sealed.value) null else identities.get() }, { config.previousRelay }, { config.previousNumber })
         claims = StoredPendingClaims(appContext)
         // The relay's clock, as the Device tab's clock-integrity row compares it.
         RelayClock.bind(appContext)
@@ -567,22 +581,9 @@ object CommsRepository {
                 if (invite == null && secret.isBlank()) return@withLock Result.failure(RelayException("Enter the enrollment secret"))
                 if (invite != null && invite.invite == null) return@withLock Result.failure(RelayException("That code is not an invite"))
                 setBusy(true)
-                // A relay on the relay list must answer with the key the list gives it.
-                // One that answers at its address with another key is a different relay
-                // (the address was taken over, or the name lapsed and was bought), and
-                // this phone would hand it its account.
-                RelayDirectory.current(appContext)?.find(url)?.let { listed ->
-                    val live = RelayDirectory.liveKey(url)
-                    if (live != listed.key) {
-                        val reason = if (live == null) {
-                            "Could not reach ${listed.name} to check it is the relay on the Clairix relay list. Try again."
-                        } else {
-                            "The relay at $url answers with a different key from the one the Clairix relay list gives ${listed.name}. " +
-                                "Someone else may have taken over its address: do not register there."
-                        }
-                        setBusy(false, reason)
-                        return@withLock Result.failure(RelayException(reason))
-                    }
+                listedKeyProblem(url)?.let { reason ->
+                    setBusy(false, reason)
+                    return@withLock Result.failure(RelayException(reason))
                 }
                 try {
                     val identity = identities.create()
@@ -628,6 +629,273 @@ object CommsRepository {
             result
         }
 
+    /**
+     * Why this phone must not register at [url], when it is on the relay list
+     * and answers with another key than the list gives it: a different relay
+     * (the address was taken over, or the name lapsed and was bought) would be
+     * handed this phone's account. Null when the relay is not listed or
+     * answers with its listed key.
+     */
+    private fun listedKeyProblem(url: String): String? {
+        val listed = RelayDirectory.current(appContext)?.find(url) ?: return null
+        val live = RelayDirectory.liveKey(url)
+        if (live == listed.key) return null
+        return if (live == null) {
+            "Could not reach ${listed.name} to check it is the relay on the Clairix relay list. Try again."
+        } else {
+            "The relay at $url answers with a different key from the one the Clairix relay list gives ${listed.name}. " +
+                "Someone else may have taken over its address: do not register there."
+        }
+    }
+
+    // ── Moving to another relay ───────────────────────────────────────────
+
+    /**
+     * Moves this phone to the relay at [relayUrl] (with its enrollment
+     * [secret], or someone's [invite] there), for when its own relay is
+     * blocked, gone, or no longer trusted. The identity stays: the same keys,
+     * sessions, contacts and conversations, under a new Clairix number. Every
+     * contact is then sent a notice over the sessions they already have, so
+     * only this phone could have sent it, and their phones follow it. Until
+     * each has, what they send to the old number waits on the old relay, and
+     * is collected from there whenever it answers, for
+     * [PREVIOUS_RELAY_KEEP_MS]. Moving back to the relay this phone just left
+     * takes up its old number there again. ClairixCoin stays on the old relay.
+     * Returns the new number.
+     */
+    suspend fun moveTo(relayUrl: String, secret: String, invite: PairingCode? = null): Result<String> =
+        withContext(Dispatchers.IO) {
+            var endpoint: String? = null
+            val result = lock.withLock {
+                val oldUrl = config.relayUrl
+                val oldNumber = config.number
+                if (oldUrl == null || oldNumber == null) return@withLock Result.failure(RelayException("Not registered with a relay"))
+                if (Vault.sealed.value) return@withLock Result.failure(VaultSealedException())
+                val url = (invite?.relayUrl ?: relayUrl).trim().trimEnd('/')
+                if (!RelayClient.acceptableRelayUrl(url)) return@withLock Result.failure(RelayException("The relay URL must start with https://"))
+                val oldOrigin = RelayClient.originOf(oldUrl)
+                val newOrigin = RelayClient.originOf(url) ?: return@withLock Result.failure(RelayException("Clairix cannot use that relay address"))
+                if (oldOrigin == null) return@withLock Result.failure(RelayException("Clairix cannot use this phone's relay address"))
+                if (isOwnRelay(url)) return@withLock Result.failure(RelayException("This phone is already on that relay"))
+                val back = config.previousRelay?.takeIf { RelayClient.originOf(it) == newOrigin }?.let { it to config.previousNumber }
+                if (back == null && invite == null && secret.isBlank()) return@withLock Result.failure(RelayException("Enter the enrollment secret"))
+                if (back == null && invite != null && invite.invite == null) return@withLock Result.failure(RelayException("That code is not an invite"))
+                setBusy(true)
+                listedKeyProblem(url)?.let { reason ->
+                    setBusy(false, reason)
+                    return@withLock Result.failure(RelayException(reason))
+                }
+                try {
+                    val number = rejoin(back) ?: registerIdentity(url, secret.takeIf { invite == null }, invite?.invite)
+                    endpoint = config.pushEndpoint
+                    val now = System.currentTimeMillis()
+                    store.moveSelf(oldNumber, number, oldOrigin, newOrigin)
+                    config.saveMove(if (back != null) back.first else url, number, oldUrl, oldNumber, now)
+                    // Delivery tokens and the claim tickets for contacts' one-time keys
+                    // were the old relay's; the new one honours neither.
+                    relay.clearTokens()
+                    claims.clear()
+                    refreshAlternates()
+                    publishConfig()
+                    setBusy(false)
+                    CommsLog.add("Moved from ${formatClairixNumber(oldNumber)} on ${relayLabel(oldOrigin)} to ${formatClairixNumber(number)} on ${relayLabel(newOrigin)}; telling contacts")
+                    Result.success(number)
+                } catch (e: Exception) {
+                    // Nothing on the phone changed: it is still on its old relay.
+                    val reason = e.message ?: "The move failed"
+                    setBusy(false, reason)
+                    Result.failure(e)
+                }
+            }
+            if (result.isSuccess) {
+                // The distributor's endpoint goes to the new relay, which checks it as any relay does.
+                endpoint?.let { onPushEndpoint(it) }
+                CommsService.start(appContext)
+                LiveLink.refresh()
+                bump()
+                scope.launch {
+                    topUpTokens()
+                    flushMoveNotices()
+                    sync()
+                }
+            }
+            result
+        }
+
+    /**
+     * The account this phone left at [back] (its address and number), when
+     * the relay there still has it: moving back takes it up again rather than
+     * registering a second time. Null when there is none to go back to.
+     * Caller holds [lock].
+     */
+    private fun rejoin(back: Pair<String, String?>?): String? {
+        val number = back?.second ?: return null
+        return try {
+            previousRelay.me()
+            CommsLog.add("${relayLabel(RelayClient.originOf(back.first))} still has ${formatClairixNumber(number)}; moving back to it")
+            number
+        } catch (e: RelayException) {
+            // Gone (wiped, or the relay was reset): registered afresh.
+            if (e.code == 401 || e.code == 403 || e.code == 404) null else throw e
+        }
+    }
+
+    /**
+     * Registers this phone's identity, as it is, at [url], with fresh one-time
+     * keys and the transport key it already has; returns the number the relay
+     * gave. Caller holds [lock].
+     */
+    private fun registerIdentity(url: String, secret: String?, invite: String?): String {
+        val identity = identities.get() ?: throw VaultSealedException()
+        identity.generateOneTimeKeys(ONE_TIME_KEYS_BATCH.toUInt())
+        identities.persist()
+        val transportKey = runCatching { transportKeys.get().publicKey() }.getOrNull()
+        val registered = relay.register(url, identity, secret, config.listed, invite, transportKey)
+        identity.markKeysPublished()
+        identities.persist()
+        if (transportKey != null) transportKeys.setPublished(true)
+        return registered.number
+    }
+
+    /**
+     * Tells every contact still owed it that this phone moved: its new number
+     * and relay travel in the notice's sender fields. One that cannot go now
+     * is tried again on the next sync or retry; one that never can (the
+     * contact's keys changed, their number is gone) is given up, and logged.
+     */
+    suspend fun flushMoveNotices() = withContext(Dispatchers.IO) {
+        if (!config.isRegistered || Vault.sealed.value) return@withContext
+        val movedAt = config.movedAt.takeIf { it > 0L } ?: return@withContext
+        moveNoticesLock.withLock {
+            for (peer in store.moveNotices()) {
+                val contact = store.contact(peer)
+                if (contact == null) { store.clearMoveNotice(peer); continue }
+                when (val d = deliver(contact, CommsWire.moved(movedAt))) {
+                    Deliver.Sent -> {
+                        store.clearMoveNotice(peer)
+                        CommsLog.add("Told ${contactLabel(contact)} this phone moved")
+                    }
+                    is Deliver.Failed -> {
+                        store.clearMoveNotice(peer)
+                        CommsLog.add("Could not tell ${contactLabel(contact)} this phone moved: ${d.reason}")
+                    }
+                    is Deliver.TooLarge -> {
+                        store.clearMoveNotice(peer)
+                        CommsLog.add("Could not tell ${contactLabel(contact)} this phone moved: ${d.reason}")
+                    }
+                    is Deliver.Offline -> { scheduleRetry(d.retryAfterMs); return@withLock }
+                }
+            }
+        }
+    }
+
+    /** The relay this phone moved away from and its number there, while that mailbox is still emptied; null otherwise. */
+    fun previousRelay(): Pair<String, String>? {
+        if (!initialised) return null
+        val url = config.previousRelay ?: return null
+        val number = config.previousNumber ?: return null
+        return url to number
+    }
+
+    /** When the old relay stops being emptied, after a move; 0 when there is none. */
+    fun previousRelayUntil(): Long = if (previousRelay() != null) config.movedAt + PREVIOUS_RELAY_KEEP_MS else 0L
+
+    /** How many contacts have not yet been told of this phone's move. */
+    fun moveNoticesOwed(): Int = unlockedOr(0) { store.moveNotices().size }
+
+    /**
+     * Collects what waits on the relay this phone moved away from: envelopes
+     * contacts sent to the old number before their phones followed the move.
+     * The old relay may be the one that is blocked, so a failure is expected,
+     * and the next try waits [PREVIOUS_RELAY_QUIET_MS]. After
+     * [PREVIOUS_RELAY_KEEP_MS] the account there is deleted, if the relay
+     * answers, and forgotten either way.
+     */
+    private suspend fun drainPreviousRelay() {
+        val url = config.previousRelay ?: return
+        val now = System.currentTimeMillis()
+        if (now - config.movedAt > PREVIOUS_RELAY_KEEP_MS) {
+            runCatching { previousRelay.wipe() }
+                .onSuccess { CommsLog.add("Deleted this phone's old account on ${relayLabel(RelayClient.originOf(url))}") }
+            config.forgetPreviousRelay()
+            return
+        }
+        if (now < previousQuietUntil) return
+        try {
+            for (page in 0 until MAX_INBOX_PAGES) {
+                val fetchedFrom = System.currentTimeMillis() - MIX_HOLD_MARGIN_MS
+                val envelopes = previousRelay.inbox()
+                if (envelopes.isEmpty()) { config.setPreviousEmptied(fetchedFrom); break }
+                val done = ArrayList<String>()
+                for (env in envelopes) {
+                    val handled = try {
+                        lock.withLock { handleLocked(env) }
+                    } catch (e: IllegalStateException) {
+                        false
+                    }
+                    if (handled) done += env.id
+                }
+                if (done.isNotEmpty()) {
+                    previousRelay.ack(done)
+                    CommsLog.add("Collected ${done.size} envelope(s) sent to ${formatClairixNumber(config.previousNumber ?: "")} on the old relay")
+                }
+                if (done.size < envelopes.size) break
+                if (envelopes.size < RelayClient.INBOX_PAGE) { config.setPreviousEmptied(fetchedFrom); break }
+            }
+        } catch (e: java.io.IOException) {
+            // Unreachable, refused, or cut off: the rest of the sync goes on.
+            previousQuietUntil = System.currentTimeMillis() + PREVIOUS_RELAY_QUIET_MS
+        }
+    }
+
+    /**
+     * [contact] says they moved to another relay: the number and relay their
+     * notice carries are where they are now. It came over their own session,
+     * so it is theirs, and it is not checked with the relay first, which may
+     * be unreachable from here: their prekey and a session bundle are fetched
+     * there as they are for any contact. A notice dated no later than the last
+     * one applied changes nothing, so an old one arriving late cannot send them
+     * back. Caller holds [lock].
+     */
+    private fun applyMove(contact: Contact, json: JSONObject) {
+        val label = contactLabel(contact)
+        val ts = json.optLong(CommsWire.F_TS, 0L)
+        if (ts <= store.movedTs(contact.number)) {
+            CommsLog.add("An older notice that $label moved arrived late; ignored")
+            return
+        }
+        val number = parseClairixNumber(json.optString(CommsWire.F_FROM))
+        if (number == null) {
+            CommsLog.add("$label says they moved, but gave no Clairix number; ignored")
+            return
+        }
+        val claimed = json.optString(CommsWire.F_RELAY).takeIf { it.isNotBlank() }
+        val origin = if (claimed == null || isOwnRelay(claimed)) null else RelayClient.originOf(claimed) ?: run {
+            CommsLog.add("$label says they moved to a relay address Clairix cannot use; ignored")
+            return
+        }
+        if (number == contact.number && origin == contact.relay) {
+            store.renumberContact(contact.number, number, origin, contact.ed25519, ts)
+            return
+        }
+        if (!store.renumberContact(contact.number, number, origin, contact.ed25519, ts)) {
+            val other = store.contact(number)?.let { contactLabel(it) } ?: "another contact"
+            CommsLog.add("$label moved to ${formatClairixNumber(number)} on ${relayLabel(origin)}, which is $other's number here; still writing to their old number")
+            noteMove(contact.number, "$label moved to ${formatClairixNumber(number)} on ${relayLabel(origin)}, but $other has that number here. Messages still go to their old number.")
+            return
+        }
+        // A claim ticket for their one-time key was their old relay's.
+        claims.put(contact.number, null, System.currentTimeMillis())
+        noteMove(number, "$label moved to another relay: now ${formatClairixNumber(number)} on ${relayLabel(origin)}")
+        CommsLog.add("$label moved from ${formatClairixNumber(contact.number)} on ${relayLabel(contact.relay)} to ${formatClairixNumber(number)} on ${relayLabel(origin)}")
+        bump()
+    }
+
+    /** Writes [line] into [peer]'s conversation, where the owner sees it. Caller holds [lock]. */
+    private fun noteMove(peer: String, line: String) {
+        store.insertMessage(ChatMessage(UUID.randomUUID().toString(), peer, Direction.IN, line, System.currentTimeMillis(), STATUS_SYSTEM, read = false, kind = KIND_NOTE))
+    }
+
     /** A shareable invite from this phone: one registration on this relay, valid for a week. */
     suspend fun createInvite(): Result<Pair<PairingCode, Long>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -639,8 +907,15 @@ object CommsRepository {
     }
 
     /** Deletes the mailbox on the relay (best effort) and everything local. */
-    /** The relay's account deletion, signed now for a wipe to send once the phone is erased (see [RelayClient.preparedWipe]). */
-    fun preparedRelayWipe(): okhttp3.Request? = if (initialised && config.isRegistered) relay.preparedWipe() else null
+    /**
+     * The relay account deletions, signed now for a wipe to send once the
+     * phone is erased (see [RelayClient.preparedWipe]): this relay's, then the
+     * one on the relay this phone moved away from, while it still has one.
+     */
+    fun preparedRelayWipes(): List<okhttp3.Request> {
+        if (!initialised || !config.isRegistered) return emptyList()
+        return listOfNotNull(relay.preparedWipe(), if (config.previousRelay != null) previousRelay.preparedWipe() else null)
+    }
 
     fun sendRelayWipe(request: okhttp3.Request, timeoutSec: Long) = relay.sendPrepared(request, timeoutSec)
 
@@ -652,6 +927,8 @@ object CommsRepository {
             // call itself blocks on its own thread until the client's timeout.
             val remote = scope.launch(Dispatchers.IO) {
                 runCatching { relay.wipe() }.onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
+                // The account this phone moved away from goes too, if that relay answers.
+                if (config.previousRelay != null) runCatching { previousRelay.wipe() }
             }
             withTimeoutOrNull(RELAY_WIPE_BUDGET_MS) { remote.join() }
             runCatching { UnifiedPush.unregister(appContext) }
@@ -1194,7 +1471,8 @@ object CommsRepository {
         if (!config.isRegistered || Vault.sealed.value) return@withContext
         outboxLock.withLock {
             for (m in store.queued()) {
-                val contact = store.contact(m.peer)
+                // A contact who moved while the queue was read is found under their new number.
+                val contact = store.contact(m.peer) ?: store.message(m.id)?.peer?.let { store.contact(it) }
                 if (contact == null) {
                     store.setStatus(m.id, "failed", "Contact removed")
                     continue
@@ -1547,6 +1825,7 @@ object CommsRepository {
             // which it could not while this one still counted as pending.
             synchronized(this@CommsRepository) { if (retryJob === coroutineContext[Job]) retryJob = null }
             topUpTokens()
+            flushMoveNotices()
             flushOutbox()
             flushReceipts()
         }
@@ -1558,6 +1837,7 @@ object CommsRepository {
         retryBackoffMs = RETRY_MIN_MS
         retryJob?.cancel()
         scope.launch {
+            flushMoveNotices()
             flushOutbox()
             flushReceipts()
         }
@@ -2835,6 +3115,7 @@ object CommsRepository {
             CommsWire.T_TIMER ->
                 if (json.has(CommsWire.F_GID)) processGroupPayload(contact, envelopeTs, json)
                 else applyTimer(contact.number, envelopeTs, json, contact.name.ifBlank { formatClairixNumber(contact.number) }, group = false)
+            CommsWire.T_MOVED -> applyMove(contact, json)
             // Cover traffic: nothing is kept, shown or acknowledged.
             CommsWire.T_NOISE -> Unit
             else -> CommsLog.add("Payload of type \"${CommsWire.type(json)}\" from ${formatClairixNumber(contact.number)} not understood; ignored")
@@ -3003,7 +3284,13 @@ object CommsRepository {
                 if (done.size < envelopes.size) break
                 if (envelopes.size < RelayClient.INBOX_PAGE) { drainedAt = fetchedFrom; break }
             }
-            if (drainedAt > 0L) pruneSealingPrekeys(drainedAt)
+            drainPreviousRelay()
+            // A replaced sealing prekey goes only once nothing sealed to it can
+            // still be waiting: on this relay, nor on the one this phone moved
+            // away from, until its mailbox there has been emptied too.
+            val emptied = if (config.previousRelay != null) minOf(drainedAt, config.previousEmptied) else drainedAt
+            if (emptied > 0L) pruneSealingPrekeys(emptied)
+            flushMoveNotices()
             flushOutbox()
             flushReceipts()
             replenishKeys()

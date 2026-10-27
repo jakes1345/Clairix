@@ -30,6 +30,7 @@ class KeyChangeGuardTest {
         CommsWire.groupCtrl("g1", CommsWire.OP_REMOVE, mapOf(CommsWire.F_MEMBER to "123456789")),
         CommsWire.threat("g1", "t1", 1L, "CATCHER", "HIGH", 1.0, 2.0, "t", "d", 2L),
         CommsWire.panic("g1", "s1", 1L, null, null, null),
+        CommsWire.moved(1L),
     )
 
     @Test
@@ -41,7 +42,10 @@ class KeyChangeGuardTest {
     fun contentFromChangedKeysIsHeldForReview() {
         for (p in everyType.filter { CommsWire.type(it) in setOf(
             CommsWire.T_MSG, CommsWire.T_PAYMENT, CommsWire.T_VOICEMAIL, CommsWire.T_MEDIA, CommsWire.T_MEDIA_CHUNK,
-            CommsWire.T_GROUP_MSG, CommsWire.T_THREAT, CommsWire.T_PANIC
+            CommsWire.T_GROUP_MSG, CommsWire.T_THREAT, CommsWire.T_PANIC,
+            // A move from new keys waits too: following it before the owner looks
+            // would send their messages wherever those keys say.
+            CommsWire.T_MOVED
         ) }) {
             assertEquals(CommsWire.type(p), KeyChangeGuard.Action.QUARANTINE, KeyChangeGuard.inbound(changed, p))
         }
