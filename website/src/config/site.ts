@@ -86,9 +86,9 @@ export interface PageMeta {
 
 export const pages = {
   home: {
-    title: 'Clairix – Personal security for Android',
+    title: 'Clairix – Private messaging and personal security for Android',
     description:
-      'Find hidden cameras, Bluetooth trackers and spyware with the phone in your pocket. Private encrypted calls. No ads, no trackers, data stays on your phone.',
+      'End-to-end encrypted messages and calls through relays anyone can run, plus the tools to find hidden cameras, trackers and spyware. Free, open source, no ads.',
     ogTitle: "Clairix. Know what's watching.",
     ogImage: '/og/home.png',
     ogImageAlt: 'Clairix. Nothing hides.',

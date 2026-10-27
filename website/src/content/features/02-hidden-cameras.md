@@ -1,6 +1,6 @@
 ---
 id: hidden-cameras
-order: 1
+order: 2
 title: "Find hidden cameras"
 kicker: "Hidden cameras"
 icon: lens

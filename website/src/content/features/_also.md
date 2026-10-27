@@ -4,4 +4,4 @@
 
 **Timeline and evidence reports.** Every finding is kept in a timeline on your phone. Export a human-readable report or a machine-readable JSON file with UTC timestamps, device details and positions, and share it with whoever you choose.
 
-**A tour of the app.** *New in Beta 5.* After setup, a tour walks through every place in the app and what it does, with a button to open each one. It is built from the app's own lists, so nothing in Clairix goes untoured, and it can be taken again from Settings.
+**A tour of the app.** After setup, a tour walks through every place in the app and what it does, with a button to open each one. It is built from the app's own lists, so nothing in Clairix goes untoured, and it can be taken again from Settings.
