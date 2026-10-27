@@ -24,7 +24,7 @@
     "gps-tracker",
     "bluetooth-le"
   ],
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "engines": {
     "node": ">=14"
   }

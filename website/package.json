@@ -2,6 +2,7 @@
   "name": "clairix-website",
   "version": "1.0.0",
   "private": true,
+  "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "sync-brand": "node scripts/sync-brand.mjs",
