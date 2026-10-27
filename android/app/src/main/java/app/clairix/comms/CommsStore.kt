@@ -167,6 +167,7 @@ class CommsStore(
         createVersion7(db)
         createVersion8(db)
         createVersion9(db)
+        createVersion10(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -180,6 +181,18 @@ class CommsStore(
         if (oldVersion < 7) createVersion7(db)
         if (oldVersion < 8) createVersion8(db)
         if (oldVersion < 9) createVersion9(db)
+        if (oldVersion < 10) createVersion10(db)
+    }
+
+    /**
+     * Moving to another relay: the contacts not yet told this phone's new
+     * number and relay (a row goes once the notice is on its way to them), and
+     * when each contact last said they moved, so an older notice arriving
+     * late cannot send them back.
+     */
+    private fun createVersion10(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS move_notices (peer TEXT PRIMARY KEY)")
+        if ("moved_ts" !in columnsOf(db, "contacts")) db.execSQL("ALTER TABLE contacts ADD COLUMN moved_ts INTEGER NOT NULL DEFAULT 0")
     }
 
     /**
@@ -407,12 +420,111 @@ class CommsStore(
             db.delete("transactions", "peer = ?", arrayOf(number))
             db.delete("quarantine", "peer = ?", arrayOf(number))
             db.delete("prekeys", "number = ?", arrayOf(number))
+            db.delete("move_notices", "peer = ?", arrayOf(number))
             db.delete("contacts", "number = ?", arrayOf(number))
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
         }
         return media
+    }
+
+    // ── Moving between relays ────────────────────────────────────────────
+
+    /**
+     * The contact numbered [old] moved to [new] on [relay] (null for this
+     * phone's own relay). Everything kept under their number follows them: the
+     * conversation, receipts owed, coin transfers, held payloads, their sealing
+     * prekey, the conversation's timer, a move notice still owed to them, and
+     * their places in groups (matched by [ed25519], so someone else with the
+     * same number in a group is left alone). [ts] is when they moved. Returns
+     * false, changing nothing, when [new] is already another contact's number.
+     */
+    fun renumberContact(old: String, new: String, relay: String?, ed25519: String, ts: Long): Boolean {
+        val db = beginWrite()
+        try {
+            val values = ContentValues().apply {
+                put("number", new)
+                if (relay != null) put("relay", relay) else putNull("relay")
+                put("moved_ts", ts)
+            }
+            if (new != old) {
+                val taken = db.rawQuery("SELECT 1 FROM contacts WHERE number = ?", arrayOf(new)).use { it.moveToFirst() }
+                if (taken) return false
+                if (db.update("contacts", values, "number = ?", arrayOf(old)) == 0) return false
+                for ((table, column) in listOf("messages" to "peer", "receipts" to "peer", "transactions" to "peer", "quarantine" to "peer", "prekeys" to "number", "timers" to "peer", "move_notices" to "peer")) {
+                    db.execSQL("UPDATE OR IGNORE $table SET $column = ? WHERE $column = ?", arrayOf(new, old))
+                    db.delete(table, "$column = ?", arrayOf(old))
+                }
+                // Their places in groups, and what those groups say they did.
+                val gids = db.rawQuery(
+                    "SELECT gid FROM group_members WHERE number = ? AND (ed25519 = ? OR ed25519 = '')", arrayOf(old, ed25519)
+                ).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList() }
+                for (gid in gids) {
+                    db.execSQL("UPDATE OR IGNORE group_members SET number = ?, ed25519 = ? WHERE gid = ? AND number = ?", arrayOf(new, ed25519, gid, old))
+                    db.delete("group_members", "gid = ? AND number = ?", arrayOf(gid, old))
+                    db.execSQL("UPDATE group_members SET added_by = ? WHERE gid = ? AND added_by = ?", arrayOf(new, gid, old))
+                    db.execSQL("UPDATE groups SET created_by = ? WHERE id = ? AND created_by = ?", arrayOf(new, gid, old))
+                    db.execSQL("UPDATE messages SET sender = ? WHERE gid = ? AND sender = ?", arrayOf(new, gid, old))
+                    db.execSQL("UPDATE shared_threats SET from_number = ? WHERE gid = ? AND from_number = ?", arrayOf(new, gid, old))
+                }
+            } else {
+                if (db.update("contacts", values, "number = ?", arrayOf(old)) == 0) return false
+            }
+            db.setTransactionSuccessful()
+            return true
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    /**
+     * This phone moved from the relay at [oldOrigin], where it was [oldNumber],
+     * to [newOrigin] as [newNumber]. In one transaction: contacts who were on
+     * the old relay are now on another one, those on the new relay are on this
+     * phone's, this phone's own places in its groups take the new number, and
+     * every contact is owed a notice of the move.
+     */
+    fun moveSelf(oldNumber: String, newNumber: String, oldOrigin: String, newOrigin: String) {
+        val db = beginWrite()
+        try {
+            if (oldOrigin != newOrigin) {
+                db.execSQL("UPDATE contacts SET relay = ? WHERE relay IS NULL", arrayOf(oldOrigin))
+                db.execSQL("UPDATE contacts SET relay = NULL WHERE relay = ?", arrayOf(newOrigin))
+            }
+            if (oldNumber != newNumber) {
+                db.execSQL("UPDATE OR IGNORE group_members SET number = ? WHERE number = ?", arrayOf(newNumber, oldNumber))
+                db.execSQL("UPDATE group_members SET added_by = ? WHERE added_by = ?", arrayOf(newNumber, oldNumber))
+                db.execSQL("UPDATE groups SET created_by = ? WHERE created_by = ?", arrayOf(newNumber, oldNumber))
+                db.execSQL("UPDATE shared_threats SET from_number = ? WHERE from_number = ?", arrayOf(newNumber, oldNumber))
+            }
+            db.execSQL("INSERT OR IGNORE INTO move_notices (peer) SELECT number FROM contacts")
+            db.setTransactionSuccessful()
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    /** When the contact numbered [number] last moved relays, as they dated it; 0 if never. */
+    fun movedTs(number: String): Long =
+        readableDatabase.rawQuery("SELECT moved_ts FROM contacts WHERE number = ?", arrayOf(number)).use { c ->
+            if (c.moveToFirst()) c.getLong(0) else 0L
+        }
+
+    /** The contacts still owed a notice that this phone moved. */
+    fun moveNotices(): List<String> =
+        readableDatabase.rawQuery("SELECT peer FROM move_notices", null).use { c ->
+            generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList()
+        }
+
+    fun clearMoveNotice(peer: String) {
+        val db = beginWrite()
+        try {
+            db.delete("move_notices", "peer = ?", arrayOf(peer))
+            db.setTransactionSuccessful()
+        } finally {
+            endWrite(db)
+        }
     }
 
     // ── Sealing prekeys ──────────────────────────────────────────────────
@@ -1236,6 +1348,8 @@ class CommsStore(
             db.delete("group_members", null, null)
             db.delete("shared_threats", null, null)
             db.delete("timers", null, null)
+            db.delete("prekeys", null, null)
+            db.delete("move_notices", null, null)
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
@@ -1281,7 +1395,7 @@ class CommsStore(
     private fun alive(): String = "(expires_at IS NULL OR expires_at > ${System.currentTimeMillis()})"
 
     private companion object {
-        const val DB_VERSION = 9
+        const val DB_VERSION = 10
         const val BUSY_TIMEOUT_MS = 10_000
     }
 }

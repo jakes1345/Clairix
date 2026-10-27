@@ -213,7 +213,7 @@ What each side learns:
   For a contact on the same relay it learns as much from the recipient alone.
 - Each relay holds the other to a limit for all its phones together: 600
   envelopes a minute, 120 lookups a minute and 600 one-time keys an hour.
-- Each mailbox takes at most 1,800 envelopes an hour from other relays
+- Each mailbox takes at most 6,000 envelopes an hour from other relays
   together, and stops 500 short of a full queue for them. A relay no phone
   here has written to or looked a number up on in the last 90 days is a
   stranger: strangers together get 10 at once and 30 an hour per mailbox,
@@ -229,6 +229,16 @@ reached at a custom domain while requests come in through another sets
 Clairix numbers are random per relay, so the same number can exist on two
 relays; the app refuses a second contact with a number it already has.
 ClairixCoin does not cross relays: each relay is its own coin community.
+
+A phone whose relay is blocked or gone can move to another one ("Move to
+another relay" in Comms settings). It registers the identity it already has
+there, so the new relay sees an ordinary registration with keys it has not
+seen before, and gets a new number. Its contacts are told over the sessions
+they already share, and their phones follow. The old relay keeps the old
+account, and what is sent to it, for up to 30 days, while the phone collects
+from it whenever it answers; then the phone deletes it. Both relays can see
+that the same keys are registered on each, which ties the old number to the
+new one for anyone who can read both.
 
 ### On your own server
 

@@ -95,6 +95,12 @@ object CommsWire {
     const val T_NOISE = "noise"
     /** The disappearing-messages timer of a conversation changed. */
     const val T_TIMER = "timer"
+    /**
+     * The sender moved to another relay, at "ts": the number and relay this
+     * payload carries ("from", "relay") are where they are now. Sent over the
+     * sessions they already have, so only they can say it.
+     */
+    const val T_MOVED = "moved"
     /** Seconds a message lasts once read; on a timer payload, the conversation's new timer. */
     const val F_TTL = "ttl"
     /** The longest a disappearing-messages timer can be: four weeks. */
@@ -236,6 +242,9 @@ object CommsWire {
         base(T_RECEIPT).put(F_STATUS, status).put(F_IDS, JSONArray(ids))
 
     fun resync(): JSONObject = base(T_RESYNC)
+
+    /** This phone moved to another relay at [ts]; the sender fields added on sending say where. */
+    fun moved(ts: Long): JSONObject = base(T_MOVED).put(F_TS, ts)
 
     /** Cover traffic: [fill] is random filler, so the padded envelope is sized like a text. */
     fun noise(fill: String): JSONObject = base(T_NOISE).put(F_BODY, fill)

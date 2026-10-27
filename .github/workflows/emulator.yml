@@ -13,9 +13,9 @@ name: Emulator smoke test
 # disappearing messages, a call that rings, and a contact on the other relay, every
 # envelope spending a blind token and going through the relay's mixing.
 #
-# Then, on the same emulator: an eight-minute soak (SoakTest), the app over the real
-# Tor network (TorDeviceTest), and last, since they move the app's vault keys, the
-# lock screen tests (VaultLockScreenTest).
+# Then, on the same emulator: an eight-minute soak (SoakTest), moving between the two
+# relays (RelayMoveTest), the app over the real Tor network (TorDeviceTest), and last,
+# since they move the app's vault keys, the lock screen tests (VaultLockScreenTest).
 #
 # The APKs are built once (job build) and every step above runs on four emulators,
 # Android 12 (API 31, the oldest Clairix runs on), 13, 14 and 15 (job smoke).
@@ -346,6 +346,32 @@ jobs:
           grep -q "^OK (1 test)" ../soak.txt || { echo "::error::The soak test failed; see soak.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../soak.txt; then echo "::error::The soak test was skipped"; exit 1; fi
 
+      # Moving between the same two relays: the app moves from A to B and its
+      # contacts (one on each) are told and reach it there, while what still
+      # goes to the old number is collected from A; a contact moves and the app
+      # follows; the app moves back to A and takes up its old number again.
+      - name: Run the relay move tests
+        working-directory: android
+        timeout-minutes: 15
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 800 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.comms.RelayMoveTest \
+            -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
+            -e secret e2e-enrollment-secret-0123456789 \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../relaymove.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-relaymove.txt
+          if grep -A1 "FATAL EXCEPTION" ../logcat-relaymove.txt | grep -q "Process: app.clairix"; then
+            echo "::error::Clairix crashed during the relay move tests; see logcat-relaymove.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-relaymove.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (4 tests)" ../relaymove.txt || { echo "::error::The relay move tests failed; see relaymove.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../relaymove.txt; then echo "::error::Relay move tests were skipped"; exit 1; fi
+
       # The app over the real Tor network (Arti on the phone, through its own
       # SOCKS proxy): requests come out of Tor, the listed relay answers with
       # its listed key, the app keeps working with relay B reachable only at
@@ -414,6 +440,8 @@ jobs:
             logcat-tor.txt
             soak.txt
             logcat-soak.txt
+            relaymove.txt
+            logcat-relaymove.txt
             relay-a.log
             relay-b.log
             tor-onion.log

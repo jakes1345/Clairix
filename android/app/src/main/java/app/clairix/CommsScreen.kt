@@ -90,6 +90,7 @@ import app.clairix.comms.GroupMember
 import app.clairix.comms.GroupThread
 import app.clairix.comms.MediaBody
 import app.clairix.comms.OrgRole
+import app.clairix.comms.RelayClient
 import app.clairix.comms.RelayDirectory
 import app.clairix.comms.TorTransport
 import app.clairix.comms.STATUS_CALL
@@ -155,6 +156,8 @@ private sealed class CommsPage {
     object MyCode : CommsPage()
     object Invite : CommsPage()
     object Settings : CommsPage()
+    /** Moving this phone to another relay. */
+    object Move : CommsPage()
     /** A group's conversation. */
     data class Group(val groupId: String) : CommsPage()
     /** A group's members and settings. */
@@ -274,7 +277,8 @@ fun CommsScreen(
         )
         CommsPage.MyCode -> MyCodeScreen(onBack = { page = CommsPage.List })
         CommsPage.Invite -> InviteScreen(onBack = { page = CommsPage.List })
-        CommsPage.Settings -> CommsSettingsScreen(onBack = { page = CommsPage.List }, onAppSettings = onAppSettings)
+        CommsPage.Settings -> CommsSettingsScreen(onBack = { page = CommsPage.List }, onAppSettings = onAppSettings, onMove = { page = CommsPage.Move })
+        CommsPage.Move -> MoveRelayScreen(onBack = { page = CommsPage.Settings })
     }
 }
 
@@ -2228,7 +2232,7 @@ private fun MyCodeScreen(onBack: () -> Unit) {
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 @Composable
-private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)? = null) {
+private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)? = null, onMove: () -> Unit) {
     val context = LocalContext.current
     val state by CommsRepository.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -2453,6 +2457,8 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             )
         }
 
+        RelayCard(busy = state.busy, relayUrl = state.relayUrl, onMove = onMove)
+
         // The app-wide settings — passcode, biometric unlock, duress code — live on
         // their own screen. In the full app that is reached from the Scan header
         // too; in the comms-only build this row is the only way to it.
@@ -2476,7 +2482,7 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             Text("About Clairix numbers", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
             Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             Text(
-                "Numbers are random and handed out by your relay at registration. Two people on different relays cannot message each other.",
+                "Numbers are random and handed out by your relay at registration. People on different relays reach each other through their relays. A number belongs to its relay: moving to another relay gives you a new one, and your contacts' phones are told it.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -2496,6 +2502,251 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             onClick = { confirmUnpair = true },
             tone = Tone.Danger,
             enabled = !state.busy
+        )
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+// ── Moving to another relay ──────────────────────────────────────────────────
+
+/** A relay's host, as the owner reads it. */
+private fun relayHost(url: String?): String =
+    url?.let { runCatching { java.net.URI(it).host }.getOrNull() ?: it.removePrefix("https://") } ?: "—"
+
+/** The relay this phone is on, what is still collected from the one it left, and the way to move. */
+@Composable
+private fun RelayCard(busy: Boolean, relayUrl: String?, onMove: () -> Unit) {
+    val version by CommsRepository.version.collectAsStateWithLifecycle()
+    val previous = remember(version, relayUrl) { CommsRepository.previousRelay() }
+    val until = remember(version, relayUrl) { CommsRepository.previousRelayUntil() }
+    val owed = remember(version, relayUrl) { CommsRepository.moveNoticesOwed() }
+    ClairixCard {
+        Text("Relay", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+        Text(relayHost(relayUrl), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+        Text(
+            "If this relay is blocked where you are, shut down, or no longer one you trust, move to another. You keep " +
+                "your keys, contacts and conversations and get a new number there; each contact's phone is told it and switches over.",
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle
+        )
+        previous?.let { (url, number) ->
+            Text(
+                "Still collecting what is sent to your old number ${formatClairixNumber(number)} on ${relayHost(url)}, " +
+                    "whenever it can be reached, until ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(until))}.",
+                style = MaterialTheme.typography.bodySmall,
+                color = ClairixTheme.colors.textMuted
+            )
+        }
+        if (owed > 0) {
+            Text(
+                if (owed == 1) "1 contact has not been told your new number yet; Clairix keeps trying." else "$owed contacts have not been told your new number yet; Clairix keeps trying.",
+                style = MaterialTheme.typography.bodySmall,
+                color = ClairixTheme.colors.caution
+            )
+        }
+        SecondaryButton("Move to another relay", onClick = onMove, enabled = !busy, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * Moves this phone to another relay: one from the relay list, an address and
+ * its enrollment secret, or an invite from someone already there; or back to
+ * the relay it just left. Says plainly what moves and what does not first.
+ */
+@Composable
+private fun MoveRelayScreen(onBack: () -> Unit) {
+    val state by CommsRepository.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    var url by rememberSaveable { mutableStateOf("") }
+    var secret by rememberSaveable { mutableStateOf("") }
+    var invite by remember { mutableStateOf<PairingCode?>(null) }
+    var inviteError by remember { mutableStateOf<String?>(null) }
+    var confirming by remember { mutableStateOf(false) }
+    var moved by rememberSaveable { mutableStateOf<String?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    val relayList by RelayDirectory.list.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { RelayDirectory.current(context) }
+        RelayDirectory.refreshIfStale(context)
+    }
+    val previous = remember { CommsRepository.previousRelay() }
+    val here = state.relayUrl?.let { RelayClient.originOf(it) }
+    val takeInvite: (PairingCode?) -> Unit = { code ->
+        when {
+            code == null -> inviteError = "That is not a Clairix invite."
+            code.invite == null -> inviteError = "That's someone's contact code, not an invite. Ask them to tap Invite in Comms on their phone."
+            RelayClient.originOf(code.relayUrl) == here -> inviteError = "That invite is for the relay this phone is already on."
+            else -> { inviteError = null; invite = code; url = code.relayUrl }
+        }
+    }
+    val scanInvite = rememberCodeScanner { takeInvite(it) }
+    val target = (invite?.relayUrl ?: url).trim().trimEnd('/')
+    val targetOrigin = RelayClient.originOf(target)
+    val goingBack = previous != null && targetOrigin != null && RelayClient.originOf(previous.first) == targetOrigin
+    val ready = targetOrigin != null && targetOrigin != here && (invite != null || goingBack || secret.isNotBlank())
+
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            containerColor = ClairixTheme.colors.surfaceRaised,
+            shape = ClairixShapes.Sheet,
+            title = { Text("Move to ${relayHost(target)}?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+            text = {
+                Text(
+                    (if (goingBack) "You take up your old number ${formatClairixNumber(previous!!.second)} there again. "
+                        else "You get a new Clairix number there. ") +
+                        "Your keys, contacts and conversations stay, and every contact's phone is sent your new number and switches over. " +
+                        "Your ClairixCoin balance stays on ${relayHost(state.relayUrl)}. " +
+                        "For 30 days Clairix also collects what is still sent to your current number there, whenever that relay can be reached.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textMuted
+                )
+            },
+            confirmButton = {
+                GhostButton(
+                    "Move",
+                    onClick = {
+                        confirming = false
+                        failure = null
+                        scope.launch {
+                            CommsRepository.moveTo(target, secret, invite)
+                                .onSuccess { moved = it; secret = "" }
+                                .onFailure { failure = it.message ?: "The move failed" }
+                        }
+                    }
+                )
+            },
+            dismissButton = { GhostButton("Cancel", onClick = { confirming = false }, tone = Tone.Neutral) }
+        )
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Header("Move to another relay", onBack = onBack)
+
+        moved?.let { number ->
+            StatusHero(
+                eyebrow = "Moved",
+                headline = formatClairixNumber(number),
+                body = "Your number on ${relayHost(state.relayUrl)}. Your contacts are being told; each phone switches over as the notice reaches it. " +
+                    "Your contact code has the new number in it.",
+                tone = Tone.Accent
+            )
+            PrimaryButton("Done", onClick = onBack, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(16.dp))
+            return@Column
+        }
+
+        Notice(
+            Tone.Info,
+            "Your keys, contacts and conversations come with you; your number does not, since each relay hands out its own. " +
+                "Every contact is sent your new number over the encrypted session you already share, so nobody else can send it on your behalf, " +
+                "and their phones switch over by themselves. Verified contacts stay verified. ClairixCoin stays on the relay you leave. " +
+                "What contacts send to your old number before they switch is collected from the old relay whenever it can be reached, for 30 days.",
+            title = "What moves"
+        )
+
+        previous?.let { (prevUrl, prevNumber) ->
+            ClairixCard {
+                Text("Move back", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(
+                    "${relayHost(prevUrl)} still has your old number ${formatClairixNumber(prevNumber)}. Moving back takes it up again; no secret or invite is needed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                SecondaryButton(
+                    if (goingBack) "Selected" else "Move back to ${relayHost(prevUrl)}",
+                    onClick = { invite = null; url = prevUrl },
+                    enabled = !goingBack,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        relayList?.relays?.filter { RelayClient.originOf(it.url) != here }?.takeIf { it.isNotEmpty() }?.let { relays ->
+            ClairixCard {
+                Text("Relays you can move to", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(
+                    "From the Clairix relay list. Clairix checks the relay still has the key the list gives it before moving there.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                for (relay in relays) {
+                    HorizontalDivider(color = ClairixTheme.colors.border)
+                    Text(relay.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                    Text("${relay.country} · ${relay.host}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text("Run by ${relay.operator}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    relay.join?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) }
+                    SecondaryButton(
+                        if (target == relay.url) "Selected below" else "Use this relay",
+                        onClick = { invite = null; url = relay.url },
+                        enabled = target != relay.url,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        ClairixCard {
+            Text("With an invite", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            invite?.let { code ->
+                Text(
+                    "Invited by ${code.name.ifBlank { formatClairixNumber(code.number) }} to ${relayHost(code.relayUrl)}.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.accent
+                )
+                GhostButton("Clear the invite", onClick = { invite = null; url = "" }, tone = Tone.Neutral)
+            } ?: run {
+                Text(
+                    "Someone on the relay you want can invite you: they tap Invite in Comms. Scan the code it shows, or paste the invite they sent.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SecondaryButton("Scan invite", onClick = { inviteError = null; scanInvite() }, modifier = Modifier.weight(1f))
+                    SecondaryButton(
+                        "Paste invite",
+                        onClick = { takeInvite(clipboard.getText()?.text?.let { PairingCode.fromText(it) }) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            inviteError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+        }
+
+        if (invite == null) {
+            ClairixCard {
+                Text("Or enter a relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                OutlinedTextField(
+                    value = url, onValueChange = { url = it },
+                    label = { Text("Relay URL", style = MaterialTheme.typography.bodyMedium) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = clairixTextFieldColors()
+                )
+                if (!goingBack) {
+                    OutlinedTextField(
+                        value = secret, onValueChange = { secret = it },
+                        label = { Text("Enrollment secret", style = MaterialTheme.typography.bodyMedium) },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = clairixTextFieldColors()
+                    )
+                }
+                if (targetOrigin != null && targetOrigin == here) {
+                    Text("This phone is already on that relay.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution)
+                }
+            }
+        }
+
+        failure?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+        PrimaryButton(
+            if (state.busy) "Moving…" else "Move",
+            onClick = { confirming = true },
+            enabled = ready && !state.busy,
+            loading = state.busy,
+            modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(16.dp))
     }

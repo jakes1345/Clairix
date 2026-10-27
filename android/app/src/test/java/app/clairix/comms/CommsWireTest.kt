@@ -65,6 +65,15 @@ class CommsWireTest {
     }
 
     @Test
+    fun aMoveNoticeIsDatedAndSaysWhereInItsSenderFields() {
+        val got = roundTrip(CommsWire.moved(1_800_000_000_000).put(CommsWire.F_RELAY, "https://relay.example"))
+        assertEquals(CommsWire.T_MOVED, CommsWire.type(got))
+        assertEquals(1_800_000_000_000, got.getLong(CommsWire.F_TS))
+        assertEquals(sender.number, got.getString(CommsWire.F_FROM))
+        assertEquals("https://relay.example", got.getString(CommsWire.F_RELAY))
+    }
+
+    @Test
     fun messageRoundTrip() {
         val got = roundTrip(CommsWire.message("m-1", 1234L, "hello \"there\" ✓"))
         assertEquals(CommsWire.T_MSG, CommsWire.type(got))
