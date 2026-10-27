@@ -21,7 +21,7 @@ Quiet tools for the moment a situation turns: SOS to your group, a duress phrase
 
 <div class="methods">
 
-**SOS.** Hold the red octagon until it fills, then confirm: Clairix reads your position and sends it, end-to-end encrypted, to every member of every group you are in. Location is read at that moment only. The relay never holds an SOS back to mix it with other traffic. From Beta 5, with the offline mesh on, an SOS that cannot reach the relay is carried phone to phone over Bluetooth instead.
+**SOS.** Hold the red octagon until it fills, then confirm: Clairix reads your position and sends it, end-to-end encrypted, to every member of every group you are in. Location is read at that moment only. The relay never holds an SOS back to mix it with other traffic. With the offline mesh on, an SOS that cannot reach the relay is carried phone to phone over Bluetooth instead.
 
 **Duress phrase.** Set an ordinary-looking sentence. Type it into any Clairix conversation and the message goes out as written while the SOS fires underneath. The phrase itself is stored encrypted and compared only in memory. It is never written to a log, a notification or the timeline.
 

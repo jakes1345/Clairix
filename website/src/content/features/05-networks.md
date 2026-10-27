@@ -1,6 +1,6 @@
 ---
 id: networks
-order: 4
+order: 5
 title: "Spot fake networks, towers and GPS"
 kicker: "Networks"
 icon: tower
@@ -27,11 +27,11 @@ Clairix flags Wi-Fi access points that behave like bait, catches "answer everyth
 
 **Cell tower baseline.** A fake tower cannot be told from a real one by looking at the spectrum, but it does change what your modem reports: which cell serves you, on what technology, how loud, with how many neighbours. Clairix samples these every fifteen seconds while the scanner runs and builds a baseline of the cells you normally see at the places you normally are. It then scores indicators such as a downgrade to an older network technology, a cell ID that does not belong in the area it claims, an area change while you are standing still, an unusually strong signal, an unknown cell at a familiar place, a tower that lives for seconds, rapid switching between cells or technologies, a cell with no visible neighbours, and a transmitter that is physically within about eighty metres of you. Scores accumulate. One indicator is noise; several at once are a problem, and that is when you are told.
 
-**GPS spoofing and jamming.** *New in Beta 5.* A spoofer is a transmitter that sends fake satellite signals; a jammer drowns the real ones out. Clairix checks what the satellites report against what real satellites look like: signal strengths that are too even or too strong, the time the satellites give against the network's time, the GPS position against the one from Wi-Fi and cell towers, jumps no vehicle could make, apps allowed to fake the location, the receiver's clock jumping, the receiver's own gain control, and a fix that collapses to one constellation. It runs while the GPS page is open, and in the background whenever something else already has the GPS on, such as navigation. Navigation shows a warning over the map when the signal is spoofed or jammed.
+**GPS spoofing and jamming.** A spoofer is a transmitter that sends fake satellite signals; a jammer drowns the real ones out. Clairix checks what the satellites report against what real satellites look like: signal strengths that are too even or too strong, the time the satellites give against the network's time, the GPS position against the one from Wi-Fi and cell towers, jumps no vehicle could make, apps allowed to fake the location, the receiver's clock jumping, the receiver's own gain control, and a fix that collapses to one constellation. It runs while the GPS page is open, and in the background whenever something else already has the GPS on, such as navigation. Navigation shows a warning over the map when the signal is spoofed or jammed.
 
-**2G.** *New in Beta 5.* 2G is how fake cell towers work: a tower that refuses 4G pushes the phone down to 2G, where the network never proves it is real. Android hides the state of the "Allow 2G" switch from apps, so Clairix says whether your phone has the switch, turns the row red if the phone is ever seen on a 2G tower, and opens the page where you turn it off.
+**2G.** 2G is how fake cell towers work: a tower that refuses 4G pushes the phone down to 2G, where the network never proves it is real. Android hides the state of the "Allow 2G" switch from apps, so Clairix says whether your phone has the switch, turns the row red if the phone is ever seen on a 2G tower, and opens the page where you turn it off.
 
-**VPN leaks.** *New in Beta 5.* With a VPN up, Clairix flags DNS still going to your router or carrier, IPv6 traffic the VPN does not carry, Clairix itself left outside the VPN, "Block connections without VPN" turned off, and a proxy on the network.
+**VPN leaks.** With a VPN up, Clairix flags DNS still going to your router or carrier, IPv6 traffic the VPN does not carry, Clairix itself left outside the VPN, "Block connections without VPN" turned off, and a proxy on the network.
 
 **Honest about maturity.** Rules that describe standing still are only applied when the phone knows it is stationary. The screen shows how mature the baseline is and how many cells and visits it is built on, so you know how much to trust the score.
 

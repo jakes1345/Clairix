@@ -1,6 +1,6 @@
 ---
 id: spyware
-order: 3
+order: 4
 title: "Check your phone for spyware"
 kicker: "Spyware"
 icon: spyware
@@ -35,9 +35,9 @@ Clairix inspects the apps on your phone for stalkerware, audits the certificates
 
 **Microphone, camera and audio routes.** Clairix shows when another app is recording audio or using a camera. It also watches for a Bluetooth or USB microphone that attaches itself while nothing is playing and no call is up, which is how a paired earpiece left in a bag becomes a live microphone on your phone.
 
-**Phone health.** One screen with the facts that matter: root, bootloader state, verified boot, SELinux, screen lock, storage encryption, USB and wireless debugging, developer options, installs from unknown sources, security patch age, VPN and private DNS, whether your phone's Bluetooth name is your real name, whether it is discoverable and, from Beta 5, whether the VPN leaks, whether 2G is allowed and whether your keyboard can reach the internet. A row that can be fixed takes you to the setting that fixes it.
+**Phone health.** One screen with the facts that matter: root, bootloader state, verified boot, SELinux, screen lock, storage encryption, USB and wireless debugging, developer options, installs from unknown sources, security patch age, VPN and private DNS, whether your phone's Bluetooth name is your real name, whether it is discoverable and whether the VPN leaks, whether 2G is allowed and whether your keyboard can reach the internet. A row that can be fixed takes you to the setting that fixes it.
 
-**Your keyboard.** *New in Beta 5.* A keyboard sees everything you type in every app, before any app can encrypt it. Clairix asks the keyboard not to learn from anything typed in Clairix, which Gboard and Samsung's keyboard honour, and Phone check names the keyboard in use and warns if it can reach the internet.
+**Your keyboard.** A keyboard sees everything you type in every app, before any app can encrypt it. Clairix asks the keyboard not to learn from anything typed in Clairix, which Gboard and Samsung's keyboard honour, and Phone check names the keyboard in use and warns if it can reach the internet.
 
 </div>
 
