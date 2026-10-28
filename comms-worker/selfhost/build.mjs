@@ -105,4 +105,6 @@ const cron :Workerd.Worker = (
 );
 `;
 writeFileSync(join(out, "relay.capnp"), config);
+// The container's supervisor (container/) passes workerd these and no others.
+writeFileSync(join(out, "settings.json"), JSON.stringify(SETTINGS) + "\n");
 console.log(`Wrote ${join(out, "relay.capnp")} (storage in ${state}, relay on ${listen}, cron on ${cronListen})`);

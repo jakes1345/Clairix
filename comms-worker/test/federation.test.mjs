@@ -456,6 +456,12 @@ test("an oversized envelope is refused alike for a number that exists and one th
 test("another relay is held per recipient, alike for numbers that exist and ones that do not", async () => {
   const { a, b } = relays();
   const net = network([a, b]);
+  // The clock stands still: the bucket refills one every 2 seconds, and 608
+  // sends on a slow machine take longer than that, which would let one more
+  // through than the limit this test counts.
+  const ticking = Date.now;
+  const frozen = ticking();
+  Date.now = () => frozen;
   try {
     const alice = await makePhone(a);
     const bob = await makePhone(b);
@@ -479,6 +485,7 @@ test("another relay is held per recipient, alike for numbers that exist and ones
     // The other relay's wait (until its bucket holds one again) reaches the phone, which sends again then.
     assert.ok(waits.length === 8 && waits.every((w) => w === "2"), `waits: ${waits}`);
   } finally {
+    Date.now = ticking;
     net.restore();
   }
 });

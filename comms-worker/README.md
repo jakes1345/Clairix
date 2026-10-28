@@ -295,6 +295,20 @@ settings, and swaps the new build in only once it has built. Logs:
 `journalctl -u clairix-relay`. One server holds all of a relay's Durable
 Objects; workerd does not spread them across machines.
 
+### In a container, with no server to look after
+
+The same relay, Caddy and onion service also come as one container image,
+`ghcr.io/jakes1345/clairix-relay` (`container/`), for hosts that run
+containers rather than lend a machine: bunny.net Magic Containers, step by
+step in [container/README.md](container/README.md). A small supervisor
+stands in for systemd, and because a container host's disk is not backed up,
+it backs the relay up itself: sealed with a key only the operator holds, to
+a Bunny Storage zone, every 10 minutes and on every stop. On an empty volume
+it restores the newest backup, keys, accounts and waiting mail included,
+before anything answers. A lease in the same zone keeps a second copy from
+running. CI (`relay-container.yml`) tests a restore after a lost volume,
+under gVisor too, as Magic Containers runs it.
+
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
