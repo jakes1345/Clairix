@@ -1,0 +1,90 @@
+name: Relay container
+
+# Builds the container relay (comms-worker/container/), the image a host such
+# as bunny.net Magic Containers runs, and tests it end to end twice: under
+# Docker's usual runtime and under gVisor (runsc), the sandbox Magic
+# Containers runs every container in. Each run registers two phones, leaves a
+# message waiting, stops the container, throws its volume away and requires
+# the relay to come back from its encrypted backup with its keys, onion
+# address, accounts and the message (test/container-restore.mjs).
+#
+# On main, and every Monday (for the base image's security updates), the
+# tested image is published as ghcr.io/<owner>/clairix-relay, tagged :main
+# and :<date>-<commit>.
+on:
+  pull_request:
+    paths:
+      - 'comms-worker/**'
+      - '.github/workflows/relay-container.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'comms-worker/**'
+      - '.github/workflows/relay-container.yml'
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: comms-worker
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the image
+        run: |
+          docker build -f container/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.licenses=GPL-3.0-only" \
+            -t clairix-relay:ci .
+
+      - name: Restore from backup (runc)
+        run: node --disable-warning=ExperimentalWarning --import ./test/harness/register.mjs test/container-restore.mjs clairix-relay:ci runc
+
+      # gVisor from its own apt repository, as its install guide gives it.
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list > /dev/null
+          sudo apt-get update -q
+          sudo apt-get install -y -q runsc
+          sudo runsc install
+          sudo systemctl restart docker
+          runsc --version
+
+      - name: Restore from backup (gVisor)
+        run: node --disable-warning=ExperimentalWarning --import ./test/harness/register.mjs test/container-restore.mjs clairix-relay:ci runsc
+
+      - name: Publish
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/clairix-relay"
+          tag="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for t in main "$tag"; do
+            docker tag clairix-relay:ci "$image:$t"
+            docker push "$image:$t"
+          done
+          echo "Published $image:$tag (and :main)" >> "$GITHUB_STEP_SUMMARY"
