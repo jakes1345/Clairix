@@ -108,18 +108,24 @@ data class GlintBlob(
     val x: Float,
     val y: Float,
     val radius: Float,
-    /** Consecutive frames this spot has held still while the scene held still. */
-    val persistence: Int,
+    /** How long, in camera time, this spot has held still while the scene held still. */
+    val heldMs: Long,
+    /** It stayed lit with the torch off: a light, not a reflection. Never reported. */
+    val lightSource: Boolean,
+    /** Held still and, where the torch could test it, confirmed a reflection. */
+    val candidate: Boolean,
     val confidence: Float
-) {
-    val candidate: Boolean get() = persistence >= LensGlintAnalyzer.MIN_PERSISTENCE
-}
+)
 
 /** What the OPTICAL tab shows beside the viewfinder. */
 data class OpticalState(
     val mode: OpticalMode = OpticalMode.GLINT,
     val running: Boolean = false,
     val torchOn: Boolean = false,
+    /** False when this camera has no torch, so the glint sweep cannot work. */
+    val hasTorch: Boolean = true,
+    /** The torch is briefly off while a steady spot is tested. */
+    val checking: Boolean = false,
     val error: String? = null,
     /** Mean luma of the last frame, 0..255. */
     val meanLuma: Float = 0f,
@@ -187,18 +193,18 @@ data class SweepStep(val id: String, val title: String, val detail: String, val 
 /**
  * Finds the one thing a camera lens cannot help doing: looking back at you.
  *
- * With the torch on, a lens — even a pinhole lens — is a retroreflector: the light
+ * With the torch on, a lens, even a pinhole lens, is a retroreflector: the light
  * goes down the barrel, bounces off the sensor stack and comes straight back up
  * the same axis as a steady, round pinpoint. Shiny edges, screws and glass also
- * flash, but their highlights slide as the phone moves. So per frame: threshold the
- * Y plane, connect the bright pixels into blobs on a 1/4-scale grid, keep the small
- * round ones, and track each by nearest centroid. A blob that holds its place for
- * [MIN_PERSISTENCE] consecutive frames while the frame's mean luma holds within 6 %
- * (the scene is static, so this is not just a slow pan) is a candidate.
+ * flash, but their highlights slide as the phone moves, and a light that is on by
+ * itself (a standby LED, a screen) stays lit when the torch goes off. The work is
+ * done by [GlintTracker]; this class copies the luma plane out of each camera frame,
+ * switches the torch when the tracker asks, and turns grid cells into display
+ * coordinates.
  *
- * IR mode is the same machinery with the torch off on the front camera — whose IR
- * cut filter is weak on most phones — in a dark room: a night-vision camera lights
- * the room with 850 nm LEDs the eye cannot see, and they show up as a bright dot.
+ * IR mode is the same machinery with the torch off on the front camera, in a dark
+ * room: a night-vision camera lights the room with 850 nm LEDs the eye cannot see,
+ * and on phones whose front camera lets some infrared through, they show as a dot.
  *
  * Only the Y plane is read; frames never leave this class.
  */
@@ -206,67 +212,19 @@ class LensGlintAnalyzer(
     private val mode: OpticalMode,
     /** True when the preview is mirrored (front camera), so overlay x is flipped to match. */
     private val mirrored: Boolean,
+    /** Switches the torch, or null when this camera has none. */
+    private val torch: ((Boolean) -> Unit)?,
     private val onState: (OpticalState) -> Unit,
     private val onCandidate: (GlintBlob) -> Unit
 ) : ImageAnalysis.Analyzer {
 
-    companion object {
-        // A lens retroreflector holds its position for a long time while the camera is still.
-        // 20 frames at ~30 fps ≈ 0.67 s before the first circle turns red.
-        const val MIN_PERSISTENCE = 20
-        private const val SCALE = 4
-        private const val GLINT_THRESHOLD = 235
-        /** IR leaks through the front camera's filter dimly; the dot is bright but rarely saturates. */
-        private const val IR_THRESHOLD = 200
-        /** IR mode: above this mean luma the room has visible light in it and a dot means nothing. */
-        private const val IR_MAX_AMBIENT = 60f
-        // GLINT: minimum 4 grid cells (16 × 16 source pixels) eliminates sensor noise and dust specks.
-        private const val MIN_AREA_GLINT = 4
-        // IR dots are often smaller; 2 grid cells (8 × 8 source pixels) avoids missing faint emitters.
-        private const val MIN_AREA_IR = 2
-        private const val MAX_AREA = 60
-        // Lens retroreflectors are nearly perfect circles; 0.72 cuts highlights from screw heads
-        // and glossy edges while keeping genuine round glints.
-        private const val MIN_CIRCULARITY = 0.72f
-        /** Fraction of the grid allowed over threshold before the frame is called washed out. */
-        private const val WASHOUT_FRACTION = 0.15f
-        private const val LUMA_STABLE_FRACTION = 0.06f
-        /** Grid pixels a centroid may move between frames and still be the same spot. */
-        private const val MATCH_RADIUS = 3f
-        // Full confidence at 60 frames (≈ 2 s at 30 fps); alert threshold of 0.7 fires at ~42 frames.
-        private const val CONFIDENCE_FULL_AT = 60f
-        // If the median displacement of all matched tracks exceeds this, the camera panned.
-        private const val PAN_VETO_GRID_PX = 1.8f
-        // Max spread (degrees) of displacement vectors before the pan veto kicks in.
-        private const val PAN_VETO_ANGULAR_SPREAD_DEG = 50f
-    }
-
-    private class Track(var gx: Float, var gy: Float, var radius: Float, var persistence: Int, val id: Int) {
-        var reportedAt = 0
-    }
-
-    private class Blob {
-        var area = 0
-        var sx = 0L
-        var sy = 0L
-        var perimeter = 0
-    }
-
-    private val tracks = ArrayList<Track>()
-    private var nextId = 1
-    private var prevMean = -1f
+    private val tracker = GlintTracker(ir = mode == OpticalMode.IR, torchAvailable = mode.torch && torch != null)
+    private var luma = ByteArray(0)
     private var frames = 0L
     private var fpsWindowStart = 0L
     private var fpsWindowFrames = 0
     private var fps = 0f
     @Volatile private var closed = false
-
-    private var gw = 0
-    private var gh = 0
-    private var grid = ByteArray(0)
-    private var labels = IntArray(0)
-    private var stack = IntArray(0)
-    private val blobs = ArrayList<Blob>(64)
 
     /** Stops emitting; the executor may still be mid-frame when the use case unbinds. */
     fun close() { closed = true }
@@ -281,135 +239,16 @@ class LensGlintAnalyzer(
         }
     }
 
-    private fun ensureBuffers(w: Int, h: Int) {
-        if (w == gw && h == gh) return
-        gw = w; gh = h
-        val n = w * h
-        grid = ByteArray(n)
-        labels = IntArray(n)
-        stack = IntArray(n)
-    }
-
     private fun process(image: ImageProxy) {
         val plane = image.planes[0]
         val buf = plane.buffer
-        val rowStride = plane.rowStride
-        val pixStride = plane.pixelStride
-        val w = image.width
-        val h = image.height
-        if (w < SCALE * 8 || h < SCALE * 8) return
-        ensureBuffers(w / SCALE, h / SCALE)
-        val threshold = if (mode == OpticalMode.GLINT) GLINT_THRESHOLD else IR_THRESHOLD
-        val limit = buf.limit()
+        val size = buf.remaining()
+        if (luma.size != size) luma = ByteArray(size)
+        buf.get(luma, 0, size)
+        buf.rewind()
+        val r = tracker.process(luma, image.width, image.height, plane.rowStride, plane.pixelStride, image.imageInfo.timestamp)
+        r.torch?.let { on -> if (!closed) torch?.invoke(on) }
 
-        // Pass 1: downsample the Y plane, threshold, mean.
-        var sum = 0L
-        var bright = 0
-        for (gy in 0 until gh) {
-            val rowBase = gy * SCALE * rowStride
-            val gRow = gy * gw
-            for (gx in 0 until gw) {
-                val idx = rowBase + gx * SCALE * pixStride
-                val v = if (idx < limit) buf.get(idx).toInt() and 0xFF else 0
-                sum += v
-                if (v > threshold) { grid[gRow + gx] = 1; bright++ } else grid[gRow + gx] = 0
-            }
-        }
-        val n = gw * gh
-        val mean = sum.toFloat() / n
-        val change = if (prevMean > 0f) abs(mean - prevMean) / prevMean else 0f
-        prevMean = mean
-        val stable = change < LUMA_STABLE_FRACTION
-        val washedOut = bright > n * WASHOUT_FRACTION
-        val tooBright = mode == OpticalMode.IR && mean > IR_MAX_AMBIENT
-
-        // Pass 2: connected components, then the shape filter.
-        blobs.clear()
-        Arrays.fill(labels, 0, n, 0)
-        val candidates = ArrayList<Track>()
-        if (bright > 0 && !washedOut && !tooBright) {
-            var label = 0
-            for (i in 0 until n) {
-                if (grid[i].toInt() == 1 && labels[i] == 0) flood(i, ++label)
-            }
-            for (b in blobs) {
-                val minArea = if (mode == OpticalMode.GLINT) MIN_AREA_GLINT else MIN_AREA_IR
-                if (b.area < minArea || b.area > MAX_AREA) continue
-                val p = b.perimeter.toFloat()
-                val circularity = (4f * PI.toFloat() * b.area) / (p * p)
-                if (circularity < MIN_CIRCULARITY) continue
-                val r = sqrt(b.area / PI.toFloat())
-                candidates.add(Track(b.sx.toFloat() / b.area, b.sy.toFloat() / b.area, r, 1, 0))
-            }
-        }
-
-        // Pass 3: nearest-centroid tracking. Unmatched tracks die — persistence
-        // means *consecutive* frames; a spot that blinks is not a lens.
-        val matched = BooleanArray(tracks.size)
-        val next = ArrayList<Track>(candidates.size)
-        // Record (dx, dy, track) for every matched track so the pan vetoes can use them.
-        data class Disp(val dx: Float, val dy: Float, val track: Track)
-        val displacements = ArrayList<Disp>()
-        for (c in candidates) {
-            var best = -1
-            var bestD = MATCH_RADIUS * MATCH_RADIUS
-            for (ti in tracks.indices) {
-                if (matched[ti]) continue
-                val t = tracks[ti]
-                val dx = t.gx - c.gx
-                val dy = t.gy - c.gy
-                val d = dx * dx + dy * dy
-                if (d < bestD) { bestD = d; best = ti }
-            }
-            if (best >= 0) {
-                matched[best] = true
-                val t = tracks[best]
-                // Displacement is from the track's last-known position (one frame ago).
-                val ddx = c.gx - t.gx
-                val ddy = c.gy - t.gy
-                displacements.add(Disp(ddx, ddy, t))
-                t.gx = c.gx; t.gy = c.gy; t.radius = c.radius
-                t.persistence = if (stable) t.persistence + 1 else 1
-                next.add(t)
-            } else {
-                next.add(Track(c.gx, c.gy, c.radius, 1, nextId++))
-            }
-        }
-        // Per-track veto: a single highlight that keeps moving can still be a false positive
-        // even when fewer than three tracks are present. Reset any track that moved individually.
-        for ((ddx, ddy, t) in displacements) {
-            if (sqrt(ddx * ddx + ddy * ddy) > PAN_VETO_GRID_PX) {
-                t.persistence = 1
-                t.reportedAt = 0
-            }
-        }
-        // Global pan veto: if ≥ 3 tracks that each exceeded the motion threshold all moved in
-        // the same direction, the phone panned. Reset ALL tracks so a genuine glint must hold
-        // still through a fresh stationary interval.
-        val movers = displacements.filter { sqrt(it.dx * it.dx + it.dy * it.dy) > PAN_VETO_GRID_PX }
-        if (movers.size >= 3) {
-            val meanDx = movers.sumOf { it.dx.toDouble() }.toFloat() / movers.size
-            val meanDy = movers.sumOf { it.dy.toDouble() }.toFloat() / movers.size
-            val meanMag = sqrt(meanDx * meanDx + meanDy * meanDy)
-            if (meanMag > PAN_VETO_GRID_PX) {
-                // Only movers contribute to the spread test; stationary tracks cannot block the veto.
-                val meanAngle = kotlin.math.atan2(meanDy.toDouble(), meanDx.toDouble())
-                val spreadOk = movers.all { d ->
-                    val angle = kotlin.math.atan2(d.dy.toDouble(), d.dx.toDouble())
-                    var diff = Math.toDegrees(angle - meanAngle)
-                    while (diff > 180.0) diff -= 360.0
-                    while (diff < -180.0) diff += 360.0
-                    abs(diff.toFloat()) < PAN_VETO_ANGULAR_SPREAD_DEG
-                }
-                if (spreadOk) {
-                    for (t in next) { t.persistence = 1; t.reportedAt = 0 }
-                }
-            }
-        }
-        tracks.clear()
-        tracks.addAll(next)
-
-        // Report
         frames++
         val now = SystemClock.elapsedRealtime()
         fpsWindowFrames++
@@ -419,56 +258,28 @@ class LensGlintAnalyzer(
             fpsWindowStart = now
             fpsWindowFrames = 0
         }
+        if (r.gridWidth == 0) return
         val rotation = image.imageInfo.rotationDegrees
-        val out = ArrayList<GlintBlob>(tracks.size)
-        for (t in tracks) {
-            val nx = (t.gx + 0.5f) / gw
-            val ny = (t.gy + 0.5f) / gh
-            val (vx, vy) = toView(nx, ny, rotation)
-            val blob = GlintBlob(
-                id = t.id, x = vx, y = vy, radius = t.radius / max(gw, gh),
-                persistence = t.persistence,
-                confidence = min(1f, t.persistence / CONFIDENCE_FULL_AT)
-            )
-            out.add(blob)
-            // First report at the persistence floor, then every four frames while the
-            // spot keeps holding so the finding's confidence climbs with it.
-            if (t.persistence >= MIN_PERSISTENCE && (t.reportedAt == 0 || t.persistence - t.reportedAt >= 4)) {
-                t.reportedAt = t.persistence
-                if (!closed) onCandidate(blob)
-            }
-        }
+        val blobs = r.spots.map { blob(it, r, rotation) }
+        if (!closed) for (s in r.report) onCandidate(blob(s, r, rotation))
         if (!closed) onState(
             OpticalState(
-                mode = mode, running = true, torchOn = mode.torch, error = null,
-                meanLuma = mean, lumaChange = change, brightPixels = bright,
-                washedOut = washedOut, tooBright = tooBright,
-                tracks = out, frames = frames, fps = fps
+                mode = mode, running = true, torchOn = mode.torch && torch != null, hasTorch = torch != null,
+                checking = r.checking, error = null,
+                meanLuma = r.meanLuma, lumaChange = r.lumaChange, brightPixels = r.brightCells,
+                washedOut = r.washedOut, tooBright = r.tooBright,
+                tracks = blobs, frames = frames, fps = fps
             )
         )
     }
 
-    /** Iterative 4-connected flood fill from [start]; appends the blob's statistics. */
-    private fun flood(start: Int, label: Int) {
-        val b = Blob()
-        var sp = 0
-        stack[sp++] = start
-        labels[start] = label
-        while (sp > 0) {
-            val i = stack[--sp]
-            val x = i % gw
-            val y = i / gw
-            b.area++
-            b.sx += x
-            b.sy += y
-            var boundary = false
-            if (x > 0) { val j = i - 1; if (grid[j].toInt() == 1) { if (labels[j] == 0) { labels[j] = label; stack[sp++] = j } } else boundary = true } else boundary = true
-            if (x < gw - 1) { val j = i + 1; if (grid[j].toInt() == 1) { if (labels[j] == 0) { labels[j] = label; stack[sp++] = j } } else boundary = true } else boundary = true
-            if (y > 0) { val j = i - gw; if (grid[j].toInt() == 1) { if (labels[j] == 0) { labels[j] = label; stack[sp++] = j } } else boundary = true } else boundary = true
-            if (y < gh - 1) { val j = i + gw; if (grid[j].toInt() == 1) { if (labels[j] == 0) { labels[j] = label; stack[sp++] = j } } else boundary = true } else boundary = true
-            if (boundary) b.perimeter++
-        }
-        blobs.add(b)
+    private fun blob(s: GlintTracker.Spot, r: GlintTracker.Result, rotation: Int): GlintBlob {
+        val (vx, vy) = toView((s.gx + 0.5f) / r.gridWidth, (s.gy + 0.5f) / r.gridHeight, rotation)
+        return GlintBlob(
+            id = s.id, x = vx, y = vy, radius = s.radius / max(r.gridWidth, r.gridHeight),
+            heldMs = s.heldMs, lightSource = s.kind == GlintTracker.Kind.LIGHT_SOURCE,
+            candidate = s.candidate, confidence = s.confidence
+        )
     }
 
     /**
@@ -503,6 +314,7 @@ class LensGlintAnalyzer(
 object HiddenCameraScanner {
 
     private const val FINDINGS_CAP = 200
+    private const val FINDINGS_PER_METHOD = 50
     private const val ALERT_CONFIDENCE = 0.7f
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -528,10 +340,18 @@ object HiddenCameraScanner {
     /** Finding ids already raised as alerts, so a climbing confidence re-alerts nobody. */
     private val alerted = Collections.synchronizedSet(HashSet<String>())
 
-    /** Adds or replaces (by id) a finding; alerts once when it is strong enough. */
-    fun report(f: CameraFinding) {
-        _findings.update { current -> (listOf(f) + current.filter { it.id != f.id }).take(FINDINGS_CAP) }
-        if (f.confidence >= ALERT_CONFIDENCE && alerted.add(f.id)) {
+    /**
+     * Adds or replaces (by id) a finding; alerts once when it is strong enough and
+     * [mayAlert]. Each method keeps at most [FINDINGS_PER_METHOD], so a stream of one
+     * kind cannot push the others off the list.
+     */
+    fun report(f: CameraFinding, mayAlert: Boolean = true) {
+        _findings.update { current ->
+            val merged = listOf(f) + current.filter { it.id != f.id }
+            val perMethod = HashMap<CameraFindMethod, Int>()
+            merged.filter { (perMethod.merge(it.method, 1, Int::plus) ?: 0) <= FINDINGS_PER_METHOD }.take(FINDINGS_CAP)
+        }
+        if (mayAlert && f.confidence >= ALERT_CONFIDENCE && alerted.add(f.id)) {
             Registry.publishAlert(
                 Alert(
                     id = "camera|${f.id}", ts = f.ts,
@@ -590,19 +410,28 @@ object HiddenCameraScanner {
     /** The name the sweep's camera claim is held under; see [PhoneHealthMonitor.ownCameraStarted]. */
     private const val CAMERA_CLAIM = "sweep"
 
+    /** When the optical sweep last raised an alert; it raises at most one a minute. */
+    @Volatile private var lastOpticalAlertAt = 0L
+
     /** Called by the analyzer when a spot has held still long enough. */
     fun opticalCandidate(context: Context, mode: OpticalMode, blob: GlintBlob) {
         val (lat, lon) = fix(context)
         val px = (blob.x * 100).roundToInt().coerceIn(0, 100)
         val py = (blob.y * 100).roundToInt().coerceIn(0, 100)
         val method = if (mode == OpticalMode.GLINT) CameraFindMethod.LENS_GLINT else CameraFindMethod.IR_ILLUMINATOR
+        val seconds = String.format(Locale.US, "%.1f", blob.heldMs / 1000f)
         val detail = if (mode == OpticalMode.GLINT)
-            "A steady round pinpoint held still for ${blob.persistence} frames while the scene held still. A lens returns torchlight straight back along its own axis; a shiny edge slides as you move. Step closer: look for a dark pinhole behind the spot."
+            "A small round pinpoint held still for $seconds s while the phone held still, and went dark when the torch switched off, so it is a reflection of the torch, not a light. A lens returns torchlight straight back along its own axis. Step closer: look for a dark pinhole behind the spot."
         else
-            "A point of light in a dark scene held still for ${blob.persistence} frames. The eye sees nothing there; a night-vision camera lights the room with infrared LEDs and the front camera's weak IR filter lets them through."
+            "A point of light in a dark scene held still for $seconds s. The eye sees nothing there; a night-vision camera lights the room with infrared LEDs, and this camera lets some infrared through."
+        // One finding per place in the frame (a 10 % grid), so a spot that blinks out and back is not a new finding.
+        val now = System.currentTimeMillis()
+        val mayAlert = blob.confidence < ALERT_CONFIDENCE || now - lastOpticalAlertAt >= 60_000L
+        if (mayAlert && blob.confidence >= ALERT_CONFIDENCE) lastOpticalAlertAt = now
         report(
-            CameraFinding(
-                id = "optical|${mode.name.lowercase(Locale.US)}|$opticalSession|${blob.id}",
+            mayAlert = mayAlert,
+            f = CameraFinding(
+                id = "optical|${mode.name.lowercase(Locale.US)}|$opticalSession|${px / 10}|${py / 10}",
                 ts = System.currentTimeMillis(), method = method, confidence = blob.confidence,
                 location = "In the viewfinder, $px % from the left and $py % from the top",
                 detail = detail, lat = lat, lon = lon
@@ -631,10 +460,10 @@ object HiddenCameraScanner {
     private val HTTP_PORTS = setOf(80, 81, 88, 8000, 8080, 8081, 8899, 9000)
     private val RTSP_PORTS = setOf(554, 8554, 10554)
 
-    private class HttpSignature(val regex: Regex, val label: String, val confidence: Float)
+    internal class HttpSignature(val regex: Regex, val label: String, val confidence: Float)
 
     /** Camera and recorder fingerprints in an HTTP response: titles, Server headers, auth realms, login pages. */
-    private val HTTP_SIGNATURES = listOf(
+    internal val HTTP_SIGNATURES = listOf(
         HttpSignature(Regex("hikvision|hik-connect|/doc/page/login\\.asp|ds-2cd|ds-7"), "Hikvision camera or recorder", 0.92f),
         HttpSignature(Regex("dahua|dh_web|webplugin\\.exe|ipc-hdw|ipc-hfw|imou"), "Dahua / Imou camera", 0.92f),
         HttpSignature(Regex("reolink"), "Reolink camera", 0.92f),
@@ -645,8 +474,11 @@ object HiddenCameraScanner {
         HttpSignature(Regex("axis communications|axis.*network camera|/axis-cgi/"), "Axis network camera", 0.92f),
         HttpSignature(Regex("vivotek|mobotix|arecont|geovision|hanwha|wisenet|uniview|tiandy|avigilon|bosch.*camera|panasonic.*network camera|sony.*network camera"), "Professional IP camera", 0.9f),
         HttpSignature(Regex("ubnt|unifi protect|aircam|unifi video"), "Ubiquiti camera", 0.85f),
-        HttpSignature(Regex("wyze|yi home|yi_home|kami|wansview|sricam|tenvis|zmodo|lorex|swann|annke|night owl|eufy|arlo|blink"), "Consumer security camera", 0.88f),
-        HttpSignature(Regex("netwave|goahead-webs|uc-httpd|boa/0\\.9|xmeye|sofia|v380|yoosee|icsee|camhi|hichip|cloudcam|p2p.*camera"), "Budget IP camera firmware (Netwave / GoAhead / XMeye class)", 0.85f),
+        // Whole words only: "blink" alone is also a CSS animation name on half the routers' login pages.
+        HttpSignature(Regex("\\b(wyze|yi home|yi_home|kami|wansview|sricam|tenvis|zmodo|lorex|swann|annke|night owl|eufy|arlo)\\b|\\bblink (sync|camera|mini|outdoor|indoor)\\b"), "Consumer security camera", 0.88f),
+        HttpSignature(Regex("netwave|uc-httpd|xmeye|sofia|v380|yoosee|icsee|camhi|hichip|cloudcam|p2p.*camera"), "Budget IP camera firmware (Netwave / XMeye class)", 0.85f),
+        // GoAhead and Boa run on many routers, modems and printers as well as cameras: a hint, not a finding.
+        HttpSignature(Regex("goahead-webs|boa/0\\.9"), "Embedded web server common on budget cameras (also on routers and printers)", 0.4f),
         HttpSignature(Regex("mjpg-streamer|mjpeg-streamer|motion-jpeg|videostream\\.cgi|/snapshot\\.cgi|/video\\.cgi|/cgi-bin/hi3510|hi3516|hi3518"), "Camera video stream endpoint", 0.85f),
         HttpSignature(Regex("ip ?camera|ipcam|network camera|web ?camera|webcam|surveillance|cctv"), "Describes itself as a camera", 0.8f),
         HttpSignature(Regex("onvif"), "ONVIF camera interface", 0.8f),
@@ -800,13 +632,13 @@ object HiddenCameraScanner {
                 if (conf <= 0f) continue
                 // The router runs a web UI and sometimes a media port; only hard
                 // evidence makes it a camera.
-                if (h.ip == gateway && conf < 0.8f) continue
+                if (h.ip == gateway && conf < 0.9f) continue
                 val ports = h.openPorts.sorted().joinToString(", ")
                 out += CameraFinding(
                     id = "net|${h.ip}", ts = now, method = CameraFindMethod.NETWORK, confidence = conf,
                     location = "${h.ip} on ${ssid ?: "this Wi-Fi"}" + if (h.ip == gateway) " (the router)" else "",
                     detail = reasons.joinToString(". ") + (if (ports.isNotEmpty()) ". Open ports: $ports" else "") +
-                        ". A camera on the venue's network is streaming to somebody; if you did not put it there, ask who did.",
+                        ". There is a camera on this network. If it is not yours, or a camera the venue has told you about, ask who put it there.",
                     lat = lat, lon = lon
                 )
             }
@@ -930,7 +762,8 @@ object HiddenCameraScanner {
                 try { sock.receive(pkt) } catch (_: SocketTimeoutException) { continue }
                 val ip = pkt.address?.hostAddress ?: continue
                 val xml = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
-                if (!xml.contains("ProbeMatch", ignoreCase = true)) continue
+                // Only a device that says it is a video transmitter counts; printers and NAS boxes answer ONVIF probes too.
+                if (!xml.contains("ProbeMatch", ignoreCase = true) || !xml.contains("NetworkVideoTransmitter", ignoreCase = true)) continue
                 val name = Regex("onvif://www\\.onvif\\.org/name/([^ <\"]+)").find(xml)?.groupValues?.get(1)?.let { urlDecode(it) }
                 val hardware = Regex("onvif://www\\.onvif\\.org/hardware/([^ <\"]+)").find(xml)?.groupValues?.get(1)?.let { urlDecode(it) }
                 val xaddr = Regex("<[^>]*XAddrs>([^<]+)<").find(xml)?.groupValues?.get(1)?.trim()?.substringBefore(' ')
@@ -1016,7 +849,7 @@ object HiddenCameraScanner {
 
     // ── Wireless: unprovisioned cameras announcing themselves ────────────────
 
-    private class ApRule(pattern: String, val label: String, val confidence: Float) {
+    internal class ApRule(pattern: String, val label: String, val confidence: Float) {
         val regex = Regex(pattern)
     }
 
@@ -1025,9 +858,10 @@ object HiddenCameraScanner {
      * against the lower-cased whole name, anchored at the start: an ordinary network
      * that happens to contain "cam" (Camden, campus) must not fire.
      */
-    private val AP_RULES = listOf(
+    internal val AP_RULES = listOf(
         ApRule("^(ipc|ipcam|ip_cam|ip-cam|ipcamera|ip_camera|netcam|hdcam|hd_cam|hd-cam|minicam|mini_cam|spycam|spy_cam|smartcam|smart_cam|wificam|wifi_cam|wifi-cam|camhi|cam_hi|camera|cam)[-_ ]?[0-9a-f]{4,}$", "Generic IP camera setup hotspot", 0.85f),
-        ApRule("^(a9|q7|q8|q15|sq\\d{1,2}|x5|xd|hdq|ccq|cmdc|bpr|lookcam|hdwificam(pro)?|pccam|p2p|eye4|ac\\d{2})[-_ ]?[0-9a-z]{2,}$", "Covert mini camera (A9 / SQ / Q7 class) in setup mode", 0.95f),
+        // The short prefixes need the device's hex serial after them: "AC1750" and "xdhome" are routers and homes.
+        ApRule("^(a9|q7|q8|q15|sq\\d{1,2}|x5|xd|hdq|ccq|cmdc|bpr|lookcam|hdwificam(pro)?|pccam|p2p|eye4|ac\\d{2})[-_ ]?[0-9a-f]{4,}$", "Covert mini camera (A9 / SQ / Q7 class) in setup mode", 0.95f),
         ApRule("^(a9|q7|sq\\d{1,2}|lookcam|hdwificam(pro)?)$", "Covert mini camera (A9 / SQ / Q7 class) in setup mode", 0.9f),
         ApRule("^(wyze|wyzecam|wyze_cam)([-_ ].*)?$", "Wyze camera in setup mode", 0.9f),
         ApRule("^(yi|kami)[-_ ]?(home|cam|dome|outdoor|smart|pro)[-_ ]?.*$", "YI / Kami camera", 0.9f),
@@ -1038,7 +872,9 @@ object HiddenCameraScanner {
         ApRule("^(ezviz|hik-|hikvision|ds-2cd|ds-2de|hik_).*$", "Hikvision / EZVIZ camera", 0.9f),
         ApRule("^(dh-|dahua|imou|ipc-hdw|ipc-hfw|dh_ipc).*$", "Dahua / Imou camera", 0.9f),
         ApRule("^(arlo|blink|eufy_cam|eufycam|eufy[-_ ]?security|ring-|ring_|ringsetup|lorex|swann|zmodo|annke|night ?owl|wansview|sricam|tenvis|vimtag|dlink.*cam|dcs-\\d{3,4})([-_ ].*)?$", "Consumer security camera in setup mode", 0.85f),
-        ApRule("^(v380|yoosee|icsee|xm-|xmeye|gw_|carecam|camhipro|hichip|ipc365|cloudedge|cloudcam|littlelf|tuya_ipc|tuyasmart|smartlife|smart_life|jooan|besder|anran|hiseeu|zosi|sv3c|xvim|iegeek)([-_ ].*)?$", "Budget Wi-Fi camera (V380 / Yoosee / iCSee / XMeye / Tuya) in setup mode", 0.85f),
+        ApRule("^(v380|yoosee|icsee|xm-|xmeye|gw_|carecam|camhipro|hichip|ipc365|cloudedge|cloudcam|littlelf|tuya_ipc|jooan|besder|anran|hiseeu|zosi|sv3c|xvim|iegeek)([-_ ].*)?$", "Budget Wi-Fi camera (V380 / Yoosee / iCSee / XMeye / Tuya) in setup mode", 0.85f),
+        // Every Tuya / Smart Life plug and bulb broadcasts this in setup mode too.
+        ApRule("^(tuyasmart|smartlife|smart_life)([-_ ].*)?$", "Tuya / Smart Life device in setup mode (plugs and bulbs use it as well as cameras)", 0.3f),
         ApRule("^(mi camera|mi_camera|xiaomi_cam|xiaomi-cam|mijia_cam|chuangmi|isa-camera|isa_camera|imilab|aqara[-_ ]?cam|aqara[-_ ]?g\\d)([-_ ].*)?$", "Xiaomi / Aqara camera", 0.85f),
         ApRule("^(nvr|dvr|hdnvr|xvr)[-_ ]?[0-9a-z]*$", "Video recorder (NVR/DVR) hotspot", 0.7f),
         ApRule("^direct-[0-9a-z]{2}-.*(cam|ipc|camera).*$", "Wi-Fi Direct camera", 0.7f),
@@ -1082,6 +918,10 @@ object HiddenCameraScanner {
             val results = try { wifi.scanResults } catch (_: SecurityException) { null } ?: emptyList()
             val (lat, lon) = fix(app)
             val now = System.currentTimeMillis()
+            // When the readings were actually taken: Android refuses all but four scans in two
+            // minutes, and then the cache is older than "just now".
+            val newestUs = results.maxOfOrNull { it.timestamp } ?: 0L
+            val measuredAt = if (newestUs > 0L) now - (SystemClock.elapsedRealtime() - newestUs / 1000L).coerceAtLeast(0L) else now
             for (r in results) {
                 @Suppress("DEPRECATION")
                 val raw = r.SSID?.trim()?.trim('"').orEmpty()
@@ -1100,10 +940,10 @@ object HiddenCameraScanner {
                 }
                 if (label == null) continue
                 if (open) conf = min(1f, conf + 0.05f)
-                val metres = approxMetres(r.level)
+                val metres = approxMetresWifi(r.level)
                 out += CameraFinding(
                     id = "wifiap|$bssid", ts = now, method = CameraFindMethod.WIFI_SETUP_AP, confidence = conf,
-                    location = "\"$raw\" at ${r.level} dBm — roughly ${fmtMetres(metres)} away" + if (r.level >= -50) ", in this room" else "",
+                    location = "\"$raw\" at ${r.level} dBm — roughly ${fmtMetres(metres)} away" + if (r.level >= -40) ", probably in this room" else "",
                     detail = "$label. ${if (open) "Open network" else "Encrypted network"}, ${WifiScanner.bandFor(r.frequency)}, BSSID $bssid. " +
                         "A camera broadcasts its own hotspot until someone pairs it with the venue's Wi-Fi; one that is still broadcasting was planted recently or never finished setup. Walk toward the strongest signal.",
                     lat = lat, lon = lon
@@ -1112,7 +952,7 @@ object HiddenCameraScanner {
             out.sortByDescending { it.confidence }
             _findings.update { current -> (out + current.filter { it.method != CameraFindMethod.WIFI_SETUP_AP }).take(FINDINGS_CAP) }
             out.forEach { f -> if (f.confidence >= ALERT_CONFIDENCE) report(f) }
-            _wireless.update { it.copy(wifiScannedTs = now, wifiApsSeen = results.size, wifiError = null) }
+            _wireless.update { it.copy(wifiScannedTs = measuredAt, wifiApsSeen = results.size, wifiError = null) }
             return out
         } finally {
             _wireless.update { it.copy(wifiScanning = false) }
@@ -1166,7 +1006,9 @@ object HiddenCameraScanner {
         val until = System.currentTimeMillis() + durationMs
         _wireless.update { it.copy(bleListening = true, bleUntilTs = until, bleDevicesSeen = 0, bleError = null) }
         val seen = Collections.synchronizedSet(HashSet<String>())
-        val reported = Collections.synchronizedSet(HashSet<String>())
+        // When each device's finding was last refreshed: its signal strength is updated about
+        // once a second, so walking toward it shows the number climbing.
+        val refreshedAt = ConcurrentHashMap<String, Long>()
         val (lat, lon) = fix(app)
         val handle: (ScanResult) -> Unit = { r ->
             val address = r.device?.address
@@ -1184,12 +1026,14 @@ object HiddenCameraScanner {
                     }
                 }
                 val finalLabel = label
-                if (finalLabel != null && reported.add(address)) {
+                val nowMs = System.currentTimeMillis()
+                if (finalLabel != null && nowMs - (refreshedAt[address] ?: 0L) >= 1_000L) {
+                    refreshedAt[address] = nowMs
                     val metres = approxMetres(r.rssi)
                     report(
                         CameraFinding(
                             id = "ble|$address", ts = System.currentTimeMillis(), method = CameraFindMethod.BLE_SETUP_AP, confidence = conf,
-                            location = "${name ?: "Unnamed device"} ($address) at ${r.rssi} dBm — roughly ${fmtMetres(metres)} away" + if (r.rssi >= -50) ", in this room" else "",
+                            location = "${name ?: "Unnamed device"} ($address) at ${r.rssi} dBm — roughly ${fmtMetres(metres)} away" + if (r.rssi >= -50) ", probably in this room" else "",
                             detail = "$finalLabel. Cameras advertise over Bluetooth while they wait for an app to hand them Wi-Fi credentials; a working camera has usually stopped. Follow the signal strength to find it.",
                             lat = lat, lon = lon
                         )
@@ -1401,7 +1245,7 @@ object HiddenCameraScanner {
         SweepStep("mirrors", "Mirror test",
             "Fingernail on the glass: a gap between the nail and its reflection is a normal mirror. No gap, or a dark room showing through when you cup the torch against the glass, is a two-way mirror.", "Hands · torch"),
         SweepStep("network", "Scan the venue's Wi-Fi",
-            "Join the venue's network and run the NETWORK tab. A camera streaming to its owner speaks RTSP or ONVIF on the LAN and usually has a web UI with the maker's name on it.", "NETWORK"),
+            "Join the venue's network and run the NETWORK tab. Most cameras on a network answer ONVIF or RTSP, or have a web page with the maker's name on it. Cheap cloud-only mini cameras often expose no ports at all, so a clean result here is not the last word.", "NETWORK"),
         SweepStep("wireless", "Listen for setup beacons",
             "WIRELESS tab: a camera that has not been paired broadcasts its own open hotspot or a Bluetooth name. A planted one that was never finished is loud.", "WIRELESS"),
         SweepStep("magnet", "Magnetic pass along surfaces",
@@ -1436,6 +1280,12 @@ object HiddenCameraScanner {
 
     /** Log-distance path loss with a −59 dBm one-metre reference, which is what BLE and Wi-Fi beacons roughly show. */
     fun approxMetres(rssi: Int): Double = 10.0.pow((-59.0 - rssi) / 20.0)
+
+    /**
+     * A Wi-Fi access point is far louder than a Bluetooth beacon: about -40 dBm at a
+     * metre, and walls bend the falloff steeper than free space (exponent 3).
+     */
+    fun approxMetresWifi(rssi: Int): Double = 10.0.pow((-40.0 - rssi) / 30.0)
 
     fun fmtMetres(m: Double): String = when {
         m < 1.0 -> "under a metre"
