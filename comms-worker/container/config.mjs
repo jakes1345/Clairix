@@ -21,8 +21,18 @@ export function readConfig(env) {
 
   const onion = onOff(env.ONION, true, "ONION", problems);
 
-  const tls = (env.CADDY_TLS ?? "acme").trim();
+  let tls = (env.CADDY_TLS ?? "acme").trim();
   if (tls !== "acme" && tls !== "internal") problems.push('CADDY_TLS must be "acme" (the default) or "internal"');
+  // With a Cloudflare token, certificates are proved over DNS (a TXT record in
+  // the domain's Cloudflare zone), so the certificate authority never has to
+  // reach this container: for hosts whose network does not carry its checks.
+  const cloudflareToken = (env.CLOUDFLARE_API_TOKEN ?? "").trim();
+  if (cloudflareToken && !/^[A-Za-z0-9_-]{20,}$/.test(cloudflareToken)) problems.push("CLOUDFLARE_API_TOKEN does not look like a Cloudflare API token");
+  if (cloudflareToken && tls === "acme") tls = "cloudflare";
+
+  // Caddy's debug log and an access log, for finding out why a certificate
+  // will not come. The access log writes down addresses: turn it off again.
+  const debug = onOff(env.CADDY_DEBUG, false, "CADDY_DEBUG", problems);
 
   let backup = null;
   if ((env.BACKUP ?? "").trim() !== "off") {
@@ -45,7 +55,7 @@ export function readConfig(env) {
   }
 
   if (problems.length) throw new Error(problems.map((p) => `  - ${p}`).join("\n"));
-  return { domain, email, onion, tls, backup, origin: (env.RELAY_ORIGIN ?? "").trim() || `https://${domain}` };
+  return { domain, email, onion, tls, cloudflareToken, debug, backup, origin: (env.RELAY_ORIGIN ?? "").trim() || `https://${domain}` };
 }
 
 function onOff(value, fallback, name, problems) {
@@ -59,15 +69,21 @@ function onOff(value, fallback, name, problems) {
 
 /**
  * The Caddyfile: HTTPS for the domain, certificates kept on the volume, no
- * admin API and no access log; the onion service's loopback port when Tor is on.
+ * admin API and no access log (unless debugging); the onion service's
+ * loopback port when Tor is on. With tls "cloudflare", certificates are
+ * proved over DNS with the token Caddy is given as CLOUDFLARE_API_TOKEN.
  */
-export function caddyfile({ domain, email, tls, onionHost }, { relayPort, onionPort, dataDir }) {
+export function caddyfile({ domain, email, tls, onionHost, debug = false }, { relayPort, onionPort, dataDir }) {
   const lines = ["{", "\tadmin off", `\tstorage file_system {`, `\t\troot ${dataDir}`, "\t}"];
   if (email) lines.push(`\temail ${email}`);
+  if (debug) lines.push("\tdebug");
   lines.push("}", "");
-  lines.push("# No log directive: Caddy keeps no access log, so no address or request is written down.");
+  if (debug) lines.push("# CADDY_DEBUG=on: every request is logged, addresses included, until it is turned off.");
+  else lines.push("# No log directive: Caddy keeps no access log, so no address or request is written down.");
   lines.push(`${domain} {`);
+  if (debug) lines.push("\tlog");
   if (tls === "internal") lines.push("\ttls internal");
+  if (tls === "cloudflare") lines.push("\ttls {", "\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}", "\t}");
   lines.push(`\treverse_proxy 127.0.0.1:${relayPort} {`);
   lines.push("\t\t# The relay's registration limit counts per address. Set here, so a client cannot choose its own.");
   lines.push("\t\theader_up CF-Connecting-IP {remote_host}");
@@ -100,10 +116,16 @@ export function torrc({ dataDir, serviceDir, onionPort }) {
   ].join("\n");
 }
 
+/** The container's own secrets: never the relay's, whatever its settings list says. */
+const CONTAINER_SECRETS = new Set(["BACKUP_KEY", "BACKUP_ACCESS_KEY", "CLOUDFLARE_API_TOKEN"]);
+
 /** The environment workerd gets: the relay's own settings and nothing else (no backup secrets). */
 export function relayEnvironment(env, settings, { origin, onion }) {
   const out = { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/nonexistent" };
-  for (const name of settings) if (env[name] !== undefined && env[name] !== "") out[name] = env[name];
+  for (const name of settings) {
+    if (CONTAINER_SECRETS.has(name)) continue;
+    if (env[name] !== undefined && env[name] !== "") out[name] = env[name];
+  }
   out.RELAY_ORIGIN = origin;
   if (onion) out.RELAY_ONION = `http://${onion}`;
   else delete out.RELAY_ONION;
