@@ -24,6 +24,27 @@ export function readConfig(env) {
   const tls = (env.CADDY_TLS ?? "acme").trim();
   if (tls !== "acme" && tls !== "internal") problems.push('CADDY_TLS must be "acme" (the default) or "internal"');
 
+  // How Let's Encrypt checks the domain. Unset: over ports 80 and 443, which
+  // needs its validators to reach this container. "cloudflare": through a TXT
+  // record Caddy writes in the domain's Cloudflare DNS, so the certificate no
+  // longer depends on any path from the validators to the host's IP.
+  const acmeDns = (env.ACME_DNS ?? "").trim();
+  if (acmeDns !== "" && acmeDns !== "cloudflare") problems.push('ACME_DNS must be "cloudflare" or left unset');
+  if (acmeDns && tls !== "acme") problems.push('ACME_DNS needs CADDY_TLS=acme: an internal certificate is not checked by anyone');
+  if (acmeDns === "cloudflare") {
+    const token = env.CLOUDFLARE_API_TOKEN ?? "";
+    if (!token.trim()) problems.push("CLOUDFLARE_API_TOKEN is required with ACME_DNS=cloudflare: a Cloudflare API token with Zone:Read and DNS:Edit on the domain's zone");
+    // The shapes Caddy's Cloudflare module accepts; anything else stops Caddy at start.
+    else if (!/^[A-Za-z0-9_-]{35,50}$/.test(token) && !/^cf(ut|at)_[A-Za-z0-9_-]{32,256}$/.test(token)) {
+      problems.push("CLOUDFLARE_API_TOKEN does not look like a Cloudflare API token: paste the token alone, without quotes, spaces or Bearer");
+    }
+  }
+
+  // Caddy's debug log and an access log, for finding out why a certificate
+  // will not come. Off by default: with it on, client addresses are written
+  // to the container's log.
+  const debug = onOff(env.CADDY_DEBUG, false, "CADDY_DEBUG", problems);
+
   let backup = null;
   if ((env.BACKUP ?? "").trim() !== "off") {
     const zone = (env.BACKUP_ZONE ?? "").trim();
@@ -45,7 +66,7 @@ export function readConfig(env) {
   }
 
   if (problems.length) throw new Error(problems.map((p) => `  - ${p}`).join("\n"));
-  return { domain, email, onion, tls, backup, origin: (env.RELAY_ORIGIN ?? "").trim() || `https://${domain}` };
+  return { domain, email, onion, tls, acmeDns, debug, backup, origin: (env.RELAY_ORIGIN ?? "").trim() || `https://${domain}` };
 }
 
 function onOff(value, fallback, name, problems) {
@@ -59,15 +80,26 @@ function onOff(value, fallback, name, problems) {
 
 /**
  * The Caddyfile: HTTPS for the domain, certificates kept on the volume, no
- * admin API and no access log; the onion service's loopback port when Tor is on.
+ * admin API and no access log (unless CADDY_DEBUG is on); the certificate
+ * checked over DNS when ACME_DNS is set; the onion service's loopback port
+ * when Tor is on.
  */
-export function caddyfile({ domain, email, tls, onionHost }, { relayPort, onionPort, dataDir }) {
+export function caddyfile({ domain, email, tls, acmeDns = "", debug = false, onionHost }, { relayPort, onionPort, dataDir }) {
   const lines = ["{", "\tadmin off", `\tstorage file_system {`, `\t\troot ${dataDir}`, "\t}"];
   if (email) lines.push(`\temail ${email}`);
+  if (debug) lines.push("\tdebug");
   lines.push("}", "");
-  lines.push("# No log directive: Caddy keeps no access log, so no address or request is written down.");
+  if (debug) lines.push("# CADDY_DEBUG=on: every request, with its client address, goes to the container's log.");
+  else lines.push("# No log directive: Caddy keeps no access log, so no address or request is written down.");
   lines.push(`${domain} {`);
+  if (debug) lines.push("\tlog");
   if (tls === "internal") lines.push("\ttls internal");
+  else if (acmeDns === "cloudflare") {
+    // The token is read from Caddy's environment when it runs, so it is never
+    // written into this file. Public resolvers for the propagation check, so a
+    // host's own resolver cannot hide or cache the TXT record.
+    lines.push("\ttls {", "\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}", "\t\tresolvers 1.1.1.1 1.0.0.1", "\t}");
+  }
   lines.push(`\treverse_proxy 127.0.0.1:${relayPort} {`);
   lines.push("\t\t# The relay's registration limit counts per address. Set here, so a client cannot choose its own.");
   lines.push("\t\theader_up CF-Connecting-IP {remote_host}");
@@ -85,6 +117,13 @@ export function caddyfile({ domain, email, tls, onionHost }, { relayPort, onionP
     lines.push("\t}", "}");
   }
   return lines.join("\n") + "\n";
+}
+
+/** The environment Caddy gets: its own folders, and the Cloudflare token only when DNS checks are on. */
+export function caddyEnvironment(env, { acmeDns }, { dataDir, configDir }) {
+  const out = { PATH: "/usr/bin:/bin", HOME: dataDir, XDG_DATA_HOME: dataDir, XDG_CONFIG_HOME: configDir };
+  if (acmeDns === "cloudflare") out.CLOUDFLARE_API_TOKEN = env.CLOUDFLARE_API_TOKEN;
+  return out;
 }
 
 /** The torrc: the onion service only, no SOCKS port, keys on the volume. */

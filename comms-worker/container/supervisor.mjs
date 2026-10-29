@@ -23,7 +23,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { LEASE_TTL_MS, Storage, backUp, copyId, releaseLease, restore, storageIsEmpty, takeLease } from "./backup.mjs";
-import { caddyfile, readConfig, relayEnvironment, torrc } from "./config.mjs";
+import { caddyEnvironment, caddyfile, readConfig, relayEnvironment, torrc } from "./config.mjs";
 
 const DATA = "/data";
 const RUN = "/run/clairix";
@@ -94,10 +94,15 @@ async function main() {
   const caddyConfig = join(RUN, "Caddyfile");
   await writeFile(
     caddyConfig,
-    caddyfile({ domain: config.domain, email: config.email, tls: config.tls, onionHost }, { relayPort: RELAY_PORT, onionPort: ONION_PORT, dataDir: join(DATA, "caddy") }),
+    caddyfile(
+      { domain: config.domain, email: config.email, tls: config.tls, acmeDns: config.acmeDns, debug: config.debug, onionHost },
+      { relayPort: RELAY_PORT, onionPort: ONION_PORT, dataDir: join(DATA, "caddy") },
+    ),
   );
+  if (config.acmeDns) log(`certificates are checked through ${config.acmeDns} DNS, not over ports 80 and 443`);
+  if (config.debug) log("CADDY_DEBUG is on: Caddy logs every request with its client address; turn it off once the certificate is in");
   start("caddy", "/usr/bin/caddy", ["run", "--config", caddyConfig, "--adapter", "caddyfile"], {
-    env: { PATH: "/usr/bin:/bin", HOME: join(DATA, "caddy"), XDG_DATA_HOME: join(DATA, "caddy"), XDG_CONFIG_HOME: join(RUN, "caddy") },
+    env: caddyEnvironment(process.env, config, { dataDir: join(DATA, "caddy"), configDir: join(RUN, "caddy") }),
   });
 
   ready = true;

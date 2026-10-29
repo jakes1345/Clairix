@@ -23,7 +23,7 @@ import {
   takeLease,
   unseal,
 } from "../container/backup.mjs";
-import { caddyfile, readConfig, relayEnvironment, torrc } from "../container/config.mjs";
+import { caddyEnvironment, caddyfile, readConfig, relayEnvironment, torrc } from "../container/config.mjs";
 import { startFakeBunnyStorage } from "./harness/fake-bunny-storage.mjs";
 
 const KEY = randomBytes(32);
@@ -353,6 +353,59 @@ test("Caddy: HTTPS for the domain, no admin API, no access log, the client addre
   assert.match(plain, /tls internal/);
   assert.doesNotMatch(plain, /8790/);
   assert.doesNotMatch(plain, /email/);
+});
+
+const CF_TOKEN = "cfut_" + "Ab9-_".repeat(8);
+
+test("settings: certificates checked through Cloudflare DNS need a token of the right shape", () => {
+  const c = readConfig({ ...good, ACME_DNS: "cloudflare", CLOUDFLARE_API_TOKEN: CF_TOKEN });
+  assert.equal(c.acmeDns, "cloudflare");
+  assert.equal(c.debug, false);
+  assert.equal(readConfig(good).acmeDns, "");
+  assert.equal(readConfig({ ...good, ACME_DNS: "cloudflare", CLOUDFLARE_API_TOKEN: "x".repeat(40) }).acmeDns, "cloudflare");
+
+  assert.throws(() => readConfig({ ...good, ACME_DNS: "cloudflare" }), /CLOUDFLARE_API_TOKEN is required/);
+  for (const bad of [`"${CF_TOKEN}"`, `Bearer ${CF_TOKEN}`, `${CF_TOKEN}\n`, "short"]) {
+    assert.throws(() => readConfig({ ...good, ACME_DNS: "cloudflare", CLOUDFLARE_API_TOKEN: bad }), /does not look like a Cloudflare API token/, bad);
+  }
+  assert.throws(() => readConfig({ ...good, ACME_DNS: "route53" }), /ACME_DNS must be "cloudflare"/);
+  assert.throws(() => readConfig({ ...good, ACME_DNS: "cloudflare", CLOUDFLARE_API_TOKEN: CF_TOKEN, CADDY_TLS: "internal" }), /ACME_DNS needs CADDY_TLS=acme/);
+  assert.equal(readConfig({ ...good, CADDY_DEBUG: "on" }).debug, true);
+  assert.throws(() => readConfig({ ...good, CADDY_DEBUG: "yes" }), /CADDY_DEBUG must be "on" or "off"/);
+});
+
+test("Caddy: a DNS check through Cloudflare, with the token read from the environment, never the file", () => {
+  const text = caddyfile(
+    { domain: "relay.example.org", email: "", tls: "acme", acmeDns: "cloudflare", onionHost: null },
+    { relayPort: 8787, onionPort: 8790, dataDir: "/data/caddy" },
+  );
+  assert.match(text, /^relay\.example\.org \{\n\ttls \{\n\t\tdns cloudflare \{env\.CLOUDFLARE_API_TOKEN\}\n\t\tresolvers 1\.1\.1\.1 1\.0\.0\.1\n\t\}/m);
+  assert.doesNotMatch(text, /cfut_/);
+  assert.doesNotMatch(text, /^\s*(log|debug)\b/m);
+  assert.doesNotMatch(caddyfile({ domain: "relay.example.org", email: "", tls: "acme", onionHost: null }, { relayPort: 8787, onionPort: 8790, dataDir: "/d" }), /dns cloudflare/);
+});
+
+test("Caddy: CADDY_DEBUG adds the debug log and an access log for the domain only", () => {
+  const text = caddyfile(
+    { domain: "relay.example.org", email: "", tls: "acme", debug: true, onionHost: "c".repeat(56) + ".onion" },
+    { relayPort: 8787, onionPort: 8790, dataDir: "/data/caddy" },
+  );
+  assert.ok(text.indexOf("\tdebug\n}") > 0 && text.indexOf("\tdebug\n}") < text.indexOf("relay.example.org {"), "debug is a global option");
+  assert.match(text, /^relay\.example\.org \{\n\tlog\n/m);
+  assert.equal(text.match(/^\tlog$/gm).length, 1, "the onion service stays unlogged");
+});
+
+test("Caddy's environment holds the Cloudflare token only when DNS checks are on", () => {
+  const env = { ...good, CLOUDFLARE_API_TOKEN: CF_TOKEN, PATH: "/evil" };
+  const dirs = { dataDir: "/data/caddy", configDir: "/run/clairix/caddy" };
+  const on = caddyEnvironment(env, { acmeDns: "cloudflare" }, dirs);
+  assert.equal(on.CLOUDFLARE_API_TOKEN, CF_TOKEN);
+  assert.equal(on.PATH, "/usr/bin:/bin");
+  assert.equal(on.XDG_DATA_HOME, "/data/caddy");
+  for (const secret of ["ENROLL_SECRET", "BACKUP_KEY", "BACKUP_ACCESS_KEY"]) assert.equal(on[secret], undefined, secret);
+  assert.equal(caddyEnvironment(env, { acmeDns: "" }, dirs).CLOUDFLARE_API_TOKEN, undefined);
+  // Nor does the relay ever get it.
+  assert.equal(relayEnvironment(env, ["ENROLL_SECRET"], { origin: "https://relay.example.org", onion: null }).CLOUDFLARE_API_TOKEN, undefined);
 });
 
 test("Tor: the onion service only, no SOCKS port", () => {

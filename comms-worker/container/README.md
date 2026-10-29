@@ -27,7 +27,11 @@ Storage ($1 a month minimum). Roughly **$10–13 a month**.
 ## What runs where
 
 - **HTTPS is ended inside the container**, by Caddy, with a Let's Encrypt
-  certificate it gets and renews itself. The relay uses an *Anycast IP*
+  certificate it gets and renews itself. Let's Encrypt checks the domain
+  either over ports 80 and 443 (the default) or, with `ACME_DNS=cloudflare`,
+  through a TXT record Caddy writes in the domain's Cloudflare DNS. The DNS
+  check needs no connection from Let's Encrypt to the container, so it works
+  even when its validators cannot reach the Anycast IP (step 2b). The relay uses an *Anycast IP*
   endpoint, which passes connections through untouched, not a CDN endpoint,
   which would open them on bunny.net's servers. So bunny.net carries only
   encrypted connections, as any network does.
@@ -83,6 +87,22 @@ $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create
 disk means a new relay with new keys; every phone would have to register
 again.
 
+### 2b. A Cloudflare token for the certificate (if the domain's DNS is on Cloudflare)
+
+Recommended on Magic Containers: Let's Encrypt has been seen failing to reach
+an Anycast IP that answers everyone else ("Error getting validation data" in
+the log). With this token Caddy proves the domain through DNS instead.
+
+Cloudflare dashboard → **My Profile** → **API Tokens** → **Create Token** →
+**Edit zone DNS** template, then:
+
+- **Permissions**: `Zone` · `DNS` · `Edit`, and add `Zone` · `Zone` · `Read`.
+- **Zone Resources**: Include · Specific zone · your domain (e.g. `clairix.app`).
+- **Continue to summary** → **Create Token**, and copy it (it is shown once).
+
+It can change that zone's DNS records only; keep it in your password manager
+with the other secrets. It goes to Caddy alone, never to the relay.
+
 ### 3. A storage zone for the backups
 
 bunny.net dashboard → **Storage** → **Add Storage Zone**. Name it (say
@@ -116,7 +136,11 @@ Open the zone → **Access** and note:
   BACKUP_KEY=<from step 2>
   BACKUP_ENDPOINT=https://se.storage.bunnycdn.com
   ACME_EMAIL=you@example.org
+  ACME_DNS=cloudflare
+  CLOUDFLARE_API_TOKEN=<from step 2b>
   ```
+
+  Leave out the last two if you skipped step 2b.
 
 - **Resources** (if offered): half a CPU, 512 MB.
 - **Region**: one region (e.g. Stockholm).
@@ -133,8 +157,9 @@ Deploy. Then, in the app:
 ### 5. DNS
 
 Point the domain at the Anycast IP the app shows: an `A` record,
-`relay.clairix.app → <the IP>`. Within a few minutes Caddy has its
-certificate, and `https://relay.clairix.app/` answers with the relay's
+`relay.clairix.app → <the IP>`. On Cloudflare, leave it **DNS only** (grey
+cloud): proxied, Cloudflare would end the HTTPS instead of the container.
+Within a few minutes Caddy has its certificate, and `https://relay.clairix.app/` answers with the relay's
 status: `"service":"clairix-comms"`, its key, and its `onion` address.
 
 ### 6. Check the logs
@@ -166,6 +191,9 @@ Optional:
 | `BACKUP_PATH` | `clairix-relay/<domain>` | The folder in the zone. |
 | `BACKUP_EVERY_MINUTES` | `10` | 5 to 1440. |
 | `ACME_EMAIL` | none | Let's Encrypt writes here before a certificate would expire unrenewed. |
+| `ACME_DNS` | none | `cloudflare`: prove the domain through a TXT record in its Cloudflare DNS instead of over ports 80 and 443 (step 2b). |
+| `CLOUDFLARE_API_TOKEN` | none | Required with `ACME_DNS=cloudflare`: a token with Zone:Read and DNS:Edit on the domain's zone. Given to Caddy only. |
+| `CADDY_DEBUG` | `off` | `on` writes Caddy's debug log and an access log (with client addresses) to the container's log, to find out why a certificate will not come. Turn it off afterwards. |
 | `ONION` | `on` | `off` leaves the onion service out. |
 | `BACKUP` | on | `off` runs with no backups and no lease: a lost disk is a new relay. |
 
@@ -197,6 +225,12 @@ backup and gives up its lease on the way out.
   sit in storage.
 - **Backups failing** (`backup (scheduled) failed` in the log): the relay
   keeps running; check the zone's password and hostname.
+- **No certificate, and `https://` gives a TLS "internal error"**: Caddy has
+  none yet. If the log shows `Error getting validation data` for
+  `tls-alpn-01` and `http-01`, Let's Encrypt could not reach the Anycast IP:
+  set `ACME_DNS=cloudflare` and `CLOUDFLARE_API_TOKEN` (step 2b) and update
+  the container. Caddy then logs `certificate obtained successfully` within
+  a few minutes. To see what reaches Caddy, set `CADDY_DEBUG=on` for one try.
 
 ## Limits worth knowing
 

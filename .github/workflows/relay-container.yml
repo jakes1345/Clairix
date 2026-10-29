@@ -57,6 +57,24 @@ jobs:
             --label "org.opencontainers.image.licenses=GPL-3.0-only" \
             -t clairix-relay:ci .
 
+      # The restore test runs with an internal certificate; this checks that the
+      # image's Caddy loads the Caddyfile the supervisor writes for
+      # ACME_DNS=cloudflare (the Cloudflare module provisions, the token is
+      # read from the environment). A made-up token: nothing is asked of Cloudflare.
+      - name: Caddy takes the DNS-checked Caddyfile
+        run: |
+          token="cfut_$(openssl rand -hex 20)"
+          TOKEN="$token" node --disable-warning=ExperimentalWarning --input-type=module -e '
+            import { caddyfile, readConfig } from "./container/config.mjs";
+            const c = readConfig({ RELAY_DOMAIN: "relay.example.org", ENROLL_SECRET: "0123456789abcdef0123", BACKUP: "off",
+              ACME_DNS: "cloudflare", CLOUDFLARE_API_TOKEN: process.env.TOKEN, CADDY_DEBUG: "on" });
+            process.stdout.write(caddyfile({ ...c, onionHost: "c".repeat(56) + ".onion" }, { relayPort: 8787, onionPort: 8790, dataDir: "/tmp/caddy" }));
+          ' > "$RUNNER_TEMP/Caddyfile"
+          docker run --rm --entrypoint /usr/bin/caddy clairix-relay:ci list-modules > "$RUNNER_TEMP/caddy-modules"
+          grep -qx dns.providers.cloudflare "$RUNNER_TEMP/caddy-modules"
+          docker run --rm -e CLOUDFLARE_API_TOKEN="$token" -v "$RUNNER_TEMP/Caddyfile:/Caddyfile:ro" \
+            --entrypoint /usr/bin/caddy clairix-relay:ci validate --config /Caddyfile --adapter caddyfile
+
       - name: Restore from backup (runc)
         run: node --disable-warning=ExperimentalWarning --import ./test/harness/register.mjs test/container-restore.mjs clairix-relay:ci runc
 
