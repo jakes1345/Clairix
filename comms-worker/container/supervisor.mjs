@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { chmod, chown, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { connect } from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { LEASE_TTL_MS, Storage, backUp, copyId, releaseLease, restore, storageIsEmpty, takeLease } from "./backup.mjs";
@@ -94,12 +95,25 @@ async function main() {
   const caddyConfig = join(RUN, "Caddyfile");
   await writeFile(
     caddyConfig,
-    caddyfile({ domain: config.domain, email: config.email, tls: config.tls, onionHost }, { relayPort: RELAY_PORT, onionPort: ONION_PORT, dataDir: join(DATA, "caddy") }),
+    caddyfile(
+      { domain: config.domain, email: config.email, tls: config.tls, onionHost, debug: config.debug },
+      { relayPort: RELAY_PORT, onionPort: ONION_PORT, dataDir: join(DATA, "caddy") },
+    ),
   );
   start("caddy", "/usr/bin/caddy", ["run", "--config", caddyConfig, "--adapter", "caddyfile"], {
-    env: { PATH: "/usr/bin:/bin", HOME: join(DATA, "caddy"), XDG_DATA_HOME: join(DATA, "caddy"), XDG_CONFIG_HOME: join(RUN, "caddy") },
+    env: {
+      PATH: "/usr/bin:/bin",
+      HOME: join(DATA, "caddy"),
+      XDG_DATA_HOME: join(DATA, "caddy"),
+      XDG_CONFIG_HOME: join(RUN, "caddy"),
+      // Caddy alone gets the token; the Caddyfile names it, never spells it out.
+      ...(config.cloudflareToken ? { CLOUDFLARE_API_TOKEN: config.cloudflareToken } : {}),
+    },
   });
 
+  // Ready only once Caddy takes connections too, so the host's checks (and
+  // phones) never reach a relay with nothing in front of it yet.
+  await waitFor(() => portOpen(443), 60_000, "Caddy did not start");
   ready = true;
   log(`the relay is up at https://${config.domain}${onionHost ? ` and http://${onionHost}` : ""}`);
   every(CRON_EVERY_MS, untilNextTen(), runCron, "scheduled work");
@@ -227,6 +241,19 @@ for (const sig of ["SIGTERM", "SIGINT"]) {
 }
 
 // ── Health, cron and timers ───────────────────────────────────────────────
+
+function portOpen(port) {
+  return new Promise((resolve) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    const done = (ok) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(2_000, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
 
 async function relayAnswers() {
   try {

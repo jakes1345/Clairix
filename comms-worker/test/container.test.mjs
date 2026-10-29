@@ -324,6 +324,35 @@ test("settings: the defaults, and every missing or mistyped one named at once", 
   assert.throws(() => readConfig({ ...good, BACKUP_PATH: "../elsewhere" }), /BACKUP_PATH/);
 });
 
+test("a Cloudflare token proves certificates over DNS, and reaches Caddy alone", () => {
+  const token = "cfut_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0";
+  const c = readConfig({ ...good, CLOUDFLARE_API_TOKEN: token });
+  assert.equal(c.tls, "cloudflare");
+  assert.equal(c.cloudflareToken, token);
+  const text = caddyfile({ domain: "relay.example.org", email: "", tls: c.tls, onionHost: null }, { relayPort: 8787, onionPort: 8790, dataDir: "/d" });
+  assert.match(text, /^relay\.example\.org \{\n\ttls \{\n\t\tdns cloudflare \{env\.CLOUDFLARE_API_TOKEN\}\n\t\}/m);
+  // The Caddyfile names the token; it never spells it out.
+  assert.ok(!text.includes(token));
+  // The relay never sees it.
+  const relay = relayEnvironment({ ...good, CLOUDFLARE_API_TOKEN: token }, ["ENROLL_SECRET", "CLOUDFLARE_API_TOKEN"], { origin: "https://x", onion: null });
+  assert.equal(relay.CLOUDFLARE_API_TOKEN, undefined);
+  // CADDY_TLS=internal still wins, for testing; a mistyped token is named.
+  assert.equal(readConfig({ ...good, CLOUDFLARE_API_TOKEN: token, CADDY_TLS: "internal" }).tls, "internal");
+  assert.throws(() => readConfig({ ...good, CLOUDFLARE_API_TOKEN: "not a token" }), /CLOUDFLARE_API_TOKEN/);
+  assert.equal(readConfig(good).cloudflareToken, "");
+});
+
+test("CADDY_DEBUG turns on Caddy's debug and access logs, and only then", () => {
+  assert.equal(readConfig(good).debug, false);
+  assert.equal(readConfig({ ...good, CADDY_DEBUG: "on" }).debug, true);
+  assert.throws(() => readConfig({ ...good, CADDY_DEBUG: "yes" }), /CADDY_DEBUG/);
+  const on = caddyfile({ domain: "relay.example.org", email: "", tls: "acme", onionHost: null, debug: true }, { relayPort: 8787, onionPort: 8790, dataDir: "/d" });
+  assert.match(on, /^\tdebug$/m);
+  assert.match(on, /^relay\.example\.org \{\n\tlog$/m);
+  const off = caddyfile({ domain: "relay.example.org", email: "", tls: "acme", onionHost: null }, { relayPort: 8787, onionPort: 8790, dataDir: "/d" });
+  assert.doesNotMatch(off, /^\s*(debug|log)$/m);
+});
+
 test("the relay gets its own settings and never the backup secrets", () => {
   const env = { ...good, MIX_MAX_MS: "0", FEDERATION: "off", PATH: "/evil", NODE_OPTIONS: "--require x" };
   const out = relayEnvironment(env, ["ENROLL_SECRET", "MIX_MAX_MS", "FEDERATION", "RELAY_ONION"], { origin: "https://relay.example.org", onion: "b".repeat(56) + ".onion" });

@@ -137,6 +137,23 @@ Point the domain at the Anycast IP the app shows: an `A` record,
 certificate, and `https://relay.clairix.app/` answers with the relay's
 status: `"service":"clairix-comms"`, its key, and its `onion` address.
 
+If no certificate comes (the log shows `challenge failed` or `connection`
+errors from `acme_client`, or only the backups and Tor, and the page still
+gives an SSL error), the certificate authority's checks are not reaching the
+container through the Anycast IP. Prove the domain over DNS instead, so the
+checks never need to reach it:
+
+1. In Cloudflare: **My Profile → API Tokens → Create Token → Edit zone DNS**
+   template. Under **Zone Resources** choose *Include → Specific zone →*
+   your domain (`clairix.app`). Create it and copy the token.
+2. In the app: add `CLOUDFLARE_API_TOKEN=<the token>` to the environment
+   variables, **Update Container**, **Save Changes**.
+
+Caddy then puts a `_acme-challenge` TXT record in the Cloudflare zone, the
+certificate authority reads it, and Caddy removes it again; renewals work the
+same way. The token can edit that one zone's DNS and nothing else, and only
+Caddy is given it.
+
 ### 6. Check the logs
 
 **Logs** in the app should show, within ten minutes:
@@ -167,13 +184,15 @@ Optional:
 | `BACKUP_EVERY_MINUTES` | `10` | 5 to 1440. |
 | `ACME_EMAIL` | none | Let's Encrypt writes here before a certificate would expire unrenewed. |
 | `ONION` | `on` | `off` leaves the onion service out. |
+| `CLOUDFLARE_API_TOKEN` | none | Prove certificates over DNS in the domain's Cloudflare zone (step 5), not by connecting to the container. |
+| `CADDY_DEBUG` | `off` | `on`: Caddy's debug log and an access log, to find out why a certificate does not come. The access log writes down addresses: turn it off again. |
 | `BACKUP` | on | `off` runs with no backups and no lease: a lost disk is a new relay. |
 
 Every relay setting in the main README (`FEDERATION`, `MIX_MAX_MS`,
 `DELIVERY_TOKENS_PER_HOUR`, `COIN_INITIAL_BALANCE`, `ADMIN_SECRET`, ...)
 works here too, as an environment variable. `RELAY_ORIGIN` defaults to
 `https://<RELAY_DOMAIN>` and `RELAY_ONION` is set from Tor. The relay itself
-is given its own settings only, never the backup ones.
+is given its own settings only, never the backup keys or the Cloudflare token.
 
 ## Updating
 
