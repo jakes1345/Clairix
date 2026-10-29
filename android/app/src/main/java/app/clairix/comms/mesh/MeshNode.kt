@@ -14,6 +14,9 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.AdvertisingSet
+import android.bluetooth.le.AdvertisingSetCallback
+import android.bluetooth.le.AdvertisingSetParameters
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -38,6 +41,8 @@ data class MeshStatus(
     val carrying: Int = 0,
     val receivedForYou: Int = 0,
     val handedOn: Int = 0,
+    /** Whether this phone also advertises and listens on Bluetooth's long-range (coded) radio mode. */
+    val longRange: Boolean = false,
     val error: String? = null
 )
 
@@ -48,6 +53,12 @@ data class MeshStatus(
  * [PEER_COOLDOWN_MS]. A meeting is one [MeshSession] over one characteristic: the
  * client writes chunks, the server notifies chunks, each one at a time as the stack
  * requires, and the client disconnects when both sides are done or after [MEETING_MS].
+ *
+ * On a phone whose Bluetooth has the long-range (LE Coded) radio mode, it also
+ * advertises a second, extended set on that mode at full power, listens for both, and
+ * connects on it to the phones it heard there: at the same power a coded signal carries
+ * several times as far, at an eighth of the speed. The ordinary advertisement stays, so
+ * phones without the mode still meet this one, and this one still meets them.
  *
  * All Bluetooth callbacks are handed to one thread, which owns every map here.
  * Needs BLUETOOTH_SCAN, BLUETOOTH_CONNECT and BLUETOOTH_ADVERTISE; the caller checks.
@@ -79,6 +90,11 @@ class MeshNode(
     private val serverConns = HashMap<String, Conn>()
     private val clientConns = HashMap<String, Conn>()
     private val lastMet = HashMap<String, Long>()
+
+    /** True when this phone's Bluetooth can both send and hear long-range (coded) advertising. */
+    private val longRange: Boolean = manager?.adapter?.let {
+        runCatching { it.isLeCodedPhySupported && it.isLeExtendedAdvertisingSupported }.getOrDefault(false)
+    } ?: false
 
     /** One side of one meeting: its session, its reassembler, and its outgoing chunk queue. */
     private inner class Conn(val device: BluetoothDevice, val initiator: Boolean) {
@@ -131,7 +147,7 @@ class MeshNode(
         serverConns.clear(); clientConns.clear()
         runCatching { server?.close() }
         server = null
-        _status.update { it.copy(running = false, advertising = false, scanning = false) }
+        _status.update { it.copy(running = false, advertising = false, scanning = false, longRange = false) }
     }
 
     // ── Advertising and scanning ──────────────────────────────────────────
@@ -141,24 +157,45 @@ class MeshNode(
         override fun onStartFailure(errorCode: Int) { _status.update { it.copy(advertising = false, error = "Advertising failed ($errorCode)") } }
     }
 
+    private val longRangeCallback = object : AdvertisingSetCallback() {
+        override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
+            _status.update { it.copy(longRange = status == ADVERTISE_SUCCESS) }
+        }
+        override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?) { _status.update { it.copy(longRange = false) } }
+    }
+
+    /** The service only, as in the ordinary advertisement. */
+    private fun serviceOnly(): AdvertiseData = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
+        .addServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID)).build()
+
     private fun advertise(on: Boolean) {
         val adv = manager?.adapter?.bluetoothLeAdvertiser ?: return
+        if (longRange) runCatching {
+            if (!on) adv.stopAdvertisingSet(longRangeCallback)
+            else adv.startAdvertisingSet(
+                // Extended, connectable, coded on both channels, as loud as the phone allows.
+                AdvertisingSetParameters.Builder().setLegacyMode(false).setConnectable(true).setScannable(false)
+                    .setPrimaryPhy(BluetoothDevice.PHY_LE_CODED).setSecondaryPhy(BluetoothDevice.PHY_LE_CODED)
+                    .setInterval(AdvertisingSetParameters.INTERVAL_MEDIUM).setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH)
+                    .build(),
+                serviceOnly(), null, null, null, longRangeCallback
+            )
+        }.onFailure { e -> Log.i(TAG, "Long-range advertising refused: ${e.message}") }
         runCatching {
             if (!on) { adv.stopAdvertising(advertiseCallback); _status.update { it.copy(advertising = false) }; return }
             adv.startAdvertising(
                 AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
                     .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM).setConnectable(true).build(),
                 // The service only: no name, no manufacturer data, the address the stack rotates.
-                AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
-                    .addServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID)).build(),
+                serviceOnly(),
                 advertiseCallback
             )
         }.onFailure { e -> _status.update { it.copy(error = "Advertising refused: ${e.message}") } }
     }
 
     private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) { exec.execute { maybeMeet(result.device) } }
-        override fun onBatchScanResults(results: MutableList<ScanResult>) { exec.execute { results.forEach { maybeMeet(it.device) } } }
+        override fun onScanResult(callbackType: Int, result: ScanResult) { exec.execute { maybeMeet(result.device, heardOnCoded(result)) } }
+        override fun onBatchScanResults(results: MutableList<ScanResult>) { exec.execute { results.forEach { maybeMeet(it.device, heardOnCoded(it)) } } }
         override fun onScanFailed(errorCode: Int) { _status.update { it.copy(scanning = false, error = "Scan failed ($errorCode)") } }
     }
 
@@ -169,7 +206,10 @@ class MeshNode(
             // Filtered on the service, so the scan keeps running with the screen off.
             sc.startScan(
                 listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID)).build()),
-                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build(),
+                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).apply {
+                    // Extended and coded advertisements as well as ordinary ones.
+                    if (longRange) setLegacy(false).setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
+                }.build(),
                 scanCallback
             )
             _status.update { it.copy(scanning = true) }
@@ -178,7 +218,9 @@ class MeshNode(
 
     // ── Client side: this phone connects ──────────────────────────────────
 
-    private fun maybeMeet(device: BluetoothDevice) {
+    private fun heardOnCoded(result: ScanResult): Boolean = longRange && result.primaryPhy == BluetoothDevice.PHY_LE_CODED
+
+    private fun maybeMeet(device: BluetoothDevice, coded: Boolean = false) {
         if (!_status.value.running) return
         val addr = device.address ?: return
         val now = System.currentTimeMillis()
@@ -188,7 +230,10 @@ class MeshNode(
         val c = Conn(device, initiator = true)
         clientConns[addr] = c
         c.timeout = exec.schedule(Runnable { end(c) }, MEETING_MS, TimeUnit.MILLISECONDS)
-        c.gatt = runCatching { device.connectGatt(app, false, clientCallback, BluetoothDevice.TRANSPORT_LE) }.getOrNull()
+        // A phone heard only on the coded mode is likely out of reach of the ordinary one:
+        // connect on coded too (the stack picks the faster mode when both work).
+        val phy = if (coded) BluetoothDevice.PHY_LE_1M_MASK or BluetoothDevice.PHY_LE_CODED_MASK else BluetoothDevice.PHY_LE_1M_MASK
+        c.gatt = runCatching { device.connectGatt(app, false, clientCallback, BluetoothDevice.TRANSPORT_LE, phy) }.getOrNull()
         if (c.gatt == null) end(c)
     }
 
