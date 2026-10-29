@@ -243,8 +243,12 @@ class Tracker(
         entry.score = score
         entry.confidence = confidence
 
+        // Moving with you is CRITICAL for a recognised tracker. For a device nothing
+        // identifies it is HIGH: that is how a hardwired GPS box looks, and also how a
+        // companion's phone, a passenger's earbuds or the bus's own electronics look,
+        // and the alert says so rather than declaring every one of them a tracker.
         val threat = when {
-            entry.following -> Threat.CRITICAL
+            entry.following -> if (isRecognisedTracker(entry.tracker)) Threat.CRITICAL else Threat.HIGH
             entry.tracker != null -> entry.tracker!!.threat
             entry.persistent -> Threat.MEDIUM
             else -> Threat.LOW
@@ -281,6 +285,10 @@ class Tracker(
 
         return Observation(detection, entry.following && !wasFollowing)
     }
+
+    /** A tag made for finding things (AirTag, Tile, SmartTag…), not a beacon or a device we only half recognise. */
+    private fun isRecognisedTracker(type: TrackerType?): Boolean =
+        type != null && (type.threat == Threat.CRITICAL || type.threat == Threat.HIGH)
 
     /**
      * Attaches what a tracker said over DULT to its row. Partial results arrive as

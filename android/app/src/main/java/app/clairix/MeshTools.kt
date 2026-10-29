@@ -73,6 +73,11 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                     status.running -> "Starting"
                     else -> "Not running"
                 })
+                KeyValueRow("Long range", when {
+                    !on || !status.running -> "Off"
+                    status.longRange -> "On"
+                    else -> "This phone's Bluetooth does not have it"
+                })
                 KeyValueRow("Meetings", "${status.meetings}")
                 KeyValueRow("Last meeting", if (status.lastMeetingAt == 0L) "None yet" else "${(now - status.lastMeetingAt) / 60_000} min ago")
                 KeyValueRow("Carrying", "${status.carrying} message${if (status.carrying == 1) "" else "s"}")
@@ -84,7 +89,8 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
         item(key = "§limits") {
             Notice(
                 Tone.Info, title = "Limits",
-                text = "Bluetooth reaches a few tens of metres, so a message moves when phones pass each other. Photos, videos and " +
+                text = "Bluetooth reaches a few tens of metres; phones with Bluetooth's long-range mode (shown above) reach several " +
+                    "times farther between each other, out in the open. A message moves when phones pass each other. Photos, videos and " +
                     "calls stay for the relay. A contact can be reached only after one message has gone through the relay, which is " +
                     "how the two phones' sessions start. Messages are carried for ${MeshProtocol.TTL_MS / 3_600_000} hours and at most " +
                     "${MeshProtocol.MAX_HOPS} hops. The relay keeps trying as well; whichever copy arrives second is dropped."

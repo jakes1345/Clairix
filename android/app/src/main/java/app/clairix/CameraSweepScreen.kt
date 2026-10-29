@@ -50,11 +50,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.CameraFindMethod
 import app.clairix.analysis.CameraFinding
 import app.clairix.analysis.GlintBlob
+import app.clairix.analysis.GlintTracker
+import app.clairix.analysis.OpticalState
 import app.clairix.analysis.HiddenCameraScanner
 import app.clairix.analysis.LensGlintAnalyzer
 import app.clairix.analysis.OpticalMode
@@ -68,7 +71,10 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import app.clairix.ui.theme.ClairixTheme
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.selection.toggleable
 import app.clairix.ui.components.*
 import androidx.compose.foundation.layout.PaddingValues
@@ -163,7 +169,16 @@ private fun OpticalTab(findings: List<CameraFinding>) {
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    var askedOnce by rememberSaveable { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it; askedOnce = true }
+    val activity = ctx as? android.app.Activity
+    // Re-read the permission on return from Settings.
+    LifecycleResumeEffect(Unit) {
+        granted = ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        onPauseOrDispose { }
+    }
+    val blocked = askedOnce && !granted && activity != null &&
+        !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
     var modeIndex by rememberSaveable { mutableStateOf(0) }
     val mode = OpticalMode.entries[modeIndex.coerceIn(0, OpticalMode.entries.size - 1)]
     var live by rememberSaveable { mutableStateOf(true) }
@@ -195,7 +210,17 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                     color = ClairixTheme.colors.textMuted
                 )
                 Spacer(Modifier.height(8.dp))
-                PrimaryButton("Allow camera", onClick = { ask.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth())
+                if (blocked) {
+                    // Android no longer shows the prompt once it has been refused for good: only Settings can grant it.
+                    PrimaryButton("Open app settings", onClick = {
+                        ctx.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                .setData(android.net.Uri.fromParts("package", ctx.packageName, null))
+                        )
+                    }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    PrimaryButton("Allow camera", onClick = { ask.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth())
+                }
             }
         } else {
             Box(
@@ -217,11 +242,14 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                     val status = when {
                         state.error != null -> state.error!!
                         !state.running -> "Opening camera…"
-                        state.tooBright -> "Too bright for IR — darken the room"
-                        state.washedOut -> "Washed out — back away from the surface"
+                        mode == OpticalMode.GLINT && !state.hasTorch -> "This camera has no torch, so the glint check cannot work"
+                        state.checking -> "Checking a spot: torch off for a moment"
+                        state.tooBright -> "Too bright for IR. Darken the room"
+                        state.washedOut -> "Washed out. Back away from the surface"
                         state.tracks.any { it.candidate } -> "Steady reflection. Look for a pinhole"
-                        state.tracks.isNotEmpty() -> "${state.tracks.size} bright spot(s), none steady yet"
-                        else -> if (mode == OpticalMode.GLINT) "Pan slowly, torch on" else "Point at suspect objects"
+                        state.tracks.any { !it.lightSource } -> "${state.tracks.count { !it.lightSource }} bright spot(s), hold still"
+                        state.tracks.isNotEmpty() -> "Only light sources in view"
+                        else -> if (mode == OpticalMode.GLINT) "Hold still over each area, torch on" else "Point at suspect objects"
                     }
                     val col = when {
                         state.error != null -> ClairixTheme.colors.danger
@@ -229,7 +257,11 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                         state.tooBright || state.washedOut -> ClairixTheme.colors.caution
                         else -> ClairixTheme.colors.textMuted
                     }
-                    Text(status, style = MaterialTheme.typography.labelMedium, color = col, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        status, style = MaterialTheme.typography.labelMedium, color = col, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        // Read out as it changes, so a spot turning red reaches screen-reader users too.
+                        modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }
+                    )
                     Text(
                         "Y ${state.meanLuma.roundToInt()} · Δ${(state.lumaChange * 100).roundToInt()}% · ${state.fps.roundToInt()} fps",
                         style = MaterialTheme.typography.monoSmall,
@@ -243,14 +275,14 @@ private fun OpticalTab(findings: List<CameraFinding>) {
             if (mode == OpticalMode.GLINT) {
                 Text("How glint works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "The torch is on. A lens — even a pinhole — sends light straight back along its own axis, so it shows as a tiny round spot that stays put while you move. Screw heads, glass edges and chrome flash too, but their highlights slide. Hold the phone still for about a second over a suspect area; a circle turns red once a spot has held completely still for ${LensGlintAnalyzer.MIN_PERSISTENCE} consecutive frames.",
+                    "The torch is on. A lens, even a pinhole, sends light straight back along its own axis, so it shows as a tiny round spot. Hold the phone still over each suspect area for about a second. A spot that stays put is tested: the torch blinks off for a moment, and a reflection goes dark with it while a light (a standby LED, a screen) stays lit. Reflections turn red; lights are shown grey and never reported. Screw heads, glass and chrome flash too, but their highlights slide as you move.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
             } else {
                 Text("How the IR view works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "Torch off, front camera. Night-vision cameras light the room with 850 nm infrared LEDs; the eye sees nothing, but the front camera's IR filter is weak and shows them as a white or violet dot. Make the room as dark as you can — the view greys out if there is too much visible light — and point the screen side at smoke detectors, clocks, chargers and vents.",
+                    "Torch off, front camera. Night-vision cameras light the room with 850 nm infrared LEDs the eye cannot see; some phones' front cameras let that light through as a white or violet dot. First check yours: point a TV remote at the front camera and press a button. If you see it flash here, this check works on your phone; if not, this phone cannot see infrared and an empty result means nothing. Then make the room as dark as you can (the view greys out if there is too much light) and point the screen side at smoke detectors, clocks, chargers and vents.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -285,11 +317,25 @@ private fun CameraViewfinder(mode: OpticalMode) {
         HiddenCameraScanner.opticalStarting(mode)
         var provider: ProcessCameraProvider? = null
         var cancelled = false
+        // Set once the camera is bound; the analyzer asks for the torch through it.
+        var control: androidx.camera.core.CameraControl? = null
+        // The torch as the analyzer last asked for it: off only while it tests a spot.
+        var torchWanted = mode.torch
         val analyzer = LensGlintAnalyzer(
             mode = mode, mirrored = mode.frontCamera,
+            torch = if (mode.torch) { on ->
+                torchWanted = on
+                ContextCompat.getMainExecutor(ctx).execute { runCatching { control?.enableTorch(on) } }
+            } else null,
             onState = { HiddenCameraScanner.publishOptical(it) },
             onCandidate = { HiddenCameraScanner.opticalCandidate(ctx, mode, it) }
         )
+        // CameraX turns the torch off when the camera closes in the background and does not
+        // turn it back on: do it on every resume.
+        val resumeObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && mode.torch) runCatching { control?.enableTorch(torchWanted) }
+        }
+        owner.lifecycle.addObserver(resumeObserver)
         val future = ProcessCameraProvider.getInstance(ctx)
         future.addListener({
             if (cancelled) return@addListener
@@ -310,13 +356,19 @@ private fun CameraViewfinder(mode: OpticalMode) {
                 analysis.setAnalyzer(executor, analyzer)
                 p.unbindAll()
                 val camera = p.bindToLifecycle(owner, selector, preview, analysis)
-                if (mode.torch && camera.cameraInfo.hasFlashUnit()) camera.cameraControl.enableTorch(true)
+                if (mode.torch && camera.cameraInfo.hasFlashUnit()) {
+                    control = camera.cameraControl
+                    camera.cameraControl.enableTorch(true)
+                } else if (mode.torch) {
+                    HiddenCameraScanner.publishOptical(OpticalState(mode = mode, running = true, torchOn = false, hasTorch = false))
+                }
             } catch (e: Exception) {
                 HiddenCameraScanner.opticalError(mode, e.message)
             }
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
             cancelled = true
+            owner.lifecycle.removeObserver(resumeObserver)
             analyzer.close()
             runCatching { provider?.unbindAll() }
             HiddenCameraScanner.opticalStopped(mode)
@@ -335,7 +387,8 @@ private fun GlintOverlay(tracks: List<GlintBlob>) {
             val r = max(14.dp.toPx(), b.radius * min(size.width, size.height) * 3f)
             val col = when {
                 b.candidate -> palette.danger
-                b.persistence >= LensGlintAnalyzer.MIN_PERSISTENCE / 2 -> palette.caution
+                b.lightSource -> palette.textMuted.copy(alpha = 0.3f)
+                b.heldMs >= GlintTracker.HOLD_MS / 2 -> palette.caution
                 else -> palette.textMuted.copy(alpha = 0.45f)
             }
             drawCircle(col, r, c, style = Stroke(width = if (b.candidate) 3.dp.toPx() else 1.5.dp.toPx()))
@@ -439,7 +492,8 @@ private fun WirelessTab(findings: List<CameraFinding>) {
             state.wifiError?.let { SweepWarning(it) }
             if (state.wifiScannedTs > 0) {
                 Text(
-                    "Scanned ${fmtAgo(now, state.wifiScannedTs)} · ${state.wifiApsSeen} networks in range",
+                    "Readings from ${fmtAgo(now, state.wifiScannedTs)} · ${state.wifiApsSeen} networks in range" +
+                        if (now - state.wifiScannedTs > 30_000L) " · Android limits Wi-Fi scans to four every two minutes" else "",
                     style = MaterialTheme.typography.monoSmall,
                     color = ClairixTheme.colors.textSubtle
                 )

@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleStartEffect
 import app.clairix.analysis.Ultrasonic
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.KeyValueRow
@@ -103,8 +104,10 @@ internal fun UltrasoundScreen() {
         state = state.copy(listening = false, selfTest = if (state.selfTest == SelfTest.RUNNING) SelfTest.NOT_RUN else state.selfTest)
     }
 
-    // The microphone is never left open behind the page.
+    // The microphone is never left open behind the page, nor while the app is in
+    // the background: leaving the app stops the session, as the Stop button would.
     DisposableEffect(Unit) { onDispose { job?.cancel() } }
+    LifecycleStartEffect(Unit) { onStopOrDispose { if (job?.isActive == true) stop() } }
 
     val found = state.heard.values.sortedByDescending { it.snrDb }
     ScreenList {

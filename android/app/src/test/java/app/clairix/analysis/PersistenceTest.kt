@@ -3,6 +3,8 @@ package app.clairix.analysis
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import app.clairix.Threat
+import app.clairix.detect.Signatures
 import org.junit.Test
 
 /**
@@ -14,8 +16,8 @@ class PersistenceTest {
     private val t0 = 1_700_000_000_000L
     private val t1 = t0 + 13 * 60_000L
 
-    private fun Tracker.see(key: String, at: Long, metresNorth: Double) = observe(
-        key = key, address = key, rssi = -60, tracker = null, approxMetres = null,
+    private fun Tracker.see(key: String, at: Long, metresNorth: Double, type: app.clairix.TrackerType? = null) = observe(
+        key = key, address = key, rssi = -60, tracker = type, approxMetres = null,
         rotations = 0, addresses = 1,
         fix = Fix(lat = 40.0 + metresNorth / 111_195.0, lon = -75.0, speed = 12f, time = at),
         hasPosition = true, now = at
@@ -99,5 +101,22 @@ class PersistenceTest {
         for (i in 1..12) last = tracker.see("tag", t0 + i * 60_000L, i * 170.0)
         assertTrue(last.following)
         assertTrue(MAX_PERSIST_THRESHOLD_MS < 15 * 60_000L)
+    }
+
+    @Test
+    fun aRecognisedTrackerMovingWithYouIsCriticalAnythingElseIsHigh() {
+        // Twelve minutes, two kilometres: both have moved with you.
+        val tracker = Tracker()
+        var tag = tracker.see("tag", t0, 0.0, Signatures.AIRTAG)
+        var phone = tracker.see("phone", t0, 0.0)
+        for (i in 1..13) {
+            tag = tracker.see("tag", t0 + i * 60_000L, i * 170.0, Signatures.AIRTAG)
+            phone = tracker.see("phone", t0 + i * 60_000L, i * 170.0)
+        }
+        assertTrue(tag.following)
+        assertTrue(phone.following)
+        assertEquals(Threat.CRITICAL, tag.threat)
+        // A companion's phone looks like this too; it is not called a tracker.
+        assertEquals(Threat.HIGH, phone.threat)
     }
 }

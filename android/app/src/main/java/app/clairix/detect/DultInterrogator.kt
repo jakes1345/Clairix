@@ -80,27 +80,33 @@ data class DultResult(
  */
 object DultInterrogator {
 
-    /** DULT Non-Owner Service. */
-    val NON_OWNER_SERVICE: UUID = UUID.fromString("15190001-12F4-C99E-7DFA-3C4B7A2B6A1D")
+    /** DULT Non-Owner Service (draft-ietf-dult-accessory-protocol, section 3.11). */
+    val NON_OWNER_SERVICE: UUID = UUID.fromString("15190001-12F4-C226-88ED-2AC5579F2A85")
 
-    /** Non-owner control point: write-with-response for commands, indicate for answers. */
-    val CONTROL_POINT: UUID = UUID.fromString("8E0C0001-1D68-FB79-7825-05A2BD6D6E3A")
+    /** The accessory non-owner characteristic: write-with-response for commands, indicate for answers. */
+    val CONTROL_POINT: UUID = UUID.fromString("8E0C0001-1D68-FB92-BF61-48377421680E")
 
     private val CLIENT_CONFIG: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-    const val OP_GET_PRODUCT_DATA = 0x03
-    const val OP_GET_MANUFACTURER_NAME = 0x04
-    const val OP_GET_MODEL_NAME = 0x05
-    const val OP_GET_ACCESSORY_CATEGORY = 0x06
-    const val OP_GET_IDENTIFIER = 0x07
-    const val OP_SOUND_START = 0x0E
-    const val OP_SOUND_STOP = 0x0F
+    // Opcodes from the draft's tables 4 and 18; sent and received little-endian.
+    const val OP_GET_PRODUCT_DATA = 0x0003
+    const val OP_GET_MANUFACTURER_NAME = 0x0004
+    const val OP_GET_MODEL_NAME = 0x0005
+    const val OP_GET_ACCESSORY_CATEGORY = 0x0006
+    const val OP_SOUND_START = 0x0300
+    const val OP_SOUND_STOP = 0x0301
+    /** Optional, and answered only after the owner of the tracker in hand has done something on it; otherwise Invalid_state. */
+    const val OP_GET_IDENTIFIER = 0x0404
+    private const val OP_GET_IDENTIFIER_RESPONSE = 0x0405
 
-    /** DULT "Get_*_Response" opcodes are the request opcode with bit 11 set. */
+    /** The accessory-information responses (0x0003–0x000D) are the request opcode with bit 11 set. */
     private const val RESPONSE_FLAG = 0x0800
+    private const val INFO_OPS_LAST = 0x000D
 
-    /** DULT Command_Response opcode: echoes the command and carries a status word. */
+    /** Command_Response: [0x0302][echoed opcode][status], each a little-endian 16-bit word. */
     private const val OP_COMMAND_RESPONSE = 0x0302
+    /** Command_Response status 0x0000 is Success; anything else is a refusal. */
+    private const val STATUS_SUCCESS = 0x0000
 
     /** Whole session budget: connect, discover, subscribe, every query, disconnect. */
     const val TIMEOUT_MS = 10_000L
@@ -117,7 +123,7 @@ object DultInterrogator {
      */
     val SUPPORTED: Set<String> = setOf(
         "airtag", "findmy", "tile", "chipolo", "chipolo_spot",
-        "pebblebee", "motorola_tag", "smarttag", "smarttag2"
+        "pebblebee", "motorola_tag", "smarttag", "google_find_hub", "dult"
     )
 
     /**
@@ -211,12 +217,15 @@ object DultInterrogator {
                 pending = next
                 op = next
             }
-            if (!writeCharacteristic(gatt, cp, encode(op))) finish("Write of opcode 0x%02X failed".format(op))
+            if (!writeCharacteristic(gatt, cp, encode(op))) finish("Write of opcode 0x%04X failed".format(op))
         }
 
         fun onIndication(value: ByteArray) {
             val op = synchronized(lock) { pending } ?: return
-            val updated = parse(op, value, result)
+            // Indications that answer something else (a Sound_Completed, a late reply)
+            // are not the answer to the command in flight.
+            val answer = answer(op, value) ?: return
+            val updated = apply(op, answer, result)
             synchronized(lock) { result = updated; pending = null }
             trySend(updated)
             sendNext()
@@ -327,47 +336,51 @@ object DultInterrogator {
     // ── Wire format ──────────────────────────────────────────────────────────
 
     /** DULT frames begin with a little-endian 16-bit opcode. */
-    private fun encode(op: Int): ByteArray = byteArrayOf((op and 0xFF).toByte(), ((op shr 8) and 0xFF).toByte())
+    internal fun encode(op: Int): ByteArray = byteArrayOf((op and 0xFF).toByte(), ((op shr 8) and 0xFF).toByte())
 
     private fun le16(bytes: ByteArray, at: Int): Int =
         (bytes[at].toInt() and 0xFF) or ((bytes[at + 1].toInt() and 0xFF) shl 8)
 
+    /** An indication that answers the command in flight: its operand, and the status for a Command_Response. */
+    internal class Answer(val body: ByteArray, val status: Int)
+
     /**
-     * Strips the response header when one is present. A Get_* answer leads with the
-     * request opcode plus the response flag; a control command answers with
-     * Command_Response, which echoes the opcode and adds a status word. Firmware that
-     * sends the bare operand is accepted as it is — one command is outstanding at a
-     * time, so there is no ambiguity about what the bytes answer.
+     * Whether [value] answers [op], and with what. An accessory-information request
+     * is answered by its own opcode with bit 11 set; Get_Identifier by
+     * Get_Identifier_Response; and any command, or a request the tracker refuses, by
+     * a Command_Response echoing the opcode with a status. Anything else, such as
+     * the Sound_Completed that follows a sound, answers nothing in flight: null.
      */
-    private fun operand(op: Int, value: ByteArray): ByteArray {
-        if (value.size < 2) return value
-        val head = le16(value, 0)
-        if (head == (op or RESPONSE_FLAG) || head == op) return value.copyOfRange(2, value.size)
-        if (head == OP_COMMAND_RESPONSE) {
-            // Command_Response: [0x0302][echoed opcode][status]
-            return if (value.size >= 4) value.copyOfRange(4, value.size) else ByteArray(0)
+    internal fun answer(op: Int, value: ByteArray): Answer? {
+        if (value.size < 2) return null
+        val rest = value.copyOfRange(2, value.size)
+        return when (le16(value, 0)) {
+            OP_COMMAND_RESPONSE ->
+                if (value.size >= 6 && le16(value, 2) == op) Answer(ByteArray(0), le16(value, 4)) else null
+            OP_GET_IDENTIFIER_RESPONSE -> if (op == OP_GET_IDENTIFIER) Answer(rest, STATUS_SUCCESS) else null
+            op or RESPONSE_FLAG -> if (op <= INFO_OPS_LAST) Answer(rest, STATUS_SUCCESS) else null
+            else -> null
         }
-        return value
     }
 
-    private fun parse(op: Int, value: ByteArray, current: DultResult): DultResult {
-        val body = operand(op, value)
+    internal fun apply(op: Int, answer: Answer, current: DultResult): DultResult {
+        val ok = answer.status == STATUS_SUCCESS
+        val body = answer.body
         return when (op) {
-            OP_GET_MANUFACTURER_NAME -> current.copy(manufacturer = utf8(body) ?: current.manufacturer)
-            OP_GET_MODEL_NAME -> current.copy(model = utf8(body) ?: current.model)
-            OP_GET_ACCESSORY_CATEGORY ->
-                current.copy(category = categoryName(body.firstOrNull()?.toInt()?.and(0xFF)) ?: current.category)
-            OP_GET_PRODUCT_DATA -> current.copy(productData = hex(body).takeIf { it.isNotEmpty() } ?: current.productData)
-            OP_GET_IDENTIFIER -> current.copy(serialHash = if (body.isEmpty()) current.serialHash else serialHash(body))
-            OP_SOUND_START -> current.copy(soundStarted = statusOk(body))
-            OP_SOUND_STOP -> current.copy(soundStarted = false)
-            else -> current
+            OP_SOUND_START -> current.copy(soundStarted = ok)
+            OP_SOUND_STOP -> if (ok) current.copy(soundStarted = false) else current
+            // A refused query (Invalid_state, Invalid_command) leaves the field as it was.
+            else -> if (!ok || body.isEmpty()) current else when (op) {
+                OP_GET_MANUFACTURER_NAME -> current.copy(manufacturer = utf8(body) ?: current.manufacturer)
+                OP_GET_MODEL_NAME -> current.copy(model = utf8(body) ?: current.model)
+                OP_GET_ACCESSORY_CATEGORY ->
+                    current.copy(category = categoryName(body[0].toInt() and 0xFF) ?: current.category)
+                OP_GET_PRODUCT_DATA -> current.copy(productData = hex(body))
+                OP_GET_IDENTIFIER -> current.copy(serialHash = serialHash(body))
+                else -> current
+            }
         }
     }
-
-    /** Command status word, little-endian, zero meaning success; an empty acknowledgement counts as success. */
-    private fun statusOk(body: ByteArray): Boolean =
-        body.size < 2 || le16(body, body.size - 2) == 0
 
     private fun utf8(bytes: ByteArray): String? {
         if (bytes.isEmpty()) return null

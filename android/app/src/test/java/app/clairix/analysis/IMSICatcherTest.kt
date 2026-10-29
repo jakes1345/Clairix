@@ -93,6 +93,17 @@ class IMSICatcherTest {
     }
 
     @Test
+    fun aSettledPhoneCountsAsStationaryWithoutAFreshFix() {
+        // Settled phones get a fix every few minutes, so the newest one is usually
+        // past FIX_STALE_MS. The scanner's confirmed stillness stands in for it.
+        val c = catcher()
+        c.recordAndAnalyze(cell("A", tac = "100"), fixAt(0.0, speed = null), settled = true)
+        now += 4 * 60_000L
+        val still = c.recordAndAnalyze(cell("B", tac = "200"), fixAt(0.0, speed = null).copy(time = now - 4 * 60_000L), settled = true)
+        assertTrue(still.map { it.id }.toString(), still.any { it.id == "tac_change_stationary" })
+    }
+
+    @Test
     fun aStalePreviousFixDoesNotMakeTheCurrentOneStationary() {
         val c = catcher()
         c.recordAndAnalyze(cell("A", tac = "100"), fixAt(0.0, speed = null))

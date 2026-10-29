@@ -20,6 +20,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.Sensor
+import android.hardware.SensorManager
+import android.hardware.TriggerEvent
+import android.hardware.TriggerEventListener
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
@@ -45,6 +49,7 @@ import app.clairix.analysis.IMSICatcher
 import app.clairix.analysis.IdentityResolver
 import app.clairix.analysis.LocationHistory
 import app.clairix.analysis.LocationTrack
+import app.clairix.analysis.MotionPolicy
 import app.clairix.analysis.Tracker
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.analysis.WifiScanner
@@ -65,6 +70,7 @@ import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -72,6 +78,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.Collections
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 class ScanService : LifecycleService() {
 
@@ -108,7 +118,7 @@ class ScanService : LifecycleService() {
     private lateinit var eventLog: EventLog
     private lateinit var cellStore: Store
 
-    private val alerted = HashSet<String>()
+    private val alerted: MutableSet<String> = Collections.synchronizedSet(HashSet())
     private val gpsTrail = ArrayList<LatLon>(500)
     private var publishCycle = 0
     private lateinit var phoneHealthMonitor: PhoneHealthMonitor
@@ -141,9 +151,47 @@ class ScanService : LifecycleService() {
     /** When each piece of surveillance hardware was last written up, by address; a battery advertises several times a second. */
     private val infrastructureAlertedAt = HashMap<String, Long>()
 
+    /**
+     * Where each packet is worked on. The scanner delivers its callbacks on the main
+     * thread, and resolving identities, cadence and the tracker for every advert there
+     * kept the UI thread (and with it the CPU) busy with every phone and earbud nearby.
+     * One thread, so packets are still handled in the order they arrived.
+     */
+    private val bleExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { r -> Thread(r, "ble-packets").apply { isDaemon = true } }
+
+    private fun post(results: List<ScanResult>) {
+        try {
+            bleExecutor.execute { for (r in results) runCatching { handle(r) } }
+        } catch (_: RejectedExecutionException) {
+            // The service is gone; a packet that arrived on the way out is dropped.
+        }
+    }
+
+    /** How hard the scanner works for its position; see [applyPace]. */
+    private val motion = MotionPolicy()
+
+    /** The significant-motion sensor, a one-shot hardware trigger re-armed each time the phone settles. */
+    private val motionSensor: Sensor? by lazy {
+        getSystemService(SensorManager::class.java)?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
+    }
+    private val motionTrigger = object : TriggerEventListener() {
+        override fun onTrigger(event: TriggerEvent?) {
+            motion.onMotion(System.currentTimeMillis())?.let { applyPace(it) }
+        }
+    }
+
+    /** Cuts the publish loop's wait short, so the screen coming on shows live data at once. */
+    private val publishKick = Channel<Unit>(Channel.CONFLATED)
+    private var lastHealthAt = 0L
+    private var lastWifiAt = 0L
+
+    /** The nearest mapped plate reader per address, so a battery advertising several times a second is not looked up against every camera each time. */
+    private val nearestCameraCache = HashMap<String, Triple<Long, Double?, String?>>()
+
     private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) { handle(result) }
-        override fun onBatchScanResults(results: MutableList<ScanResult>) { results.forEach { handle(it) } }
+        override fun onScanResult(callbackType: Int, result: ScanResult) { post(listOf(result)) }
+        override fun onBatchScanResults(results: MutableList<ScanResult>) { post(ArrayList(results)) }
         override fun onScanFailed(errorCode: Int) {
             // A scan that is already running is not an error worth showing.
             if (errorCode == ScanCallback.SCAN_FAILED_ALREADY_STARTED) return
@@ -178,6 +226,7 @@ class ScanService : LifecycleService() {
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val fix = result.lastLocation?.toFix() ?: return
+            motion.onFix(fix)?.let { applyPace(it) }
             LocationHistory.record(this@ScanService, fix)
             track.update(fix)
             updateVehicle(fix)
@@ -203,7 +252,7 @@ class ScanService : LifecycleService() {
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_ON -> { screenOn = true; restartScan() }
+                Intent.ACTION_SCREEN_ON -> { screenOn = true; restartScan(); publishKick.trySend(Unit) }
                 Intent.ACTION_SCREEN_OFF -> { screenOn = false; restartScan() }
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
                     when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
@@ -434,10 +483,16 @@ class ScanService : LifecycleService() {
         // The first minutes of a drive get the intensive sweep — see [beginTrip].
         val mode = if (System.currentTimeMillis() < intensiveUntil) ScanSettings.SCAN_MODE_LOW_LATENCY
         else AppSettings.scanMode
+        // With the screen off nobody is watching the list, so the controller may hold
+        // results and hand them over in batches: the CPU sleeps between them instead of
+        // waking for every advert. Not during a drive, where a few seconds' delay puts
+        // a roadside camera hundreds of metres from where it was heard.
+        val batch = !screenOn && !vehicleTrips.inTrip &&
+            runCatching { adapter.isOffloadedScanBatchingSupported }.getOrDefault(false)
         val settings = ScanSettings.Builder()
             .setScanMode(mode)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-            .setLegacy(false).setReportDelay(0).build()
+            .setLegacy(false).setReportDelay(if (batch) SCREEN_OFF_BATCH_MS else 0L).build()
 
         // Android 8.1+ suspends an *unfiltered* scan once the screen goes off, so a
         // filter list is the price of scanning with the phone in a pocket. But any
@@ -464,17 +519,43 @@ class ScanService : LifecycleService() {
             Registry.update { it.copy(hasFix = false) }
             return
         }
-        // High accuracy, not balanced: balanced power returns Wi-Fi/cell fixes of
-        // ~100 m or worse, and ObservationArea discards anything over 50 m, so places
-        // never accumulated and nothing could ever be confirmed as following. This
-        // is already a location foreground service; GPS is what it is for.
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 15_000L)
-            .setMinUpdateIntervalMillis(10_000L).setMinUpdateDistanceMeters(25f).build()
+        motion.start(System.currentTimeMillis())
+        applyPace(MotionPolicy.Pace.MOVING)
+    }
+
+    /**
+     * Moving: high accuracy, not balanced. Balanced power returns Wi-Fi/cell fixes of
+     * ~100 m or worse, and ObservationArea discards anything over 50 m, so places never
+     * accumulated and nothing could ever be confirmed as following.
+     *
+     * Settled ([MotionPolicy]): a phone that is going nowhere makes no new places, and
+     * GPS every fifteen seconds was most of the scanner's battery use. A Wi-Fi/cell fix
+     * every few minutes keeps the position fresh for the cell checks that need one,
+     * and with no distance filter they get it. The significant-motion sensor, or the
+     * next fix that has moved, brings GPS back.
+     */
+    private fun applyPace(pace: MotionPolicy.Pace) {
+        if (!running || !granted(Manifest.permission.ACCESS_FINE_LOCATION)) return
+        val request = when (pace) {
+            MotionPolicy.Pace.MOVING -> LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 15_000L)
+                .setMinUpdateIntervalMillis(10_000L).setMinUpdateDistanceMeters(25f).build()
+            MotionPolicy.Pace.STILL -> LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, SETTLED_FIX_MS)
+                .setMinUpdateIntervalMillis(60_000L).build()
+        }
         try {
+            // The same callback again replaces the earlier request.
             location.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
         } catch (e: SecurityException) {
             Registry.update { it.copy(hasFix = false, error = "Location denied: ${e.message}") }
+            return
         }
+        val sensors = getSystemService(SensorManager::class.java)
+        val sensor = motionSensor
+        if (sensors != null && sensor != null) {
+            if (pace == MotionPolicy.Pace.STILL) sensors.requestTriggerSensor(motionTrigger, sensor)
+            else sensors.cancelTriggerSensor(motionTrigger, sensor)
+        }
+        GnssMonitor.setSettled(pace == MotionPolicy.Pace.STILL)
     }
 
     // Cell sampling reads the modem and writes the baseline to disk. Both belong off
@@ -500,7 +581,7 @@ class ScanService : LifecycleService() {
                         val cell = snapshot.cell
                         runCatching { app.clairix.analysis.CellularExposure.noteServing(this@ScanService, cell) }
                         val fix = track.current
-                        val findings = imsiCatcher.recordAndAnalyze(cell, fix)
+                        val findings = imsiCatcher.recordAndAnalyze(cell, fix, settled = motion.confirmedStill(System.currentTimeMillis()))
                         val (score, level) = imsiCatcher.scoreAndLevel(findings)
                         val (knownCells, visits, maturity) = imsiCatcher.stats()
                         Registry.publishCell(
@@ -534,7 +615,10 @@ class ScanService : LifecycleService() {
                         }
                     }
                 }
-                delay(15_000L)
+                // The modem is asked for a fresh reading each time. While the phone is
+                // in use or on the move cells change quickly; settled in a pocket,
+                // thirty seconds still gives the five-minute checks ten readings.
+                delay(if (screenOn || motion.pace == MotionPolicy.Pace.MOVING) 15_000L else 30_000L)
             }
         }
     }
@@ -602,9 +686,14 @@ class ScanService : LifecycleService() {
                 } else emptyList()
                 Registry.publishMap(MapData(trail, deviceTrails, cellMarkers))
 
-                // Phone health: immediately on first cycle, then every ~30s
+                // Phone health: at once, then every 30 s while the screen is on, every
+                // five minutes while it is off: what it reads changes when someone
+                // is using the phone, and the microphone and camera are watched
+                // through callbacks in between.
                 publishCycle++
-                if (publishCycle == 1 || publishCycle % 20 == 0) {
+                val healthEvery = if (screenOn) 30_000L else 5 * 60_000L
+                if (publishCycle == 1 || now - lastHealthAt >= healthEvery) {
+                    lastHealthAt = now
                     phoneHealthMonitor.scanAndPublish()
                     // Unlock ledger: pull the platform's keyguard events and judge
                     // the sleep window, so a night-time unlock is reported while
@@ -612,8 +701,16 @@ class ScanService : LifecycleService() {
                     withContext(Dispatchers.IO) { runCatching { UnlockLedger.refresh(this@ScanService) } }
                 }
 
-                // WiFi anomaly scan: immediately on first cycle, then every ~60s
-                if (publishCycle == 1 || publishCycle % 40 == 0) {
+                // Wi-Fi anomaly scan: at once, then every minute while the screen is on;
+                // with it off, every two minutes on the move and every ten settled,
+                // where the networks around do not change.
+                val wifiEvery = when {
+                    screenOn -> 60_000L
+                    motion.pace == MotionPolicy.Pace.MOVING -> 2 * 60_000L
+                    else -> 10 * 60_000L
+                }
+                if (publishCycle == 1 || now - lastWifiAt >= wifiEvery) {
+                    lastWifiAt = now
                     // The picture the WIFI tab shows, then the judgement on it. The
                     // snapshot requests a fresh scan and waits for its results, so both
                     // it and the anomaly scan below read this cycle's beacons rather than
@@ -683,7 +780,12 @@ class ScanService : LifecycleService() {
                     }
                 }
 
-                delay(1500)
+                motion.tick(now)?.let { pace -> withContext(Dispatchers.Main) { applyPace(pace) } }
+
+                // The list and the map are for someone looking at them: every 1.5 s
+                // while the screen is on, every 10 s while it is off. Alerts do not
+                // wait for this; they are raised as packets arrive.
+                withTimeoutOrNull(if (screenOn) 1_500L else 10_000L) { publishKick.receive() }
             }
         }
     }
@@ -752,9 +854,9 @@ class ScanService : LifecycleService() {
                     id = "following@${observation.detection.key}@$now",
                     kind = EventKind.FOLLOWING,
                     ts = now,
-                    title = "${observation.detection.name} is following you",
+                    title = followingTitle(observation.detection),
                     detail = "Confirmed over ${observation.detection.displacementM.toInt()} m, ${observation.detection.sightings} sightings",
-                    severity = Severity.CRITICAL,
+                    severity = if (observation.detection.threat == Threat.CRITICAL) Severity.CRITICAL else Severity.HIGH,
                     lat = fix?.lat, lon = fix?.lon
                 ),
                 dedupeKey = "following@${observation.detection.key}"
@@ -781,7 +883,11 @@ class ScanService : LifecycleService() {
         val fix = track.current
         var nearestM: Double? = null
         var nearestLabel: String? = null
-        if (fix != null) {
+        val cached = synchronized(nearestCameraCache) { nearestCameraCache[address] }
+        if (cached != null && now - cached.first < NEAREST_CAMERA_REUSE_MS) {
+            nearestM = cached.second
+            nearestLabel = cached.third
+        } else if (fix != null) {
             val cameras = knownCameras
             if (cameras.isNotEmpty()) {
                 val here = Fix(fix.lat, fix.lon, null, now)
@@ -795,6 +901,7 @@ class ScanService : LifecycleService() {
                 }
                 if (best != null) { nearestM = bestM; nearestLabel = best.summary }
             }
+            synchronized(nearestCameraCache) { nearestCameraCache[address] = Triple(now, nearestM, nearestLabel) }
         }
         val kept = Registry.publishInfrastructure(
             InfrastructureSighting(
@@ -845,7 +952,9 @@ class ScanService : LifecycleService() {
      */
     private fun maybeInterrogate(key: String, device: BluetoothDevice, detection: Detection) {
         val known = detection.tracker?.id?.let { it in DultInterrogator.SUPPORTED } == true
-        if (!known && !detection.following) return
+        // A tag that has stayed around, not every one passing in the street: each
+        // exchange is a Bluetooth connection, and a busy pavement is dozens an hour.
+        if (!(known && detection.persistent) && !detection.following) return
         synchronized(dultAsked) { if (key in dultAsked) return }
         val adapter = getSystemService(BluetoothManager::class.java)?.adapter
         if (adapter == null || !adapter.isEnabled) return
@@ -916,9 +1025,10 @@ class ScanService : LifecycleService() {
             intensiveUntil = 0L
             intensiveJob?.cancel()
             intensiveJob = null
-            // Back to the configured mode on the main thread, where the scan is managed.
-            lifecycleScope.launch { if (running) restartScan() }
         }
+        // Back to the configured mode, and to batching if the screen is off, on the
+        // main thread, where the scan is managed.
+        lifecycleScope.launch { if (running) restartScan() }
         findings.forEach(::publishVehicleFinding)
     }
 
@@ -955,6 +1065,7 @@ class ScanService : LifecycleService() {
         vehicleTrips.clear()
         synchronized(dultAsked) { dultAsked.clear() }
         synchronized(infrastructureAlertedAt) { infrastructureAlertedAt.clear() }
+        synchronized(nearestCameraCache) { nearestCameraCache.clear() }
         GnssMonitor.clear()
         runCatching { app.clairix.analysis.CellularExposure.clear(this) }
         LocationHistory.clear(this)
@@ -979,27 +1090,36 @@ class ScanService : LifecycleService() {
      * screen-on scan runs unfiltered.
      */
     private fun buildScanFilters(): List<ScanFilter> {
+        // Apple's ID alone matches every iPhone, Watch and pair of AirPods in range,
+        // each advertising several times a second, and every one woke the phone to
+        // be thrown away by Signatures.isBenign. Only Find My (message type 0x12) can
+        // be a tracker, so the filter masks to it. Samsung's 0x0075 and the two IDs
+        // once listed for Tile matched phones, watches and earbuds and nothing the
+        // detector uses: SmartTags and Tiles are recognised by their service UUIDs,
+        // which are below.
         val manufacturerIds = listOf(
-            0x004C, // Apple — AirTag, Find My, iBeacon
-            0x0075, // Samsung — SmartTag
-            0x00D7, // Tile
-            0x005E, // Tile (legacy)
             SurveillanceHardware.COMPANY_XUNTONG, // Flock Safety camera battery packs
         )
+        // 0xFE9F (Google, on nearly every Android phone) is not listed: nothing matches
+        // on it, so it only woke the phone.
         val serviceUuids = listOf(
-            // Tile 0xFEED, Samsung SmartTag 0xFD5A/0xFD70, Chipolo 0xFEBE/0xFE2B,
-            // Nut 0xAA01/0xAA02, Eddystone 0xFEAA, Invoxia 0xFE85,
-            // Orbit/KeySmart 0xFFE0/0xFFF3 (generic HM-10 UART, paired check in Signatures)
+            // Checked against the Bluetooth SIG member UUID registry: Tile 0xFEED/0xFEEC/
+            // 0xFD84, Samsung SmartTag 0xFD5A, Chipolo 0xFE33/0xFE65, Pebblebee 0xFA25,
+            // the DULT separated-tracker advertisement 0xFCB2, Nut 0xAA01/0xAA02,
+            // Google 0xFEAA (Find Hub tags and Eddystone), 0xFE85 (Invoxia),
+            // Orbit/KeySmart 0xFFE0/0xFFF3 (generic HM-10 UART, paired check in Signatures).
             "0000feed-0000-1000-8000-00805f9b34fb",
+            "0000feec-0000-1000-8000-00805f9b34fb",
+            "0000fd84-0000-1000-8000-00805f9b34fb",
             "0000fd5a-0000-1000-8000-00805f9b34fb",
-            "0000fd70-0000-1000-8000-00805f9b34fb",
-            "0000febe-0000-1000-8000-00805f9b34fb",
-            "0000fe2b-0000-1000-8000-00805f9b34fb",
+            "0000fe33-0000-1000-8000-00805f9b34fb",
+            "0000fe65-0000-1000-8000-00805f9b34fb",
+            "0000fa25-0000-1000-8000-00805f9b34fb",
+            "0000fcb2-0000-1000-8000-00805f9b34fb",
             "0000aa01-0000-1000-8000-00805f9b34fb",
             "0000aa02-0000-1000-8000-00805f9b34fb",
             "0000feaa-0000-1000-8000-00805f9b34fb",
             "0000fe85-0000-1000-8000-00805f9b34fb",
-            "0000fe9f-0000-1000-8000-00805f9b34fb",
             "0000ffe0-0000-1000-8000-00805f9b34fb",
             "0000fff3-0000-1000-8000-00805f9b34fb",
             // Flock Safety accessory service, so a camera's hardware is heard with the
@@ -1007,12 +1127,22 @@ class ScanService : LifecycleService() {
             SurveillanceHardware.ACCESSORY_SERVICE,
         )
         val filters = ArrayList<ScanFilter>()
+        filters.add(
+            ScanFilter.Builder()
+                .setManufacturerData(APPLE_COMPANY, byteArrayOf(FIND_MY_TYPE), byteArrayOf(0xFF.toByte()))
+                .build()
+        )
         manufacturerIds.forEach { id ->
             filters.add(ScanFilter.Builder().setManufacturerData(id, byteArrayOf()).build())
         }
+        // A filter on the service UUID list does not see service data, and Tile,
+        // SmartTag, DULT and Find Hub tags put their UUID only in service data, so
+        // with the screen off they went unheard. Those get a service-data filter.
         serviceUuids.forEach { uuid ->
-            filters.add(ScanFilter.Builder()
-                .setServiceUuid(android.os.ParcelUuid.fromString(uuid)).build())
+            val parcel = android.os.ParcelUuid.fromString(uuid)
+            val builder = ScanFilter.Builder()
+            if (uuid in SERVICE_DATA_UUIDS) builder.setServiceData(parcel, ByteArray(0)) else builder.setServiceUuid(parcel)
+            filters.add(builder.build())
         }
         return filters
     }
@@ -1077,20 +1207,34 @@ class ScanService : LifecycleService() {
             .notify(NOTIFICATION_ID, buildOngoing(list.size, following))
     }
 
+    /** A recognised tracker "is following you"; anything else is only known to be travelling with you. */
+    private fun followingTitle(detection: Detection): String =
+        if (detection.threat == Threat.CRITICAL) "${detection.name} is following you"
+        else "${detection.name} is travelling with you"
+
     private fun notifyFollowing(detection: Detection) {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
         val metres = detection.displacementM.toInt()
+        val tracker = detection.threat == Threat.CRITICAL
+        val short = if (tracker) "Heard $metres m apart. It is on you or your vehicle."
+        else "Heard $metres m apart. Nothing identifies it as a tracker."
+        val long = if (tracker) {
+            "${detection.name} present at locations $metres m apart over ${detection.sightings} sightings. " +
+                "Check wheel wells, bumper covers, OBD-II port, under seats, bag linings."
+        } else {
+            "${detection.name} has been heard at places $metres m apart over ${detection.sightings} sightings. " +
+                "It does not identify itself as a tracker: it may be the phone, earbuds or watch of someone " +
+                "travelling with you, or your vehicle's own electronics. A hardwired GPS tracker looks the same, " +
+                "so if you are alone, check the car: OBD-II port, under the dash, wheel wells, bumpers. " +
+                "Mark it as yours in Clairix if you recognise it."
+        }
         val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
-            .setContentTitle("${detection.name} is following you")
-            .setContentText("Heard $metres m apart. It is on you or your vehicle.")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "${detection.name} present at locations $metres m apart over " +
-                    "${detection.sightings} sightings. Check wheel wells, bumper covers, " +
-                    "OBD-II port, under seats, bag linings."
-            ))
+            .setContentTitle(followingTitle(detection))
+            .setContentText(short)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(long))
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setCategory(if (tracker) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true).setContentIntent(contentIntent()).build()
         getSystemService(NotificationManager::class.java).notify(detection.key.hashCode(), n)
     }
@@ -1113,6 +1257,8 @@ class ScanService : LifecycleService() {
         if (running) {
             try { unregisterReceiver(systemReceiver) } catch (_: IllegalArgumentException) {}
             location.removeLocationUpdates(locationCallback)
+            motionSensor?.let { getSystemService(SensorManager::class.java)?.cancelTriggerSensor(motionTrigger, it) }
+            GnssMonitor.setSettled(false)
             gnssHandle?.let { GnssMonitor.release(it) }
             gnssHandle = null
             // A drive still under way is closed and stored, or the trip count loses it.
@@ -1136,6 +1282,7 @@ class ScanService : LifecycleService() {
         LocationHistory.flush()
         phoneHealthMonitor.stop()
         AudioRouteMonitor.stop()
+        bleExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -1173,6 +1320,18 @@ class ScanService : LifecycleService() {
         private const val CHANNEL_CELL = "cell_alerts"
         private const val NOTIFICATION_ID = 1
         private const val NOTIF_CELL = 2
+        private const val APPLE_COMPANY = 0x004C
+        /** Trackers that carry their service UUID in service data rather than the UUID list. */
+        private val SERVICE_DATA_UUIDS = setOf(
+            "0000feed-0000-1000-8000-00805f9b34fb",
+            "0000feec-0000-1000-8000-00805f9b34fb",
+            "0000fd84-0000-1000-8000-00805f9b34fb",
+            "0000fd5a-0000-1000-8000-00805f9b34fb",
+            "0000fcb2-0000-1000-8000-00805f9b34fb",
+            "0000feaa-0000-1000-8000-00805f9b34fb",
+        )
+        /** Apple's Find My message type, the first byte after the company ID. */
+        private const val FIND_MY_TYPE: Byte = 0x12
 
         // Not exposed as constants on ScanCallback before API 33 / 34, so spelled out.
         private const val SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES = 5
@@ -1188,5 +1347,11 @@ class ScanService : LifecycleService() {
         private const val INTENSIVE_SWEEP_MS = 5 * 60_000L
         /** Allowance past the interrogator's own budget before its collector is cancelled. */
         private const val DULT_GRACE_MS = 5_000L
+        /** How long the controller may hold results while the screen is off. */
+        private const val SCREEN_OFF_BATCH_MS = 5_000L
+        /** A Wi-Fi/cell fix this often once the phone has settled. */
+        private const val SETTLED_FIX_MS = 3 * 60_000L
+        /** A hardware sighting reuses its nearest-camera lookup for this long. */
+        private const val NEAREST_CAMERA_REUSE_MS = 30_000L
     }
 }

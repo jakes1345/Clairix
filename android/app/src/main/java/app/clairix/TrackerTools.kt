@@ -119,7 +119,7 @@ internal fun FindTrackerPage(onBack: (() -> Unit)? = null) {
                         Text(d.address, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                     }
                     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (d.following) StatusPill("Following", Tone.Danger)
+                        if (d.following) StatusPill(followingPill(d), d.threat.tone())
                         else StatusPill(levelLabel(d.threat.name), d.threat.tone())
                         Text(
                             if (d.rssi == 0) "— dBm" else "${d.rssi} dBm",

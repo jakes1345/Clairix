@@ -652,14 +652,24 @@ class PhoneHealthMonitor(private val context: Context) {
         }
     }
 
-    /** `getprop` is the only unprivileged route to boot properties; a missing key reads "". */
-    private fun prop(key: String): String? = runCatching {
-        val p = ProcessBuilder("getprop", key).redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
-        p.waitFor(1, TimeUnit.SECONDS)
-        p.destroy()
-        out.takeIf { it.isNotEmpty() }
-    }.getOrNull()
+    /**
+     * `getprop` is the only unprivileged route to boot properties; a missing key reads "".
+     * Every key asked for is a read-only `ro.` property, fixed from boot until the next
+     * one, so each is read once per process and kept: the health check runs every
+     * thirty seconds and started five processes each time.
+     */
+    private fun prop(key: String): String? {
+        bootProps[key]?.let { return it.ifEmpty { null } }
+        val out = runCatching {
+            val p = ProcessBuilder("getprop", key).redirectErrorStream(true).start()
+            val text = p.inputStream.bufferedReader().use { it.readText() }.trim()
+            p.waitFor(1, TimeUnit.SECONDS)
+            p.destroy()
+            text
+        }.getOrNull() ?: return null
+        if (key.startsWith("ro.")) bootProps[key] = out
+        return out.ifEmpty { null }
+    }
 
     private fun rootEvidence(): List<String> {
         val evidence = ArrayList<String>(4)
@@ -797,6 +807,9 @@ class PhoneHealthMonitor(private val context: Context) {
     }
 
     companion object {
+        /** Read-only boot properties already read; see [prop]. */
+        private val bootProps = java.util.concurrent.ConcurrentHashMap<String, String>()
+
         /** The monitor currently registered for callbacks, if the service is running. */
         @Volatile
         private var active: PhoneHealthMonitor? = null
