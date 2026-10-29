@@ -53,6 +53,9 @@ internal fun Threat.tone(): Tone = when (this) {
     Threat.NONE -> Tone.Safe
 }
 
+/** The row pill for a device moving with you: a recognised tracker follows, anything else travels with you. */
+internal fun followingPill(d: Detection): String = if (d.threat == Threat.CRITICAL) "Following" else "With you"
+
 /** A severity or threat name as people say it: "High", not "HIGH". */
 internal fun levelLabel(name: String): String =
     name.lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }

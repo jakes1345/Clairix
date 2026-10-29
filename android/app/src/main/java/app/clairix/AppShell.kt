@@ -180,9 +180,11 @@ private fun count(n: Int, noun: String): String = if (n == 1) "1 $noun" else "$n
 private const val STRONG_CAMERA_CONFIDENCE = 0.7f
 
 internal fun trackerStatus(status: ScanStatus, detections: List<Detection>, trusted: Set<String>): CategoryStatus {
-    val following = detections.count { it.following && it.address !in trusted }
+    val following = detections.count { it.following && it.address !in trusted && it.threat == Threat.CRITICAL }
+    val travelling = detections.count { it.following && it.address !in trusted && it.threat != Threat.CRITICAL }
     return when {
         following > 0 -> CategoryStatus("${count(following, "tracker")} following you", StatusTone.ALERT)
+        travelling > 0 -> CategoryStatus("${count(travelling, "device")} travelling with you", StatusTone.CAUTION)
         !status.scanning -> CategoryStatus("Scanner off", StatusTone.NEUTRAL)
         !status.bluetoothOn -> CategoryStatus("Bluetooth is off", StatusTone.CAUTION)
         else -> CategoryStatus("${count(status.nearbyCount, "device")} nearby, none following", StatusTone.CLEAR)

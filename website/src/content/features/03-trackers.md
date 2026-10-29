@@ -21,7 +21,7 @@ Clairix scans for Bluetooth trackers and unknown devices, follows them through a
 
 <div class="methods">
 
-**Recognition.** Clairix recognises the advertisements of AirTag and other Find My accessories, Tile, Samsung SmartTag and SmartTag 2, Chipolo and Chipolo Spot, Pebblebee, Orbit, Nut, Motorola tags, Invoxia and Eddystone beacons, as well as the generic Bluetooth modules used in hardwired GPS trackers. Known benign devices are filtered out so the list is not your headphones and your neighbour's television.
+**Recognition.** Clairix recognises the advertisements of AirTag and other Find My accessories, Tile, Samsung SmartTag (all generations), Chipolo, Pebblebee, Google Find Hub tags, any tracker announcing itself under the industry's unwanted-tracking standard (DULT), Orbit, Nut, Invoxia and Eddystone beacons, as well as the generic Bluetooth modules used in hardwired GPS trackers. Known benign devices are filtered out so the list is not your headphones and your neighbour's television.
 
 **Following through rotation.** Trackers change their Bluetooth address every few minutes. Clairix links the new address to the old one in two ways. First by fingerprint: the parts of the advertisement that do not change. Second by cadence: how often the device advertises, how tightly it holds that interval, its transmit power and radio features. A link is made only when exactly one candidate fits. A wrong merge would be worse than a missed one, so ambiguity stitches nothing.
 

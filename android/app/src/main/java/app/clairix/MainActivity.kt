@@ -1836,7 +1836,7 @@ private fun DetectionRow(
                 overflow = TextOverflow.Ellipsis
             )
             if (trusted) StatusPill("Trusted", Tone.Neutral)
-            else StatusPill(if (d.following) "Following" else levelLabel(d.threat.name), d.threat.tone())
+            else StatusPill(if (d.following) followingPill(d) else levelLabel(d.threat.name), d.threat.tone())
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
@@ -1886,7 +1886,8 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
             FollowConfidence.NONE -> "Not enough data yet" to Tone.Neutral
             FollowConfidence.NO_POSITION -> "No GPS, so movement can't be confirmed" to Tone.Caution
             FollowConfidence.NOT_MOVED_ENOUGH -> "Nearby, not following" to Tone.Caution
-            FollowConfidence.CONFIRMED -> "Following you" to Tone.Danger
+            FollowConfidence.CONFIRMED ->
+                if (d.threat == Threat.CRITICAL) "Following you" to Tone.Danger else "Travelling with you" to Tone.Caution
         }
         Text(line, style = MaterialTheme.typography.titleSmall, color = if (trusted) c.textSubtle else lineTone.color())
         val explanation = when (d.confidence) {
@@ -1899,8 +1900,15 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                 "It keeps showing up, but only ${d.displacementM.roundToInt()} m of shared travel so far. " +
                     "Confirming it needs about 300 m."
             FollowConfidence.CONFIRMED ->
-                "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
-                    "Check wheel wells, bumper covers, the OBD-II port, under seats and bag linings."
+                if (d.threat == Threat.CRITICAL) {
+                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
+                        "Check wheel wells, bumper covers, the OBD-II port, under seats and bag linings."
+                } else {
+                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, but it does not identify itself as a " +
+                        "tracker. It may be the phone, earbuds or watch of someone travelling with you, or your vehicle's own " +
+                        "electronics. A hardwired GPS tracker looks the same: if you are alone, check the OBD-II port, under the " +
+                        "dash, wheel wells and bumpers. Mark it as yours if you recognise it."
+                }
         }
         Text(explanation, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
 

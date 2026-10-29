@@ -11,9 +11,9 @@ import org.junit.Test
 /** The Scan hub's status lines and the tab layout per build. */
 class ScanHubStatusTest {
 
-    private fun detection(address: String, following: Boolean) = Detection(
+    private fun detection(address: String, following: Boolean, threat: Threat = Threat.CRITICAL) = Detection(
         key = address, address = address, name = "Tracker", rssi = -60, tracker = null,
-        threat = if (following) Threat.HIGH else Threat.LOW, score = 0,
+        threat = if (following) threat else Threat.LOW, score = 0,
         firstSeen = 0L, lastSeen = 0L, sightings = 3, persistent = following, following = following,
         confidence = if (following) FollowConfidence.CONFIRMED else FollowConfidence.NOT_MOVED_ENOUGH,
         displacementM = 0.0, places = 1, rotations = 0, addresses = 1, approxMetres = null
@@ -35,6 +35,13 @@ class ScanHubStatusTest {
         val trusted = trackerStatus(ScanStatus(scanning = true, nearbyCount = 1), following, setOf("A"))
         assertEquals("1 device nearby, none following", trusted.text)
         assertFalse(trusted.alert)
+    }
+
+    @Test
+    fun anUnidentifiedDeviceMovingWithYouIsACautionNotATracker() {
+        val s = trackerStatus(ScanStatus(scanning = true, nearbyCount = 5), listOf(detection("B", true, Threat.HIGH)), emptySet())
+        assertEquals("1 device travelling with you", s.text)
+        assertEquals(StatusTone.CAUTION, s.tone)
     }
 
     @Test

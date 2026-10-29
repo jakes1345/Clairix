@@ -854,9 +854,9 @@ class ScanService : LifecycleService() {
                     id = "following@${observation.detection.key}@$now",
                     kind = EventKind.FOLLOWING,
                     ts = now,
-                    title = "${observation.detection.name} is following you",
+                    title = followingTitle(observation.detection),
                     detail = "Confirmed over ${observation.detection.displacementM.toInt()} m, ${observation.detection.sightings} sightings",
-                    severity = Severity.CRITICAL,
+                    severity = if (observation.detection.threat == Threat.CRITICAL) Severity.CRITICAL else Severity.HIGH,
                     lat = fix?.lat, lon = fix?.lon
                 ),
                 dedupeKey = "following@${observation.detection.key}"
@@ -1103,14 +1103,19 @@ class ScanService : LifecycleService() {
         // 0xFE9F (Google, on nearly every Android phone) is not listed: nothing matches
         // on it, so it only woke the phone.
         val serviceUuids = listOf(
-            // Tile 0xFEED, Samsung SmartTag 0xFD5A/0xFD70, Chipolo 0xFEBE/0xFE2B,
-            // Nut 0xAA01/0xAA02, Eddystone 0xFEAA, Invoxia 0xFE85,
-            // Orbit/KeySmart 0xFFE0/0xFFF3 (generic HM-10 UART, paired check in Signatures)
+            // Checked against the Bluetooth SIG member UUID registry: Tile 0xFEED/0xFEEC/
+            // 0xFD84, Samsung SmartTag 0xFD5A, Chipolo 0xFE33/0xFE65, Pebblebee 0xFA25,
+            // the DULT separated-tracker advertisement 0xFCB2, Nut 0xAA01/0xAA02,
+            // Google 0xFEAA (Find Hub tags and Eddystone), 0xFE85 (Invoxia),
+            // Orbit/KeySmart 0xFFE0/0xFFF3 (generic HM-10 UART, paired check in Signatures).
             "0000feed-0000-1000-8000-00805f9b34fb",
+            "0000feec-0000-1000-8000-00805f9b34fb",
+            "0000fd84-0000-1000-8000-00805f9b34fb",
             "0000fd5a-0000-1000-8000-00805f9b34fb",
-            "0000fd70-0000-1000-8000-00805f9b34fb",
-            "0000febe-0000-1000-8000-00805f9b34fb",
-            "0000fe2b-0000-1000-8000-00805f9b34fb",
+            "0000fe33-0000-1000-8000-00805f9b34fb",
+            "0000fe65-0000-1000-8000-00805f9b34fb",
+            "0000fa25-0000-1000-8000-00805f9b34fb",
+            "0000fcb2-0000-1000-8000-00805f9b34fb",
             "0000aa01-0000-1000-8000-00805f9b34fb",
             "0000aa02-0000-1000-8000-00805f9b34fb",
             "0000feaa-0000-1000-8000-00805f9b34fb",
@@ -1130,9 +1135,14 @@ class ScanService : LifecycleService() {
         manufacturerIds.forEach { id ->
             filters.add(ScanFilter.Builder().setManufacturerData(id, byteArrayOf()).build())
         }
+        // A filter on the service UUID list does not see service data, and Tile,
+        // SmartTag, DULT and Find Hub tags put their UUID only in service data, so
+        // with the screen off they went unheard. Those get a service-data filter.
         serviceUuids.forEach { uuid ->
-            filters.add(ScanFilter.Builder()
-                .setServiceUuid(android.os.ParcelUuid.fromString(uuid)).build())
+            val parcel = android.os.ParcelUuid.fromString(uuid)
+            val builder = ScanFilter.Builder()
+            if (uuid in SERVICE_DATA_UUIDS) builder.setServiceData(parcel, ByteArray(0)) else builder.setServiceUuid(parcel)
+            filters.add(builder.build())
         }
         return filters
     }
@@ -1197,20 +1207,34 @@ class ScanService : LifecycleService() {
             .notify(NOTIFICATION_ID, buildOngoing(list.size, following))
     }
 
+    /** A recognised tracker "is following you"; anything else is only known to be travelling with you. */
+    private fun followingTitle(detection: Detection): String =
+        if (detection.threat == Threat.CRITICAL) "${detection.name} is following you"
+        else "${detection.name} is travelling with you"
+
     private fun notifyFollowing(detection: Detection) {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
         val metres = detection.displacementM.toInt()
+        val tracker = detection.threat == Threat.CRITICAL
+        val short = if (tracker) "Heard $metres m apart. It is on you or your vehicle."
+        else "Heard $metres m apart. Nothing identifies it as a tracker."
+        val long = if (tracker) {
+            "${detection.name} present at locations $metres m apart over ${detection.sightings} sightings. " +
+                "Check wheel wells, bumper covers, OBD-II port, under seats, bag linings."
+        } else {
+            "${detection.name} has been heard at places $metres m apart over ${detection.sightings} sightings. " +
+                "It does not identify itself as a tracker: it may be the phone, earbuds or watch of someone " +
+                "travelling with you, or your vehicle's own electronics. A hardwired GPS tracker looks the same, " +
+                "so if you are alone, check the car: OBD-II port, under the dash, wheel wells, bumpers. " +
+                "Mark it as yours in Clairix if you recognise it."
+        }
         val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
-            .setContentTitle("${detection.name} is following you")
-            .setContentText("Heard $metres m apart. It is on you or your vehicle.")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "${detection.name} present at locations $metres m apart over " +
-                    "${detection.sightings} sightings. Check wheel wells, bumper covers, " +
-                    "OBD-II port, under seats, bag linings."
-            ))
+            .setContentTitle(followingTitle(detection))
+            .setContentText(short)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(long))
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setCategory(if (tracker) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true).setContentIntent(contentIntent()).build()
         getSystemService(NotificationManager::class.java).notify(detection.key.hashCode(), n)
     }
@@ -1297,6 +1321,15 @@ class ScanService : LifecycleService() {
         private const val NOTIFICATION_ID = 1
         private const val NOTIF_CELL = 2
         private const val APPLE_COMPANY = 0x004C
+        /** Trackers that carry their service UUID in service data rather than the UUID list. */
+        private val SERVICE_DATA_UUIDS = setOf(
+            "0000feed-0000-1000-8000-00805f9b34fb",
+            "0000feec-0000-1000-8000-00805f9b34fb",
+            "0000fd84-0000-1000-8000-00805f9b34fb",
+            "0000fd5a-0000-1000-8000-00805f9b34fb",
+            "0000fcb2-0000-1000-8000-00805f9b34fb",
+            "0000feaa-0000-1000-8000-00805f9b34fb",
+        )
         /** Apple's Find My message type, the first byte after the company ID. */
         private const val FIND_MY_TYPE: Byte = 0x12
 

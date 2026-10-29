@@ -2,6 +2,7 @@ package app.clairix.analysis
 
 import app.clairix.CellStatus
 import app.clairix.Detection
+import app.clairix.Threat
 import app.clairix.WifiAnomaly
 import org.json.JSONArray
 import org.json.JSONObject
@@ -100,8 +101,9 @@ object ThreatPayload {
     private fun buildBleTitle(d: Detection): String {
         val tracker = d.tracker
         return when {
-            tracker != null -> "${tracker.label} following you"
-            d.following -> "Unknown tracker following you"
+            d.following && d.threat == Threat.CRITICAL && tracker != null -> "${tracker.label} following you"
+            d.following -> "Unidentified device travelling with you"
+            tracker != null -> "${tracker.label} nearby"
             d.persistent -> "Persistent unknown device"
             else -> "Suspicious BLE device"
         }
