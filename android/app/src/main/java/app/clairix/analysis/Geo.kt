@@ -108,15 +108,21 @@ class ObservationArea(private val maxPlaces: Int = 60) {
     fun points(): List<LatLon> = places.map { LatLon(it.lat, it.lon) }
 }
 
-/** Where we have been, and whether we are actually going anywhere. */
+/**
+ * Where we have been, and whether we are actually going anywhere. Updated on the main
+ * thread and read from the packet thread and the service's loop, hence volatile.
+ */
 class LocationTrack {
 
+    @Volatile
     var current: Fix? = null
         private set
 
+    @Volatile
     var travelledM: Double = 0.0
         private set
 
+    @Volatile
     private var previous: Fix? = null
 
     fun update(fix: Fix) {

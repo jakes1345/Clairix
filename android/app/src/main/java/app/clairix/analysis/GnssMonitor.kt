@@ -30,7 +30,9 @@ import kotlin.math.abs
  * their own; they report whenever something else has the receiver running, which the
  * scanner's own location request and navigation do. Only a foreground holder (the GPS
  * screen) switches the receiver on itself, once a second. The Wi-Fi/cell position is asked
- * for once a minute while anyone holds the monitor.
+ * for once a minute while the phone is moving or the GPS screen is open, and every
+ * [NETWORK_SETTLED_MS] once the scanner has seen it settle ([setSettled]): a phone on a
+ * desk has nothing new to cross-check, and each Wi-Fi/cell fix wakes the radios.
  *
  * Held by reference count: the scanner service holds it while it runs, the GPS screen
  * while it is open. Everything runs on one thread, which owns the analyzer.
@@ -41,6 +43,7 @@ object GnssMonitor {
     private const val ASSESS_EVERY_MS = 1_000L
     private const val ALERT_WINDOW_MS = 30 * 60_000L
     private const val NETWORK_INTERVAL_MS = 60_000L
+    private const val NETWORK_SETTLED_MS = 10 * 60_000L
     private const val GPS_L1_HZ = 1_575.42e6
 
     class Handle internal constructor(val foreground: Boolean)
@@ -53,6 +56,10 @@ object GnssMonitor {
     private val alertedAt = HashMap<GnssVerdict, Long>()
     private var gpsRequested = false
     private var registered = false
+    /** The scanner has seen the phone settle; see [setSettled]. */
+    private var settled = false
+    /** The interval the Wi-Fi/cell request is registered at, or 0 when there is none. */
+    private var networkIntervalMs = 0L
 
     /** Starts (or joins) monitoring. A [foreground] holder also switches the receiver on. Release the handle when done. */
     fun acquire(context: Context, foreground: Boolean): Handle {
@@ -63,6 +70,7 @@ object GnssMonitor {
             holders += h
             if (!registered) register(ctx)
             updateGpsRequest(ctx)
+            if (registered) updateNetworkRequest(ctx)
         }
         return h
     }
@@ -71,7 +79,15 @@ object GnssMonitor {
         executor.execute {
             holders -= handle
             val ctx = app ?: return@execute
-            if (holders.isEmpty()) unregister(ctx) else updateGpsRequest(ctx)
+            if (holders.isEmpty()) unregister(ctx) else { updateGpsRequest(ctx); if (registered) updateNetworkRequest(ctx) }
+        }
+    }
+
+    /** The scanner's view of whether the phone is going anywhere; slows the Wi-Fi/cell fixes while it is not. */
+    fun setSettled(value: Boolean) {
+        executor.execute {
+            settled = value
+            app?.let { if (registered) updateNetworkRequest(it) }
         }
     }
 
@@ -102,10 +118,8 @@ object GnssMonitor {
             lm.registerGnssStatusCallback(executor, statusCallback)
             lm.registerGnssMeasurementsCallback(executor, measurementsCallback)
             lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 0L, 0f, executor, passiveListener)
-            if (lm.allProviders.contains(LocationManager.NETWORK_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, NETWORK_INTERVAL_MS, 0f, executor, networkListener)
-            }
             registered = true
+            updateNetworkRequest(ctx)
         } catch (e: SecurityException) {
             Log.w(TAG, "Location refused: ${e.message}")
         } catch (e: IllegalArgumentException) {
@@ -122,6 +136,23 @@ object GnssMonitor {
         runCatching { lm.removeUpdates(gpsListener) }
         gpsRequested = false
         registered = false
+        networkIntervalMs = 0L
+    }
+
+    private fun updateNetworkRequest(ctx: Context) {
+        val lm = manager(ctx) ?: return
+        if (!lm.allProviders.contains(LocationManager.NETWORK_PROVIDER)) return
+        val want = if (settled && holders.none { it.foreground }) NETWORK_SETTLED_MS else NETWORK_INTERVAL_MS
+        if (want == networkIntervalMs) return
+        try {
+            // Registering the same listener again replaces its earlier request.
+            lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, want, 0f, executor, networkListener)
+            networkIntervalMs = want
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Network location refused: ${e.message}")
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "No network provider: ${e.message}")
+        }
     }
 
     private fun updateGpsRequest(ctx: Context) {

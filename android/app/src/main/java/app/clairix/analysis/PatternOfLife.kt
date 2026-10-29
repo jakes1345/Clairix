@@ -62,8 +62,9 @@ object LocationHistory {
                 root.put(KEY, arr)
             }
             // Up to ~1.5 MB of JSON: serialised on the IO dispatcher under [lock],
-            // not here on the main thread.
-            s.touch(60_000L, guard = lock)
+            // not here on the main thread, and only every ten minutes; the scanner
+            // flushes it when it stops.
+            s.touch(10 * 60_000L, guard = lock)
         }
     }
 

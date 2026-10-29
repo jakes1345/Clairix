@@ -15,13 +15,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.CheckState
 import app.clairix.analysis.Gnss
@@ -53,11 +53,12 @@ internal fun GnssScreen() {
     val hasLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
 
-    // While the screen is open the receiver is switched on, so the checks have data
-    // whether or not anything else is using it.
-    DisposableEffect(hasLocation) {
+    // While the screen is open and in front the receiver is switched on, so the
+    // checks have data whether or not anything else is using it. Leaving the app
+    // switches it off again: a page left open in the background kept GPS running.
+    LifecycleStartEffect(hasLocation) {
         val handle = if (hasLocation) GnssMonitor.acquire(context, foreground = true) else null
-        onDispose { handle?.let { GnssMonitor.release(it) } }
+        onStopOrDispose { handle?.let { GnssMonitor.release(it) } }
     }
 
     val tone = when (a.verdict) {

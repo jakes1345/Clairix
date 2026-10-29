@@ -85,8 +85,15 @@ class IMSICatcher(
     private fun tacKey(c: ServingCell) = "${c.mcc ?: "?"}-${c.mnc ?: "?"}-${c.tac ?: "?"}"
     private fun ctKey(c: ServingCell) = "${c.mcc ?: "?"}-${c.mnc ?: "?"}-${c.cellId}"
 
+    /**
+     * [settled] is the scanner's word that the phone has gone nowhere for minutes, with
+     * a recent fix to show it ([MotionPolicy.confirmedStill]). A settled phone gets a
+     * fix every few minutes, not every fifteen seconds, so on its own the newest fix
+     * would usually be too old to judge by, and every rule meant for standing still
+     * would stay off exactly when the phone is standing still.
+     */
     @Synchronized
-    fun recordAndAnalyze(cell: ServingCell, fix: Fix?): List<CatcherFinding> {
+    fun recordAndAnalyze(cell: ServingCell, fix: Fix?, settled: Boolean = false): List<CatcherFinding> {
         val now = clock()
         pruneRecent(now)
 
@@ -94,7 +101,7 @@ class IMSICatcher(
         // cells, swapping radio technology and signal jumps are all what travelling
         // normally looks like. Speed is authoritative when the fix reports it;
         // otherwise fall back to the speed implied by the last two distinct fixes.
-        val stationary = isStationary(fix, now)
+        val stationary = settled || isStationary(fix, now)
         if (!stationary) ratRanks.clear()
 
         updateEphemeral(cell, now, stationary)
@@ -436,7 +443,10 @@ class IMSICatcher(
         if ((cell.neighbors ?: 0) > 0) data.put("neighborsEverSeen", true)
         if ((cell.timingAdvance ?: 0) > 0) data.put("taEverNonZero", true)
 
-        store.touch()
+        // Encrypted and written at most every few minutes rather than on every poll:
+        // the scanner flushes it when it stops, so only a killed process loses the
+        // last few minutes of counts.
+        store.touch(BASELINE_WRITE_MS)
     }
 
     fun scoreAndLevel(findings: List<CatcherFinding>): Pair<Int, Threat> {
@@ -487,6 +497,8 @@ class IMSICatcher(
     }
 
     private companion object {
+        /** The baseline is written at most this often while scanning; see [updateBaseline]. */
+        const val BASELINE_WRITE_MS = 5 * 60_000L
         /** Time away from an area after which being back there counts as a new visit. */
         const val VISIT_GAP_MS = 30 * 60_000L
         /** How long a better radio technology counts as "available here" while still. */
