@@ -30,7 +30,7 @@ Clairix is free to use and requires Android 12 or newer.
 | **Website** | https://clairix.app |
 | **Platform** | Android 12 and newer |
 | **Distribution** | Google Play (package `app.clairix`); Clairix Full edition as a direct APK download from clairix.app |
-| **Current version** | 2.7.0 |
+| **Current version** | 3.0.0 Beta 8 |
 | **Price** | Free. Every feature. |
 | **Developer** | Clairix, an independent project |
 | **Category** | Tools / personal security |
