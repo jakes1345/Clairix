@@ -397,7 +397,8 @@ vehicles and take one vote per vehicle, and reaches back to no phone.
   minutes old) give a segment's speed under the trip pseudonym. Raw probes
   are deleted after two hours, so the most a region ever holds is two hours
   of segment speeds from pseudonymous vehicles. The phone reports nothing for
-  the first 500 m of a drive or the last stretch before its destination.
+  roughly the first kilometre of a drive (a distance that varies per drive) or
+  the last stretch before its destination.
 - **Live** speed is the median over the last ten minutes, one vote per vehicle
   per segment (its latest sample). **Typical** speed is a 168-slot week
   (hour of week, UTC, Monday first) updated with an EWMA (α = 0.2) of each

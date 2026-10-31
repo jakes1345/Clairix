@@ -108,8 +108,6 @@ class Navigator(
         const val REROUTE_COOLDOWN_MS = 5_000L
         /** Reroutes that do not get the car back on a route back off up to this long (parking lots, unmapped roads). */
         const val REROUTE_MAX_COOLDOWN_MS = 60_000L
-        /** Probes stop this far from the destination, so the relay never sees where a trip ends. */
-        const val PROBE_END_ZONE_M = 500.0
         const val FASTER_CHECK_MS = 120_000L
         const val FASTER_SAVING_SEC = 180.0
         const val ARRIVED_M = 30.0
@@ -478,7 +476,8 @@ class Navigator(
             if (offCount >= OFF_ROUTE_FIXES && !rerouting && now - lastRerouteMs > cooldown) {
                 reroute = true
             }
-            probe.nearDestination(t.total - progressM <= PROBE_END_ZONE_M)
+            // Inside this trip's end zone, which the probe draws for itself, nothing more is reported.
+            probe.remainingToDestination(t.total - progressM)
             if (!off && t.total - progressM <= ARRIVED_M) {
                 arrived = true
                 return@withLock

@@ -98,8 +98,9 @@ nearest road from the same map, so a destination is never sent anywhere to be
 found or named. Searching online for an address or a place is a separate tap
 that says it sends the text to OpenStreetMap. The map's background tiles come
 from OpenStreetMap's servers when you are online, which see your IP address and
-the area you are looking at; the GPS track never leaves the phone, and a trip's
-first 500 m and final approach are never reported to traffic.
+the area you are looking at; the GPS track never leaves the phone, and roughly
+the first kilometre of a trip (a distance that varies from trip to trip) and
+its final approach are never reported to traffic.
 
 ### What it cannot do
 

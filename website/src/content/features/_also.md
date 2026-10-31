@@ -1,4 +1,4 @@
-**Drive.** Offline turn-by-turn navigation on OpenStreetMap data, with privacy-preserving live traffic: anonymous speed samples per road segment, never your GPS track, and nothing for the first 500 metres or the final approach of a trip. Optional engine data from a Bluetooth OBD-II adapter.
+**Drive.** Offline turn-by-turn navigation on OpenStreetMap data, with privacy-preserving live traffic: anonymous speed samples per road segment, never your GPS track, and nothing for roughly the first kilometre (a distance that varies per trip) or the final approach of a trip. Optional engine data from a Bluetooth OBD-II adapter.
 
 **NFC.** Read and identify NFC tags and cards, and flag ones that look like clones or emulators.
 

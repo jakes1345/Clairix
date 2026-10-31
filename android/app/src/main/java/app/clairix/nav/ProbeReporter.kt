@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.security.SecureRandom
 
 /**
  * Turns map-matched positions into anonymous per-segment speed samples for the relay.
@@ -21,15 +22,24 @@ import java.io.IOException
  * Only a segment key, the segment's own map position, a median speed and a time leave the
  * phone, one sample per segment traversed (or per minute spent on one); GPS positions never do.
  * Nothing is collected or sent unless Drive navigation is active, and stopping navigation
- * discards whatever had not been sent. The first [PRIVACY_ZONE_M] driven and the last stretch
- * before the destination (see [nearDestination]) are never reported, so the relay cannot learn
- * where trips begin or end.
+ * discards whatever had not been sent. The first stretch of a trip and the last before the
+ * destination are never reported, so the relay cannot learn where trips begin or end. Each
+ * stretch is between [ZONE_MIN_M] and [ZONE_MAX_M] long, drawn afresh for every trip in
+ * [start], so the first and last reported points of a repeated trip are not a fixed distance
+ * from home either. A road the car was already on inside the start zone is never reported,
+ * however far it runs beyond the zone or whether the car comes back to it later in the trip
+ * (see [finish]); entering the end zone drops the road being driven (see [nearDestination]).
  *
  * Each batch is posted anonymously (a traffic token, no identity) under [trip], the pseudonym
  * this drive is known by on the relay, which changes every few minutes: the relay can tell
  * this vehicle's samples from another's for long enough to detect a stoppage, and no longer.
  */
-class ProbeReporter(context: Context, val region: String, private val trip: TripPseudonym) {
+class ProbeReporter(
+    context: Context,
+    val region: String,
+    private val trip: TripPseudonym,
+    private val random: SecureRandom = SecureRandom(),
+) {
 
     private companion object {
         const val TAG = "ProbeReporter"
@@ -47,7 +57,13 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
          * a jam or behind a crash would say nothing until it moved on, too late for detection.
          */
         const val SLICE_MS = 60_000L
-        const val PRIVACY_ZONE_M = 500.0
+        /**
+         * The start and end zones, the stretches of a trip that are never reported, are each
+         * drawn from this range per trip (see [drawZoneM]); one fixed length would put the first
+         * and last reported points of a daily trip at the same distance from home every day.
+         */
+        const val ZONE_MIN_M = 500.0
+        const val ZONE_MAX_M = 1_500.0
     }
 
     private class Sample(val seg: String, val kph: Double, val timeMs: Long, val lat: Double, val lon: Double)
@@ -60,6 +76,8 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
         var lastTimeMs: Long,
         val segLat: Double,
         val segLon: Double,
+        /** [drivenM] when the car entered this segment; a segment entered inside the start zone is never reported. */
+        val startDrivenM: Double,
     ) {
         val speeds = ArrayList<Double>()
         var minAlongM = firstAlongM
@@ -75,8 +93,23 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
     @Volatile private var active = false
     private var flushJob: Job? = null
     private var scope: CoroutineScope? = null
-    /** Distance observed since [start]; nothing is reported until it passes [PRIVACY_ZONE_M]. */
+    /** Distance covered by the traversals finished since [start], reported or not. */
     private var drivenM = 0.0
+    /**
+     * The segment last matched and [drivenM] when the car entered it. A later minute on the same
+     * segment (see [SLICE_MS]), or a return to it after fixes that matched no road, inherits that
+     * distance, so the road a trip began on stays unreported beyond the zone boundary too.
+     */
+    private var lastSeg: String? = null
+    private var lastSegEnteredM = 0.0
+    /** Roads entered inside this trip's start zone; a return to one of them later in the trip is not reported either. */
+    private val startZoneSegs = HashSet<String>()
+    /** This trip's start zone: a segment entered before this far was driven is never reported. */
+    internal var startZoneM = ZONE_MAX_M
+        private set
+    /** This trip's end zone: once the destination is this near, nothing more is reported. */
+    internal var endZoneM = ZONE_MAX_M
+        private set
     @Volatile private var suppressed = false
 
     /**
@@ -90,6 +123,11 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
         }
     }
 
+    /** Navigation's distance left to the destination; inside this trip's end zone reporting stops (see [nearDestination]). */
+    fun remainingToDestination(remainingM: Double) {
+        synchronized(lock) { nearDestination(remainingM <= endZoneM) }
+    }
+
     /** Begins collecting; samples are posted every minute, or sooner once 60 are waiting. */
     fun start(scope: CoroutineScope) {
         synchronized(lock) {
@@ -99,6 +137,12 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
             current = null
             pending.clear()
             drivenM = 0.0
+            lastSeg = null
+            lastSegEnteredM = 0.0
+            startZoneSegs.clear()
+            // Fresh zones for each trip: a daily commute must not report from the same two spots every day.
+            startZoneM = drawZoneM()
+            endZoneM = drawZoneM()
             suppressed = false
             // A new drive is a new vehicle as far as the relay can tell.
             trip.reset()
@@ -110,6 +154,9 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
             }
         }
     }
+
+    /** A whole number of metres in [ZONE_MIN_M]..[ZONE_MAX_M], from the same kind of randomness as the pseudonym. */
+    private fun drawZoneM(): Double = ZONE_MIN_M + random.nextInt((ZONE_MAX_M - ZONE_MIN_M).toInt() + 1)
 
     /** Stops collecting and drops everything not yet sent. */
     fun stop() {
@@ -140,7 +187,12 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
                 current = null
             }
             if (segmentKey == null) return
-            val t = current ?: Traversal(segmentKey, alongM, timeMs, timeMs, segLat, segLon).also { current = it }
+            if (segmentKey != lastSeg) {
+                lastSeg = segmentKey
+                lastSegEnteredM = drivenM
+                if (drivenM < startZoneM) startZoneSegs.add(segmentKey)
+            }
+            val t = current ?: Traversal(segmentKey, alongM, timeMs, timeMs, segLat, segLon, lastSegEnteredM).also { current = it }
             t.lastTimeMs = timeMs
             t.minAlongM = minOf(t.minAlongM, alongM)
             t.maxAlongM = maxOf(t.maxAlongM, alongM)
@@ -154,7 +206,11 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
     private fun finish(t: Traversal) {
         val coveredM = t.maxAlongM - t.minAlongM
         drivenM += coveredM
-        if (drivenM < PRIVACY_ZONE_M) return
+        // Judged by where the trip stood when the car entered the segment, never by how far it
+        // has come since: the traversal that carries the trip out of the start zone is dropped
+        // unreported, as nearDestination() drops the one in progress at the other end, and so
+        // is any later minute on that same road.
+        if (t.startDrivenM < startZoneM || t.seg in startZoneSegs) return
         // A segment where the GPS lost its speed even once is not reported: its median would
         // describe only part of the drive.
         if (t.speedUnknown || t.speeds.isEmpty()) return
@@ -163,6 +219,9 @@ class ProbeReporter(context: Context, val region: String, private val trip: Trip
         if (kph < 0 || kph > MAX_KPH) return
         pending.add(Sample(t.seg, kph, t.lastTimeMs, t.segLat, t.segLon))
     }
+
+    /** Segment keys of the samples waiting to be posted, oldest first; what tests check instead of a relay. */
+    internal fun queuedSegments(): List<String> = synchronized(lock) { pending.map { it.seg } }
 
     private fun median(values: List<Double>): Double {
         val s = values.sorted()
