@@ -3233,9 +3233,22 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 if (isOut && msg.status == "failed") {
                                     Spacer(Modifier.width(4.dp))
                                     Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = ClairixTheme.colors.danger, modifier = Modifier.size(12.dp))
+                                } else if (isOut && msg.status == "queued") {
+                                    // Still owed to some members: the outbox is trying them.
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                 }
                             }
                         }
+                    }
+                    // How far it got when not every member has it: "Reached 3 of 4 members; trying 1 more".
+                    if (isOut && msg.error != null) {
+                        Text(
+                            msg.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (msg.status == "failed") ClairixTheme.colors.danger else ClairixTheme.colors.textSubtle,
+                            modifier = Modifier.widthIn(max = 280.dp).padding(top = 2.dp, end = 4.dp)
+                        )
                     }
                 }
             }

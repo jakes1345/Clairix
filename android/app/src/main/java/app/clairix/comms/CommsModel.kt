@@ -28,7 +28,11 @@ data class Group(
     val createdBy: String,
     val createdTs: Long,
     val myRole: OrgRole,
-    val memberCount: Int = 0
+    val memberCount: Int = 0,
+    /** The number of the roster this phone holds; 0 for a group no admin has numbered ([RosterSync]). */
+    val rosterVersion: Long = 0L,
+    /** The newest roster number any member's payload named; above [rosterVersion], the roster is out of date. */
+    val rosterSeen: Long = 0L
 )
 
 data class GroupMember(
@@ -39,7 +43,9 @@ data class GroupMember(
     val ed25519: String,
     /** Clairix number of the admin who added them. */
     val addedBy: String,
-    val addedTs: Long
+    val addedTs: Long,
+    /** The newest roster number they are known to be in: what they sent was numbered so, or a roster or change that new named them. */
+    val rv: Long = 0L
 )
 
 data class GroupThread(

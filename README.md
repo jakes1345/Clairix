@@ -271,15 +271,25 @@ maintainer on the live service, not in this repository.
 - **Duress phrase.** A sentence you can type into any chat. It is sent as
   written; underneath, an SOS with your position (the last known one, or a
   fresh fix when the phone can read one within a few seconds) goes to every
-  group you are in, and nothing about it is written on this phone. In no group
-  it sends nothing, and the Duress phrase page says so in red until you join one.
+  group you are in, and nothing about it is written on this phone: anyone the
+  relay cannot take right away is tried again for about thirty minutes from
+  memory only, and if Android closes Clairix those tries stop. In no group it
+  sends nothing, and the Duress phrase page says so in red until you join one.
 - **SOS.** Hold the red octagon until it fills and confirm: your position goes,
   end-to-end encrypted, to your groups, and the app then says how many people
-  it reached; anyone the relay could not take is tried again for about eight
-  minutes while the app runs. With no Clairix number, or no group with anyone
-  else in it, the button says nobody would receive it instead of sending.
-  A timeline entry records the count. Location is read at that moment and at
-  no other time.
+  it reached. Anyone the relay could not take stays queued, one entry per
+  person, and is tried again for about thirty minutes, with the screen off
+  too; if Android closes Clairix meanwhile, the tries resume when it next runs
+  with the phone unlocked, until the thirty minutes are up. A notification
+  gives the count as retries reach more people, and the final one. Members
+  you have blocked are sent nothing.
+  A phone that missed a change to a group's members finds out from the next
+  group message, which carries the newer list number, asks an admin for the
+  current list and meanwhile holds back from anyone it cannot confirm, so
+  someone removed stops getting your SOS. With no Clairix number, or no group
+  with anyone else in it, the button says nobody would receive it instead of
+  sending. A timeline entry records the count. Location is read at that
+  moment and at no other time.
 - **Fake call.** Rings the phone with its own ringtone and vibration for
   45 seconds, honouring silent mode, and shows a real-looking call screen over
   the lock screen, so you can walk away. It needs notifications and

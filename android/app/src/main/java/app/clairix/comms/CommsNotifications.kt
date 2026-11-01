@@ -77,7 +77,7 @@ object CommsNotifications {
     const val LOCKED_CALL_NOTIFICATION_ID = 0x5C00_0005
     const val LOCKED_SOS_NOTIFICATION_ID = 0x5C00_0006
     const val LOCKED_MESSAGES_NOTIFICATION_ID = 0x5C00_0007
-    /** The last word on an SOS the owner sent, once its retries are over: who it reached. */
+    /** Word on an SOS the owner sent while its retries go on, and the last word once they are over: who it reached. */
     const val SOS_OUTCOME_NOTIFICATION_ID = 0x5C00_0008
     /** The one notification for every message request: "Someone new wrote to you", naming no one. */
     const val REQUEST_NOTIFICATION_ID = 0x5C00_0009
@@ -704,11 +704,14 @@ object CommsNotifications {
     }
 
     /**
-     * What became of the SOS the owner sent, once the members the relay could
-     * not take have been tried again: [text] is the result's own sentence
-     * ("SOS reached 3 of 4 people"). Posted so the outcome reaches an owner
-     * who has put the phone away; the button's toast said the first pass.
-     * Never posted for the covert duress phrase.
+     * What became of the SOS the owner sent, as the members the relay could
+     * not take at first are tried again: [text] is the result's own sentence
+     * ("SOS reached 3 of 4 people; trying 1 more again", then "SOS reached all
+     * 4 people"). Posted when a retry changes what it says, and once more when
+     * the retries are over, so the outcome reaches an owner who has put the
+     * phone away; the button's toast said the first pass. One notification,
+     * updated in place, that sounds only when it first appears. Never posted
+     * for the covert duress phrase.
      */
     fun notifySosOutcome(context: Context, text: String, ts: Long) {
         if (!canPost(context)) return
@@ -720,6 +723,7 @@ object CommsNotifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .setContentIntent(openComms(context, SOS_OUTCOME_NOTIFICATION_ID))
             .setWhen(ts)

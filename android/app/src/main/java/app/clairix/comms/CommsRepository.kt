@@ -36,7 +36,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.channels.Channel
@@ -79,7 +78,8 @@ import kotlin.math.ln
  *   {"v":1,"t":"media","id":uuid,"ts":ms,"mime":..,"w":..,"h":..,"dur":ms,"size":bytes,"n":chunks,"cap":..,"thumb":b64,...}
  *   {"v":1,"t":"mchunk","id":media uuid,"i":index,"data":base64,...}   — one of "n" pieces of the file
  *   {"v":1,"t":"gmsg","gid":group,"id":uuid,"ts":ms,"body":text,...}   — a group message, one envelope per member
- *   {"v":1,"t":"gctl","gid":group,"op":roster|add|remove|join,...}      — a group's roster, kept by its admins
+ *   {"v":1,"t":"gctl","gid":group,"op":add|join|remove|leave|roster|rosterreq,...} — a group's roster, kept by its admins
+ *   group payloads also carry "rv": the number of the roster the sender holds (RosterSync)
  *   {"v":1,"t":"threat","gid":group,"id":uuid,"ts":ms,"kind":..,"sev":..,"lat":..,"lon":..,"title":..,"detail":..,"exp":ms,...}
  *   {"v":1,"t":"panic","gid":group,"id":uuid,"ts":ms,"lat":..,"lon":..,"note":text,...}
  * The sender's keys ride along so a first message from someone who has our
@@ -227,13 +227,27 @@ object CommsRepository {
      */
     private val tokenRefill = TokenRefill(
         topUp = { topUpTokens() },
-        // Tokens came: the outbox, the receipts, and an SOS waiting on them.
-        retry = { panicNudge.trySend(Unit); scope.launch { flushOutbox(); flushReceipts() } },
+        // Tokens came: the outbox (an SOS waiting on them first) and the receipts.
+        retry = { scope.launch { flushOutbox(); flushReceipts() } },
         launch = { block -> scope.launch { block() } },
     )
 
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
+    /**
+     * The same for the group outbox's SOS rows, apart from everything else so
+     * an SOS never waits behind a photo going out or a group text to two
+     * hundred members.
+     */
+    private val sosOutboxLock = Mutex()
+    /** The same for the group outbox's other rows: roster changes, group texts, shared threats. */
+    private val groupOutboxLock = Mutex()
+    /**
+     * Group outbox rows kept in memory only: a covert SOS's, and the roster
+     * request it may send, since the duress phrase writes nothing on this
+     * phone. Everything else is in the store.
+     */
+    private val memoryRows = GroupOutbox.MemoryRows()
     private val receiptsLock = Mutex()
     private val moveNoticesLock = Mutex()
     private val passNoticesLock = Mutex()
@@ -382,8 +396,9 @@ object CommsRepository {
         // every group this phone is in, with the last known position, and the
         // flag is lowered once that has been tried. What came of it is
         // published for the button to say and written to the timeline, never
-        // for the covert phrase; members the relay could not take are tried
-        // again for a while after the flag drops (see retryPanic).
+        // for the covert phrase; members the relay could not take stay in the
+        // group outbox and are tried again for about thirty minutes after the
+        // flag drops (see broadcastPanic).
         scope.launch {
             Registry.panicActive.collect { active ->
                 if (!active) return@collect
@@ -1810,12 +1825,16 @@ object CommsRepository {
 
     /**
      * Sends everything queued, oldest first, stopping at the first network
-     * failure and trying again later. The repository lock is held only to
-     * encrypt each message, never across the network round trip, so a slow
-     * network does not hold up envelopes (and call signals) coming in.
+     * failure and trying again later: an SOS still waiting in the group
+     * outbox first, then one-to-one messages, then the group outbox's roster
+     * changes, texts and shared threats ([flushGroupOutbox]). The repository
+     * lock is held only to encrypt each message, never across the network
+     * round trip, so a slow network does not hold up envelopes (and call
+     * signals) coming in.
      */
     suspend fun flushOutbox() = withContext(Dispatchers.IO) {
         if (!config.isRegistered || Vault.sealed.value) return@withContext
+        flushGroupOutbox(SOS_ROWS)
         outboxLock.withLock {
             for (m in store.queued()) {
                 // A contact who moved while the queue was read is found under their new number.
@@ -1859,6 +1878,7 @@ object CommsRepository {
                 }
             }
         }
+        flushGroupOutbox(OTHER_ROWS)
         bump()
     }
 
@@ -2156,18 +2176,19 @@ object CommsRepository {
      * (the backoff grows to five), and a photo queued behind it waited for that
      * one, since nothing else flushes the outbox while the owner sends nothing
      * (SoakTest, round 330). And a retry that failed again could not schedule
-     * the next, being itself the retry still pending.
+     * the next, being itself the retry still pending. The decision is
+     * [OutboxRetry.next]; the group outbox's rows, an SOS's among them, are
+     * tried on the same schedule.
      */
     @Synchronized
     private fun scheduleRetry(afterMs: Long? = null) {
-        val wait = afterMs?.coerceIn(1_000L, RETRY_MAX_MS) ?: retryBackoffMs
-        val at = System.currentTimeMillis() + wait
-        if (retryJob?.isActive == true && retryAtMs <= at) return
-        if (afterMs == null) retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS)
+        val pendingAt = if (retryJob?.isActive == true) retryAtMs else null
+        val next = OutboxRetry.next(System.currentTimeMillis(), retryBackoffMs, afterMs, pendingAt, RETRY_MAX_MS) ?: return
+        retryBackoffMs = next.backoffMs
         retryJob?.cancel()
-        retryAtMs = at
+        retryAtMs = next.atMs
         retryJob = scope.launch {
-            delay(wait)
+            delay(next.waitMs)
             // Its wait is over: from here a failure schedules the next retry,
             // which it could not while this one still counted as pending.
             synchronized(this@CommsRepository) { if (retryJob === coroutineContext[Job]) retryJob = null }
@@ -2184,8 +2205,7 @@ object CommsRepository {
         if (!initialised || !config.isRegistered) return
         retryBackoffMs = RETRY_MIN_MS
         retryJob?.cancel()
-        // An SOS waiting on the relay goes now rather than at its next pause's end.
-        panicNudge.trySend(Unit)
+        // The outbox goes now, an SOS waiting on the relay first, rather than at the next pause's end.
         scope.launch {
             flushMoveNotices()
             flushPassNotices()
@@ -2513,20 +2533,20 @@ object CommsRepository {
     }
 
     /**
-     * Sends [payload] to every one of [members] who is a contact on this phone,
-     * one envelope each; returns how many the relay took. Failures are logged
-     * per member. Nothing is queued: a group payload is sent once, and the
-     * caller decides what a complete failure means. An SOS uses [fanOutEach]
-     * to know who was reached and who to try again.
+     * Sends [payload] at once to every one of [members] who is a contact on
+     * this phone (never a blocked one or a message request), one envelope
+     * each; returns how many the relay took. Failures are logged per member.
+     * Nothing is queued: this is for what goes now or not at all, the
+     * invitation to a newcomer (the add is undone when it cannot reach them),
+     * and for what the next message carries anyway, a group's
+     * disappearing-messages change. SOS alerts, group texts, shared threats
+     * and roster changes go through the group outbox ([queueGroupRows]),
+     * which tries again.
      */
     private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): Int =
         fanOutEach(what, members, payload, quiet).count { it.delivery == MemberDelivery.SENT }
 
-    /**
-     * [fanOut], member by member: what each one's envelope came to, so an SOS
-     * can count who the relay took, who the offline mesh carries, who must be
-     * tried again and who it cannot reach at all.
-     */
+    /** [fanOut], member by member: what each one's envelope came to. */
     private suspend fun fanOutEach(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): List<MemberResult> {
         // A covert SOS leaves no line in the comms log, failures included.
         val log: (String) -> Unit = if (quiet) { _ -> } else CommsLog::add
@@ -2534,7 +2554,7 @@ object CommsRepository {
         for (m in members) {
             val contact = store.contact(m.number)
             if (contact == null) {
-                val why = "they are not a contact on this phone"
+                val why = GroupOutbox.NOT_A_CONTACT
                 log("$what to ${memberLabel(m)} not sent: $why")
                 out += MemberResult(m.number, MemberDelivery.FAILED, why)
                 continue
@@ -2542,7 +2562,7 @@ object CommsRepository {
             if (!isGroupMember(contact, m.ed25519)) {
                 // Someone else holds this number on another relay: the group's
                 // messages go to the member the group knows, never to a number.
-                val why = "the contact with that number is not the person this group knows"
+                val why = GroupOutbox.NOT_THE_MEMBER
                 log("$what to ${memberLabel(m)} not sent: $why")
                 out += MemberResult(m.number, MemberDelivery.FAILED, why)
                 continue
@@ -2573,10 +2593,26 @@ object CommsRepository {
         return out
     }
 
+    /** An admin's whole roster of [group], numbered [rv] ([CommsWire.OP_ROSTER]). */
+    private fun rosterPayload(group: Group, members: List<GroupMember>, rv: Long): JSONObject =
+        CommsWire.groupCtrl(
+            group.id, CommsWire.OP_ROSTER,
+            mapOf(
+                CommsWire.F_GROUP_NAME to group.name,
+                CommsWire.F_CREATED_BY to group.createdBy,
+                CommsWire.F_CREATED_TS to group.createdTs,
+                CommsWire.F_MEMBERS to rosterJson(members),
+                CommsWire.F_ROSTER_VERSION to rv
+            )
+        )
+
     /**
-     * Adds a contact to a group this phone administers: the roster here, then
-     * the whole roster to the newcomer (so their phone learns the group) and
-     * the new member to everyone already in it.
+     * Adds a contact to a group this phone administers, as the roster's next
+     * number ([RosterSync.next]): the roster here, then the whole roster to
+     * the newcomer at once, so their phone learns the group (the add is
+     * undone when that cannot reach them now), then, through the group
+     * outbox, the new member and the whole numbered roster to everyone
+     * already in it.
      */
     suspend fun addGroupMember(gid: String, number: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -2589,22 +2625,31 @@ object CommsRepository {
             if (ctx.has(number)) throw IllegalArgumentException("${contact.name.ifBlank { formatClairixNumber(number) }} is already in the group")
             if (ctx.members.size >= MAX_GROUP_MEMBERS) throw IllegalArgumentException("A group holds at most $MAX_GROUP_MEMBERS members")
             val now = System.currentTimeMillis()
-            val newcomer = GroupMember(gid, number, contact.name, OrgRole.MEMBER, contact.ed25519, ctx.me, now)
-            lock.withLock { store.insertGroupMember(newcomer) }
+            val rv = RosterSync.next(ctx.group.rosterVersion, ctx.group.rosterSeen)
+            val newcomer = GroupMember(gid, number, contact.name, OrgRole.MEMBER, contact.ed25519, ctx.me, now, rv)
+            lock.withLock {
+                store.insertGroupMember(newcomer)
+                store.setRoster(gid, rv, rv)
+            }
             bump()
             val roster = ctx.members + newcomer
+            val group = ctx.group.copy(rosterVersion = rv, rosterSeen = rv)
             val welcome = CommsWire.groupCtrl(
                 gid, CommsWire.OP_ADD,
                 mapOf(
                     CommsWire.F_GROUP_NAME to ctx.group.name,
                     CommsWire.F_CREATED_BY to ctx.group.createdBy,
                     CommsWire.F_CREATED_TS to ctx.group.createdTs,
-                    CommsWire.F_MEMBERS to rosterJson(roster)
+                    CommsWire.F_MEMBERS to rosterJson(roster),
+                    CommsWire.F_ROSTER_VERSION to rv
                 )
             )
             val welcomed = fanOut("Group invitation", listOf(newcomer), welcome)
             if (welcomed == 0) {
-                lock.withLock { store.removeGroupMember(gid, number) }
+                lock.withLock {
+                    store.removeGroupMember(gid, number)
+                    store.setRoster(gid, ctx.group.rosterVersion, ctx.group.rosterSeen)
+                }
                 bump()
                 throw RelayException("${contact.name.ifBlank { formatClairixNumber(number) }} could not be reached; try again later")
             }
@@ -2614,16 +2659,29 @@ object CommsRepository {
                     CommsWire.F_MEMBER to number,
                     CommsWire.F_MEMBER_NAME to contact.name,
                     CommsWire.F_ROLE to OrgRole.MEMBER.name,
-                    CommsWire.F_MEMBER_ED25519 to contact.ed25519
+                    CommsWire.F_MEMBER_ED25519 to contact.ed25519,
+                    CommsWire.F_ROSTER_VERSION to rv
                 )
             )
-            fanOut("Roster update", ctx.others(), joined)
+            // The change, for apps from before roster numbers, and the whole
+            // numbered roster, which repairs a phone that missed an earlier one.
+            val batch = UUID.randomUUID().toString()
+            queueRosterRows(group, ctx.others(), joined, batch)
+            queueRosterRows(group, ctx.others(), rosterPayload(group, roster, rv), batch)
+            scope.launch { flushOutbox() }
             CommsLog.add("${contact.name.ifBlank { formatClairixNumber(number) }} added to \"${ctx.group.name}\"")
             Unit
         }
     }
 
-    /** Takes a member out of a group this phone administers; they and everyone else are told. */
+    /**
+     * Takes a member out of a group this phone administers, as the roster's
+     * next number. Through the group outbox: the removal to everyone, the
+     * removed member included so their phone drops the group (unless the
+     * owner blocked them: nothing is sent to a blocked identity), and the
+     * whole numbered roster to everyone left, so a phone that missed a change
+     * catches up instead of sending on to the person removed.
+     */
     suspend fun removeGroupMember(gid: String, number: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
@@ -2631,22 +2689,39 @@ object CommsRepository {
             if (ctx.myRole != OrgRole.ADMIN) throw RelayException("Only an admin can remove members")
             if (number == ctx.me) throw IllegalArgumentException("Leave the group instead")
             val target = ctx.members.find { it.number == number } ?: throw IllegalArgumentException("They are not in the group")
-            lock.withLock { store.removeGroupMember(gid, number) }
+            val rv = RosterSync.next(ctx.group.rosterVersion, ctx.group.rosterSeen)
+            lock.withLock {
+                store.removeGroupMember(gid, number)
+                store.setRoster(gid, rv, rv)
+            }
             bump()
-            val notice = CommsWire.groupCtrl(gid, CommsWire.OP_REMOVE, mapOf(CommsWire.F_MEMBER to number))
-            // The removed member hears it too, so their phone drops the group.
-            fanOut("Roster update", ctx.others(), notice)
+            val remaining = ctx.members.filter { it.number != number }
+            val group = ctx.group.copy(rosterVersion = rv, rosterSeen = rv)
+            val batch = UUID.randomUUID().toString()
+            val notice = CommsWire.groupCtrl(gid, CommsWire.OP_REMOVE, mapOf(CommsWire.F_MEMBER to number, CommsWire.F_ROSTER_VERSION to rv))
+            queueRosterRows(group, ctx.others(), notice, batch)
+            queueRosterRows(group, remaining.filter { it.number != ctx.me }, rosterPayload(group, remaining, rv), batch)
+            scope.launch { flushOutbox() }
             CommsLog.add("${memberLabel(target)} removed from \"${ctx.group.name}\"")
             Unit
         }
     }
 
-    /** Leaves a group: the other members are told, then everything about it goes from this phone. */
+    /**
+     * Leaves a group: everything about it goes from this phone, what its
+     * outbox still owed anyone included, and then the other members are told
+     * through the group outbox, which keeps the notice and tries it again
+     * until it reaches them (never anyone the owner blocked).
+     */
     suspend fun leaveGroup(gid: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val ctx = groupContext(gid)
-            if (config.isRegistered) fanOut("Leaving notice", ctx.others(), CommsWire.groupCtrl(gid, CommsWire.OP_LEAVE))
             dropGroupLocally(gid)
+            if (config.isRegistered) {
+                val notice = CommsWire.withRosterVersion(CommsWire.groupCtrl(gid, CommsWire.OP_LEAVE), ctx.group.rosterVersion)
+                queueRosterRows(ctx.group, ctx.others(), notice, UUID.randomUUID().toString())
+                scope.launch { flushOutbox() }
+            }
             Registry.publishSharedThreats(store.sharedThreats(null))
             CommsLog.add("Left \"${ctx.group.name}\"")
             bump()
@@ -2655,14 +2730,19 @@ object CommsRepository {
 
     private suspend fun dropGroupLocally(gid: String) {
         lock.withLock { store.deleteGroup(gid).forEach { CommsMedia.delete(it) } }
+        // The store's outbox rows for the group went with it; a covert SOS's go too.
+        memoryRows.removeIf { it.gid == gid }
         CommsNotifications.cancel(appContext, gid)
     }
 
     /**
      * Sends a text to every member of [gid]. The conversation gets one row at
-     * once; its status is "sent" when at least one member's envelope reached
-     * the relay and "failed" when none did. The fan-out runs on the
-     * repository's scope, so leaving the screen does not cut it short.
+     * once, "queued", and the group outbox one row per member, tried until
+     * the relay takes it or a week has passed. The bubble then says what
+     * happened ([GroupOutbox.textStatus]): sent once every member has it,
+     * sent with "Reached 3 of 4 members" when some could not be reached,
+     * failed when nobody could. The first try runs on the repository's scope,
+     * so leaving the screen does not cut it short.
      */
     suspend fun sendGroupMessage(gid: String, body: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -2680,18 +2760,13 @@ object CommsRepository {
             }
             bump()
             wakeExpiry()
-            scope.launch {
-                val recipients = ctx.others()
-                val sent = if (recipients.isEmpty()) 0 else fanOut("Group message", recipients, CommsWire.groupMsg(gid, text, id, ts, ttl))
-                if (sent > 0 || recipients.isEmpty()) {
-                    store.markSentIfQueued(id)
-                    if (recipients.isNotEmpty() && sent < recipients.size) {
-                        CommsLog.add("Group message to \"${ctx.group.name}\" reached $sent of ${recipients.size} member(s)")
-                    }
-                } else {
-                    store.setStatus(id, "failed", "No member could be reached")
-                }
+            val queued = queueGroupRows(ctx, GroupOutbox.Kind.TEXT, id, id, CommsWire.groupMsg(gid, text, id, ts, ttl), ts, ts + GroupOutbox.TEXT_LIFETIME_MS)
+            if (queued.rows.isEmpty()) {
+                // Nobody else in the group (or only people the owner blocked): nothing to wait for.
+                store.markSentIfQueued(id)
                 bump()
+            } else {
+                scope.launch { flushGroupOutbox(OTHER_ROWS, batch = id) }
             }
             Unit
         }
@@ -2704,8 +2779,10 @@ object CommsRepository {
 
     /**
      * Shares a detection with group [gid]: on this phone's map and timeline at
-     * once, and to every member in one envelope each. [bleJson] and [cellJson]
-     * are optional JSON objects with the raw evidence.
+     * once, and to every member through the group outbox, one row each, tried
+     * until the threat expires. [bleJson] and [cellJson] are optional JSON
+     * objects with the raw evidence. Fails only when nobody could be reached
+     * for good; members the relay could not take now are tried again.
      */
     suspend fun shareThreats(
         gid: String, kind: String, severity: String, lat: Double?, lon: Double?, title: String, detail: String,
@@ -2726,52 +2803,482 @@ object CommsRepository {
             lock.withLock { store.insertSharedThreat(threat) }
             Registry.publishSharedThreats(store.sharedThreats(null))
             bump()
-            val sent = fanOut("Shared threat", ctx.others(), CommsWire.threat(gid, id, ts, kind, severity, lat, lon, heading, text, threat.expiresAt, bleJson, cellJson))
-            CommsLog.add("Threat \"$heading\" shared with \"${ctx.group.name}\": $sent of ${ctx.others().size} member(s) reached")
-            if (sent == 0 && ctx.others().isNotEmpty()) throw RelayException("No member could be reached")
+            val payload = CommsWire.threat(gid, id, ts, kind, severity, lat, lon, heading, text, threat.expiresAt, bleJson, cellJson)
+            val queued = queueGroupRows(ctx, GroupOutbox.Kind.THREAT, id, id, payload, ts, threat.expiresAt)
+            val rows = if (queued.rows.isEmpty()) emptyList() else flushGroupOutbox(OTHER_ROWS, batch = id)
+            val reached = rows.count { it.status == GroupOutbox.Status.SENT }
+            val waiting = rows.count { !it.final }
+            CommsLog.add(
+                "Threat \"$heading\" shared with \"${ctx.group.name}\": $reached of ${rows.size} member(s) reached" +
+                    if (waiting > 0) "; $waiting tried again until it expires" else ""
+            )
+            if (rows.isNotEmpty() && reached == 0 && waiting == 0 && rows.none { it.status == GroupOutbox.Status.MESH }) {
+                throw RelayException("No member could be reached")
+            }
             Unit
         }
+    }
+
+    // ── Group outbox ──────────────────────────────────────────────────────
+    //
+    // One row per member a group payload is still owed to ([GroupOutbox]),
+    // tried by flushOutbox on scheduleRetry's back-off: SOS rows first, then
+    // roster changes, texts and threats. A covert SOS's rows live in
+    // memoryRows only. Who gets a row is GroupOutbox.plan: never this phone,
+    // never anyone the owner blocked, and while the roster is out of date
+    // (RosterSync) only members confirmed in the newer one; the others' rows
+    // are held until it comes.
+
+    private val SOS_ROWS = setOf(GroupOutbox.Kind.SOS)
+    private val OTHER_ROWS = setOf(GroupOutbox.Kind.ROSTER, GroupOutbox.Kind.TEXT, GroupOutbox.Kind.THREAT)
+    /** A group's roster is asked for again at most this often, or this often while an SOS waits on the answer. */
+    private const val ROSTER_ASK_MS = 10 * 60_000L
+    private const val ROSTER_ASK_URGENT_MS = 60_000L
+    /** How long a request for a roster is worth trying. */
+    private const val ROSTER_ASK_LIFETIME_MS = 24 * 3600_000L
+    /** An admin answers one member's requests for one group's roster at most this often. */
+    private const val ROSTER_ANSWER_MS = 60_000L
+
+    /** What [queueGroupRows] made: the rows, and how many members it left out because the owner blocked them. */
+    private class Queued(val rows: List<GroupOutbox.Row>, val skipped: Int)
+
+    /**
+     * Queues [payload], numbered with the sender's roster
+     * ([CommsWire.withRosterVersion]), for [members] of [ctx]'s group (by
+     * default everyone but this phone), one row each as [GroupOutbox.plan]
+     * decides. A member this phone cannot reach gets a row that has already
+     * failed, so the result says who and why; a blocked one gets none and is
+     * counted nowhere. [quiet] (a covert SOS): kept in memory only, nothing
+     * logged. Asks the admins for the roster when rows had to be held for it.
+     */
+    private fun queueGroupRows(
+        ctx: GroupContext,
+        kind: GroupOutbox.Kind,
+        id: String,
+        batch: String,
+        payload: JSONObject,
+        created: Long,
+        deadline: Long,
+        quiet: Boolean = false,
+        members: List<GroupMember> = ctx.others()
+    ): Queued {
+        val text = CommsWire.withRosterVersion(payload, ctx.group.rosterVersion).toString()
+        val blocked = store.blockedKeys()
+        val g = ctx.group
+        var skipped = 0
+        val rows = ArrayList<GroupOutbox.Row>(members.size)
+        for (m in members) {
+            val contact = store.contact(m.number)
+            val knownAs = contact != null && isGroupMember(contact, m.ed25519)
+            val confirmed = RosterSync.confirmed(m.rv, g.rosterVersion, g.rosterSeen)
+            val status = when (val plan = GroupOutbox.plan(m, ctx.me, contact, knownAs, blocked, confirmed)) {
+                GroupOutbox.Plan.Skip -> {
+                    if (m.number != ctx.me) skipped++
+                    continue
+                }
+                is GroupOutbox.Plan.Fail -> {
+                    if (!quiet) CommsLog.add("${rowLabel(kind, payload)} to ${memberLabel(m)} not sent: ${plan.reason}")
+                    rows += GroupOutbox.Row(id, m.number, g.id, batch, kind, m.ed25519, text, created, deadline, GroupOutbox.Status.FAILED, error = plan.reason)
+                    continue
+                }
+                is GroupOutbox.Plan.Queue -> if (plan.held) GroupOutbox.Status.HELD else GroupOutbox.Status.QUEUED
+            }
+            val why = if (status == GroupOutbox.Status.HELD) GroupOutbox.WAITING_FOR_ROSTER else null
+            rows += GroupOutbox.Row(id, m.number, g.id, batch, kind, m.ed25519, text, created, deadline, status, error = why)
+        }
+        if (quiet) memoryRows.add(rows) else store.insertOutbox(rows)
+        if (rows.any { it.status == GroupOutbox.Status.HELD }) askForRoster(g, urgent = kind == GroupOutbox.Kind.SOS, quiet = quiet)
+        return Queued(rows, skipped)
+    }
+
+    /**
+     * Queues a roster payload ([payload]: a change, a whole roster, a request
+     * for one, a leaving notice) for [recipients], one row each, never for
+     * this phone or anyone the owner blocked. Unlike other rows these go to
+     * the member they were made for whether or not the roster still lists
+     * them: a removed member must hear it, and a leaving notice outlives the
+     * group on this phone.
+     */
+    private fun queueRosterRows(
+        group: Group,
+        recipients: List<GroupMember>,
+        payload: JSONObject,
+        batch: String,
+        quiet: Boolean = false,
+        lifetimeMs: Long = GroupOutbox.ROSTER_LIFETIME_MS
+    ) {
+        val me = config.number ?: return
+        val blocked = store.blockedKeys()
+        val now = System.currentTimeMillis()
+        val id = UUID.randomUUID().toString()
+        val text = payload.toString()
+        val rows = recipients
+            .filter { it.number != me && !GroupOutbox.blockedRecipient(it.number, it.ed25519, blocked) }
+            .map { GroupOutbox.Row(id, it.number, group.id, batch, GroupOutbox.Kind.ROSTER, it.ed25519, text, now, now + lifetimeMs) }
+        if (quiet) memoryRows.add(rows) else store.insertOutbox(rows)
+    }
+
+    /** When each group's roster was last asked for, so a run of newer numbers is not a run of requests. */
+    private val rosterAskedAt = HashMap<String, Long>()
+    /** When each member's request for each group's roster was last answered, by "gid|number". */
+    private val rosterAnsweredAt = HashMap<String, Long>()
+
+    /**
+     * Asks [group]'s admins for its roster ([CommsWire.OP_ROSTER_REQUEST]):
+     * this phone heard a newer roster number than its own, so it missed a
+     * change. At most once every ten minutes, or every minute while an SOS
+     * waits on the answer ([urgent]). [quiet]: kept in memory and not logged
+     * (asked for a covert SOS).
+     */
+    private fun askForRoster(group: Group, urgent: Boolean, quiet: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val every = if (urgent) ROSTER_ASK_URGENT_MS else ROSTER_ASK_MS
+        synchronized(rosterAskedAt) {
+            if (now - (rosterAskedAt[group.id] ?: 0L) < every) return
+            rosterAskedAt[group.id] = now
+        }
+        val me = config.number ?: return
+        val admins = store.groupMembers(group.id).filter { it.role == OrgRole.ADMIN && it.number != me }
+        if (admins.isEmpty()) return
+        val request = CommsWire.withRosterVersion(CommsWire.groupCtrl(group.id, CommsWire.OP_ROSTER_REQUEST), group.rosterVersion)
+        queueRosterRows(group, admins, request, UUID.randomUUID().toString(), quiet, ROSTER_ASK_LIFETIME_MS)
+        if (!quiet) CommsLog.add("The member list of \"${group.name}\" on this phone is out of date; asking its admins for theirs")
+        scope.launch { flushOutbox() }
+    }
+
+    /** The group outbox's rows of [kinds]: the store's and those kept in memory. */
+    private fun groupRows(kinds: Set<GroupOutbox.Kind>): List<GroupOutbox.Row> =
+        store.outbox(kinds) + memoryRows.all().filter { it.kind in kinds }
+
+    private fun saveRow(row: GroupOutbox.Row) {
+        if (memoryRows.has(row)) memoryRows.update(row) else store.updateOutbox(row)
+    }
+
+    private fun deleteRow(row: GroupOutbox.Row) {
+        if (memoryRows.has(row)) memoryRows.remove(row) else store.deleteOutbox(row.id, row.recipient)
+    }
+
+    private fun deleteBatch(batch: String) {
+        store.deleteOutboxBatch(batch)
+        memoryRows.removeIf { it.batch == batch }
+    }
+
+    /** What a row carries, as the comms log names it. */
+    private fun rowLabel(kind: GroupOutbox.Kind, payload: JSONObject?): String = when (kind) {
+        GroupOutbox.Kind.SOS -> "SOS"
+        GroupOutbox.Kind.TEXT -> "Group message"
+        GroupOutbox.Kind.THREAT -> "Shared threat"
+        GroupOutbox.Kind.ROSTER -> when (payload?.optString(CommsWire.F_OP)) {
+            CommsWire.OP_LEAVE -> "Leaving notice"
+            CommsWire.OP_ROSTER_REQUEST -> "Request for the member list"
+            else -> "Roster update"
+        }
+    }
+
+    /** A row the outbox stops owing anyone, and why. */
+    private enum class Dropped { BLOCKED, REMOVED }
+
+    /** What trying a row came to: an outcome for it, or no row any more. */
+    private sealed class Tried {
+        class Done(val outcome: GroupOutbox.Outcome) : Tried()
+        class Drop(val why: Dropped) : Tried()
+    }
+
+    /**
+     * Tries the group outbox's rows of [kinds] that are due ([GroupOutbox.due]),
+     * or only [batch]'s; SOS rows under a lock of their own. Stops at the
+     * first the relay could not take and schedules the retry, as the
+     * one-to-one outbox does, unless [everyone] (an SOS's first pass, which
+     * tries every member whatever became of the others). Then settles what is
+     * final. Returns [batch]'s rows as they stood after the pass, before
+     * anything final was cleared. Never throws: with the vault sealed the
+     * rows wait for the unlock, and anything else is logged.
+     */
+    private suspend fun flushGroupOutbox(kinds: Set<GroupOutbox.Kind>, batch: String? = null, everyone: Boolean = false): List<GroupOutbox.Row> {
+        if (!config.isRegistered) return emptyList()
+        return (if (GroupOutbox.Kind.SOS in kinds) sosOutboxLock else groupOutboxLock).withLock { groupPass(kinds, batch, everyone) }
+    }
+
+    /** [flushGroupOutbox] with its lock held: one [passGroupOutbox], which never throws out of here. */
+    private suspend fun groupPass(kinds: Set<GroupOutbox.Kind>, batch: String?, everyone: Boolean): List<GroupOutbox.Row> {
+        val sos = GroupOutbox.Kind.SOS in kinds
+        return try {
+            passGroupOutbox(kinds, batch, everyone)
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: VaultSealedException) {
+            emptyList()
+        } catch (e: Exception) {
+            CommsLog.add("The group outbox could not be tried: ${e.message ?: e.javaClass.simpleName}")
+            emptyList()
+        } finally {
+            // An SOS still being tried holds the vault open; with none left, it is let go.
+            if (sos) holdVaultForSos(runCatching { sosPending() }.getOrDefault(false))
+        }
+    }
+
+    private suspend fun passGroupOutbox(kinds: Set<GroupOutbox.Kind>, batch: String?, everyone: Boolean): List<GroupOutbox.Row> {
+        val now = System.currentTimeMillis()
+        // What ran out of time is settled first, and held rows go to whoever the roster now confirms.
+        var rows = groupRows(kinds).map { r ->
+            val e = GroupOutbox.expire(r, now)
+            if (e != r) {
+                saveRow(e)
+                if (e.kind != GroupOutbox.Kind.SOS && !memoryRows.has(e)) {
+                    CommsLog.add("${rowLabel(e.kind, CommsWire.parse(e.payload))} to ${memberName(e.gid, e.recipient)} given up: ${e.error}")
+                }
+            }
+            e
+        }
+        rows = releaseHeld(rows)
+        if (GroupOutbox.Kind.SOS in kinds) {
+            val waiting = rows.filter { it.status == GroupOutbox.Status.QUEUED && (batch == null || it.batch == batch) }
+            if (waiting.isNotEmpty()) topUpTokensForSos(waiting.size, quiet = waiting.all { memoryRows.has(it) })
+        }
+        val due = GroupOutbox.due(rows, now).filter { batch == null || it.batch == batch }
+        var offline = false
+        var backoff = false
+        var retryAfter = Long.MAX_VALUE
+        for (row in due) {
+            val quiet = memoryRows.has(row)
+            when (val t = tryRow(row, quiet)) {
+                is Tried.Drop -> dropRow(row, t.why)
+                is Tried.Done -> {
+                    val o = t.outcome
+                    val next = GroupOutbox.after(row, o, System.currentTimeMillis())
+                    saveRow(next)
+                    if (!quiet) logRow(row, next, o)
+                    if (o is GroupOutbox.Outcome.Offline) {
+                        offline = true
+                        val wait = o.retryAfterMs
+                        if (wait == null) backoff = true else retryAfter = minOf(retryAfter, wait)
+                        if (!everyone) break
+                    }
+                }
+            }
+        }
+        if (offline) scheduleRetry(if (backoff) null else retryAfter)
+        val after = groupRows(kinds)
+        val batchRows = if (batch != null) after.filter { it.batch == batch } else emptyList()
+        settleGroupRows(after, kinds)
+        return batchRows
+    }
+
+    /**
+     * Held rows once the roster may have changed ([GroupOutbox.release]):
+     * queued for members it now confirms, dropped for anyone it no longer
+     * lists. Returns the rows as they now stand.
+     */
+    private fun releaseHeld(rows: List<GroupOutbox.Row>): List<GroupOutbox.Row> {
+        if (rows.none { it.status == GroupOutbox.Status.HELD }) return rows
+        val out = ArrayList<GroupOutbox.Row>(rows.size)
+        for (r in rows) {
+            if (r.status != GroupOutbox.Status.HELD) {
+                out += r
+                continue
+            }
+            val group = store.group(r.gid)
+            val member = if (group != null) store.groupMember(r.gid, r.recipient) else null
+            val confirmed = group != null && member != null && RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen)
+            val next = GroupOutbox.release(r, member, confirmed)
+            when {
+                next == null -> dropRow(r, Dropped.REMOVED)
+                next == r -> out += r
+                else -> {
+                    saveRow(next)
+                    out += next
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * A row the outbox owes nobody any more: the owner blocked its member
+     * (dropped without a word, as everything about a blocked identity is), or
+     * the roster no longer lists them. An SOS being tried counts them as left
+     * out, not as unreached.
+     */
+    private fun dropRow(row: GroupOutbox.Row, why: Dropped) {
+        val quiet = memoryRows.has(row)
+        deleteRow(row)
+        val run = sosRun
+        if (run != null && row.kind == GroupOutbox.Kind.SOS && row.batch == run.batch) {
+            synchronized(run) {
+                val counts = if (why == Dropped.BLOCKED) run.skipped else run.removed
+                counts[row.gid] = (counts[row.gid] ?: 0) + 1
+            }
+        }
+        if (why == Dropped.REMOVED && !quiet && row.kind != GroupOutbox.Kind.SOS) {
+            CommsLog.add("${rowLabel(row.kind, null)} to ${formatClairixNumber(row.recipient)} dropped: they are no longer in the group")
+        }
+    }
+
+    /**
+     * One try at [row]. A member the owner blocked, or one the roster no
+     * longer lists (for anything but a roster row, which goes to whom it was
+     * made for), is dropped. While the roster is out of date, a member not
+     * confirmed in the newer one is held and the admins asked for it. Then as
+     * any envelope: not a contact, or not the person the group knows, is
+     * final; otherwise the relay decides, and when it cannot be reached a
+     * text or an SOS also goes into the offline mesh (when it is on), the
+     * relay still tried until the row is final.
+     */
+    private suspend fun tryRow(row: GroupOutbox.Row, quiet: Boolean): Tried {
+        val blocked = store.blockedKeys()
+        if (GroupOutbox.blockedRecipient(row.recipient, row.recipientEd, blocked)) return Tried.Drop(Dropped.BLOCKED)
+        var key = row.recipientEd
+        if (row.kind != GroupOutbox.Kind.ROSTER) {
+            val group = store.group(row.gid) ?: return Tried.Drop(Dropped.REMOVED)
+            val member = store.groupMember(row.gid, row.recipient) ?: return Tried.Drop(Dropped.REMOVED)
+            if (row.recipientEd.isNotBlank() && member.ed25519.isNotBlank() && member.ed25519 != row.recipientEd) return Tried.Drop(Dropped.REMOVED)
+            if (GroupOutbox.blockedRecipient(member.number, member.ed25519, blocked)) return Tried.Drop(Dropped.BLOCKED)
+            if (!RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen)) {
+                askForRoster(group, urgent = row.kind == GroupOutbox.Kind.SOS, quiet = quiet)
+                return Tried.Done(GroupOutbox.Outcome.Hold)
+            }
+            key = member.ed25519
+        }
+        val contact = store.contact(row.recipient) ?: return Tried.Done(GroupOutbox.Outcome.Failed(GroupOutbox.NOT_A_CONTACT))
+        if (!isGroupMember(contact, key)) return Tried.Done(GroupOutbox.Outcome.Failed(GroupOutbox.NOT_THE_MEMBER))
+        val payload = CommsWire.parse(row.payload) ?: return Tried.Done(GroupOutbox.Outcome.Failed("its record on this phone is unreadable"))
+        val outcome = when (val d = deliver(contact, payload)) {
+            Deliver.Sent -> GroupOutbox.Outcome.Sent
+            is Deliver.Failed -> GroupOutbox.Outcome.Failed(d.reason)
+            is Deliver.TooLarge -> GroupOutbox.Outcome.Failed(d.reason)
+            is Deliver.Offline -> {
+                val mesh = !row.mesh && CommsWire.type(payload) in MESH_TYPES && meshQueue(contact, payload, row.id, quiet)
+                GroupOutbox.Outcome.Offline(d.reason, d.retryAfterMs, mesh)
+            }
+        }
+        return Tried.Done(outcome)
+    }
+
+    /** The comms log's line for one try at a row, when it says something new. */
+    private fun logRow(row: GroupOutbox.Row, next: GroupOutbox.Row, outcome: GroupOutbox.Outcome) {
+        val what = rowLabel(row.kind, if (row.kind == GroupOutbox.Kind.ROSTER) CommsWire.parse(row.payload) else null)
+        val who = memberName(row.gid, row.recipient)
+        when (outcome) {
+            GroupOutbox.Outcome.Sent -> if (row.attempts > 0) CommsLog.add("$what to $who went through on try ${next.attempts}")
+            is GroupOutbox.Outcome.Failed -> CommsLog.add("$what to $who failed: ${outcome.reason}")
+            is GroupOutbox.Outcome.Offline -> when {
+                next.final -> if (row.kind != GroupOutbox.Kind.SOS) CommsLog.add("$what to $who given up: ${next.error}")
+                row.attempts == 0 -> CommsLog.add("$what to $who not sent yet: ${outcome.reason}; it stays queued and is tried again")
+            }
+            GroupOutbox.Outcome.Hold -> Unit
+        }
+    }
+
+    /**
+     * What final rows mean, after a pass. A group text's bubble says how far
+     * it got ([GroupOutbox.textStatus]); a send whose every row is final is
+     * cleared from the outbox; an SOS updates [panicResult] and, once final,
+     * gives its last word ([settleSos]).
+     */
+    private fun settleGroupRows(rows: List<GroupOutbox.Row>, kinds: Set<GroupOutbox.Kind>) {
+        var changed = false
+        for ((batch, batchRows) in rows.groupBy { it.batch }) {
+            val done = batchRows.all { it.final }
+            when (batchRows.first().kind) {
+                GroupOutbox.Kind.SOS -> Unit
+                GroupOutbox.Kind.TEXT -> {
+                    val s = GroupOutbox.textStatus(batchRows)
+                    val current = store.statusOf(batch)
+                    if (current != null && (current.first != s.status || current.second != s.note)) {
+                        store.setStatus(batch, s.status, s.note)
+                        changed = true
+                    }
+                    if (done) deleteBatch(batch)
+                }
+                GroupOutbox.Kind.THREAT -> if (done) {
+                    // One that took more than a try says what came of it; the first try's line is shareThreats'.
+                    if (batchRows.any { it.attempts > 1 }) {
+                        val title = batchRows.firstNotNullOfOrNull { CommsWire.parse(it.payload) }?.optString(CommsWire.F_TITLE).orEmpty()
+                        val name = store.group(batchRows.first().gid)?.name ?: "a group"
+                        val reached = batchRows.count { it.status == GroupOutbox.Status.SENT }
+                        CommsLog.add("Threat \"$title\" shared with \"$name\": $reached of ${batchRows.size} member(s) reached after retrying")
+                    }
+                    deleteBatch(batch)
+                }
+                GroupOutbox.Kind.ROSTER -> if (done) deleteBatch(batch)
+            }
+        }
+        if (changed) bump()
+        if (GroupOutbox.Kind.SOS in kinds) settleSos(rows.filter { it.kind == GroupOutbox.Kind.SOS })
     }
 
     // ── SOS ───────────────────────────────────────────────────────────────
 
     /**
      * What became of the latest visible SOS (the button's), as it stands: after
-     * its first pass over every member, then after each retry pass until it is
-     * final. Null before any. A covert SOS (the duress phrase) is never
-     * published here: nothing on this phone may say it was sent.
+     * its first pass over every member, then after each pass of the group
+     * outbox until it is final. Null before any. A covert SOS (the duress
+     * phrase) is never published here: nothing on this phone may say it was
+     * sent.
      */
     private val _panicResult = MutableStateFlow<PanicResult?>(null)
     val panicResult: StateFlow<PanicResult?> = _panicResult.asStateFlow()
 
     /** Numbers each raise of the SOS flag, so a caller waiting on [panicResult] knows its own. */
     private val panicAttempts = AtomicLong(0)
-    /** The retry passes of the latest SOS; a new SOS cancels them, since everyone it reaches has the newer alert. */
-    private var panicRetry: Job? = null
-    /** A fresh network ends a retry pause early. */
-    private val panicNudge = Channel<Unit>(Channel.CONFLATED)
 
-    /** One group's SOS: who it goes to and the payload, kept so a retry pass sends the same alert (recipients dedupe it by id). */
-    private class PanicTarget(val group: Group, val members: List<GroupMember>, val payload: JSONObject)
+    /**
+     * The latest SOS raised in this process: what its result is made of
+     * besides its rows. [skipped] and [removed] count, per group, members
+     * left out because the owner blocked them or the roster turned out no
+     * longer to list them. A newer SOS replaces it and takes over its rows.
+     */
+    private class SosRun(
+        val attempt: Long,
+        val batch: String,
+        val ts: Long,
+        val lat: Double?,
+        val lon: Double?,
+        val covert: Boolean,
+        val groups: List<Pair<String, String>>,
+        val errors: Map<String, String>,
+        val skipped: HashMap<String, Int>
+    ) {
+        val removed = HashMap<String, Int>()
+        /** Passes over its rows so far: the first, then one per outbox flush that reached them. */
+        var passes = 0
+        /** The sentence last said about it, so a notification goes only when it changes. */
+        var lastHeadline: String? = null
+    }
+
+    @Volatile private var sosRun: SosRun? = null
+    private val sosVaultLock = Any()
+    /** Whether the vault is held open for an SOS still being tried; see [holdVaultForSos]. */
+    private var sosVaultHeld = false
+    /** Lets go of the vault once no SOS is pending, whatever else happens; see [holdVaultForSos]. */
+    private var sosVaultWatch: Job? = null
+    private const val SOS_VAULT_CHECK_MS = 5 * 60_000L
 
     /**
      * Whether an SOS raised now would have anyone to go to: what the SOS
-     * button checks before its confirm dialog. Reads the store; call off the
-     * main thread.
+     * button checks before its confirm dialog. Members the owner blocked do
+     * not count: they are sent nothing. Reads the store; call off the main
+     * thread.
      */
     fun sosGate(): SosGate {
         if (!initialised || !config.isRegistered) return SosGate.NOT_REGISTERED
-        val me = config.number
-        val groups = groups()
-        val others = groups.sumOf { g -> groupMembers(g.id).count { it.number != me } }
-        return SosGate.decide(true, groups.size, others)
+        val me = config.number ?: return SosGate.NOT_REGISTERED
+        return unlockedOr(SosGate.NO_RECIPIENTS) {
+            val blocked = store.blockedKeys()
+            val groups = store.groups()
+            val others = groups.sumOf { g ->
+                store.groupMembers(g.id).count { it.number != me && !GroupOutbox.blockedRecipient(it.number, it.ed25519, blocked) }
+            }
+            SosGate.decide(true, groups.size, others)
+        }
     }
 
     /**
      * Raises the visible SOS and waits for its first pass over every member of
      * every group: what the button says, after the sends and not before.
-     * Members the relay could not take are tried again in the background; each
-     * pass replaces the result in [panicResult].
+     * Members the relay could not take stay in the group outbox and are tried
+     * again for about thirty minutes; each pass replaces the result in
+     * [panicResult].
      */
     suspend fun sendSos(): PanicResult {
         // A broadcast still running lowers the flag when it is done; raising it
@@ -2782,42 +3289,20 @@ object CommsRepository {
         return panicResult.first { it != null && it.attempt > before }!!
     }
 
-    private fun panicTarget(gid: String, lat: Double?, lon: Double?, note: String?): PanicTarget {
-        val ctx = groupContext(gid)
-        val id = UUID.randomUUID().toString()
-        val ts = System.currentTimeMillis()
-        val text = note?.trim()?.take(MAX_PANIC_NOTE)
-        return PanicTarget(ctx.group, ctx.others(), CommsWire.panic(gid, id, ts, lat, lon, text))
-    }
-
-    /** One pass of [target]'s SOS over [members]: all of them, or those still waiting. Logged per member unless [covert]. */
-    private suspend fun panicPass(target: PanicTarget, members: List<GroupMember>, covert: Boolean): PanicGroupResult =
-        PanicGroupResult(target.group.id, target.group.name, fanOutEach("SOS", members, target.payload, quiet = covert))
-
-    private fun panicGroupLine(r: PanicGroupResult, position: Boolean): String =
-        "SOS sent to \"${r.groupName}\": ${r.reached} of ${r.members.size} member(s) reached" +
-            (if (r.meshQueued > 0) ", ${r.meshQueued} in the offline mesh" else "") +
-            (if (position) "" else " (no position)")
-
     /**
-     * Sends an SOS to every other member of [gid] once, with this phone's
-     * position when it has one. What each member's envelope came to is in the
-     * result; nothing is tried again here (see [broadcastPanic]).
-     */
-    suspend fun sendPanic(gid: String, lat: Double?, lon: Double?, note: String? = null, covert: Boolean = false): PanicGroupResult = withContext(Dispatchers.IO) {
-        if (!config.isRegistered) throw RelayException("Not registered with a relay")
-        val target = panicTarget(gid, lat, lon, note)
-        val result = panicPass(target, target.members, covert)
-        if (!covert) CommsLog.add(panicGroupLine(result, lat != null && lon != null))
-        result
-    }
-
-    /**
-     * The SOS was raised: to every group, with the last known position. Each
-     * group is tried whatever became of the last; the result counts people
-     * the relay took, people the offline mesh carries and people nobody could
-     * reach. Members the relay could not take are tried again by [retryPanic]
-     * after this returns. Logged unless [covert]; the caller records it.
+     * The SOS was raised: to every group, with the last known position.
+     * Every other member of every group gets a row in the group outbox
+     * ([queueGroupRows]: never anyone the owner blocked, and while a roster
+     * is out of date never someone it may no longer list, until that is
+     * confirmed), delivery tokens are fetched for them ([topUpTokensForSos]),
+     * and the first pass tries each of them at once, whatever became of the
+     * others. The result counts people the relay took, people the offline
+     * mesh carries, people still queued and people nobody could reach; the
+     * outbox tries the queued ones again for about thirty minutes, with the
+     * vault held open meanwhile, each pass replacing [panicResult] ([settleSos]).
+     * A newer SOS takes over from an older one still being tried: everyone it
+     * reaches has the newer alert. A covert SOS's rows are kept in memory only
+     * and nothing about it is logged; the caller records a visible one.
      */
     private suspend fun broadcastPanic(attempt: Long, covert: Boolean): PanicResult {
         val s = Registry.status.value
@@ -2834,71 +3319,188 @@ object CommsRepository {
             if (!covert) CommsLog.add("SOS raised, but this phone is in no group to send it to")
             return PanicResult(attempt, ts, lat, lon, blocked = PanicBlocked.NO_GROUPS)
         }
-        // A new SOS supersedes the last one's retries: everyone it reaches has the newer alert.
-        panicRetry?.cancel()
-        panicNudge.tryReceive()
-        // Tokens are fetched apart from the sends that spend them (RelayClient.send
-        // never fetches); after a long time offline the pool may be empty, and an
-        // SOS cannot wait for the outbox's backoff to refill it. Fetches only
-        // when few are left.
-        topUpTokensForPanic(covert)
-        val targets = ArrayList<PanicTarget>(groups.size)
-        val results = groups.map { g ->
-            runCatching { panicTarget(g.id, lat, lon, null) }
-                .mapCatching { t -> targets += t; panicPass(t, t.members, covert) }
-                .getOrElse { e ->
+        val batch = UUID.randomUUID().toString()
+        val errors = HashMap<String, String>()
+        val skipped = HashMap<String, Int>()
+        var queued = 0
+        val run = SosRun(attempt, batch, ts, lat, lon, covert, groups.map { it.id to it.name }, errors, skipped)
+        // Under the SOS rows' lock from the first row to the end of the first
+        // pass: no other flush tries this SOS, or settles it, before that.
+        val rows = sosOutboxLock.withLock {
+            store.deleteOutboxKindExcept(GroupOutbox.Kind.SOS, batch)
+            memoryRows.removeIf { it.kind == GroupOutbox.Kind.SOS && it.batch != batch }
+            for (g in groups) {
+                runCatching {
+                    val id = UUID.randomUUID().toString()
+                    val q = queueGroupRows(
+                        groupContext(g.id), GroupOutbox.Kind.SOS, id, batch, CommsWire.panic(g.id, id, ts, lat, lon, null),
+                        ts, ts + GroupOutbox.SOS_LIFETIME_MS, quiet = covert
+                    )
+                    skipped[g.id] = q.skipped
+                    queued += q.rows.size
+                }.onFailure { e ->
                     if (!covert) CommsLog.add("SOS to \"${g.name}\" could not be tried: ${e.message}")
-                    PanicGroupResult(g.id, g.name, emptyList(), error = e.message ?: e.javaClass.simpleName)
+                    errors[g.id] = e.message ?: e.javaClass.simpleName
                 }
+            }
+            sosRun = run
+            // Its retries start from the shortest pause, whatever the outbox's back-off had grown to.
+            retryBackoffMs = RETRY_MIN_MS
+            holdVaultForSos(queued > 0)
+            if (queued == 0) emptyList() else groupPass(SOS_ROWS, batch, everyone = true)
         }
-        var result = PanicResult(attempt, ts, lat, lon, groups = results)
-        if (result.people == 0 && results.all { it.error == null }) result = result.copy(blocked = PanicBlocked.NO_OTHER_MEMBERS)
-        result = result.copy(retrying = result.anyPending)
+        if (queued > 0 && rows.isEmpty()) {
+            if (!covert) CommsLog.add("SOS raised, but its first try could not run; it stays queued and is tried again")
+            return PanicResult(attempt, ts, lat, lon, error = "Its first try could not run; it stays queued and is tried again", retrying = true)
+        }
+        val result = PanicResult.fromRows(attempt, ts, lat, lon, run.groups, rows, errors, skipped, run.removed)
         if (!covert) {
-            for (r in results) if (r.error == null) CommsLog.add(panicGroupLine(r, position))
+            for (r in result.groups) CommsLog.add(r.logLine(position, result.retrying))
             CommsLog.add(result.headline() + " · " + result.detail())
         }
-        if (result.retrying) panicRetry = scope.launch { retryPanic(result, targets, covert) }
         return result
     }
 
     /**
-     * Tries the members the relay could not take again, pass by pass, with
-     * growing pauses ([PanicResult.RETRY_DELAYS_MS]); a fresh network ends a
-     * pause early. Each pass replaces [panicResult]; the last word, since
-     * retries were needed, is also a notification, for an owner who has put
-     * the phone away. Lives in this process's memory: a per-recipient outbox
-     * that survives it is the next step. Nothing is logged or shown for a
-     * covert SOS.
+     * After a pass over the SOS rows: the latest SOS's result, published for
+     * the button and, while it is still being tried, as an updated
+     * notification whenever what it says changes ("SOS reached 3 of 4
+     * people; trying 1 more again"); once every row of it is final, its last
+     * word (log line, timeline entry and notification, when it took more than
+     * its first pass) and its rows cleared. An SOS raised before this process
+     * started (the store keeps a visible one's rows) gets its last word too.
+     * A covert SOS says nothing anywhere.
      */
-    private suspend fun retryPanic(first: PanicResult, targets: List<PanicTarget>, covert: Boolean) {
-        var result = first
-        val delays = PanicResult.RETRY_DELAYS_MS
-        for ((i, wait) in delays.withIndex()) {
-            withTimeoutOrNull(wait) { panicNudge.receive() }
-            topUpTokensForPanic(covert)
-            val passResults = targets.mapNotNull { t ->
-                val pending = result.pendingIn(t.group.id)
-                if (pending.isEmpty()) null else panicPass(t, t.members.filter { it.number in pending }, covert)
+    private fun settleSos(rows: List<GroupOutbox.Row>) {
+        val run = sosRun
+        val now = System.currentTimeMillis()
+        for ((batch, batchRows) in rows.groupBy { it.batch }) {
+            if (run == null || run.batch != batch) {
+                if (batchRows.all { it.final }) finishEarlierSos(batch, batchRows)
+                continue
             }
-            result = result.merged(passResults, pass = i + 2, retrying = false)
-            result = result.copy(retrying = i < delays.lastIndex && result.anyPending)
-            // A newer SOS may have taken over while this pass ran; its result stands.
-            if (!covert) _panicResult.update { cur -> if (cur != null && cur.attempt == result.attempt) result else cur }
-            if (!result.anyPending) break
-        }
-        // Cancelled by a newer SOS during the last pass: that one's word is the one that counts.
-        if (covert || !currentCoroutineContext().isActive) return
-        CommsLog.add("SOS after retrying: " + result.headline() + " · " + result.detail())
-        recordPanicEvent(result, retried = true)
-        if (_panicResult.value?.attempt == result.attempt) {
-            CommsNotifications.notifySosOutcome(appContext, result.headline(), System.currentTimeMillis())
+            val result = synchronized(run) {
+                run.passes++
+                PanicResult.fromRows(
+                    run.attempt, run.ts, run.lat, run.lon, run.groups, batchRows, run.errors,
+                    HashMap(run.skipped), HashMap(run.removed), pass = run.passes
+                )
+            }
+            val headline = result.headline()
+            // The first pass is broadcastPanic's to report; after it each change is said as it happens.
+            if (run.passes > 1 && !run.covert) {
+                _panicResult.update { cur -> if (cur != null && cur.attempt == run.attempt) result else cur }
+                if (result.retrying && headline != run.lastHeadline) CommsNotifications.notifySosOutcome(appContext, headline, now)
+            }
+            run.lastHeadline = headline
+            if (result.retrying) continue
+            deleteBatch(batch)
+            if (run.passes > 1 && !run.covert) {
+                CommsLog.add("SOS after retrying: $headline · ${result.detail()}")
+                recordPanicEvent(result, retried = true)
+                CommsNotifications.notifySosOutcome(appContext, headline, now)
+            }
         }
     }
 
-    /** [topUpTokens] for an SOS: the same fetch, without the log line a failure writes, when the SOS is covert. */
-    private fun topUpTokensForPanic(covert: Boolean) {
-        if (covert) runCatching { relay.topUpTokens() } else topUpTokens()
+    /**
+     * The last word of an SOS raised before this process started, now that
+     * every row of it is final: said as its own run would have said it, then
+     * cleared. Only a visible SOS's rows are kept in the store.
+     */
+    private fun finishEarlierSos(batch: String, rows: List<GroupOutbox.Row>) {
+        val covert = rows.any { memoryRows.has(it) }
+        deleteBatch(batch)
+        if (covert) return
+        val payload = rows.firstNotNullOfOrNull { CommsWire.parse(it.payload) }
+        val lat = payload?.optDouble(CommsWire.F_LAT, Double.NaN)?.takeIf { !it.isNaN() }
+        val lon = payload?.optDouble(CommsWire.F_LON, Double.NaN)?.takeIf { !it.isNaN() }
+        val groups = rows.map { it.gid }.distinct().map { gid -> gid to (store.group(gid)?.name ?: "A group") }
+        val result = PanicResult.fromRows(0L, rows.minOf { it.created }, lat, lon, groups, rows)
+        val headline = result.headline()
+        CommsLog.add("SOS after retrying: $headline · ${result.detail()}")
+        recordPanicEvent(result, retried = true)
+        CommsNotifications.notifySosOutcome(appContext, headline, System.currentTimeMillis())
+    }
+
+    /**
+     * Holds the vault open while an SOS is still being tried, as a call
+     * does: with a secure lock screen the screen going off seals the identity
+     * away, and every retry with it, which is just when an SOS is still
+     * needed (pressed, and the phone put away). Let go once none is pending;
+     * the vault then seals if the phone is locked by then. However the SOS
+     * ends (an unpair, a store that cannot be read), the hold does not
+     * outlive its thirty minutes: a check every few minutes lets go once no
+     * SOS row is left within its time.
+     */
+    private fun holdVaultForSos(pending: Boolean) {
+        synchronized(sosVaultLock) {
+            if (pending == sosVaultHeld) return
+            sosVaultHeld = pending
+            sosVaultWatch?.cancel()
+            sosVaultWatch = null
+            if (!pending) {
+                Vault.release()
+                return
+            }
+            Vault.hold()
+            sosVaultWatch = scope.launch {
+                while (isActive) {
+                    delay(SOS_VAULT_CHECK_MS)
+                    if (!runCatching { sosPending() }.getOrDefault(false)) {
+                        holdVaultForSos(false)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /** Whether an SOS is still being tried: one of its rows is neither final nor past its time. */
+    private fun sosPending(): Boolean {
+        if (!initialised || !config.isRegistered) return false
+        val now = System.currentTimeMillis()
+        return groupRows(SOS_ROWS).any { !it.final && now < it.deadline }
+    }
+
+    /**
+     * Fills the delivery-token pool for an SOS to [envelopes] members before
+     * its sends ([SosTokens]): a send never fetches tokens itself, and a
+     * phone back after weeks away has none left and may not hold the relay's
+     * keys for the current fortnight. Those are read at once, with a request
+     * that names nobody, rather than at the random later moment an ordinary
+     * top-up picks. Nothing is logged for a covert SOS ([quiet]).
+     */
+    private fun topUpTokensForSos(envelopes: Int, quiet: Boolean) {
+        if (!config.isRegistered) return
+        var keysRead = false
+        fun readKeys() {
+            keysRead = true
+            runCatching { relay.info() }.onSuccess { keepAddresses(it) }
+        }
+        repeat(SosTokens.MAX_FETCHES) {
+            when (SosTokens.step(relay.tokenCount(), envelopes, keysRead || relay.tokenKeysCurrent())) {
+                SosTokens.Step.ENOUGH -> return
+                SosTokens.Step.READ_KEYS_FIRST -> readKeys()
+                SosTokens.Step.FETCH -> Unit
+            }
+            val before = relay.tokenCount()
+            val held = try {
+                relay.topUpTokens(low = SosTokens.target(envelopes), batch = RelayClient.TOKENS_BATCH)
+            } catch (e: RelayException) {
+                // The relay's fortnight is not the one this phone's clock says: read its keys, then once more.
+                if (e.code == RelayClient.KEYS_PENDING && !keysRead) {
+                    readKeys()
+                    return@repeat
+                }
+                if (!quiet) CommsLog.add("Could not fetch delivery tokens for the SOS: ${e.message}")
+                return
+            } catch (e: Exception) {
+                if (!quiet) CommsLog.add("Could not fetch delivery tokens for the SOS: ${e.message}")
+                return
+            }
+            if (held <= before) return
+        }
     }
 
     /**
@@ -2977,6 +3579,13 @@ object CommsRepository {
             CommsLog.add("$type from $label dropped: they have the number of someone in \"${group.name}\", not their keys")
             return
         }
+        // The roster number the sender holds. A numbered change or roster
+        // keeps its own books (applyGroupCtrl); anything else tells this phone
+        // whether its roster is out of date, and that the sender is in theirs.
+        val rv = CommsWire.rosterVersion(json)
+        val op = json.optString(CommsWire.F_OP)
+        val numberedChange = type == CommsWire.T_GROUP_CTRL && (op == CommsWire.OP_JOIN || op == CommsWire.OP_REMOVE || op == CommsWire.OP_ROSTER)
+        if (rv != null && !numberedChange) heardRosterVersion(group, sender, rv)
         when (type) {
             CommsWire.T_GROUP_MSG -> {
                 val id = CommsWire.messageId(json) ?: return
@@ -3051,7 +3660,8 @@ object CommsRepository {
      * An invitation: [contact] added this phone to a group. The roster must
      * name them as an admin, or the message is somebody making up a group in
      * other people's names. For a group already here, only an admin's roster
-     * replaces what this phone has.
+     * replaces what this phone has, and when it is numbered ([RosterSync]),
+     * only one newer than the roster held.
      */
     private fun applyGroupAdd(contact: Contact, gid: String, existing: Group?, json: JSONObject) {
         val me = config.number ?: return
@@ -3078,21 +3688,42 @@ object CommsRepository {
             CommsLog.add("Roster for \"${existing.name}\" from $label, who is not one of its admins; dropped")
             return
         }
+        val rv = CommsWire.rosterVersion(json)
+        if (existing != null && rv != null && !RosterSync.replaces(existing.rosterVersion, rv)) {
+            // A late copy of a roster no newer than the one held changes nothing.
+            CommsLog.add("Roster of \"${existing.name}\" from $label is not newer than the one this phone has; kept")
+            return
+        }
         val name = json.optString(CommsWire.F_GROUP_NAME).trim().take(MAX_GROUP_NAME).ifBlank { existing?.name ?: "Group" }
         val createdBy = json.optString(CommsWire.F_CREATED_BY).let { parseClairixNumber(it) } ?: existing?.createdBy ?: from
         val createdTs = existing?.createdTs ?: json.optLong(CommsWire.F_CREATED_TS, System.currentTimeMillis())
         val myRole = roster.find { it.number == me }?.let { runCatching { OrgRole.valueOf(it.role) }.getOrNull() } ?: OrgRole.MEMBER
-        val now = System.currentTimeMillis()
         store.insertGroup(Group(gid, name, createdBy, createdTs, myRole))
+        replaceMembersLocked(gid, roster, from, rv ?: 0L)
+        if (rv != null) {
+            val (v, s) = RosterSync.afterRoster(existing?.rosterVersion ?: 0L, existing?.rosterSeen ?: 0L, rv)
+            store.setRoster(gid, v, s)
+        }
+        CommsLog.add(if (existing == null) "Added to group \"$name\" by $label (${roster.size} members)" else "Roster of \"$name\" updated by $label (${roster.size} members)")
+        // Rows held while the roster was out of date may go now, or be dropped.
+        if (existing != null) scope.launch { flushOutbox() }
+    }
+
+    /**
+     * Replaces [gid]'s members with [roster], keeping who added each one and
+     * when; everyone on it is known to be in roster number [rv]. Caller holds
+     * [lock].
+     */
+    private fun replaceMembersLocked(gid: String, roster: List<CommsWire.RosterEntry>, from: String, rv: Long) {
+        val now = System.currentTimeMillis()
         val known = store.groupMembers(gid).associateBy { it.number }
         for (e in roster) {
             val role = runCatching { OrgRole.valueOf(e.role) }.getOrDefault(OrgRole.MEMBER)
             val ed = e.ed25519.ifBlank { store.contact(e.number)?.ed25519 ?: known[e.number]?.ed25519 ?: "" }
             val memberName = e.name.trim().take(40).ifBlank { store.contact(e.number)?.name ?: known[e.number]?.name ?: "" }
-            store.insertGroupMember(GroupMember(gid, e.number, memberName, role, ed, known[e.number]?.addedBy ?: from, known[e.number]?.addedTs ?: now))
+            store.insertGroupMember(GroupMember(gid, e.number, memberName, role, ed, known[e.number]?.addedBy ?: from, known[e.number]?.addedTs ?: now, rv))
         }
         for (gone in known.keys - roster.map { it.number }.toSet()) store.removeGroupMember(gid, gone)
-        CommsLog.add(if (existing == null) "Added to group \"$name\" by $label (${roster.size} members)" else "Roster of \"$name\" updated by $label (${roster.size} members)")
     }
 
     /** A roster change from [sender], already known to be in [group]. Caller holds [lock]. */
@@ -3104,13 +3735,15 @@ object CommsRepository {
             CommsWire.OP_JOIN -> {
                 if (sender.role != OrgRole.ADMIN) { CommsLog.add("Roster change in \"${group.name}\" from $label, who is not an admin; dropped"); return }
                 val number = parseClairixNumber(json.optString(CommsWire.F_MEMBER)) ?: return
-                if (store.groupMember(gid, number) != null) return
-                if (store.groupMembers(gid).size >= MAX_GROUP_MEMBERS) return
-                val role = runCatching { OrgRole.valueOf(json.optString(CommsWire.F_ROLE)) }.getOrDefault(OrgRole.MEMBER)
-                val name = json.optString(CommsWire.F_MEMBER_NAME).trim().take(40).ifBlank { store.contact(number)?.name ?: "" }
-                val ed = json.optString(CommsWire.F_MEMBER_ED25519).ifBlank { store.contact(number)?.ed25519 ?: "" }
-                store.insertGroupMember(GroupMember(gid, number, name, role, ed, sender.number, System.currentTimeMillis()))
-                CommsLog.add("${name.ifBlank { formatClairixNumber(number) }} joined \"${group.name}\" (added by $label)")
+                val rv = CommsWire.rosterVersion(json)
+                if (store.groupMember(gid, number) == null && store.groupMembers(gid).size < MAX_GROUP_MEMBERS) {
+                    val role = runCatching { OrgRole.valueOf(json.optString(CommsWire.F_ROLE)) }.getOrDefault(OrgRole.MEMBER)
+                    val name = json.optString(CommsWire.F_MEMBER_NAME).trim().take(40).ifBlank { store.contact(number)?.name ?: "" }
+                    val ed = json.optString(CommsWire.F_MEMBER_ED25519).ifBlank { store.contact(number)?.ed25519 ?: "" }
+                    store.insertGroupMember(GroupMember(gid, number, name, role, ed, sender.number, System.currentTimeMillis(), rv ?: 0L))
+                    CommsLog.add("${name.ifBlank { formatClairixNumber(number) }} joined \"${group.name}\" (added by $label)")
+                }
+                if (rv != null) noteChange(group, sender, rv)
             }
             CommsWire.OP_REMOVE -> {
                 if (sender.role != OrgRole.ADMIN) { CommsLog.add("Roster change in \"${group.name}\" from $label, who is not an admin; dropped"); return }
@@ -3121,16 +3754,115 @@ object CommsRepository {
                     CommsLog.add("Removed from \"${group.name}\" by $label")
                     return
                 }
-                val target = store.groupMember(gid, number) ?: return
-                store.removeGroupMember(gid, number)
-                CommsLog.add("${memberLabel(target)} removed from \"${group.name}\" by $label")
+                store.groupMember(gid, number)?.let { target ->
+                    store.removeGroupMember(gid, number)
+                    CommsLog.add("${memberLabel(target)} removed from \"${group.name}\" by $label")
+                }
+                CommsWire.rosterVersion(json)?.let { noteChange(group, sender, it) }
             }
             CommsWire.OP_LEAVE -> {
                 store.removeGroupMember(gid, sender.number)
                 CommsLog.add("$label left \"${group.name}\"")
             }
+            CommsWire.OP_ROSTER -> applyRoster(contact, group, sender, json)
+            CommsWire.OP_ROSTER_REQUEST -> answerRosterRequest(group, sender)
             else -> CommsLog.add("Group operation \"$op\" from $label not understood; ignored")
         }
+    }
+
+    /**
+     * After an admin's numbered change, applied as deltas always were
+     * ([RosterSync.afterDelta]): the roster's number moves on when nothing
+     * was missed in between, and the admin is known to hold it; a gap means a
+     * change was missed, and the admins are asked for the roster. Rows held
+     * for it are looked at again. Caller holds [lock].
+     */
+    private fun noteChange(group: Group, sender: GroupMember, rv: Long) {
+        val (v, s) = RosterSync.afterDelta(group.rosterVersion, group.rosterSeen, rv)
+        store.setRoster(group.id, v, s)
+        store.noteMemberVersion(group.id, sender.number, rv)
+        if (RosterSync.stale(v, s)) askForRoster(group.copy(rosterVersion = v, rosterSeen = s), urgent = false)
+        scope.launch { flushOutbox() }
+    }
+
+    /**
+     * A payload from [sender] named roster number [rv]: they hold that roster,
+     * so they are in it; and a number newer than this phone's means its roster
+     * is out of date, so the admins are asked for theirs while rows for
+     * members not confirmed in it wait. Caller holds [lock].
+     */
+    private fun heardRosterVersion(group: Group, sender: GroupMember, rv: Long) {
+        val raised = rv > sender.rv
+        if (raised) store.noteMemberVersion(group.id, sender.number, rv)
+        val (v, s) = RosterSync.heard(group.rosterVersion, group.rosterSeen, rv)
+        if (s > group.rosterSeen) store.noteRosterSeen(group.id, s)
+        if (!RosterSync.stale(v, s)) return
+        if (s > group.rosterSeen) askForRoster(group.copy(rosterSeen = s), urgent = false)
+        // The sender may now be confirmed in the newer roster: their held rows can go.
+        if (raised) scope.launch { flushOutbox() }
+    }
+
+    /**
+     * An admin's whole numbered roster ([CommsWire.OP_ROSTER]): it replaces the
+     * one held when it is newer ([RosterSync.replaces]); one that no longer
+     * lists this phone means it was removed and missed being told. From an
+     * admin, one at least as new as the roster held also means the roster is
+     * no longer out of date, and the rows held for it go to whoever it lists.
+     * Caller holds [lock].
+     */
+    private fun applyRoster(contact: Contact, group: Group, sender: GroupMember, json: JSONObject) {
+        val me = config.number ?: return
+        val label = memberLabel(sender)
+        if (sender.role != OrgRole.ADMIN) {
+            CommsLog.add("Member list of \"${group.name}\" from $label, who is not an admin; dropped")
+            return
+        }
+        val rv = CommsWire.rosterVersion(json) ?: return
+        if (rv < group.rosterVersion) return
+        val roster = CommsWire.rosterEntries(json).filter { parseClairixNumber(it.number) != null }.distinctBy { it.number }
+        if (roster.none { it.number == sender.number && it.role == OrgRole.ADMIN.name } ||
+            !KeyChangeGuard.mayApplyGroupControl(contact, roster.find { it.number == sender.number }?.ed25519) ||
+            roster.size > MAX_GROUP_MEMBERS
+        ) {
+            CommsLog.add("Member list of \"${group.name}\" from $label dropped: it does not name them as an admin with their keys, or is too long")
+            return
+        }
+        if (RosterSync.replaces(group.rosterVersion, rv)) {
+            if (roster.none { it.number == me }) {
+                // After the caller releases the lock: the group's rows go with its files.
+                scope.launch { dropGroupLocally(group.id); Registry.publishSharedThreats(store.sharedThreats(null)); bump() }
+                CommsLog.add("Removed from \"${group.name}\" by $label")
+                return
+            }
+            replaceMembersLocked(group.id, roster, sender.number, rv)
+            val myRole = roster.find { it.number == me }?.let { runCatching { OrgRole.valueOf(it.role) }.getOrNull() } ?: OrgRole.MEMBER
+            if (myRole != group.myRole) store.setGroupRole(group.id, myRole)
+            CommsLog.add("Member list of \"${group.name}\" brought up to date by $label (${roster.size} members)")
+        }
+        val (v, s) = RosterSync.afterRoster(group.rosterVersion, group.rosterSeen, rv)
+        store.setRoster(group.id, v, s)
+        store.noteMemberVersion(group.id, sender.number, rv)
+        scope.launch { flushOutbox() }
+    }
+
+    /**
+     * A member asks for the roster ([CommsWire.OP_ROSTER_REQUEST]): an admin
+     * answers with its own, numbered, through the group outbox, at most once
+     * a minute for each member. Anyone else ignores it. Caller holds [lock].
+     */
+    private fun answerRosterRequest(group: Group, sender: GroupMember) {
+        val me = config.number ?: return
+        val members = store.groupMembers(group.id)
+        if (members.find { it.number == me }?.role != OrgRole.ADMIN) return
+        val key = "${group.id}|${sender.number}"
+        val now = System.currentTimeMillis()
+        synchronized(rosterAnsweredAt) {
+            if (now - (rosterAnsweredAt[key] ?: 0L) < ROSTER_ANSWER_MS) return
+            rosterAnsweredAt[key] = now
+        }
+        queueRosterRows(group, listOf(sender), rosterPayload(group, members, group.rosterVersion), UUID.randomUUID().toString(), lifetimeMs = ROSTER_ASK_LIFETIME_MS)
+        CommsLog.add("${memberLabel(sender)} asked for the member list of \"${group.name}\"; sending it")
+        scope.launch { flushOutbox() }
     }
 
     /**
@@ -3255,38 +3987,40 @@ object CommsRepository {
      * Seals [payload] for [contact] into a mesh bundle, once per message [id]. Needs a
      * session with them already: starting one takes a key from the relay, which is
      * exactly what is not reachable. Returns true when the message is in the mesh.
+     * [quiet] (a covert SOS) writes no line in the comms log.
      */
-    private suspend fun meshQueue(contact: Contact, payload: JSONObject, id: String): Boolean {
+    private suspend fun meshQueue(contact: Contact, payload: JSONObject, id: String, quiet: Boolean = false): Boolean {
         if (!::appContext.isInitialized || !Mesh.enabled(appContext)) return false
         val mesh = Mesh.store(appContext)
         if (mesh.isQueued(contact.number, id)) return true
         val now = System.currentTimeMillis()
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
+        val log: (String) -> Unit = if (quiet) { _ -> } else CommsLog::add
         return when (val p = lock.withLock { prepareLocked(contact, JSONObject(payload.toString()), null) }) {
             is Prepared.Ready -> {
                 val tag = runCatching { identities.get()?.meshTag(contact.sealing, MeshProtocol.day(now)) }.getOrNull()
                 val b = tag?.let { MeshProtocol.newBundle(p.envelope, it, now) }
                 if (tag == null) {
-                    CommsLog.add("A message to $label could not be addressed for the offline mesh; it waits for the relay")
+                    log("A message to $label could not be addressed for the offline mesh; it waits for the relay")
                     false
                 } else if (b == null) {
-                    CommsLog.add("A message to $label is too long for the offline mesh; it waits for the relay")
+                    log("A message to $label is too long for the offline mesh; it waits for the relay")
                     false
                 } else {
                     mesh.addOwn(contact.number, id, b, now)
-                    CommsLog.add("A message to $label is in the offline mesh: it travels phone to phone until it reaches them")
+                    log("A message to $label is in the offline mesh: it travels phone to phone until it reaches them")
                     true
                 }
             }
             Prepared.NeedBundle -> {
-                CommsLog.add("No session with $label yet, so the offline mesh cannot reach them until one message has gone through the relay")
+                log("No session with $label yet, so the offline mesh cannot reach them until one message has gone through the relay")
                 false
             }
             Prepared.NeedPrekey -> {
                 // Their sealing key was last fetched over two weeks ago (or never);
                 // sealing to an older one, or to their long-term key, would undo
                 // what the rotating keys are for.
-                CommsLog.add("$label's sealing key is out of date, so the offline mesh cannot reach them until the relay is reachable again")
+                log("$label's sealing key is out of date, so the offline mesh cannot reach them until the relay is reachable again")
                 false
             }
             else -> false

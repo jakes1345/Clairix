@@ -35,11 +35,6 @@ class PanicResultTest {
         assertEquals(0, r.failed)
         assertEquals(0, r.meshQueued)
         assertEquals(2, r.groupsReached)
-        // Her second envelope is not worth another pass; Cal's is.
-        assertEquals(setOf("cal"), r.pendingIn("a"))
-        assertEquals(emptySet<String>(), r.pendingIn("b"))
-        assertEquals(emptySet<String>(), r.pendingIn("no such group"))
-        assertTrue(r.anyPending)
     }
 
     @Test
@@ -51,7 +46,6 @@ class PanicResultTest {
         assertEquals(1, r.meshQueued)
         assertEquals(1, r.failed)
         assertEquals(0, r.pending)
-        assertFalse("a mesh-queued member is not tried again by the relay path", r.anyPending)
         assertEquals("SOS reached 1 of 3 people; 1 in the offline mesh; 1 could not be reached", r.headline())
         assertEquals("Group a: 1 of 3 (1 in the offline mesh) · with your position", r.detail())
     }
@@ -114,34 +108,102 @@ class PanicResultTest {
         assertFalse(PanicResult(1, 0L, blocked = PanicBlocked.NO_GROUPS).hasPosition)
     }
 
-    @Test
-    fun aRetryPassReplacesOnlyTheMembersItTried() {
-        val first = result(
-            g("a", m("bea", SENT), m("cal", OFFLINE, offline), m("dee", OFFLINE, offline)),
-            retrying = true
+    // ── Made from the SOS's rows in the group outbox ────────────────────
+
+    private val t0 = 1_700_000_000_000L
+    private val family = listOf("a" to "Family", "b" to "Shelter team")
+
+    private fun row(gid: String, number: String, status: GroupOutbox.Status, mesh: Boolean = false, error: String? = null) =
+        GroupOutbox.Row(
+            "sos-$gid", number, gid, "batch", GroupOutbox.Kind.SOS, "ed-$number", "{}", t0, t0 + GroupOutbox.SOS_LIFETIME_MS,
+            status, mesh = mesh, error = error
         )
-        val second = first.merged(listOf(g("a", m("cal", SENT))), pass = 2, retrying = true)
-        assertEquals(2, second.pass)
-        assertEquals(2, second.reached)
-        assertEquals(setOf("dee"), second.pendingIn("a"))
-        assertEquals("SOS reached 2 of 3 people; trying 1 more again", second.headline())
-        // A pass naming a group this result does not have changes nothing.
-        assertEquals(second.groups, second.merged(listOf(g("zz", m("bea", FAILED))), pass = 3, retrying = true).groups)
-        // Nothing left to try: final.
-        val third = second.merged(listOf(g("a", m("dee", SENT))), pass = 3, retrying = false)
-        assertFalse(third.anyPending)
-        assertEquals("SOS reached all 3 people", third.headline())
-        // A missing position is said in the detail, never left out.
-        assertEquals("Group a: 3 of 3 · no position attached", third.copy(lat = null, lon = null).detail())
+
+    @Test
+    fun aRetryThatLandsSaysSo() {
+        val q = GroupOutbox.Status.QUEUED
+        val s = GroupOutbox.Status.SENT
+        val first = PanicResult.fromRows(1, t0, 51.5, -0.1, family, listOf(row("a", "1", s), row("a", "2", s), row("a", "3", s), row("b", "4", q, error = offline)))
+        assertTrue("a queued row is still being tried", first.retrying)
+        assertEquals("SOS reached 3 of 4 people; trying 1 more again", first.headline())
+        val after = PanicResult.fromRows(1, t0, 51.5, -0.1, family, listOf(row("a", "1", s), row("a", "2", s), row("a", "3", s), row("b", "4", s)), pass = 2)
+        assertFalse(after.retrying)
+        assertEquals(2, after.pass)
+        assertEquals("SOS reached all 4 people", after.headline())
+        assertEquals("Family: 3 of 3 · Shelter team: 1 of 1 · with your position", after.detail())
     }
 
     @Test
-    fun retriesGrowAndStopWithinTenMinutes() {
-        val d = PanicResult.RETRY_DELAYS_MS
-        assertTrue("the first retry should come within seconds", d.first() <= 5_000L)
-        for (i in 1 until d.size) assertTrue("pauses should grow", d[i] > d[i - 1])
-        val total = d.sum()
-        assertTrue("retries should last several minutes, not seconds: $total", total >= 5 * 60_000L)
-        assertTrue("retries should not go on past ten minutes: $total", total <= 10 * 60_000L)
+    fun reachedQueuedAndFailedForGoodAreToldApart() {
+        val rows = listOf(
+            row("a", "1", GroupOutbox.Status.SENT),
+            row("a", "2", GroupOutbox.Status.QUEUED, error = offline),
+            row("a", "3", GroupOutbox.Status.HELD),
+            row("a", "4", GroupOutbox.Status.QUEUED, mesh = true, error = offline),
+            row("a", "5", GroupOutbox.Status.FAILED, error = "No such Clairix number on this relay any more")
+        )
+        val r = PanicResult.fromRows(1, t0, null, null, family.take(1), rows)
+        assertEquals(1, r.reached)
+        assertEquals("queued and held rows are both still waiting", 2, r.pending)
+        assertEquals(1, r.meshQueued)
+        assertEquals(1, r.failed)
+        assertTrue(r.retrying)
+        assertEquals("SOS reached 1 of 5 people; 1 in the offline mesh; trying 2 more again; 1 could not be reached", r.headline())
+        // Thirty minutes on, whoever is still queued is not reached.
+        val end = PanicResult.fromRows(1, t0, null, null, family.take(1), rows.map { GroupOutbox.expire(it, t0 + GroupOutbox.SOS_LIFETIME_MS) })
+        assertFalse(end.retrying)
+        assertEquals("SOS reached 1 of 5 people; 1 in the offline mesh; 3 could not be reached", end.headline())
+        assertEquals("Family: 1 of 5 (1 in the offline mesh) · no position attached", end.detail())
+    }
+
+    @Test
+    fun theFirstPassWithTheRelayDownSaysNotSentYet() {
+        val r = PanicResult.fromRows(1, t0, 51.5, -0.1, family.take(1), listOf(row("a", "1", GroupOutbox.Status.QUEUED, error = offline)))
+        assertEquals("SOS not sent yet — retrying: the relay is not reachable right now", r.headline())
+        val line = r.groups.single().logLine(position = true, retrying = r.retrying)
+        assertEquals("SOS to \"Family\": not sent yet, 0 of 1 member reached; 1 waiting for the relay", line)
+        assertFalse("the log never calls an SOS sent that nobody got", line.contains("sent to"))
+    }
+
+    @Test
+    fun theGroupLineSaysWhatHappenedToEachMember() {
+        val g = PanicGroupResult(
+            "a", "Family",
+            listOf(m("1", SENT), m("2", SENT), m("3", MESH_QUEUED, offline), m("4", FAILED, "refused")),
+            skipped = 1, removed = 1
+        )
+        assertEquals(
+            "SOS to \"Family\": reached 2 of 4 members; 1 in the offline mesh; 1 could not be reached; 1 you blocked left out; 1 no longer in the group (no position)",
+            g.logLine(position = false, retrying = false)
+        )
+        assertEquals(
+            "SOS to \"Family\": not sent, 0 of 1 member reached; 1 could not be reached",
+            PanicGroupResult("a", "Family", listOf(m("1", FAILED, "refused"))).logLine(position = true, retrying = false)
+        )
+        assertEquals(
+            "SOS to \"Gone\" could not be tried: that group is no longer on this phone",
+            PanicGroupResult("x", "Gone", emptyList(), error = "That group is no longer on this phone").logLine(true, false)
+        )
+    }
+
+    @Test
+    fun blockedAndRemovedMembersAreLeftOutNotUnreached() {
+        val r = PanicResult.fromRows(
+            1, t0, 51.5, -0.1, family.take(1), listOf(row("a", "1", GroupOutbox.Status.SENT)),
+            skipped = mapOf("a" to 1), removed = mapOf("a" to 1)
+        )
+        assertEquals(1, r.people)
+        assertEquals("SOS reached 1 person", r.headline())
+        assertEquals("Family: 1 of 1 (1 you blocked left out, 1 no longer in the group) · with your position", r.detail())
+        // Everyone else blocked: nobody to send to, said as such.
+        val none = PanicResult.fromRows(1, t0, null, null, family.take(1), emptyList(), skipped = mapOf("a" to 2))
+        assertEquals(PanicBlocked.NO_RECIPIENTS, none.blocked)
+        assertEquals("SOS not sent: nobody else in your groups can receive it", none.headline())
+        // No other member at all.
+        assertEquals(PanicBlocked.NO_OTHER_MEMBERS, PanicResult.fromRows(1, t0, null, null, family.take(1), emptyList()).blocked)
+        // A group that could not be tried is said, not taken for an empty one.
+        val gone = PanicResult.fromRows(1, t0, null, null, family.take(1), emptyList(), errors = mapOf("a" to "That group is no longer on this phone"))
+        assertEquals(null, gone.blocked)
+        assertEquals("SOS could not be sent: that group is no longer on this phone", gone.headline())
     }
 }

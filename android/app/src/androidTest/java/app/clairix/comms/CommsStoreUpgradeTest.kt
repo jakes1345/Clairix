@@ -35,9 +35,14 @@ class CommsStoreUpgradeTest {
     @After
     fun tidy() { context.deleteDatabase(name) }
 
-    private fun columns(store: CommsStore): Set<String> =
-        store.readableDatabase.rawQuery("PRAGMA table_info(contacts)", null).use { c ->
+    private fun columns(store: CommsStore, table: String = "contacts"): Set<String> =
+        store.readableDatabase.rawQuery("PRAGMA table_info($table)", null).use { c ->
             generateSequence { if (c.moveToNext()) c.getString(c.getColumnIndexOrThrow("name")) else null }.toSet()
+        }
+
+    private fun tables(store: CommsStore): Set<String> =
+        store.readableDatabase.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'", null).use { c ->
+            generateSequence { if (c.moveToNext()) c.getString(0) else null }.toSet()
         }
 
     @Test
@@ -250,6 +255,134 @@ class CommsStoreUpgradeTest {
             assertEquals(true, reopened.contactEntry(sam.number)?.blocked)
             assertEquals("ab".repeat(32), reopened.lastEnvelope(ana.number))
             assertEquals(ana, reopened.contact(ana.number))
+        } finally {
+            reopened.close()
+        }
+    }
+
+    @Test
+    fun aVersion12DatabaseGainsTheGroupOutboxAndRosterNumbersAndKeepsEveryRow() {
+        // What version 12 left on a phone: groups and members without roster
+        // numbers, and no group outbox; with a contact, a group, a group
+        // message, a one-to-one message still queued and a blocked identity.
+        val bo = ana.copy(number = "111222333", name = "Bo", ed25519 = "ed-bo", curve25519 = "curve-bo", verified = false)
+        val old = CommsStore(context, name)
+        try {
+            old.upsertContact(ana)
+            old.upsertContact(bo)
+            old.insertGroup(Group("g1", "Family", ana.number, 1L, OrgRole.ADMIN))
+            old.insertGroupMember(GroupMember("g1", ana.number, "Ana", OrgRole.ADMIN, ana.ed25519, ana.number, 1L))
+            old.insertGroupMember(GroupMember("g1", bo.number, "Bo", OrgRole.MEMBER, bo.ed25519, ana.number, 2L))
+            old.insertGroupMessage("g1", ChatMessage("g-out", "g1", Direction.OUT, "on my way", 3L, "sent", read = true, sender = ana.number))
+            old.insertMessage(ChatMessage("m-queued", bo.number, Direction.OUT, "still going", 4L, "queued", read = true))
+            old.addBlocked("ed-x", "curve-x", "999888777", null, "X", 5L)
+            val db = old.writableDatabase
+            db.execSQL("CREATE TABLE groups_v12 AS SELECT id, name, created_by, created_ts, my_role FROM groups")
+            db.execSQL("DROP TABLE groups")
+            db.execSQL(
+                """CREATE TABLE groups (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_ts INTEGER NOT NULL,
+                    my_role TEXT NOT NULL DEFAULT 'MEMBER'
+                )"""
+            )
+            db.execSQL("INSERT INTO groups SELECT * FROM groups_v12")
+            db.execSQL("DROP TABLE groups_v12")
+            db.execSQL("CREATE TABLE group_members_v12 AS SELECT gid, number, name, role, ed25519, added_by, added_ts FROM group_members")
+            db.execSQL("DROP TABLE group_members")
+            db.execSQL(
+                """CREATE TABLE group_members (
+                    gid TEXT NOT NULL,
+                    number TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL DEFAULT 'MEMBER',
+                    ed25519 TEXT NOT NULL DEFAULT '',
+                    added_by TEXT NOT NULL DEFAULT '',
+                    added_ts INTEGER NOT NULL,
+                    PRIMARY KEY (gid, number)
+                )"""
+            )
+            db.execSQL("INSERT INTO group_members SELECT * FROM group_members_v12")
+            db.execSQL("DROP TABLE group_members_v12")
+            db.execSQL("DROP TABLE group_outbox")
+            db.version = 12
+            assertTrue("roster_version" !in columns(old, "groups"))
+            assertTrue("group_outbox" !in tables(old))
+        } finally {
+            old.close()
+        }
+
+        val store = CommsStore(context, name)
+        try {
+            assertTrue(columns(store, "groups").containsAll(setOf("roster_version", "roster_seen")))
+            assertTrue("rv" in columns(store, "group_members"))
+            assertTrue("group_outbox" in tables(store))
+            // Every row from before is there as it was, the group unnumbered.
+            assertEquals(ana, store.contact(ana.number))
+            assertEquals(bo, store.contact(bo.number))
+            assertEquals(Group("g1", "Family", ana.number, 1L, OrgRole.ADMIN), store.group("g1"))
+            assertEquals(listOf(ana.number, bo.number), store.groupMembers("g1").map { it.number })
+            assertTrue(store.groupMembers("g1").all { it.rv == 0L })
+            assertEquals(listOf("g-out"), store.groupMessages("g1").map { it.id })
+            assertEquals(listOf("m-queued"), store.queued().map { it.id })
+            assertEquals(listOf("999888777"), store.blockedKeys().map { it.number })
+            assertTrue(store.outbox().isEmpty())
+
+            // Roster numbers: set by setRoster, raised and never lowered by what members say.
+            store.setRoster("g1", 3L, 3L)
+            store.noteRosterSeen("g1", 5L)
+            store.noteRosterSeen("g1", 4L)
+            assertEquals(3L to 5L, store.group("g1")!!.let { it.rosterVersion to it.rosterSeen })
+            store.noteMemberVersion("g1", bo.number, 5L)
+            store.noteMemberVersion("g1", bo.number, 2L)
+            assertEquals(5L, store.groupMember("g1", bo.number)!!.rv)
+            // Writing the group again (its name, this phone's role) keeps its numbers.
+            store.insertGroup(Group("g1", "Family and friends", ana.number, 1L, OrgRole.ADMIN))
+            assertEquals("Family and friends", store.group("g1")!!.name)
+            assertEquals(3L to 5L, store.group("g1")!!.let { it.rosterVersion to it.rosterSeen })
+            // A member written again keeps the highest number while their key stays the same.
+            store.insertGroupMember(GroupMember("g1", bo.number, "Bo", OrgRole.MEMBER, bo.ed25519, ana.number, 2L, rv = 1L))
+            assertEquals(5L, store.groupMember("g1", bo.number)!!.rv)
+            store.insertGroupMember(GroupMember("g1", bo.number, "Bo", OrgRole.MEMBER, "ed-new", ana.number, 2L, rv = 1L))
+            assertEquals("under another key it is someone else", 1L, store.groupMember("g1", bo.number)!!.rv)
+
+            // The group outbox: a row per member and payload, its payload sealed and read back whole.
+            val sos = GroupOutbox.Row(
+                "p1", bo.number, "g1", "batch-1", GroupOutbox.Kind.SOS, bo.ed25519, """{"v":1,"t":"panic","gid":"g1"}""",
+                10L, 10L + GroupOutbox.SOS_LIFETIME_MS
+            )
+            val roster = sos.copy(id = "r1", batch = "batch-2", kind = GroupOutbox.Kind.ROSTER, payload = """{"v":1,"t":"gctl","op":"roster"}""")
+            store.insertOutbox(listOf(sos, roster))
+            store.insertOutbox(listOf(sos.copy(status = GroupOutbox.Status.SENT)))
+            val rows = store.outbox()
+            assertEquals("a second copy of a row is not added", listOf("p1", "r1"), rows.map { it.id })
+            assertEquals(sos.copy(seq = rows[0].seq), rows[0])
+            assertEquals(listOf("r1"), store.outbox(listOf(GroupOutbox.Kind.ROSTER)).map { it.id })
+            store.updateOutbox(rows[0].copy(attempts = 2, triedAt = 20L, error = "busy", mesh = true))
+            val tried = store.outboxBatch("batch-1").single()
+            assertEquals(2, tried.attempts)
+            assertEquals(20L, tried.triedAt)
+            assertEquals("busy", tried.error)
+            assertTrue(tried.mesh)
+            // A newer SOS takes over from the rows of the one before; the group going takes the rest.
+            store.deleteOutboxKindExcept(GroupOutbox.Kind.SOS, "batch-3")
+            assertEquals(listOf("r1"), store.outbox().map { it.id })
+            store.insertOutbox(listOf(sos.copy(id = "p2", batch = "batch-3")))
+            store.deleteGroup("g1")
+            assertTrue(store.outbox().isEmpty())
+        } finally {
+            store.close()
+        }
+
+        // And it survives the next start.
+        val reopened = CommsStore(context, name)
+        try {
+            assertEquals(ana, reopened.contact(ana.number))
+            assertEquals(listOf("m-queued"), reopened.queued().map { it.id })
+            assertTrue("group_outbox" in tables(reopened))
+            assertTrue(reopened.outbox().isEmpty())
         } finally {
             reopened.close()
         }

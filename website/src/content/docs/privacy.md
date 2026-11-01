@@ -54,7 +54,7 @@ ClairixCoin is in Clairix Full, on any relay whose operator has not switched it 
 
 ### 2.5 Emergency alerts
 
-When you send an SOS or type your duress phrase, Clairix takes your last known position, or reads a fresh one when the phone can get a fix within a few seconds, and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time. Where that position comes from is in section 2.10.
+When you send an SOS or type your duress phrase, Clairix takes your last known position, or reads a fresh one when the phone can get a fix within a few seconds, and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time. An SOS the relay cannot take right away waits on your phone, with that position, in Clairix's encrypted database and is tried again for about thirty minutes, then deleted; the duress phrase's SOS waits in memory only. Members of your groups you have blocked are sent nothing. Where that position comes from is in section 2.10.
 
 ### 2.6 Traffic and navigation
 

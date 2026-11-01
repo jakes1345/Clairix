@@ -496,6 +496,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     "• The message is delivered normally, so the conversation looks unremarkable.\n" +
                     "• At the same time an SOS goes to all your groups with your position: the last known one, " +
                     "or a fresh fix when the phone can read one within a few seconds.\n" +
+                    "• Anyone the relay cannot take right away is tried again for about thirty minutes, from " +
+                    "Clairix's memory only. If Android closes Clairix in that time, the tries stop.\n" +
                     "• Nothing is written on this phone: no timeline entry, no log line, no notification, and " +
                     "never the phrase itself. Only the visible SOS button writes a timeline entry, with how many " +
                     "people it reached.\n" +

@@ -10,8 +10,10 @@ name: Emulator smoke test
 # (the Worker under wrangler dev, on this runner) reached from the emulator through
 # adb reverse, the app registered on one through its own code, and scripted peers on
 # both. Texts both ways with receipts, a voice note, a three-chunk photo, a group,
-# disappearing messages, a call that rings, and a contact on the other relay, every
-# envelope spending a blind token and going through the relay's mixing.
+# disappearing messages, a call that rings, a contact on the other relay, and an SOS
+# sent while relay A is away (this runner removes its adb reverse port when the test
+# asks) that goes once it is back. Every envelope spends a blind token, and all but
+# calls, SOS alerts and group changes go through the relay's mixing.
 #
 # Then, on the same emulator: an eight-minute soak (SoakTest), moving between the two
 # relays (RelayMoveTest), the app over the real Tor network (TorDeviceTest), and last,
@@ -327,20 +329,46 @@ jobs:
           "$ADB" reverse tcp:8787 tcp:8787
           "$ADB" reverse tcp:8788 tcp:8788
           "$ADB" logcat -c
+          # The SOS test (k_) needs relay A to go away mid-test and come back,
+          # which only this runner can do. When the test logs that it is ready,
+          # the adb reverse port is removed, so every connection from the phone
+          # to relay A is refused, as when the relay is down; it is restored
+          # when the test logs that it is done, or after two minutes whatever
+          # happens, and once more after the run.
+          (
+            for i in $(seq 1 1100); do
+              if "$ADB" logcat -d -s EndToEndTest:I | grep -q CLAIRIX_E2E_RELAY_A_DOWN; then
+                "$ADB" reverse --remove tcp:8787 || true
+                echo "relay A taken away after about $i s"
+                for j in $(seq 1 120); do
+                  "$ADB" logcat -d -s EndToEndTest:I | grep -q CLAIRIX_E2E_RELAY_A_UP && break
+                  sleep 1
+                done
+                "$ADB" reverse tcp:8787 tcp:8787 || true
+                echo "relay A back after about $j s"
+                break
+              fi
+              sleep 1
+            done
+          ) > ../relay-toggle.log 2>&1 &
+          TOGGLE=$!
           set +e
           timeout 1100 "$ADB" shell am instrument -w -r \
             -e class app.clairix.comms.EndToEndTest \
             -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
-            -e secret e2e-enrollment-secret-0123456789 \
+            -e secret e2e-enrollment-secret-0123456789 -e relayToggle true \
             app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../e2e.txt
           set -e
+          kill "$TOGGLE" 2>/dev/null || true
+          # Whatever the watcher got to, relay A is reachable for the steps after this one.
+          "$ADB" reverse tcp:8787 tcp:8787
           "$ADB" logcat -d > ../logcat-e2e.txt
           if grep -A1 "FATAL EXCEPTION" ../logcat-e2e.txt | grep -q "Process: app.clairix"; then
             echo "::error::Clairix crashed during the end-to-end tests; see logcat-e2e.txt"
             grep -A 30 "FATAL EXCEPTION" ../logcat-e2e.txt | head -80
             exit 1
           fi
-          grep -q "^OK (11 tests)" ../e2e.txt || { echo "::error::The end-to-end tests failed; see e2e.txt"; exit 1; }
+          grep -q "^OK (12 tests)" ../e2e.txt || { echo "::error::The end-to-end tests failed; see e2e.txt"; exit 1; }
           # Every test must have run: a skipped one (status -4 for an unmet assumption,
           # -3 for an ignored test) means the relays were not passed through.
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../e2e.txt; then echo "::error::End-to-end tests were skipped"; exit 1; fi
@@ -530,6 +558,7 @@ jobs:
             logcat.txt
             e2e.txt
             logcat-e2e.txt
+            relay-toggle.log
             lockscreen.txt
             logcat-lockscreen.txt
             cardvault.txt

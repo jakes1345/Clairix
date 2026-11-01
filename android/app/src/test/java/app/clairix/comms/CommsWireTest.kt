@@ -224,4 +224,38 @@ class CommsWireTest {
         assertEquals("4 weeks", ttlLabel(28 * 86_400))
         assertTrue(TIMER_CHOICES.all { it in 0..CommsWire.MAX_TTL })
     }
+
+    /** Roster numbers: on every group payload once a group has one, and the whole numbered roster an admin sends. */
+    @Test
+    fun rosterNumbersAndTheWholeRosterRoundTrip() {
+        val numbered = roundTrip(CommsWire.withRosterVersion(CommsWire.panic("g1", "s1", 1L, 51.5, -0.1, null), 4L))
+        assertEquals(4L, CommsWire.rosterVersion(numbered))
+        // A group no admin has numbered sends none, and none reads as none.
+        val plain = roundTrip(CommsWire.withRosterVersion(CommsWire.groupMsg("g1", "hi", "m1", 1L), 0L))
+        assertTrue(!plain.has(CommsWire.F_ROSTER_VERSION))
+        assertNull(CommsWire.rosterVersion(plain))
+        assertNull(CommsWire.rosterVersion(JSONObject().put(CommsWire.F_ROSTER_VERSION, -3)))
+
+        val members = org.json.JSONArray()
+            .put(CommsWire.rosterEntry("100000001", "Ana", OrgRole.ADMIN.name, "ed-ana"))
+            .put(CommsWire.rosterEntry("200000002", "Bo", OrgRole.MEMBER.name, "ed-bo"))
+        val roster = roundTrip(
+            CommsWire.groupCtrl(
+                "g1", CommsWire.OP_ROSTER,
+                mapOf(CommsWire.F_GROUP_NAME to "Family", CommsWire.F_MEMBERS to members, CommsWire.F_ROSTER_VERSION to 5L)
+            )
+        )
+        assertEquals(CommsWire.T_GROUP_CTRL, CommsWire.type(roster))
+        assertEquals(CommsWire.OP_ROSTER, roster.getString(CommsWire.F_OP))
+        assertEquals(5L, CommsWire.rosterVersion(roster))
+        assertEquals(
+            listOf(CommsWire.RosterEntry("100000001", "Ana", "ADMIN", "ed-ana"), CommsWire.RosterEntry("200000002", "Bo", "MEMBER", "ed-bo")),
+            CommsWire.rosterEntries(roster)
+        )
+        // The sender's own identity still rides alongside the roster's names and keys.
+        assertEquals(sender, CommsWire.senderOf(roster))
+        val ask = roundTrip(CommsWire.withRosterVersion(CommsWire.groupCtrl("g1", CommsWire.OP_ROSTER_REQUEST), 3L))
+        assertEquals(CommsWire.OP_ROSTER_REQUEST, ask.getString(CommsWire.F_OP))
+        assertEquals(3L, CommsWire.rosterVersion(ask))
+    }
 }

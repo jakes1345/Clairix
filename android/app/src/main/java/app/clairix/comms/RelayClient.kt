@@ -630,6 +630,22 @@ class RelayClient(
      */
     fun topUpTokens(low: Int = TOKENS_LOW, batch: Int = TOKENS_BATCH): Int = topUpTokens(TokenKind.DELIVERY, low, batch)
 
+    /**
+     * Whether a blind-token fetch now could be checked against keys this
+     * phone holds: it has seen the relay's keys for the current epoch, or it
+     * never saw any (a relay before Beta 6, or no fetch yet; [fetchTokens]
+     * then reads them itself). False after a fortnight or more away, when the
+     * epoch has moved on: a fetch would end in [KEYS_PENDING], and an
+     * ordinary top-up reads the keys at a random moment later. An SOS reads
+     * them at once instead, with [info], before the fetch.
+     */
+    fun tokenKeysCurrent(): Boolean {
+        val relay = base() ?: return true
+        val origin = pinOrigin(relay)
+        if (!tokenKeys.any(origin)) return true
+        return tokenKeys.get(origin, relayNow() / TOKEN_EPOCH_MS) != null
+    }
+
     /** Fetches a batch of [kind] tokens when fewer than [low] are left; returns how many the pool then holds. */
     fun topUpTokens(kind: TokenKind, low: Int = kind.low, batch: Int = kind.batch): Int {
         val p = pool(kind)
