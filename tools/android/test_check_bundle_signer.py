@@ -165,3 +165,19 @@ def test_real_apksigner_on_a_real_apk(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert f"Release certificate SHA-256: {digest}" in r.stdout
     assert run("--apksigner", apksigner, aab, signed["other.apk"]).returncode == 1
+
+
+def test_signers_named_by_platform_range_are_read(tmp_path):
+    """Newer build-tools name a v3 signer by the versions it covers, the same certificate on several lines."""
+    ks, digest = keystore(tmp_path, "release")
+    aab = bundle(tmp_path, "clairix-play.aab", ks)
+    tool = tmp_path / "apksigner"
+    tool.write_text("#!/bin/sh\n"
+                    "echo 'Verifies'\n"
+                    "echo 'Signer (minSdkVersion=31, maxSdkVersion=32) certificate DN: CN=x'\n"
+                    f"echo 'Signer (minSdkVersion=31, maxSdkVersion=32) certificate SHA-256 digest: {digest.upper()}'\n"
+                    f"echo 'Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: {digest}'\n")
+    tool.chmod(0o755)
+    r = run("--apksigner", tool, aab, touch(tmp_path, "ranged.apk"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"Release certificate SHA-256: {digest}" in r.stdout
