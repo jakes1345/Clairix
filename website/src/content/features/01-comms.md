@@ -13,7 +13,9 @@ visualCaption: "The relay cannot open it"
 
 ### What it does {#comms-does}
 
-End-to-end encrypted messages, voice notes, photos, videos and voice calls between Clairix apps, addressed by a Clairix number instead of a phone number. Groups for a family, a team or a community. SOS alerts to everyone in your group. Relays anyone can run, a way to move to another one when yours is blocked, Tor built in, and an offline mesh that carries texts and SOS phone to phone over Bluetooth when there is no network.
+End-to-end encrypted messages, voice notes, photos, videos and voice calls between Clairix apps, addressed by a Clairix number instead of a phone number. Groups for a family, a team or a community. SOS alerts to everyone in your group. Relays anyone can run, a way to move to another one when yours is blocked, Tor built in, and an offline mesh that carries texts and SOS phone to phone over Bluetooth when there is no network. Blocking, message requests from people you do not know, and reports to your relay's operator.
+
+A Clairix number, and with it messaging, calls, SOS and the duress phrase, needs an invite from someone already on Clairix, or a relay of your own. The rest of the app works without one.
 
 </div>
 
@@ -21,7 +23,7 @@ End-to-end encrypted messages, voice notes, photos, videos and voice calls betwe
 
 <div class="methods">
 
-**Clairix numbers.** At registration our relay gives your phone a random nine-digit Clairix number. It is not a phone number: it cannot call or text a phone, and a phone cannot reach it. What it buys you is a handle you can give someone without giving them your real number or your identity. You can choose whether your number can be looked up. Unlisted numbers are reached only by scanning your QR code in person.
+**Clairix numbers.** At registration the relay gives your phone a random nine-digit Clairix number. It is not a phone number: it cannot call or text a phone, and a phone cannot reach it. What it buys you is a handle you can give someone without giving them your real number or your identity. You can choose whether your number can be looked up. Unlisted numbers are reached only by scanning your QR code in person. Our relay registers people by invite only: someone already on it taps Invite in Comms. Without an invite, you can run a relay of your own, or join one whose operator has opened registration to anyone, which a relay can do for a limited number of new people a day.
 
 **Pairing and invites.** Two people pair by scanning each other's QR code in person, or by entering a listed number and then comparing safety numbers. From then on each phone has the other's identity key pinned. Someone not yet on Clairix can be sent an invite: a link to clairix.app that Android opens in Clairix alone, because the site names the app and its signing key, so no other app can take it. Before you register from an invite, the app names the relay it would put you on and says whether that relay is on the signed relay list.
 
@@ -39,7 +41,9 @@ End-to-end encrypted messages, voice notes, photos, videos and voice calls betwe
 
 **Delivery.** A live connection delivers messages the moment the relay releases them while Clairix is open or kept online in the background. Otherwise your phone can be woken through UnifiedPush, an open push standard served by a distributor you choose. The push carries only the word "wake". There is no Google service in the path.
 
-**Calls.** Voice calls use WebRTC between the two phones. The keys that protect the audio travel inside the encrypted envelopes, so neither the relay nor a TURN server can read or replace them. Calls connect directly when both networks allow it, otherwise through a TURN relay that forwards packets it cannot decrypt. Incoming calls ring over the lock screen like a phone call.
+**Calls.** Voice calls use WebRTC between the two phones. The keys that protect the audio travel inside the encrypted envelopes, so neither the relay nor a TURN server can read or replace them. When your relay offers a TURN server, which forwards packets it cannot decrypt, calls go through it by default, so the other phone never learns your network address. Switch Relay-only calls off in Comms settings to let calls connect directly when both networks allow it; on a relay with no TURN server they always do. Incoming calls ring over the lock screen like a phone call.
+
+**Blocking, requests and reports.** A first message from someone who is not in your contacts arrives as a request. You can read it, but they are not told you have, a call from them is noted as missed instead of ringing, and the notification says only "Someone new wrote to you" until you accept. Declining blocks them. Two kinds of newcomer still arrive as contacts: someone who joined with an invite you made, and a member of one of your groups writing to the group. Block, on a contact's page, stops everything they send from reaching your phone: messages, calls and group messages, with no notification, and they are not told. Keep the conversation as a record or delete it with them; unblock any time in Comms settings. Report tells your relay's operator the number, the reason and a fingerprint of the last envelope it sent you, never what it said and not who you are.
 
 **Voice notes, photos and video.** Voice notes of up to thirty seconds are compressed to fit inside a single encrypted envelope and the recording is deleted from the phone as soon as it is sent. Photos and videos are split into encrypted chunks and reassembled on the recipient's phone.
 
@@ -67,6 +71,8 @@ End-to-end encrypted messages, voice notes, photos, videos and voice calls betwe
 - Both relays involved in a move see the same keys registered on each, which ties your old number to your new one for whoever can read both.
 - A stranger can still use up the share of your mailbox kept for people you have never written to, holding up first messages from other new contacts for up to an hour. Your contacts are not affected.
 - Calls do not go through Tor.
+- While your phone is locked nothing can be opened, so an envelope from a blocked number or a request still shows as "New Clairix message", or rings as "Clairix call", until you unlock. Then it is dropped, or noted as missed, and the ringing stops.
+- Blocking works on this phone. Someone you block can still get a new number, and a report is your word to your relay's operator, who cannot see the messages it is about.
 - Mixing is one relay holding messages for a few seconds, not a network of independent mixes. The relay's own operator still sees every envelope arrive and leave. On a quiet relay there is little to mix with, and someone watching both ends for weeks can still match people by how much they send.
 - A contact on another relay needs a version of Clairix that knows about other relays. Two relays can give out the same number, and the app will not keep two contacts with one number.
 - While the offline mesh is on, anyone scanning Bluetooth nearby can see that a Clairix phone is there, never whose. Only a bundle's sender and recipient can tell who it is for. Bundles between the same two people on one day carry the same tag. Photos, videos and calls do not go over the mesh.

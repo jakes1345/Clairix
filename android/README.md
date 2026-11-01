@@ -81,7 +81,9 @@ gradle test                         # unit tests for every variant
 - **Comms → "Hide names and previews in notifications"**, on by default once a
   passcode is set.
 - **Comms → "Relay-only calls"**: audio only through the relay's TURN server,
-  so no contact learns this phone's address from a call. Off by default.
+  so no contact learns this phone's address from a call. On by default
+  whenever the relay offers a TURN server; a choice made in Comms settings
+  is kept.
 - **Comms → "Cover traffic"**: sealed envelopes nobody reads, to random
   contacts at random intervals, so real messages are not the only traffic.
   Off by default.

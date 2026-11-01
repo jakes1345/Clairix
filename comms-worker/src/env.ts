@@ -10,6 +10,15 @@ export interface Env {
   INCIDENTS: DurableObjectNamespace<IncidentCache>;
   /** One-time code typed into Clairix when it registers, so the relay is not open to everyone. */
   ENROLL_SECRET: string;
+  /**
+   * Optional: "on" lets a phone register with neither an invite nor
+   * ENROLL_SECRET, for people with nobody to invite them, up to
+   * OPEN_REGISTRATION_PER_DAY new accounts a UTC day for the whole relay and
+   * within the per-address registration limit. Unset or anything else: off.
+   */
+  OPEN_REGISTRATION?: string;
+  /** Optional: open registrations a UTC day, a whole number from 1 to 100000; default 50. */
+  OPEN_REGISTRATION_PER_DAY?: string;
   /** Optional: Cloudflare Realtime TURN key id + API token, for calls. */
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;

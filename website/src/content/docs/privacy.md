@@ -14,6 +14,7 @@ The following is created and stored only on your phone. We never upload it and c
 - The results of the spyware and phone-health checks, including the list of apps installed on your phone.
 - The unlock ledger, which records lock-screen unlock successes and failures.
 - Your Comms encryption keys, contacts and message history, in a database that is encrypted as a whole.
+- Who you have blocked, and the message requests waiting for you, in the same database (see section 2.9).
 - Your duress phrase and app-lock settings.
 - Hidden-camera sweep images. The camera feed is analysed live and is not saved.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
@@ -32,7 +33,8 @@ If you choose to use Comms, your phone registers with the Clairix relay server. 
 - **Unused invite codes you created.** These expire after 7 days.
 - **Hashes of the single-use tokens your phone fetched ahead of time** to send messages and traffic reports with. They are kept until spent, or 14 days, and do not record which account they were issued to. From Beta 6 the tokens are blind: the relay keeps nothing when it issues them and, once one is spent, a hash of it until the key it was made with is retired (14 to 28 days), so it cannot be spent twice. Neither says which account it was issued to.
 - **A note that your keys belong to your number**, so that nobody else can register them.
-- **The key your contacts' passes are checked with.** Your phone gives your contacts passes inside your end-to-end encrypted messages; envelopes that arrive without one share a small part of your mailbox, so a stranger cannot fill it. The relay keeps the key until your phone replaces it (it does when you delete a contact) or you delete your account, and notes on each waiting envelope whether it came without a pass. It never learns who a pass belonged to.
+- **The key your contacts' passes are checked with.** Your phone gives your contacts passes inside your end-to-end encrypted messages; envelopes that arrive without one share a small part of your mailbox, so a stranger cannot fill it. The relay keeps the key until your phone replaces it (it does when you delete or block a contact) or you delete your account, and notes on each waiting envelope whether it came without a pass. It never learns who a pass belonged to.
+- **Reports about your number**, if someone sends one: your number, the reason they chose, a hash of an envelope you sent them and the day, for at most 90 days (see section 2.9).
 
 Messages, voice notes, photos, videos, emergency (SOS) alerts and calls are end-to-end encrypted. The relay cannot read their content and does not learn who sent a message. Call audio travels directly between the two phones, or through a relay server that cannot decrypt it.
 
@@ -68,6 +70,12 @@ Live traffic is used only when you are actively navigating and are registered wi
 ### 2.8 Things you choose to share
 
 When you export a report or share an invite link, Clairix hands it to the app you pick through Android's share menu. What happens next is up to that app.
+
+### 2.9 Blocking, message requests and reports
+
+Blocking and message requests happen on your phone. When you block someone, Clairix keeps their public keys, their Clairix number, the relay they are on and the name you had for them, so that whatever they send is dropped unread: no message, call or group message from them is kept or shown. Nothing about the block is sent to anyone, and they are not told. A first message from someone who is not in your contacts waits on your phone as a request, and no delivery or read receipt goes back to them unless you accept it; someone who joined with your invite, or a member of one of your groups writing to the group, comes in as a contact instead. If you decline, the request is deleted and the number is blocked.
+
+When you report someone, Clairix sends the relay you are registered with their Clairix number, the relay they are on when it is another one, the reason you chose, and a hash (SHA-256) of the last encrypted envelope they sent you, when one has arrived since this version. Nothing you or they wrote is sent. The report spends one of the single-use tokens described in section 2.1, so it does not say who sent it. The relay keeps reports, dated to the day, for at most 90 days, or until its operator closes them, even if the reported account is deleted sooner. The relay's operator reads them; what they do about an account is up to them and their terms.
 
 ## 3. What we do not do
 

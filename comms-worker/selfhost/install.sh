@@ -107,6 +107,11 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "ENROLL_SECRET=$(openssl rand -hex 24)"
     echo "# The address other relays and phones reach this one at."
     echo "RELAY_ORIGIN=https://$DOMAIN"
+    echo "#"
+    echo "# Off unless set: phones may register with no invite and no secret, up to"
+    echo "# this many new accounts a UTC day (README.md, Open registration)."
+    echo "# OPEN_REGISTRATION=on"
+    echo "# OPEN_REGISTRATION_PER_DAY=50"
   } > "$ENV_FILE"
   umask 022
 else

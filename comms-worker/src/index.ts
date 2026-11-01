@@ -4,12 +4,17 @@ import {
   dayFloor,
   DELIVERY_TOKEN_BATCH_MAX,
   DELIVERY_TOKEN_RE,
+  ENVELOPE_HASH_RE,
   groupByShard,
+  isReportReason,
   isTokenKind,
+  openRegistrationCap,
   parseIceServers,
   PUSH_CHALLENGE_PREFIX,
   randomToken,
+  REPORT_REASONS,
   STUN_ONLY,
+  summariseReports,
   TOKEN_KINDS,
   tokenAllowance,
   tokenHash,
@@ -81,7 +86,11 @@ export { IncidentCache, Mailbox, Traffic };
  *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, sealingPrekey?, listed}
  *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}. ts is epoch millis within
  *                              five minutes, and each key may belong to one account, so a captured body cannot be
- *                              replayed into a second account.
+ *                              replayed into a second account. With OPEN_REGISTRATION on (off by default), neither
+ *                              secret nor invite is needed, up to OPEN_REGISTRATION_PER_DAY accounts a UTC day.
+ *   GET    /v1/admin/reports                               → {numbers}: abuse reports by number, for the operator
+ *   DELETE /v1/admin/reports   {number, relay?}            → {closed}: reports about one number dealt with. Both carry
+ *                                                            X-Admin-Secret (ADMIN_SECRET; off without it), no identity
  *   GET    /i                                              → invite page; the invite itself is in the URL fragment,
  *                                                            which browsers never send to the relay
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
@@ -99,6 +108,10 @@ export { IncidentCache, Mailbox, Traffic };
  *                              random few seconds and released in a shuffled batch (MIX_MAX_MS; see
  *                              Mailbox.enqueue). The app asks for it on everything but call set-up, SOS and
  *                              group changes; apps from before mixing never ask, so nothing of theirs waits.
+ *   POST   /v1/report          {number, relay?, envelope?, reason} → 202: someone is abusing this relay; a "report"
+ *                              token. envelope is the SHA-256 (hex) of an envelope they sent, reason one of
+ *                              REPORT_REASONS. Kept for the operator by the day, 90 days at most; nothing says who
+ *                              reported, and nothing of what was said reaches the relay.
  *   Traffic (one Durable Object per map region; "traffic" tokens, "report" tokens for new reports; probes,
  *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
  *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
@@ -252,6 +265,16 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/send") {
     if (request.method !== "POST") throw new HttpError(405, "POST only");
     return send(env, request, bodyText);
+  }
+
+  if (path === "/v1/report") {
+    if (request.method !== "POST") throw new HttpError(405, "POST only");
+    return fileReport(env, request, bodyText);
+  }
+
+  // ── The operator, with the admin secret and no identity ───────────────
+  if (path === "/v1/admin/reports") {
+    return adminReports(env, request, bodyText);
   }
 
   if (path.startsWith("/v1/traffic/")) {
@@ -933,13 +956,20 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     transportKey?: unknown;
     listed?: unknown;
   }>(bodyText);
-  // Either the relay's enrollment secret, or an invite a registered phone made.
+  // Either the relay's enrollment secret, or an invite a registered phone
+  // made; or, when the operator opened registration, neither, within the
+  // day's allowance for the whole relay (taken below, once the rest checks out).
   const invite = typeof body.invite === "string" ? body.invite : null;
+  const givenSecret = typeof body.secret === "string" && body.secret.length > 0 ? body.secret : null;
+  const openCap = invite === null && givenSecret === null ? openRegistrationCap(env) : null;
   if (invite !== null) {
     if (!INVITE_CODE_RE.test(invite)) throw new HttpError(403, "That invite code is not valid");
-  } else {
+  } else if (givenSecret !== null || openCap === null) {
+    if (givenSecret === null) {
+      throw new HttpError(403, "This relay gives new numbers by invite or with its enrollment secret: ask someone on it for an invite");
+    }
     const secret = requireSecret(env, "ENROLL_SECRET");
-    if (typeof body.secret !== "string" || !(await secretEquals(body.secret, secret))) throw new HttpError(403, "Enrollment code rejected");
+    if (!(await secretEquals(givenSecret, secret))) throw new HttpError(403, "Enrollment code rejected");
   }
   // The body is signed by the new key, and this is what keeps a captured body
   // (it carries the enrollment secret) from being replayed later: it must be
@@ -976,6 +1006,13 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const redeemed = await inviteBox.redeemInvite();
     if (!redeemed.ok) throw new HttpError(403, redeemed.reason);
   }
+  const openBox = openCap === null ? null : env.MAILBOX.get(env.MAILBOX.idFromName(OPEN_REGISTRATION_NAME));
+  if (openBox && openCap !== null) {
+    const taken = await openBox.takeOpenRegistration(openCap);
+    if (!taken.ok) {
+      throw new HttpError(429, "This relay has given out all the new numbers it gives without an invite today; try again tomorrow, or ask someone on it for an invite", taken.retryAfter);
+    }
+  }
 
   for (let attempt = 0; attempt < 8; attempt++) {
     const number = randomNumber();
@@ -986,9 +1023,10 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     if (await mailbox.claim(profile, oneTimeKeys)) {
       if (!(await claimKeys(env, profile, true))) {
         // One of the keys is already another account's. The number just taken
-        // goes back, and so does the invite, if one was used.
+        // goes back, and so does the invite or the open registration, if one was used.
         await mailbox.wipe();
         if (inviteBox) await inviteBox.releaseInvite();
+        if (openBox) await openBox.releaseOpenRegistration();
         throw new HttpError(409, "One of these keys is already registered to another Clairix number");
       }
       // A new member of this relay's coin community starts with what the
@@ -999,6 +1037,7 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     }
   }
   if (inviteBox) await inviteBox.releaseInvite();
+  if (openBox) await openBox.releaseOpenRegistration();
   throw new HttpError(503, "Could not allocate a number; try again");
 }
 
@@ -1197,6 +1236,67 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     return json({ id: res.json.id.slice(0, 80) }, 202);
   }
   return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, false, body.alert, body.pass);
+}
+
+/** The object that keeps abuse reports for the operator. */
+const REPORTS_NAME = "abuse-reports";
+/** The object that counts today's open registrations. */
+const OPEN_REGISTRATION_NAME = "open-registration";
+
+/**
+ * An abuse report: who is reported (a number, and the relay it is on when
+ * that is not this one), the hash of an envelope they sent, and why. It
+ * spends a "report" token and names nobody, so what the relay keeps is who
+ * was reported and why, never by whom; the relay never sees what was said.
+ * The answer is the same whether the number exists, was reported before,
+ * or has been reported as often as the relay keeps.
+ */
+async function fileReport(env: Env, request: Request, bodyText: string): Promise<Response> {
+  const body = parseJson<{ number?: unknown; relay?: unknown; envelope?: unknown; reason?: unknown }>(bodyText);
+  const number = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+  if (!number) throw new HttpError(400, "number must be a Clairix number");
+  const reason = body.reason;
+  if (!isReportReason(reason)) throw new HttpError(400, `reason must be one of ${REPORT_REASONS.join(", ")}`);
+  let envelope: string | null = null;
+  if (body.envelope !== undefined && body.envelope !== null) {
+    if (typeof body.envelope !== "string" || !ENVELOPE_HASH_RE.test(body.envelope)) {
+      throw new HttpError(400, "envelope must be the SHA-256 of an envelope, in lowercase hex");
+    }
+    envelope = body.envelope;
+  }
+  const named = parseRelayField(body.relay, isLoopbackDev(request));
+  const relay = named !== null && isOwnOrigin(env, request, named) ? null : named;
+  // Spent only once the report is well formed, as for a send.
+  await spendToken(env, request, "report");
+  await env.MAILBOX.get(env.MAILBOX.idFromName(REPORTS_NAME)).fileReport({ number, relay, envelope, reason, day: dayFloor(Date.now()) });
+  return json({ ok: true }, 202);
+}
+
+/**
+ * What phones reported, for the operator, with ADMIN_SECRET in X-Admin-Secret
+ * (off while it is unset): GET lists every reported number with how often,
+ * why, the envelope hashes and the first and last day; DELETE {number,
+ * relay?} closes the reports about one number once the operator has dealt
+ * with it. A few attempts a minute per address, as for registration, so the
+ * secret cannot be guessed by brute force.
+ */
+async function adminReports(env: Env, request: Request, bodyText: string): Promise<Response> {
+  const guard = env.MAILBOX.get(env.MAILBOX.idFromName(`admin-guard:${request.headers.get("cf-connecting-ip") ?? "unknown"}`));
+  const allowed = await guard.rateOk("admin", Mailbox.REGISTER_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many attempts; try again in a minute", allowed.retryAfter);
+  const secret = requireSecret(env, "ADMIN_SECRET");
+  if (!(await secretEquals(request.headers.get("x-admin-secret") ?? "", secret))) throw new HttpError(403, "Admin secret rejected");
+  const reports = env.MAILBOX.get(env.MAILBOX.idFromName(REPORTS_NAME));
+  if (request.method === "GET") return json({ numbers: summariseReports(await reports.listReports()) });
+  if (request.method === "DELETE") {
+    const body = parseJson<{ number?: unknown; relay?: unknown }>(bodyText);
+    const number = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+    if (!number) throw new HttpError(400, "number must be a Clairix number");
+    const named = parseRelayField(body.relay, isLoopbackDev(request));
+    const relay = named !== null && isOwnOrigin(env, request, named) ? null : named;
+    return json({ closed: await reports.closeReports(number, relay) });
+  }
+  throw new HttpError(405, "GET or DELETE only");
 }
 
 interface SendBody {

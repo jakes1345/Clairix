@@ -414,3 +414,93 @@ export function parseIceServers(body: unknown): IceServer[] {
   }
   return servers;
 }
+
+// ── Abuse reports ───────────────────────────────────────────────────────────
+//
+// A phone reports someone who abuses this relay (POST /v1/report): the number
+// and the relay it is on, the hash of an envelope it sent, and a reason. The
+// request spends a "report" token and names nobody, so the operator learns
+// who was reported and why, never who reported it, and never what was said:
+// the relay could not read that if it were sent, and it is not.
+
+/** Why a number is reported; the app offers exactly these (ContactGate.ReportReason). */
+export const REPORT_REASONS = ["harassment", "threats", "spam", "impersonation", "other"] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+
+/** An envelope's hash as phones keep it: SHA-256 of its bytes, in lowercase hex. */
+export const ENVELOPE_HASH_RE = /^[0-9a-f]{64}$/;
+
+/** How long a report is kept for the operator, unless they close it sooner. */
+export const REPORT_TTL_MS = 90 * DAY_MS;
+/** Reports kept about one number, and in all: past either, new ones are refused, never old ones dropped. */
+export const REPORTS_PER_TARGET_MAX = 500;
+export const REPORTS_MAX = 50_000;
+
+export function isReportReason(raw: unknown): raw is ReportReason {
+  return typeof raw === "string" && (REPORT_REASONS as readonly string[]).includes(raw);
+}
+
+/** One report as the relay keeps it: the day it came, never the moment. */
+export interface AbuseReport {
+  number: string;
+  /** The relay the number is on, when it is not this one. */
+  relay: string | null;
+  envelope: string | null;
+  reason: ReportReason;
+  day: number;
+}
+
+/** What the operator reads: every report about one number, together. */
+export interface ReportedNumber {
+  number: string;
+  relay: string | null;
+  reports: number;
+  reasons: Partial<Record<ReportReason, number>>;
+  envelopes: string[];
+  firstDay: number;
+  lastDay: number;
+}
+
+/** Groups [reports] by the number (and relay) they name, the most reported first. */
+export function summariseReports(reports: AbuseReport[]): ReportedNumber[] {
+  const byTarget = new Map<string, ReportedNumber>();
+  for (const r of reports) {
+    const key = `${r.relay ?? ""} ${r.number}`;
+    let entry = byTarget.get(key);
+    if (!entry) {
+      entry = { number: r.number, relay: r.relay, reports: 0, reasons: {}, envelopes: [], firstDay: r.day, lastDay: r.day };
+      byTarget.set(key, entry);
+    }
+    entry.reports += 1;
+    entry.reasons[r.reason] = (entry.reasons[r.reason] ?? 0) + 1;
+    if (r.envelope !== null && !entry.envelopes.includes(r.envelope)) entry.envelopes.push(r.envelope);
+    entry.firstDay = Math.min(entry.firstDay, r.day);
+    entry.lastDay = Math.max(entry.lastDay, r.day);
+  }
+  return [...byTarget.values()].sort((a, b) => b.reports - a.reports || b.lastDay - a.lastDay || a.number.localeCompare(b.number));
+}
+
+// ── Open registration ───────────────────────────────────────────────────────
+//
+// Off unless the operator turns it on. A relay run for people who have nobody
+// to invite them can let a phone register with neither an invite nor the
+// enrollment secret, up to a number of new accounts a day for the whole relay,
+// on top of the per-address limit every registration attempt already meets.
+
+/** Open registrations a day when the operator turns them on without saying how many. */
+export const OPEN_REGISTRATION_DEFAULT_PER_DAY = 50;
+
+/**
+ * How many accounts may register openly in a UTC day, or null when open
+ * registration is off: OPEN_REGISTRATION must be "on" (or "true"), and
+ * OPEN_REGISTRATION_PER_DAY, when set, a whole number from 1 to 100000;
+ * anything else there keeps the default.
+ */
+export function openRegistrationCap(env: { OPEN_REGISTRATION?: string; OPEN_REGISTRATION_PER_DAY?: string }): number | null {
+  const mode = (env.OPEN_REGISTRATION ?? "").trim().toLowerCase();
+  if (mode !== "on" && mode !== "true") return null;
+  const raw = (env.OPEN_REGISTRATION_PER_DAY ?? "").trim();
+  if (!/^[0-9]{1,6}$/.test(raw)) return OPEN_REGISTRATION_DEFAULT_PER_DAY;
+  const n = Number(raw);
+  return n >= 1 && n <= 100_000 ? n : OPEN_REGISTRATION_DEFAULT_PER_DAY;
+}

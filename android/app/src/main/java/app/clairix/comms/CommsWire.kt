@@ -107,6 +107,14 @@ object CommsWire {
      */
     const val T_PASS = "pass"
     /**
+     * The sender just registered with the invite in "inv", which the
+     * recipient made: their phone knows the invite, so the newcomer comes in
+     * as a contact rather than as a message request. Apps from before it
+     * ignore it.
+     */
+    const val T_JOINED = "joined"
+    const val F_INVITE = "inv"
+    /**
      * The sender's pass key (32 bytes, base64), on every payload once their
      * relay holds it, and when they made it ("pts"), so an older key arriving
      * late does not replace a newer one. Envelopes to them then carry a pass
@@ -262,6 +270,9 @@ object CommsWire {
 
     /** Nothing but this phone's pass key, which the sender fields added on sending carry. */
     fun pass(): JSONObject = base(T_PASS)
+
+    /** This phone registered with [invite], a code the recipient made; see [T_JOINED]. */
+    fun joined(invite: String): JSONObject = base(T_JOINED).put(F_INVITE, invite)
 
     /** Cover traffic: [fill] is random filler, so the padded envelope is sized like a text. */
     fun noise(fill: String): JSONObject = base(T_NOISE).put(F_BODY, fill)

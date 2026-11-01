@@ -139,6 +139,16 @@ object CommsRepository {
     private const val CATCHER_TTL_MS = 24 * 3600_000L
     private const val THREAT_EXPIRE_INTERVAL_MS = 3600_000L
     private const val MAX_PANIC_NOTE = 280
+    /** Why a blocked identity is not added again: it is unblocked on the blocked list only. */
+    private const val BLOCKED_ADD = "You blocked this person. To talk to them again, unblock them under Blocked in Comms settings first."
+    /** The line a call from a message request leaves in the request: it never rang. */
+    private const val REQUEST_MISSED_CALL = "Missed call · they are not in your contacts, so it did not ring"
+    /** Report tokens kept on hand: a report never needs a fetch right before it, which would tie it to this phone. */
+    private const val REPORT_TOKENS_BATCH = 2
+    /** How long past its expiry an invite this phone made is still recognised, for word of it that arrives late. */
+    private const val INVITE_ANSWER_GRACE_MS = 7L * 24 * 3600_000L
+    /** An invite code as the relay makes them: 128 bits, base64url. */
+    private val INVITE_CODE = Regex("^[A-Za-z0-9_-]{22}$")
     /** Intent extra naming the group conversation MainActivity should open (with [CommsNotifications.EXTRA_TAB]). */
     const val EXTRA_GROUP = "app.clairix.GROUP"
     const val ACTION_OPEN_GROUP = "app.clairix.OPEN_GROUP"
@@ -502,13 +512,15 @@ object CommsRepository {
      * creates a session before the app knows who sent it, and sessions from
      * senders that were rejected used to stay in the saved state for good,
      * making every save slower. Payloads still waiting for their sender to be
-     * confirmed keep theirs.
+     * confirmed keep theirs, and so do message requests, whose next message
+     * comes on the same session; a blocked number's go.
      */
     private suspend fun pruneSessions() {
         runCatching {
             lock.withLock {
                 if (!identities.exists()) return@withLock
-                val keep = store.contacts().map { it.curve25519 } + store.pending().map { it.senderCurve25519 }
+                val keep = store.contacts().map { it.curve25519 } + store.requestContacts().map { it.curve25519 } +
+                    store.pending().map { it.senderCurve25519 }
                 val dropped = identities.update { it.pruneSessions(keep) }
                 if (dropped > 0u) CommsLog.add("Removed sessions with $dropped sender(s) who are not contacts")
             }
@@ -599,7 +611,8 @@ object CommsRepository {
             val result = lock.withLock {
                 val url = (invite?.relayUrl ?: relayUrl).trim().trimEnd('/')
                 if (!RelayClient.acceptableRelayUrl(url)) return@withLock Result.failure(RelayException("The relay URL must start with https://"))
-                if (invite == null && secret.isBlank()) return@withLock Result.failure(RelayException("Enter the enrollment secret"))
+                // No secret is the relay's to judge: one whose operator opened
+                // registration takes it (up to its daily limit); any other says why not.
                 if (invite != null && invite.invite == null) return@withLock Result.failure(RelayException("That code is not an invite"))
                 setBusy(true)
                 listedKeyProblem(url)?.let { reason ->
@@ -643,14 +656,44 @@ object CommsRepository {
             // The inviter's keys came in the invite link, so they are pinned, but
             // not verified: the link passed through other hands (and the relay's
             // invite page) on the way. A first message tells them who joined;
-            // their phone adds this number when it arrives.
+            // their phone adds this number when it arrives, as a contact rather
+            // than a message request, because the invite named comes with it.
             if (invite != null && result.isSuccess) {
                 addContactFromCode(invite.copy(invite = null), source = CodeSource.LINK)
-                    .onSuccess { contact -> send(contact.number, "Joined Clairix with your invite.") }
+                    .onSuccess { contact ->
+                        invite.invite?.let { announceJoined(contact, it) }
+                        send(contact.number, "Joined Clairix with your invite.")
+                    }
                     .onFailure { CommsLog.add("Could not add ${formatClairixNumber(invite.number)} from the invite: ${it.message}") }
             }
             result
         }
+
+    /**
+     * Tells the inviter's phone which of its invites this phone registered
+     * with ([CommsWire.T_JOINED]), so it takes this phone in as a contact and
+     * not as a message request. Sent once: an inviter whose phone misses it
+     * finds this phone under Requests, and accepting it there does the same.
+     */
+    private suspend fun announceJoined(contact: Contact, invite: String) {
+        val why = when (val d = deliver(contact, CommsWire.joined(invite))) {
+            Deliver.Sent -> return
+            is Deliver.Failed -> d.reason
+            is Deliver.TooLarge -> d.reason
+            is Deliver.Offline -> d.reason
+        }
+        CommsLog.add("Could not tell ${contactLabel(contact)} which of their invites this phone used ($why); they will find it under Requests")
+    }
+
+    /** How an invite code is remembered by the phone that made it: SHA-256, hex. */
+    private fun inviteHash(code: String): String =
+        MessageDigest.getInstance("SHA-256").digest(code.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    /** Whether [json] names an invite this phone made, taking it if so: it answers once. */
+    private fun takeInvite(json: JSONObject): Boolean {
+        val code = json.optString(CommsWire.F_INVITE).takeIf { INVITE_CODE.matches(it) } ?: return false
+        return config.takeIssuedInvite(inviteHash(code))
+    }
 
     /**
      * Why this phone must not register at [url], when it is on the relay list
@@ -973,6 +1016,9 @@ object CommsRepository {
         runCatching {
             val code = pairingCode() ?: throw RelayException("Not registered")
             val invite = relay.createInvite()
+            // Remembered (as a hash) so whoever registers with it comes in as a
+            // contact, not as a message request; a week past its expiry at most.
+            config.addIssuedInvite(inviteHash(invite.code), invite.expiresAt + INVITE_ANSWER_GRACE_MS)
             CommsLog.add("Invite made; it works once until ${java.text.DateFormat.getDateInstance().format(java.util.Date(invite.expiresAt))}")
             code.copy(invite = invite.code) to invite.expiresAt
         }
@@ -1232,7 +1278,15 @@ object CommsRepository {
 
     fun contacts(): List<Contact> = unlockedOr(emptyList()) { store.contacts() }
     fun contact(number: String): Contact? = unlockedOr(null) { store.contact(number) }
+    /** The row for [number] whatever it is: a contact, a blocked contact kept as a record, or a message request. */
+    fun contactEntry(number: String): Contact? = unlockedOr(null) { store.contactEntry(number) }
     fun threads(): List<ChatThread> = unlockedOr(emptyList()) { store.threads() }
+    /** Message requests: people who wrote first and have not been accepted, most recent first. */
+    fun requests(): List<ChatThread> = unlockedOr(emptyList()) { store.requestThreads() }
+    /** The blocked list, most recent first. */
+    fun blockedList(): List<ContactGate.Blocked> = unlockedOr(emptyList()) { store.blockedKeys() }
+    /** Blocked contacts kept with their conversation, by number. */
+    fun blockedKept(): Map<String, Contact> = unlockedOr(emptyMap()) { store.blockedContacts().associateBy { it.number } }
     fun messages(peer: String): List<ChatMessage> = unlockedOr(emptyList()) { store.messages(peer) }
     fun transactions(peer: String): List<CoinTx> = unlockedOr(emptyList()) { store.transactions(peer) }
     fun allTransactions(): List<CoinTx> = unlockedOr(emptyList()) { store.allTransactions() }
@@ -1278,6 +1332,30 @@ object CommsRepository {
             if (theirRelay == null && code.number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
             if (!verify(code.ed25519, "${code.curve25519}|${code.sealing}".toByteArray(Charsets.UTF_8), code.signature)) {
                 return@withLock Result.failure(RelayException("The code's keys are not signed by its identity key"))
+            }
+            // Unblocking is done in one place, the blocked list, never by
+            // adding someone again (a code scanned by whoever holds the phone).
+            if (ContactGate.isBlocked(store.blockedKeys(), code.ed25519, code.curve25519, code.number, theirRelay)) {
+                return@withLock Result.failure(RelayException(BLOCKED_ADD))
+            }
+            store.contactEntry(code.number)?.takeIf { it.request }?.let { pending ->
+                // Someone whose first message waits as a request: adding them
+                // accepts it, if this code carries the keys it came from.
+                if (pending.relay != theirRelay || pending.curve25519 != code.curve25519 || pending.ed25519 != code.ed25519) {
+                    return@withLock Result.failure(RelayException(
+                        "${formatClairixNumber(code.number)} wrote to you from other keys than this code has; it waits under Requests. " +
+                            "Decline it there first if this code is the one to trust."
+                    ))
+                }
+                acceptRequestLocked(pending)
+            }
+            store.contactEntry(code.number)?.takeIf { it.blocked }?.let { kept ->
+                // Someone else with the same number on another relay; the blocked
+                // contact is kept by number, and one number holds one row.
+                return@withLock Result.failure(RelayException(
+                    "A contact you blocked has the Clairix number ${formatClairixNumber(code.number)}, on ${relayLabel(kept.relay)}. " +
+                        "Clairix cannot keep two people with one number; unblock and delete that contact first."
+                ))
             }
             val existing = store.contact(code.number)
             if (existing != null && existing.relay != theirRelay) {
@@ -1348,7 +1426,19 @@ object CommsRepository {
         lock.withLock {
             val number = parseClairixNumber(rawNumber) ?: return@withLock Result.failure(RelayException("A Clairix number is nine digits"))
             if (number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
-            store.contact(number)?.let { return@withLock Result.success(it) }
+            if (ContactGate.isBlocked(store.blockedKeys(), null, null, number, null)) return@withLock Result.failure(RelayException(BLOCKED_ADD))
+            store.contactEntry(number)?.let { entry ->
+                when {
+                    entry.blocked -> return@withLock Result.failure(RelayException(BLOCKED_ADD))
+                    // A message request from this number on this relay, whose keys
+                    // the relay confirmed when it came: adding it accepts it.
+                    entry.request && entry.relay == null -> acceptRequestLocked(entry)
+                    entry.request -> return@withLock Result.failure(RelayException(
+                        "${formatClairixNumber(number)} on ${relayLabel(entry.relay)} wrote to you and waits under Requests; Clairix cannot keep two people with one number."
+                    ))
+                }
+                store.contact(number)?.let { bump(); return@withLock Result.success(it) }
+            }
             setBusy(true)
             try {
                 // Only the identity: no one-time key is claimed until there is something
@@ -1357,6 +1447,7 @@ object CommsRepository {
                 if (!verify(keys.ed25519, "${keys.curve25519}|${keys.sealing}".toByteArray(Charsets.UTF_8), keys.signature)) {
                     throw RelayException("The relay returned keys that are not signed by that number's identity key")
                 }
+                if (ContactGate.isBlocked(store.blockedKeys(), keys.ed25519, keys.curve25519, number, null)) throw RelayException(BLOCKED_ADD)
                 store.contactByCurve(keys.curve25519)?.let { other ->
                     // A relay answering with another contact's real keys would otherwise
                     // let messages from that identity land under this number.
@@ -1466,17 +1557,170 @@ object CommsRepository {
     }
 
     suspend fun deleteContact(number: String) = withContext(Dispatchers.IO) {
+        lock.withLock { removeContactLocked(number) }
+        publishPassIfOwed()
+    }
+
+    /**
+     * Deletes everything about [number] (a contact, a blocked contact or a
+     * message request): the sessions, the conversation and its files, the
+     * notifications. Caller holds [lock].
+     */
+    private fun removeContactLocked(number: String) {
+        store.contactEntry(number)?.let { c -> identities.update { it.dropSessions(c.curve25519) } }
+        store.deleteContact(number).forEach { CommsMedia.delete(it) }
+        CommsNotifications.cancel(appContext, number)
+        // The pass they were given stops working: a new key goes to the
+        // relay and to everyone else, so someone deleted for flooding this
+        // phone is a stranger to the mailbox from now on.
+        if (config.isRegistered && config.passKey != null) newPassKey()
+        bump()
+    }
+
+    /** Gives the relay a pass key [newPassKey] made, outside the repository's lock. */
+    private fun publishPassIfOwed() {
+        if (config.isRegistered && !config.passPublished) scope.launch { keysLock.withLock { publishPass() } }
+    }
+
+    /**
+     * Blocks [number] ([ContactGate]): their keys and their number go on the
+     * blocked list, so nothing they send reaches this phone again, whether
+     * they write, call, or post in a group: nothing is kept, no receipt goes
+     * back, nothing rings or shows, and no log line names them. They are not
+     * told. With [delete] their contact, session and conversation are deleted
+     * too, as with [deleteContact]; without it the conversation stays,
+     * read-only, as a record. Either way the pass they were given stops
+     * working, so what they send draws on the share strangers get.
+     */
+    suspend fun block(number: String, delete: Boolean) = withContext(Dispatchers.IO) {
         lock.withLock {
-            store.contact(number)?.let { c -> identities.update { it.dropSessions(c.curve25519) } }
-            store.deleteContact(number).forEach { CommsMedia.delete(it) }
-            CommsNotifications.cancel(appContext, number)
-            // The pass they were given stops working: a new key goes to the
-            // relay and to everyone else, so someone deleted for flooding this
-            // phone is a stranger to the mailbox from now on.
-            if (config.isRegistered && config.passKey != null) newPassKey()
+            val c = store.contactEntry(number) ?: return@withLock
+            if (!ContactGate.isBlocked(store.blockedKeys(), c.ed25519, c.curve25519, c.number, c.relay)) {
+                store.addBlocked(c.ed25519, c.curve25519, c.number, c.relay, c.name, System.currentTimeMillis())
+            }
+            if (delete) {
+                removeContactLocked(number)
+            } else {
+                identities.update { it.dropSessions(c.curve25519) }
+                store.markBlocked(number)
+                CommsNotifications.cancel(appContext, number)
+                if (config.isRegistered && config.passKey != null) newPassKey()
+                bump()
+            }
+            if (store.requestContacts().isEmpty()) CommsNotifications.cancelRequest(appContext)
+        }
+        publishPassIfOwed()
+    }
+
+    /** Declines a message request: blocks the number and deletes what it sent. */
+    suspend fun declineRequest(number: String) = block(number, delete = true)
+
+    /**
+     * Takes entry [id] off the blocked list. A blocked contact kept as a
+     * record is a contact again, owed this phone's pass; one that was deleted
+     * is simply no longer blocked, and anything they send next comes in as a
+     * message request.
+     */
+    suspend fun unblock(id: Long) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val entry = store.removeBlocked(id) ?: return@withLock
+            val kept = store.contactEntry(entry.number)?.takeIf { it.blocked && ContactGate.matches(entry, it.ed25519, it.curve25519, null, null) }
+            if (kept != null && !ContactGate.isBlocked(store.blockedKeys(), kept.ed25519, kept.curve25519, kept.number, kept.relay)) {
+                store.setBlocked(kept.number, false)
+                store.owePass(kept.number)
+            }
             bump()
         }
-        if (config.isRegistered && !config.passPublished) scope.launch { keysLock.withLock { publishPass() } }
+        scope.launch { flushPassNotices() }
+    }
+
+    /** Unblocks the blocked contact kept as [number]'s record: every entry on the blocked list for them goes. */
+    suspend fun unblockContact(number: String) = withContext(Dispatchers.IO) {
+        val ids = lock.withLock {
+            val c = store.contactEntry(number) ?: return@withLock emptyList<Long>()
+            store.blockedKeys().filter { ContactGate.matches(it, c.ed25519, c.curve25519, c.number, c.relay) }.map { it.id }
+        }
+        for (id in ids) unblock(id)
+    }
+
+    /**
+     * The owner accepts a message request: [number] becomes an ordinary,
+     * unverified contact. What they sent is receipted now, read or delivered
+     * as it stands, an invitation to a group they sent is acted on, and they
+     * are given this phone's pass.
+     */
+    suspend fun acceptRequest(number: String) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val c = store.contactEntry(number)?.takeIf { it.request && !it.blocked } ?: return@withLock
+            acceptRequestLocked(c)
+        }
+        bump()
+    }
+
+    /** See [acceptRequest]. Caller holds [lock]. */
+    private fun acceptRequestLocked(c: Contact) {
+        store.setRequest(c.number, false)
+        val accepted = c.copy(request = false)
+        for ((status, ids) in ContactGate.receiptsOnAccept(store.messages(c.number))) store.queueReceipt(c.number, ids, status)
+        // Held while they were a request (an invitation to a group): acted on
+        // now, if it came from the keys accepted.
+        for (h in store.quarantined(c.number)) {
+            val json = CommsWire.parse(h.payload)
+            if (json != null && h.curve == accepted.curve25519) {
+                runCatching { processPayload(accepted, h.ts, json) }
+                    .onFailure { CommsLog.add("Something held from ${contactLabel(accepted)} could not be acted on: ${it.message}") }
+            }
+            store.deleteQuarantined(h.id)
+        }
+        store.owePass(c.number)
+        CommsLog.add("Message request from ${formatClairixNumber(c.number)} accepted")
+        if (store.requestContacts().isEmpty()) CommsNotifications.cancelRequest(appContext)
+        // After the caller releases the lock.
+        scope.launch {
+            flushReceipts()
+            flushPassNotices()
+        }
+    }
+
+    /**
+     * Reports [number] to this phone's relay, for its operator to act on: the
+     * number and the relay it is on, the hash of the newest envelope they sent
+     * (when one has come since reports existed) and [reason]
+     * ([ContactGate.reportBody]). Never what they wrote. The request spends a
+     * report token and names nobody, so the operator learns who was reported,
+     * not who reported them. A token is fetched apart from any report; with
+     * none on hand the owner is asked to try again shortly.
+     */
+    suspend fun report(number: String, reason: ContactGate.ReportReason): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!config.isRegistered) throw RelayException("Not registered with a relay")
+            val c = store.contactEntry(number) ?: throw RelayException("${formatClairixNumber(number)} is not on this phone")
+            try {
+                relay.report(ContactGate.reportBody(c.number, c.relay, store.lastEnvelope(c.number), reason))
+            } catch (e: RelayException) {
+                when (e.code) {
+                    RelayClient.NO_TOKENS -> {
+                        scope.launch { topUpReportTokens() }
+                        throw RelayException("This phone has no report token yet. It is fetching one now; try again in a few minutes.")
+                    }
+                    // A relay from before reports takes the path for a signed request, or knows none.
+                    401, 404, 405 -> throw RelayException("Your relay does not take reports yet: it runs an older version. Write to its operator instead.")
+                    else -> throw e
+                }
+            }
+            CommsLog.add("Reported ${formatClairixNumber(c.number)} to the relay's operator (${reason.wire})")
+            Unit
+        }
+    }
+
+    /** Keeps a report token or two on hand, fetched apart from any report (see [report]). */
+    private fun topUpReportTokens() {
+        if (!config.isRegistered) return
+        runCatching { relay.topUpTokens(TokenKind.REPORT, low = 1, batch = REPORT_TOKENS_BATCH) }
+            .onFailure {
+                if ((it as? RelayException)?.code == RelayClient.KEYS_PENDING) scheduleKeyRefresh()
+                else CommsLog.add("Could not fetch a report token: ${it.message}")
+            }
     }
 
     /** The 60-digit safety number shared with [contact]; identical on both phones. */
@@ -2142,8 +2386,16 @@ object CommsRepository {
     /** The owner's choice about what notifications say; see [CommsConfig.hidePreviews]. */
     fun setHidePreviews(hide: Boolean) = config.setHidePreviews(hide)
 
-    /** See [CommsConfig.relayOnlyCalls]. */
-    fun relayOnlyCalls(): Boolean = initialised && config.relayOnlyCalls
+    /** The owner's choice about relay-only calls, or null while the default applies ([RelayOnlyCalls]). */
+    fun relayOnlyCallsChoice(): Boolean? = if (initialised) config.relayOnlyCallsChoice else null
+
+    /** Whether the relay offered a TURN server for the last call this phone set up; null before the first. */
+    fun relayTurnOffered(): Boolean? = if (initialised) config.relayTurn else null
+
+    /** What the relay's call servers said for a call being set up: whether one of them was a TURN server. */
+    fun noteRelayTurn(offered: Boolean) {
+        if (initialised) config.setRelayTurn(offered)
+    }
 
     fun setRelayOnlyCalls(on: Boolean) = config.setRelayOnlyCalls(on)
 
@@ -3040,13 +3292,17 @@ object CommsRepository {
             CommsLog.add("Dropped envelope ${shortId(envelope.id)}: ${e.message}")
             return true
         }
-        if (decrypted.evictedRecentSession) {
+        // A blocked identity's envelope leaves no line naming it, and asks the
+        // relay nothing about it; resolveSender drops it below.
+        val blockedSender by lazy(LazyThreadSafetyMode.NONE) { isBlockedSender(decrypted.senderCurve25519, decrypted.senderEd25519) }
+        if (decrypted.evictedRecentSession && !blockedSender) {
             val who = store.contactByCurve(decrypted.senderCurve25519)?.let { contactLabel(it) } ?: "A sender"
             CommsLog.add("$who started yet another session; the least recently used of the sessions kept with them was dropped")
         }
-        if (decrypted.sealedToPrekey) {
+        if (decrypted.sealedToPrekey && !blockedSender) {
+            // Only a contact is written to, so only a contact's prekey is fetched.
             store.contactByCurve(decrypted.senderCurve25519)
-                ?.takeIf { it.ed25519 == decrypted.senderEd25519 && store.prekey(it.number) == null }
+                ?.takeIf { it.ed25519 == decrypted.senderEd25519 && !it.request && store.prekey(it.number) == null }
                 ?.let { refreshPrekeyLater(it) }
         }
         // Durable before anything that can fail: seen and staged in one transaction.
@@ -3083,6 +3339,13 @@ object CommsRepository {
                     store.deletePending(p.id)
                     true
                 }
+                Resolution.Blocked -> {
+                    // From a blocked identity: nothing is kept, receipted, shown or
+                    // logged, and the session its envelope opened goes with it.
+                    identities.update { it.dropSessions(p.senderCurve25519) }
+                    store.deletePending(p.id)
+                    true
+                }
                 Resolution.Unreachable -> { CommsLog.add("Relay unreachable while confirming who sent ${shortId(p.id)}; holding it"); false }
             }
         } catch (e: IllegalStateException) {
@@ -3096,11 +3359,17 @@ object CommsRepository {
 
     /**
      * A payload from [contact] that has been staged: processed, held for review
-     * when the contact's keys changed, or dropped (see [KeyChangeGuard]).
-     * Caller holds [lock].
+     * when the contact's keys changed, or dropped (see [KeyChangeGuard]); from
+     * a message request, as [admitRequestLocked] says. Caller holds [lock].
      */
     private fun admitLocked(contact: Contact, p: CommsStore.PendingInbound, json: JSONObject) {
         val type = CommsWire.type(json)
+        // The staged id is the envelope's hash: kept as the newest from them, which a report names.
+        if (ContactGate.reportable(json)) store.noteEnvelope(contact.number, p.id)
+        if (contact.request) {
+            admitRequestLocked(contact, p, json)
+            return
+        }
         when (KeyChangeGuard.inbound(contact, json)) {
             KeyChangeGuard.Action.PROCESS -> processPayload(contact, p.ts, json)
             KeyChangeGuard.Action.QUARANTINE -> {
@@ -3112,6 +3381,33 @@ object CommsRepository {
             KeyChangeGuard.Action.DROP -> CommsLog.add("$type from ${contactLabel(contact)} dropped: their keys changed and have not been checked")
         }
     }
+
+    /**
+     * A payload from a message request ([ContactGate.forRequest]): kept with
+     * no receipt and only the notification that names nobody, a call noted as
+     * missed without ringing, a group invitation held until the owner accepts,
+     * group traffic and the rest acted on as for anyone. Caller holds [lock].
+     */
+    private fun admitRequestLocked(contact: Contact, p: CommsStore.PendingInbound, json: JSONObject) {
+        when (ContactGate.forRequest(json)) {
+            ContactGate.RequestAction.KEEP, ContactGate.RequestAction.PROCESS -> processPayload(contact, p.ts, json)
+            ContactGate.RequestAction.MISSED_CALL -> {
+                val cid = json.optString(CommsWire.F_CALL_ID).takeIf { it.isNotBlank() && it.length <= 64 } ?: return
+                // One line per call, however often its offer comes; read when the request is on screen.
+                val onScreen = openPeer == contact.number && !AppLock.locked.value
+                store.insertMessage(ChatMessage("request-call-$cid", contact.number, Direction.IN, REQUEST_MISSED_CALL, System.currentTimeMillis(), STATUS_CALL, read = onScreen))
+                if (!onScreen) CommsNotifications.notifyRequest(appContext)
+            }
+            ContactGate.RequestAction.HOLD ->
+                store.quarantine(p.id, contact.number, p.senderCurve25519, p.ts, p.payload, KeyChangeGuard.MAX_HELD_PER_CONTACT)
+            ContactGate.RequestAction.IGNORE -> Unit
+        }
+    }
+
+    /** Whether the sender with these keys is blocked: a blocked contact kept as a record, or on the blocked list. */
+    private fun isBlockedSender(curve25519: String, ed25519: String): Boolean =
+        store.contactByCurve(curve25519)?.blocked == true ||
+            ContactGate.isBlocked(store.blockedKeys(), ed25519.takeIf { it.isNotEmpty() }, curve25519, null, null)
 
     /**
      * Something from [senderCurve] could not be decrypted. The envelope's sender
@@ -3128,9 +3424,16 @@ object CommsRepository {
      * would starve ICE candidate processing during an active call.
      */
     private fun recoverSession(senderCurve: String, senderEd: String, sentAtMs: Long, what: String) {
+        // A blocked identity is asked for nothing and leaves nothing in the log.
+        if (isBlockedSender(senderCurve, senderEd)) return
         val contact = store.contactByCurve(senderCurve)
         if (contact == null) {
             CommsLog.add("$what, from someone who is not a contact; dropped")
+            return
+        }
+        if (contact.request) {
+            // A resync would tell someone not yet accepted that this phone read their envelope.
+            CommsLog.add("$what, from a message request; dropped")
             return
         }
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
@@ -3214,9 +3517,20 @@ object CommsRepository {
         store.setPass(contact.number, key, created)
     }
 
-    /** Acts on a decrypted payload from a known contact. Caller holds [lock]. */
+    /**
+     * Acts on a decrypted payload from a known contact, or from a message
+     * request, which gets no receipt and only the notification that names
+     * nobody until the owner accepts it. Caller holds [lock].
+     */
     private fun processPayload(contact: Contact, envelopeTs: Long, json: JSONObject) {
         notePass(contact, json)
+        fun receipt(ids: List<String>, status: String) {
+            if (!contact.request) store.queueReceipt(contact.number, ids, status)
+        }
+        fun notifyArrival() {
+            if (contact.request) CommsNotifications.notifyRequest(appContext)
+            else CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
+        }
         when (CommsWire.type(json)) {
             CommsWire.T_MSG -> {
                 val id = CommsWire.messageId(json) ?: return
@@ -3228,7 +3542,7 @@ object CommsRepository {
                 if (alreadyRead != null) {
                     // A copy of a message already here (they re-sent it after a network
                     // error): receipt it again, since their first receipt may be lost.
-                    store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     return
                 }
                 val body = json.optString(CommsWire.F_BODY).take(MAX_BODY)
@@ -3236,10 +3550,8 @@ object CommsRepository {
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body, ts, "received", read = onScreen, ttl = disappearAfter(contact.number, json)))
                 if (onScreen) wakeExpiry()
-                store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
-                if (!onScreen) {
-                    CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
-                }
+                receipt(listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                if (!onScreen) notifyArrival()
             }
             CommsWire.T_RECEIPT -> {
                 val status = json.optString(CommsWire.F_STATUS)
@@ -3264,7 +3576,8 @@ object CommsRepository {
                 scope.launch { flushOutbox() }
                 CallManager.onPeerResync(contact)
             }
-            CommsWire.T_CALL -> CallManager.onSignal(contact, json, envelopeTs)
+            // A request's calls never reach the call screen (admitRequestLocked notes them as missed).
+            CommsWire.T_CALL -> if (!contact.request) CallManager.onSignal(contact, json, envelopeTs)
             CommsWire.T_PAYMENT -> {
                 // The coins were moved by the relay when the payer paid; this is
                 // the payer telling us, with the note only we can read.
@@ -3274,7 +3587,7 @@ object CommsRepository {
                 if (!BuildConfig.CLAIRIX_COIN) {
                     // This edition has no ClairixCoin. Receipt the notice so the
                     // payer's phone stops re-sending it, and record nothing.
-                    store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), CommsWire.STATUS_DELIVERED)
                     CommsLog.add("A ClairixCoin payment notice from ${formatClairixNumber(contact.number)} was not shown: this edition has no ClairixCoin")
                     return
                 }
@@ -3285,7 +3598,7 @@ object CommsRepository {
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null || store.hasTransaction(id)) {
                     // A re-sent notice: receipt it again, count nothing twice.
-                    store.queueReceipt(contact.number, listOf(id), if (alreadyRead == true) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), if (alreadyRead == true) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     return
                 }
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
@@ -3295,10 +3608,8 @@ object CommsRepository {
                 // shown as unconfirmed, and becomes a payment received only once
                 // the relay, which moved the coins, shows it in this account's history.
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, paymentClaimLine(amount, note), ts, STATUS_PAYMENT, read = onScreen))
-                store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
-                if (!onScreen) {
-                    CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
-                }
+                receipt(listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                if (!onScreen) notifyArrival()
                 scope.launch { confirmPayment(contact.number, id, txid, amount, ts, note) }
             }
             CommsWire.T_VOICEMAIL -> {
@@ -3314,7 +3625,7 @@ object CommsRepository {
                 if (store.belongsElsewhere(id, contact.number)) return
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null) {
-                    store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     return
                 }
                 val durationMs = json.optLong(CommsWire.F_DURATION, 0L).coerceAtLeast(0L)
@@ -3323,10 +3634,8 @@ object CommsRepository {
                 // owner has not heard it; the conversation marks it read as usual.
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, VoicemailBody(audioB64, durationMs).encode(), ts, STATUS_VOICEMAIL, read = false, ttl = disappearAfter(contact.number, json)))
-                store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
-                if (!onScreen) {
-                    CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
-                }
+                receipt(listOf(id), CommsWire.STATUS_DELIVERED)
+                if (!onScreen) notifyArrival()
                 CommsLog.add("Voicemail (${durationLabel(durationMs)}) from ${formatClairixNumber(contact.number)}")
             }
             CommsWire.T_MEDIA -> {
@@ -3340,7 +3649,7 @@ object CommsRepository {
                     // The header again (they resent after a network error). A file
                     // already whole is receipted again; one still arriving is not yet.
                     if (store.message(id)?.status != STATUS_RECEIVING) {
-                        store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                        receipt(listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     }
                     return
                 }
@@ -3402,6 +3711,8 @@ object CommsRepository {
             CommsWire.T_MOVED -> applyMove(contact, json)
             // Nothing but their pass, kept above.
             CommsWire.T_PASS -> Unit
+            // They joined with an invite this phone made: a request it came after is accepted.
+            CommsWire.T_JOINED -> if (takeInvite(json) && contact.request) acceptRequestLocked(contact)
             // Cover traffic: nothing is kept, shown or acknowledged.
             CommsWire.T_NOISE -> Unit
             else -> CommsLog.add("Payload of type \"${CommsWire.type(json)}\" from ${formatClairixNumber(contact.number)} not understood; ignored")
@@ -3411,7 +3722,8 @@ object CommsRepository {
     /**
      * Once every chunk of media [id] is here, assembles the file, stores it under
      * the message id and turns the message from "receiving" into a received one:
-     * receipted, and notified unless the conversation is on screen. Caller holds [lock].
+     * receipted, and notified unless the conversation is on screen; from a
+     * message request, neither receipted nor named. Caller holds [lock].
      */
     private fun completeMediaIfWhole(contact: Contact, id: String, body: MediaBody) {
         if (store.chunkCount(id) < body.chunks) return
@@ -3430,13 +3742,15 @@ object CommsRepository {
         store.deleteChunks(id)
         val onScreen = openPeer == contact.number && !AppLock.locked.value
         store.setStatus(id, "received")
-        if (onScreen) {
-            store.queueReceipt(contact.number, store.markRead(contact.number), CommsWire.STATUS_READ)
-        } else {
-            store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
+        when {
+            // A request is told nothing until the owner accepts it.
+            contact.request -> if (onScreen) store.markRead(contact.number)
+            onScreen -> store.queueReceipt(contact.number, store.markRead(contact.number), CommsWire.STATUS_READ)
+            else -> store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
         }
         if (!onScreen) {
-            CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
+            if (contact.request) CommsNotifications.notifyRequest(appContext)
+            else CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
         }
         CommsLog.add("${if (body.isVideo) "Video" else "Photo"} from ${formatClairixNumber(contact.number)} complete (${bytes.size / 1024} KB)")
     }
@@ -3461,15 +3775,21 @@ object CommsRepository {
         class Found(val contact: Contact) : Resolution()
         /** The payload claims a number its keys do not hold, or is malformed; drop it. */
         class Rejected(val reason: String) : Resolution()
+        /** From a blocked identity ([ContactGate]): dropped, leaving no trace of who sent it. */
+        object Blocked : Resolution()
         /** The relay was needed to confirm the sender and could not be reached; retry later. */
         object Unreachable : Resolution()
     }
 
     /**
      * Maps the Olm sender key to a contact. A first message from an unknown
-     * identity carries its keys and Clairix number; those are pinned as an
-     * unverified contact once the relay confirms that number publishes exactly
-     * those keys, so nobody can send as a number they do not hold.
+     * identity carries its keys and Clairix number; those are pinned once the
+     * relay confirms that number publishes exactly those keys, so nobody can
+     * send as a number they do not hold: as an unverified contact when they
+     * are writing to a group this phone is in and its roster names them, and
+     * otherwise as a message request ([ContactGate.admit]). A blocked identity,
+     * by its keys or by the number it claims, is [Resolution.Blocked] before
+     * the relay is asked anything about it.
      */
     private fun resolveSender(senderCurve: String, senderEd: String, json: JSONObject): Resolution {
         // A payload staged before schema 6 recorded no signing key (sender_ed is
@@ -3477,14 +3797,18 @@ object CommsRepository {
         // that alone rather than rejected.
         val legacy = senderEd.isEmpty()
         store.contactByCurve(senderCurve)?.let { c ->
+            if (c.blocked) return Resolution.Blocked
             // Olm vouches for the Curve25519 key; the envelope's signature for the
             // Ed25519 key. Both must be the contact's.
             return if (legacy || c.ed25519 == senderEd) Resolution.Found(c)
             else Resolution.Rejected("signed by a key that is not ${contactLabel(c)}'s")
         }
+        val blocked = store.blockedKeys()
+        if (ContactGate.isBlocked(blocked, senderEd.takeIf { !legacy }, senderCurve, null, null)) return Resolution.Blocked
         val from = parseClairixNumber(json.optString(CommsWire.F_FROM))
             ?: return Resolution.Rejected("sender is not a contact and gave no Clairix number")
         val ed = json.optString(CommsWire.F_ED25519); val curve = json.optString(CommsWire.F_CURVE25519)
+        if (ContactGate.isBlocked(blocked, ed, curve, null, null)) return Resolution.Blocked
         val sealing = json.optString(CommsWire.F_SEALING); val sig = json.optString(CommsWire.F_SIGNATURE)
         if (curve != senderCurve || (!legacy && ed != senderEd) || ed.isBlank() || sealing.isBlank() || sig.isBlank()) {
             return Resolution.Rejected("keys claimed by ${formatClairixNumber(from)} do not match the sender")
@@ -3496,8 +3820,14 @@ object CommsRepository {
         // confirmed there, through this phone's relay, and replies go there.
         val claimedRelay = json.optString(CommsWire.F_RELAY).takeIf { it.isNotBlank() }
         val theirRelay = if (claimedRelay == null || isOwnRelay(claimedRelay)) null
-            else RelayClient.originOf(claimedRelay) ?: return Resolution.Rejected("${formatClairixNumber(from)} gave a relay address Clairix cannot use")
-        store.contact(from)?.let { known ->
+            else RelayClient.originOf(claimedRelay) ?: run {
+                if (blocked.any { it.number == from }) return Resolution.Blocked
+                return Resolution.Rejected("${formatClairixNumber(from)} gave a relay address Clairix cannot use")
+            }
+        // A blocked number on its relay is dropped whatever keys come with it.
+        if (ContactGate.isBlocked(blocked, null, null, from, theirRelay)) return Resolution.Blocked
+        store.contactEntry(from)?.let { known ->
+            if (known.blocked) return Resolution.Blocked
             if (known.relay != theirRelay) {
                 return Resolution.Rejected("${formatClairixNumber(from)} on ${relayLabel(theirRelay)} is not ${contactLabel(known)}, who has that number on ${relayLabel(known.relay)}")
             }
@@ -3514,25 +3844,43 @@ object CommsRepository {
         if (relayView.ed25519 != ed || relayView.curve25519 != curve || relayView.sealing != sealing) {
             return Resolution.Rejected("the relay holds different keys for ${formatClairixNumber(from)}")
         }
-        val existing = store.contact(from)
-        val contact = if (existing != null) {
-            // Same number, different keys: keep the pinned name, flag it, trust
-            // nothing. What comes from the new keys is held until the owner looks.
-            identities.update { it.dropSessions(existing.curve25519) }
-            existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = true)
-        } else {
-            Contact(
-                number = from, name = json.optString(CommsWire.F_NAME).trim().take(40),
-                ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig,
-                verified = false, addedTs = System.currentTimeMillis(), relay = theirRelay
-            )
+        val existing = store.contactEntry(from)
+        val contact = when {
+            existing == null -> {
+                // Someone who joined with this phone's invite, or a group member
+                // writing to the group, comes in as a contact, as they always
+                // have; anyone else waits as a message request.
+                val gid = json.optString(CommsWire.F_GID).takeIf { it.isNotBlank() && it.length <= 64 }
+                val rosterKey = gid?.let { store.groupMember(it, from)?.ed25519 }
+                val invited = CommsWire.type(json) == CommsWire.T_JOINED && takeInvite(json)
+                val admission = ContactGate.admit(json, ed, rosterKey, ownRelay = theirRelay == null, invited = invited)
+                Contact(
+                    number = from, name = json.optString(CommsWire.F_NAME).trim().take(40),
+                    ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig,
+                    verified = false, addedTs = System.currentTimeMillis(), relay = theirRelay,
+                    request = admission == ContactGate.Admission.REQUEST
+                )
+            }
+            existing.request -> {
+                // Nothing from them was accepted, so there is no trust to keep:
+                // the request simply carries on under the keys the relay now holds.
+                identities.update { it.dropSessions(existing.curve25519) }
+                existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = false)
+            }
+            else -> {
+                // Same number, different keys: keep the pinned name, flag it, trust
+                // nothing. What comes from the new keys is held until the owner looks.
+                identities.update { it.dropSessions(existing.curve25519) }
+                existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = true)
+            }
         }
         store.upsertContact(contact)
         notePrekey(contact, relayView.sealingPrekey)
-        if (existing != null) {
+        if (existing != null && !existing.request) {
             noteKeyChange(contact)
             CommsLog.add("Keys of ${contactLabel(contact)} changed; what they send is held until you verify or accept them")
         }
+        if (existing == null && contact.request) CommsLog.add("A message request arrived from someone not in your contacts")
         return Resolution.Found(contact)
     }
 
@@ -3696,6 +4044,8 @@ object CommsRepository {
         _state.update { it.copy(relayOneTimeKeys = count, listed = me.listed) }
         // Delivery tokens are fetched here, ahead of need and apart from any send.
         runCatching { relay.topUpTokens() }.onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
+        // And a report token or two, so that reporting someone never waits on a fetch.
+        topUpReportTokens()
     }
 
     /** Marks a conversation read and tells the sender (retried until it goes). */
@@ -3706,6 +4056,9 @@ object CommsRepository {
         wakeExpiry()
         if (ids.isEmpty()) return@withContext
         bump()
+        // A message request or a blocked number is told nothing; a request's
+        // receipts go when the owner accepts it (acceptRequest).
+        if (store.contact(peer) == null) return@withContext
         store.queueReceipt(peer, ids, CommsWire.STATUS_READ)
         // On the repository's scope: leaving the screen must not cancel the receipt.
         scope.launch { flushReceipts() }

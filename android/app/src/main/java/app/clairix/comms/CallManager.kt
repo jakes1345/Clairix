@@ -664,22 +664,26 @@ object CallManager {
         // Only the servers the relay hands out are used. There is no built-in
         // fallback: a third party's STUN server would learn this phone's address
         // on every call, which the relay's own TURN never does.
-        val servers = withContext(Dispatchers.IO) {
+        val fetched = withContext(Dispatchers.IO) {
             runCatching { CommsRepository.relayClient().turn() }
                 .onFailure { CommsLog.add("Could not fetch call servers from the relay (${it.message}); using host candidates only") }
-                .getOrDefault(emptyList())
         }
+        val servers = fetched.getOrDefault(emptyList())
+        val turnOffered = servers.any { s -> s.urls.any { it.startsWith("turn") } }
+        // Remembered for the settings screen, which says what the default does on this relay.
+        if (fetched.isSuccess) CommsRepository.noteRelayTurn(turnOffered)
         if (servers.isEmpty()) {
             Log.w(TAG, "no ICE servers: the call connects only on the same network or over a VPN")
             CommsLog.add("No call servers available: the call connects only when both phones can reach each other directly")
-        } else if (servers.none { s -> s.urls.any { it.startsWith("turn") } }) {
+        } else if (!turnOffered) {
             CommsLog.add("No TURN relay configured: calls connect only when both networks allow a direct path")
         }
         // With relay-only on, the connection gathers no host or reflexive
         // candidates at all, so the other phone is told nothing but the TURN
-        // server's address; and without a TURN server there is no call.
-        val relayOnly = CommsRepository.relayOnlyCalls()
-        if (relayOnly && servers.none { s -> s.urls.any { it.startsWith("turn") } }) {
+        // server's address; and without a TURN server there is no call. It is
+        // on unless the owner switched it off, whenever the relay offers TURN.
+        val relayOnly = RelayOnlyCalls.on(CommsRepository.relayOnlyCallsChoice(), turnOffered)
+        if (relayOnly && !turnOffered) {
             CommsLog.add("Relay-only calls are on and the relay offered no TURN server, so the call cannot be placed")
             throw IllegalStateException("Relay-only calls need the relay's call servers, and none are available right now")
         }

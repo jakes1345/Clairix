@@ -22,7 +22,11 @@ import {
   type LapsedClaim,
   PUSH_CHALLENGE_TTL_MS,
   randomToken,
+  REPORT_TTL_MS,
+  REPORTS_MAX,
+  REPORTS_PER_TARGET_MAX,
   tokenHash,
+  type AbuseReport,
   type Alert,
   type OtkClaim,
   type SealingPrekey,
@@ -52,7 +56,8 @@ export type { SignedKey } from "./comms-logic";
  * The same class also serves a few objects that are not mailboxes, each named
  * after what it holds: "invite:<code>", "register-guard:<address>" and the
  * token shards "dtok:<xx>" (delivery), "ttok:<xx>" (traffic) and "rtok:<xx>"
- * (incident reports).
+ * (incident and abuse reports), "abuse-reports" (what phones reported, for
+ * the operator) and "open-registration" (today's count of open registrations).
  */
 
 export interface Profile {
@@ -315,6 +320,20 @@ interface PendingPush {
 interface StagedEnvelope {
   envelope: Envelope;
   releaseAt: number;
+}
+
+/** How many accounts registered openly on [day] (a UTC day's first millisecond). */
+interface OpenRegistrations {
+  day: number;
+  count: number;
+}
+
+/** Reports listed or cleaned up per storage read. */
+const REPORT_PAGE = 500;
+
+/** Where the reports about [number] on [relay] (null: this relay) are kept: "r:<number>|<relay>|". */
+function reportPrefix(number: string, relay: string | null): string {
+  return `r:${number}|${relay ?? ""}|`;
 }
 
 export type EnqueueResult =
@@ -962,6 +981,93 @@ export class Mailbox extends DurableObject<Env> {
     return (await this.allowanceOk("fed-claims", perHour, burst)).ok;
   }
 
+  // ── Abuse reports (in one object of its own, "abuse-reports") ────────
+
+  /**
+   * Keeps [report] for the operator: one entry per number and envelope, so
+   * the same envelope reported twice counts once. Past REPORTS_PER_TARGET_MAX
+   * about one number, or REPORTS_MAX in all, a new report is not kept; the
+   * caller answers the same either way, so a report tells nobody how often a
+   * number was reported before. Kept by the day, never the moment, until the
+   * operator closes it or REPORT_TTL_MS has passed.
+   */
+  async fileReport(report: AbuseReport): Promise<void> {
+    const prefix = reportPrefix(report.number, report.relay);
+    const key = `${prefix}${report.envelope ?? crypto.randomUUID()}`;
+    if ((await this.ctx.storage.get(key)) !== undefined) return;
+    const total = (await this.ctx.storage.get<number>("reportCount")) ?? 0;
+    if (total >= REPORTS_MAX) return;
+    const aboutThem = await this.ctx.storage.list({ prefix, limit: REPORTS_PER_TARGET_MAX });
+    if (aboutThem.size >= REPORTS_PER_TARGET_MAX) return;
+    await this.ctx.storage.put({ [key]: report, reportCount: total + 1, reportsObject: true });
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
+  }
+
+  /** Every report kept, a page at a time from storage. */
+  async listReports(): Promise<AbuseReport[]> {
+    const out: AbuseReport[] = [];
+    let startAfter: string | undefined;
+    for (;;) {
+      const page = await this.ctx.storage.list<AbuseReport>({ prefix: "r:", startAfter, limit: REPORT_PAGE });
+      if (page.size === 0) break;
+      for (const r of page.values()) out.push(r);
+      startAfter = [...page.keys()].pop();
+    }
+    return out;
+  }
+
+  /** Deletes every report about [number] on [relay] (null: this relay), once the operator has dealt with it; returns how many. */
+  async closeReports(number: string, relay: string | null): Promise<number> {
+    const keys = [...(await this.ctx.storage.list({ prefix: reportPrefix(number, relay) })).keys()];
+    const removed = await this.deleteKeys(keys);
+    const total = (await this.ctx.storage.get<number>("reportCount")) ?? 0;
+    await this.ctx.storage.put("reportCount", Math.max(0, total - removed));
+    return removed;
+  }
+
+  /** Drops reports older than REPORT_TTL_MS, a page at a time; true when any are left. */
+  private async cleanupReports(now: number): Promise<boolean> {
+    const cutoff = dayFloor(now - REPORT_TTL_MS);
+    let startAfter: string | undefined;
+    let left = 0;
+    let removed = 0;
+    for (;;) {
+      const page = await this.ctx.storage.list<AbuseReport>({ prefix: "r:", startAfter, limit: REPORT_PAGE });
+      if (page.size === 0) break;
+      const keys = [...page.keys()];
+      const stale = [...page].filter(([, r]) => r.day < cutoff).map(([k]) => k);
+      if (stale.length > 0) removed += await this.deleteKeys(stale);
+      left += keys.length - stale.length;
+      startAfter = keys[keys.length - 1];
+    }
+    if (removed > 0) await this.ctx.storage.put("reportCount", left);
+    return left > 0;
+  }
+
+  // ── Open registration (one object for the relay, "open-registration") ──
+
+  /**
+   * Takes one of today's open registrations (UTC days) while fewer than
+   * [perDay] have been taken. What is stored is the day and a count: nothing
+   * about who registered, nor from where.
+   */
+  async takeOpenRegistration(perDay: number): Promise<{ ok: boolean; retryAfter: number }> {
+    const now = Date.now();
+    const today = dayFloor(now);
+    const held = (await this.ctx.storage.get<OpenRegistrations>("openRegistrations")) ?? null;
+    const count = held !== null && held.day === today ? held.count : 0;
+    if (count >= perDay) return { ok: false, retryAfter: Math.max(1, Math.ceil((today + DAY_MS - now) / 1000)) };
+    await this.ctx.storage.put<OpenRegistrations>("openRegistrations", { day: today, count: count + 1 });
+    return { ok: true, retryAfter: 0 };
+  }
+
+  /** Gives back an open registration taken today for a registration that did not go through. */
+  async releaseOpenRegistration(): Promise<void> {
+    const held = (await this.ctx.storage.get<OpenRegistrations>("openRegistrations")) ?? null;
+    if (held === null || held.day !== dayFloor(Date.now()) || held.count <= 0) return;
+    await this.ctx.storage.put<OpenRegistrations>("openRegistrations", { day: held.day, count: held.count - 1 });
+  }
+
   // ── Envelopes ───────────────────────────────────────────────────────
 
   /**
@@ -1206,6 +1312,16 @@ export class Mailbox extends DurableObject<Env> {
         else await this.ctx.storage.deleteAll();
       } catch (e) {
         console.error("token cleanup failed", e);
+        await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
+      }
+      return;
+    }
+    if (await this.ctx.storage.get("reportsObject")) {
+      try {
+        if (await this.cleanupReports(now)) await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
+        else await this.ctx.storage.deleteAll();
+      } catch (e) {
+        console.error("report cleanup failed", e);
         await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
       }
       return;

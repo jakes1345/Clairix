@@ -338,9 +338,11 @@ twice on two machines in CI, which fails unless the two builds agree.
     option:** "Relay-only calls" (Comms settings) sets the ICE transport
     policy to relay, so the connection gathers no host or reflexive
     candidates and the contact learns only the TURN server's address; with no
-    TURN server the call is refused with a message. Off by default (a little
-    delay, and the relay must have call servers); with it off, candidates
-    still go out while dialing, as the protocol needs.
+    TURN server the call is refused with a message. On by default since the
+    gap audit of 2026-10-31 whenever the relay offers a TURN server (the
+    `RelayOnlyCalls` default; a choice the owner made is kept); with it off,
+    or on a relay with no TURN server, candidates still go out while dialing,
+    as the protocol needs.
 30. `clairix://invite` is a custom scheme any app can claim; the invite link
     dictates the relay URL at registration (`CommsRepository.kt:365`).
     *Verified for the URL; interception reported.* **Done (Beta 8):** invite

@@ -546,6 +546,16 @@ class RelayClient(
     }
 
     /**
+     * Reports someone abusing this relay to its operator ([ContactGate.reportBody]):
+     * the number, its relay, an envelope's hash and a reason. Like a send it
+     * spends a token, a report one, and names nobody, so the operator learns
+     * who was reported, never who reported them.
+     */
+    fun report(body: JSONObject) {
+        anonymous(TokenKind.REPORT, "POST", "/v1/report", body)
+    }
+
+    /**
      * One request that spends a token of [kind] and names nobody, on the
      * anonymous connection. A token the relay refuses (expired, say) is
      * replaced once from the pool. Never fetches tokens: with the pool empty

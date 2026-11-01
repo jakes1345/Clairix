@@ -172,6 +172,7 @@ class CommsWireTest {
             CommsWire.callIce("c", listOf(CommsWire.Candidate("0", 0, "x"))), CommsWire.callEnd("c", "r"),
             CommsWire.payment("i", "t", 1, 1, "n"), CommsWire.voicemail("i", 1, "QQ==", 1),
             CommsWire.mediaHeader("i", 1, "image/jpeg", 1, 1, 0, 1, 1, "c", "QQ=="), CommsWire.mediaChunk("i", 0, "QQ=="),
+            CommsWire.joined("A".repeat(22)),
         )
         for (p in all) for (f in CommsWire.SENDER_FIELDS) assertTrue("${CommsWire.type(p)} uses $f", !p.has(f))
     }

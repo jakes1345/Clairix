@@ -60,6 +60,9 @@ giving them your real number or your identity key.
   makes a new pass key when its owner deletes a contact and sends it to every
   other contact, so a pass taken from that contact stops working. A pass is
   bound to its envelope, so a relay that forwards one cannot reuse it.
+- What phones report about a number (see "Abuse reports"): the number, a
+  reason, an envelope's hash and the day. Never who reported it, and never
+  anything that was said.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
   "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
   up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
@@ -312,7 +315,8 @@ under gVisor too, as Magic Containers runs it.
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
-joins by invite: in Clairix, COMMS → INVITE makes a one-time invite. Someone
+joins by invite (or, on a relay whose operator opened registration, with the
+URL alone; see below): in Clairix, COMMS → INVITE makes a one-time invite. Someone
 standing next to you scans its QR code from COMMS setup (SCAN INVITE); someone
 far away gets a link, `https://clairix.app/i#…`. On a phone with Clairix it
 opens Clairix straight away: the site names the app and its signing key, so
@@ -329,6 +333,64 @@ inviter's keys, and sends them a first message. Not a verified one: the link
 passed through other hands, so the two compare safety numbers (or scan each
 other's code) to verify. The part after `#` never reaches any server; the page
 reads it in the browser. Each identity can make 20 invites a day.
+
+### Open registration (off unless you turn it on)
+
+By default a relay gives new numbers only by invite or with the enrollment
+secret, so someone who knows nobody on it cannot get in, however much they
+need to. A relay run for people with nobody to invite them (a support
+service's, say) can let phones register with neither:
+
+```toml
+# wrangler.toml
+[vars]
+OPEN_REGISTRATION = "on"
+OPEN_REGISTRATION_PER_DAY = "50"   # new accounts a UTC day, for the whole relay; 1 to 100000, default 50
+```
+
+On your own server the same two lines go in `/etc/clairix-relay/relay.env`
+(`OPEN_REGISTRATION=on`, `OPEN_REGISTRATION_PER_DAY=50`), and in the container
+they are environment variables. In Clairix the person picks the relay, or
+enters its address, and leaves the enrollment secret empty. Every
+registration attempt still meets the per-address limit (ten a minute,
+counted in memory and never written down), and the only record that a
+registration came in this way is the day's count: nothing says which
+accounts did, nor from where. Past the day's number a phone without an invite or the secret is told
+to try again the next day; invites and the secret keep working. One address
+can use up a day's open registrations, so choose a number you would accept
+going to one person. `COIN_INITIAL_BALANCE` is given to open registrations
+too. The project's own relay keeps open registration off.
+
+### Abuse reports
+
+Report, on a contact's page or on a message request in Clairix, sends
+`POST /v1/report`: the number reported, the relay it is on when that is not
+this one, the SHA-256 of the newest envelope it sent (when the phone has
+one) and a reason, one of `harassment`, `threats`, `spam`, `impersonation`
+or `other`. The request spends a report token and names nobody, so the relay
+keeps who was reported and why, never who reported it, and never anything
+that was said, which it cannot read. The same envelope reported twice counts
+once. Reports are kept to the day, for 90 days at most, at most 500 about one
+number and 50,000 in all, and the answer to a report is the same whether the
+number exists or was reported before.
+
+With `ADMIN_SECRET` set, the operator reads them:
+
+```sh
+curl -H "X-Admin-Secret: $ADMIN_SECRET" https://relay.example.org/v1/admin/reports
+curl -X DELETE -H "X-Admin-Secret: $ADMIN_SECRET" -d '{"number":"482913605"}' https://relay.example.org/v1/admin/reports
+```
+
+The first lists every reported number with how many reports there are, their
+reasons, the envelope hashes and the first and last day; the second closes
+the reports about one number (add `"relay"` for a number on another relay)
+once it has been dealt with. A report is someone's word: the relay never sees
+the messages, and an envelope's hash only lets a report be matched with a
+message the person who reported it chooses to show you. A number on another
+relay is that relay's operator's to act on; this relay's operator can pass the
+report on, or stop taking that relay's envelopes with `FEDERATION`. A few
+attempts a minute per address are allowed, so the secret cannot be guessed;
+without `ADMIN_SECRET` the endpoint is off.
 
 ### Calls (optional TURN)
 
@@ -484,7 +546,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite`; allocates a Clairix number. 409 when a key is already another account's |
+| POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite` (or neither, while `OPEN_REGISTRATION` is on and the day's number lasts); allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
 | GET | `/` | `{service, version, alternates, relayKey, federation, tokens}`: the relay's other addresses, the public key it signs forwarded requests with, which relays it accepts them from, and its blind-token keys for this epoch and the next |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
@@ -499,6 +561,8 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
 | GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
 | POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
+| POST | `/v1/report` | `{number, relay?, envelope?, reason}` with a report token → 202: an abuse report kept for the operator (see "Abuse reports"); the same answer whatever the number |
+| GET, DELETE | `/v1/admin/reports` | With `X-Admin-Secret` and no identity: every reported number, or (`DELETE {number, relay?}`) close the reports about one; off unless `ADMIN_SECRET` is set |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |

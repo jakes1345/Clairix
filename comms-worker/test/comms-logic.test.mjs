@@ -4,14 +4,20 @@ import assert from "node:assert/strict";
 import {
   checkPushEndpoint,
   DELIVERY_TOKEN_RE,
+  ENVELOPE_HASH_RE,
   expireClaims,
   groupByShard,
+  isReportReason,
   MemoryBuckets,
+  OPEN_REGISTRATION_DEFAULT_PER_DAY,
+  openRegistrationCap,
   OTK_CLAIM_WINDOW_MS,
   DELIVERY_TOKEN_TTL_MS,
   tokenBatchExpiry,
   parseIceServers,
   randomToken,
+  REPORT_REASONS,
+  summariseReports,
   tokenHash,
   tokenShardName,
   trustedPushHosts,
@@ -117,4 +123,41 @@ test("ICE servers are read from either shape of the provider's answer", () => {
   assert.deepEqual(parseIceServers({ iceServers: [{ urls: ["stun:b", 7] }, { urls: [] }, null, "x"] }), [{ urls: ["stun:b"] }]);
   assert.deepEqual(parseIceServers(null), []);
   assert.deepEqual(parseIceServers({}), []);
+});
+
+test("open registration is off unless the operator says on, and its daily cap is read strictly", () => {
+  assert.equal(openRegistrationCap({}), null);
+  for (const mode of ["", "off", "false", "1", "yes", "open"]) assert.equal(openRegistrationCap({ OPEN_REGISTRATION: mode }), null, mode);
+  assert.equal(openRegistrationCap({ OPEN_REGISTRATION: "on" }), OPEN_REGISTRATION_DEFAULT_PER_DAY);
+  assert.equal(openRegistrationCap({ OPEN_REGISTRATION: " TRUE " }), OPEN_REGISTRATION_DEFAULT_PER_DAY);
+  assert.equal(openRegistrationCap({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: "7" }), 7);
+  assert.equal(openRegistrationCap({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: "100000" }), 100_000);
+  for (const bad of ["0", "100001", "-3", "2.5", "lots", "1e3"]) {
+    assert.equal(openRegistrationCap({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: bad }), OPEN_REGISTRATION_DEFAULT_PER_DAY, bad);
+  }
+  // A cap with registration off opens nothing.
+  assert.equal(openRegistrationCap({ OPEN_REGISTRATION_PER_DAY: "7" }), null);
+});
+
+test("report reasons are the app's words, and reports are summed up by the number they name", () => {
+  assert.deepEqual([...REPORT_REASONS], ["harassment", "threats", "spam", "impersonation", "other"]);
+  assert.ok(isReportReason("threats"));
+  assert.ok(!isReportReason("Threats"));
+  assert.ok(!isReportReason(7));
+  assert.match("a".repeat(64), ENVELOPE_HASH_RE);
+  assert.doesNotMatch("A".repeat(64), ENVELOPE_HASH_RE);
+  const r = (number, relay, envelope, reason, day) => ({ number, relay, envelope, reason, day });
+  const summary = summariseReports([
+    r("482913605", null, "e1", "threats", 10),
+    r("111222333", null, null, "spam", 12),
+    r("482913605", null, "e1", "threats", 11),
+    r("482913605", null, "e2", "harassment", 14),
+    r("482913605", "https://other.example", null, "spam", 13),
+  ]);
+  assert.deepEqual(summary, [
+    { number: "482913605", relay: null, reports: 3, reasons: { threats: 2, harassment: 1 }, envelopes: ["e1", "e2"], firstDay: 10, lastDay: 14 },
+    { number: "482913605", relay: "https://other.example", reports: 1, reasons: { spam: 1 }, envelopes: [], firstDay: 13, lastDay: 13 },
+    { number: "111222333", relay: null, reports: 1, reasons: { spam: 1 }, envelopes: [], firstDay: 12, lastDay: 12 },
+  ]);
+  assert.deepEqual(summariseReports([]), []);
 });

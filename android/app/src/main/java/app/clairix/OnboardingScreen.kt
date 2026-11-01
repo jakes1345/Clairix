@@ -173,6 +173,8 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                         onNotNow = nextPage
                     )
                     else -> ReadyPage(
+                        comms = "Messaging, calls, SOS and the duress phrase need a Clairix number: an invite from " +
+                            "someone already on Clairix, or a relay you run. Everything else here works without one.",
                         title = "Ready when you are",
                         lead = "Start scanning now and keep the app running while you move, or look around first " +
                             "and start it later from Scan → Trackers.",
@@ -409,8 +411,9 @@ private fun LockOfferPage(lead: String, note: String, onNotNow: () -> Unit) {
     }
 }
 
+/** The last page. [comms], when given, says what Comms needs before it can be used. */
 @Composable
-private fun ReadyPage(title: String, lead: String, note: String) {
+private fun ReadyPage(title: String, lead: String, note: String, comms: String? = null) {
     val c = ClairixTheme.colors
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
@@ -431,6 +434,7 @@ private fun ReadyPage(title: String, lead: String, note: String) {
         PageTitle("Last step", title)
         Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
         Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
+        if (comms != null) Text(comms, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
         Spacer(Modifier.height(8.dp))
     }
 }

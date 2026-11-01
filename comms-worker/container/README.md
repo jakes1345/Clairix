@@ -189,7 +189,8 @@ Optional:
 | `BACKUP` | on | `off` runs with no backups and no lease: a lost disk is a new relay. |
 
 Every relay setting in the main README (`FEDERATION`, `MIX_MAX_MS`,
-`DELIVERY_TOKENS_PER_HOUR`, `COIN_INITIAL_BALANCE`, `ADMIN_SECRET`, ...)
+`DELIVERY_TOKENS_PER_HOUR`, `COIN_INITIAL_BALANCE`, `ADMIN_SECRET`,
+`OPEN_REGISTRATION`, `OPEN_REGISTRATION_PER_DAY`, ...)
 works here too, as an environment variable. `RELAY_ORIGIN` defaults to
 `https://<RELAY_DOMAIN>` and `RELAY_ONION` is set from Tor. The relay itself
 is given its own settings only, never the backup keys or the Cloudflare token.

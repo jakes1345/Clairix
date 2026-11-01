@@ -147,7 +147,7 @@ Read this part twice.
   the relay signs it without seeing it, so not even a relay that recorded
   every request can tell which account a send's token came from. If your IP address matters, use Tor or a VPN. A call hands your
   address to the contact's phone, answered or not, unless "Relay-only calls"
-  is on.
+  is on, which it is by default whenever your relay offers a TURN server.
 - **Relays.** Anyone can run a relay (comms-worker), and a contact on
   another relay is added by scanning their QR code: everything for them goes
   to your relay, which forwards it to theirs signed with its own key, so
@@ -261,8 +261,10 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   nothing.
 - **Relay-only calls** (Comms settings): call audio always goes through the
   relay's TURN server, so a contact never learns your IP address from a
-  call. Off by default; a call cannot connect while the relay has no call
-  servers.
+  call. On by default whenever your relay offers a TURN server, and off
+  while it offers none, so calls still connect directly. Switched on by hand
+  it stays on, and a call cannot connect while the relay has no TURN server;
+  switched off, calls connect directly whenever both networks allow it.
 - **Cover traffic** (Comms settings): envelopes nobody reads, to random
   contacts at random intervals while the background connection is on. Off by
   default; costs a little data and battery.

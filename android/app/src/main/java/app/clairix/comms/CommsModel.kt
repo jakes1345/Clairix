@@ -72,7 +72,9 @@ data class SharedThreat(
 /**
  * Someone this identity can talk to. The keys are pinned at first contact;
  * [verified] is true once the owner has scanned this contact's QR code (or
- * compared safety numbers) rather than trusting the relay's lookup.
+ * compared safety numbers) rather than trusting the relay's lookup. A row
+ * that is [blocked] or a [request] is kept in the same table but is not a
+ * contact to the rest of the app ([CommsStore.contact]).
  */
 data class Contact(
     val number: String,
@@ -90,7 +92,17 @@ data class Contact(
      * phone's own; null for a contact on the same relay. Everything for them
      * still goes through this phone's relay, which forwards it there.
      */
-    val relay: String? = null
+    val relay: String? = null,
+    /**
+     * Blocked by the owner, and kept with the conversation as a record:
+     * nothing they send reaches this phone (see [ContactGate]).
+     */
+    val blocked: Boolean = false,
+    /**
+     * A message request: someone who wrote first and whom the owner has not
+     * accepted. What they send is kept, with no receipt and no ring.
+     */
+    val request: Boolean = false
 )
 
 /** One message in a conversation, stored on the phone with an encrypted body. */

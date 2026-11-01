@@ -76,6 +76,8 @@ object CommsNotifications {
     const val LOCKED_MESSAGES_NOTIFICATION_ID = 0x5C00_0007
     /** The last word on an SOS the owner sent, once its retries are over: who it reached. */
     const val SOS_OUTCOME_NOTIFICATION_ID = 0x5C00_0008
+    /** The one notification for every message request: "Someone new wrote to you", naming no one. */
+    const val REQUEST_NOTIFICATION_ID = 0x5C00_0009
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -519,6 +521,42 @@ object CommsNotifications {
             )
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(notificationId(contact.number), notification)
+    }
+
+    /**
+     * Someone who is not a contact wrote, or called: one notification for all
+     * of them, which names nobody and quotes nothing whatever the preview
+     * setting, and opens the conversation list, where requests wait. It
+     * alerts once while it is showing, so a stranger writing again and again
+     * cannot keep the phone buzzing.
+     */
+    fun notifyRequest(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle("Someone new wrote to you")
+            .setContentText("Open Clairix to see the request")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, REQUEST_NOTIFICATION_ID))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                    .setSmallIcon(android.R.drawable.stat_notify_chat)
+                    .setContentTitle("New Clairix message")
+                    .setContentText("Unlock to read")
+                    .build()
+            )
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(REQUEST_NOTIFICATION_ID, notification)
+    }
+
+    /** No message request is left waiting. */
+    fun cancelRequest(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(REQUEST_NOTIFICATION_ID)
     }
 
     /**

@@ -20,7 +20,7 @@ carries the copy that was in this file when it was built, for its first start.
    | `host` | Who hosts it, and where that company is registered: a company answers to its own country's courts wherever its servers are |
    | `operator` | Who runs the relay |
    | `key` | The `relayKey` its `GET /` publishes |
-   | `join` | Optional: how someone gets on it (an invite, where to ask for a code) |
+   | `join` | Optional: how someone gets on it. An invite from someone already on it; open registration, when its operator turned it on (`OPEN_REGISTRATION`, with how many new people a day); or a partner organisation that invites people with nobody else to ask, such as a support service, named with how to reach it. The app shows this under the relay in Comms setup |
    | `onion` | Optional: its onion address, `http://<56 characters>.onion` |
 
 2. Set `issued` to the current time in seconds (`date +%s`). It must be later

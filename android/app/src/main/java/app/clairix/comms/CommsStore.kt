@@ -169,6 +169,7 @@ class CommsStore(
         createVersion9(db)
         createVersion10(db)
         createVersion11(db)
+        createVersion12(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -184,6 +185,34 @@ class CommsStore(
         if (oldVersion < 9) createVersion9(db)
         if (oldVersion < 10) createVersion10(db)
         if (oldVersion < 11) createVersion11(db)
+        if (oldVersion < 12) createVersion12(db)
+    }
+
+    /**
+     * Blocking and message requests (see [ContactGate]): a contact can be
+     * blocked and kept, its conversation a record, or be a request (someone
+     * who wrote first and has not been accepted); each contact's row keeps the
+     * hash of the newest envelope they sent, which a report names; and the
+     * blocked identities have a table of their own, which outlives their
+     * contact rows, so what they send after being deleted is still dropped.
+     */
+    private fun createVersion12(db: SQLiteDatabase) {
+        val cols = columnsOf(db, "contacts")
+        if ("blocked" !in cols) db.execSQL("ALTER TABLE contacts ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+        if ("request" !in cols) db.execSQL("ALTER TABLE contacts ADD COLUMN request INTEGER NOT NULL DEFAULT 0")
+        if ("last_envelope" !in cols) db.execSQL("ALTER TABLE contacts ADD COLUMN last_envelope TEXT")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS blocked_keys (
+                id INTEGER PRIMARY KEY,
+                ed25519 TEXT NOT NULL,
+                curve25519 TEXT NOT NULL,
+                number TEXT NOT NULL,
+                relay TEXT,
+                name TEXT NOT NULL DEFAULT '',
+                ts INTEGER NOT NULL
+            )"""
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS blocked_keys_number ON blocked_keys (number)")
     }
 
     /**
@@ -381,6 +410,11 @@ class CommsStore(
      * already holds the same Curve25519 key makes this throw
      * [android.database.sqlite.SQLiteConstraintException] rather than silently
      * deleting that contact, which is what SQLite's REPLACE would do.
+     *
+     * A new row takes [Contact.blocked] and [Contact.request] from [c]; an
+     * existing row keeps its own, which only [setRequest], [markBlocked] and
+     * [setBlocked] change, so a copy read before the owner blocked or accepted
+     * someone cannot undo it.
      */
     fun upsertContact(c: Contact) {
         val values = ContentValues().apply {
@@ -398,29 +432,143 @@ class CommsStore(
         val db = beginWrite()
         try {
             val updated = db.update("contacts", values, "number = ?", arrayOf(c.number))
-            if (updated == 0) db.insertOrThrow("contacts", null, values)
+            if (updated == 0) {
+                values.put("blocked", if (c.blocked) 1 else 0)
+                values.put("request", if (c.request) 1 else 0)
+                db.insertOrThrow("contacts", null, values)
+            }
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
         }
     }
 
+    /**
+     * The contact with this number. A blocked contact and a message request
+     * are not contacts to the rest of the app (nothing is sent to them, no
+     * receipt, no group message, no notice), so they are not returned here;
+     * [contactEntry] returns any row.
+     */
     fun contact(number: String): Contact? =
+        readableDatabase.query("contacts", null, "number = ? AND $ACTIVE", arrayOf(number), null, null, null).use { c ->
+            if (c.moveToFirst()) readContact(c) else null
+        }
+
+    /** The row with this number whatever it is: a contact, a blocked contact kept as a record, or a message request. */
+    fun contactEntry(number: String): Contact? =
         readableDatabase.query("contacts", null, "number = ?", arrayOf(number), null, null, null).use { c ->
             if (c.moveToFirst()) readContact(c) else null
         }
 
+    /** The row holding this Curve25519 key, blocked or a request included: what an envelope's sender is matched against. */
     fun contactByCurve(curve25519: String): Contact? =
         readableDatabase.query("contacts", null, "curve25519 = ?", arrayOf(curve25519), null, null, null).use { c ->
             if (c.moveToFirst()) readContact(c) else null
         }
 
-    fun contacts(): List<Contact> =
-        readableDatabase.query("contacts", null, null, null, null, null, "name COLLATE NOCASE ASC").use { c ->
+    /** Every contact; not blocked contacts or message requests (see [contact]). */
+    fun contacts(): List<Contact> = contactsWhere(ACTIVE)
+
+    /** The message requests: people who wrote first and have not been accepted. */
+    fun requestContacts(): List<Contact> = contactsWhere("request = 1 AND blocked = 0")
+
+    /** The blocked contacts kept as a record. */
+    fun blockedContacts(): List<Contact> = contactsWhere("blocked = 1")
+
+    private fun contactsWhere(where: String): List<Contact> =
+        readableDatabase.query("contacts", null, where, null, null, null, "name COLLATE NOCASE ASC").use { c ->
             val out = ArrayList<Contact>()
             while (c.moveToNext()) out += readContact(c)
             out
         }
+
+    /** Makes [number] a message request, or (accepted) an ordinary contact. */
+    fun setRequest(number: String, request: Boolean) {
+        writableDatabase.update("contacts", ContentValues().apply { put("request", if (request) 1 else 0) }, "number = ?", arrayOf(number))
+    }
+
+    /**
+     * Marks [number] blocked and kept, and forgets everything still owed to
+     * them or held from them: receipts, a notice of this phone's pass or move,
+     * payloads held for review. Their conversation stays.
+     */
+    fun markBlocked(number: String) {
+        val db = beginWrite()
+        try {
+            db.update("contacts", ContentValues().apply { put("blocked", 1) }, "number = ?", arrayOf(number))
+            db.delete("receipts", "peer = ?", arrayOf(number))
+            db.delete("pass_notices", "peer = ?", arrayOf(number))
+            db.delete("move_notices", "peer = ?", arrayOf(number))
+            db.delete("quarantine", "peer = ?", arrayOf(number))
+            db.setTransactionSuccessful()
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    /** Unblocks (or blocks) the contact row [number], keeping everything else about it. */
+    fun setBlocked(number: String, blocked: Boolean) {
+        writableDatabase.update("contacts", ContentValues().apply { put("blocked", if (blocked) 1 else 0) }, "number = ?", arrayOf(number))
+    }
+
+    /** Records [hash] (an envelope's SHA-256, hex) as the newest envelope [number] sent: what a report about them names. */
+    fun noteEnvelope(number: String, hash: String) {
+        writableDatabase.update("contacts", ContentValues().apply { put("last_envelope", hash) }, "number = ?", arrayOf(number))
+    }
+
+    /** The hash of the newest envelope [number] sent since this was kept, or null. */
+    fun lastEnvelope(number: String): String? =
+        readableDatabase.rawQuery("SELECT last_envelope FROM contacts WHERE number = ?", arrayOf(number)).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+        }
+
+    // ── Blocked identities ───────────────────────────────────────────────
+
+    /** Everything on the blocked list, most recent first. */
+    fun blockedKeys(): List<ContactGate.Blocked> =
+        readableDatabase.query("blocked_keys", null, null, null, null, null, "ts DESC, id DESC").use { c ->
+            val out = ArrayList<ContactGate.Blocked>()
+            while (c.moveToNext()) out += readBlocked(c)
+            out
+        }
+
+    /** Puts an identity on the blocked list; returns its row id. */
+    fun addBlocked(ed25519: String, curve25519: String, number: String, relay: String?, name: String, ts: Long): Long {
+        val values = ContentValues().apply {
+            put("ed25519", ed25519)
+            put("curve25519", curve25519)
+            put("number", number)
+            if (relay != null) put("relay", relay) else putNull("relay")
+            put("name", name)
+            put("ts", ts)
+        }
+        return writableDatabase.insertOrThrow("blocked_keys", null, values)
+    }
+
+    /** Takes entry [id] off the blocked list; returns what it was, or null when there is no such entry. */
+    fun removeBlocked(id: Long): ContactGate.Blocked? {
+        val db = beginWrite()
+        try {
+            val entry = db.query("blocked_keys", null, "id = ?", arrayOf(id.toString()), null, null, null).use { c ->
+                if (c.moveToFirst()) readBlocked(c) else null
+            } ?: return null
+            db.delete("blocked_keys", "id = ?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+            return entry
+        } finally {
+            endWrite(db)
+        }
+    }
+
+    private fun readBlocked(c: Cursor) = ContactGate.Blocked(
+        id = c.getLong(c.getColumnIndexOrThrow("id")),
+        ed25519 = c.getString(c.getColumnIndexOrThrow("ed25519")),
+        curve25519 = c.getString(c.getColumnIndexOrThrow("curve25519")),
+        number = c.getString(c.getColumnIndexOrThrow("number")),
+        relay = c.getColumnIndexOrThrow("relay").let { i -> if (c.isNull(i)) null else c.getString(i) },
+        name = c.getString(c.getColumnIndexOrThrow("name")),
+        ts = c.getLong(c.getColumnIndexOrThrow("ts"))
+    )
 
     /** Deletes everything about [number]; returns the ids of its media messages so their files can go too. */
     fun deleteContact(number: String): List<String> {
@@ -513,7 +661,8 @@ class CommsStore(
                 db.execSQL("UPDATE groups SET created_by = ? WHERE created_by = ?", arrayOf(newNumber, oldNumber))
                 db.execSQL("UPDATE shared_threats SET from_number = ? WHERE from_number = ?", arrayOf(newNumber, oldNumber))
             }
-            db.execSQL("INSERT OR IGNORE INTO move_notices (peer) SELECT number FROM contacts")
+            // Blocked numbers and message requests are not told where this phone went.
+            db.execSQL("INSERT OR IGNORE INTO move_notices (peer) SELECT number FROM contacts WHERE $ACTIVE")
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
@@ -569,15 +718,20 @@ class CommsStore(
         }
     }
 
-    /** Every contact is owed this phone's new pass. */
+    /** Every contact is owed this phone's new pass; a blocked number or a message request is not. */
     fun owePassToAll() {
         val db = beginWrite()
         try {
-            db.execSQL("INSERT OR IGNORE INTO pass_notices (peer) SELECT number FROM contacts")
+            db.execSQL("INSERT OR IGNORE INTO pass_notices (peer) SELECT number FROM contacts WHERE $ACTIVE")
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
         }
+    }
+
+    /** [peer] is owed this phone's pass: a request just accepted, or a contact just unblocked. */
+    fun owePass(peer: String) {
+        writableDatabase.execSQL("INSERT OR IGNORE INTO pass_notices (peer) VALUES (?)", arrayOf(peer))
     }
 
     /** The contacts still owed this phone's current pass. */
@@ -806,8 +960,12 @@ class CommsStore(
             out
         }
 
-    fun threads(): List<ChatThread> {
-        val contacts = contacts()
+    fun threads(): List<ChatThread> = threadsOf(contacts())
+
+    /** The message requests' conversations, most recent first. */
+    fun requestThreads(): List<ChatThread> = threadsOf(requestContacts())
+
+    private fun threadsOf(contacts: List<Contact>): List<ChatThread> {
         val db = readableDatabase
         return contacts.map { contact ->
             val last = db.query("messages", null, "peer = ? AND ${alive()}", arrayOf(contact.number), null, null, "ts DESC", "1").use { c ->
@@ -858,8 +1016,16 @@ class CommsStore(
             out.reversed()
         }
 
+    /**
+     * Unread messages, for the badge: not those of message requests, which
+     * have a list of their own, nor anything from a blocked number.
+     */
     fun unreadCount(): Int =
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM messages WHERE direction = 'IN' AND read = 0 AND ${alive()}", null).use { c ->
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM messages WHERE direction = 'IN' AND read = 0 AND ${alive()} " +
+                "AND peer NOT IN (SELECT number FROM contacts WHERE blocked = 1 OR request = 1) AND ${notFromBlockedMember()}",
+            null
+        ).use { c ->
             if (c.moveToFirst()) c.getInt(0) else 0
         }
 
@@ -980,9 +1146,9 @@ class CommsStore(
             s.executeUpdateDelete()
         }
 
-    /** The newest [limit] messages in group [gid]'s conversation, newest first. */
+    /** The newest [limit] messages in group [gid]'s conversation, newest first; none from a blocked member. */
     fun groupMessages(gid: String, limit: Int = 100): List<ChatMessage> =
-        readableDatabase.query("messages", null, "gid = ? AND ${alive()}", arrayOf(gid), null, null, "ts DESC", limit.toString()).use { c ->
+        readableDatabase.query("messages", null, "gid = ? AND ${alive()} AND ${notFromBlockedMember()}", arrayOf(gid), null, null, "ts DESC", limit.toString()).use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
             out
@@ -1068,13 +1234,13 @@ class CommsStore(
 
     fun groupUnread(gid: String): Int =
         readableDatabase.rawQuery(
-            "SELECT COUNT(*) FROM messages WHERE gid = ? AND direction = 'IN' AND read = 0 AND ${alive()}", arrayOf(gid)
+            "SELECT COUNT(*) FROM messages WHERE gid = ? AND direction = 'IN' AND read = 0 AND ${alive()} AND ${notFromBlockedMember()}", arrayOf(gid)
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
     /** The newest unread inbound messages in group [gid], oldest first, for the notification. */
     fun unreadGroupInbound(gid: String, limit: Int): List<ChatMessage> =
         readableDatabase.query(
-            "messages", null, "gid = ? AND direction = 'IN' AND read = 0 AND ${alive()}", arrayOf(gid), null, null, "ts DESC", limit.toString()
+            "messages", null, "gid = ? AND direction = 'IN' AND read = 0 AND ${alive()} AND ${notFromBlockedMember()}", arrayOf(gid), null, null, "ts DESC", limit.toString()
         ).use { c ->
             val out = ArrayList<ChatMessage>()
             while (c.moveToNext()) readMessage(c)?.let { out += it }
@@ -1421,6 +1587,7 @@ class CommsStore(
             db.delete("move_notices", null, null)
             db.delete("passes", null, null)
             db.delete("pass_notices", null, null)
+            db.delete("blocked_keys", null, null)
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
@@ -1437,7 +1604,9 @@ class CommsStore(
         verified = c.getInt(c.getColumnIndexOrThrow("verified")) != 0,
         keyChanged = c.getInt(c.getColumnIndexOrThrow("key_changed")) != 0,
         addedTs = c.getLong(c.getColumnIndexOrThrow("added_ts")),
-        relay = c.getColumnIndex("relay").let { i -> if (i >= 0 && !c.isNull(i)) c.getString(i) else null }
+        relay = c.getColumnIndex("relay").let { i -> if (i >= 0 && !c.isNull(i)) c.getString(i) else null },
+        blocked = c.getColumnIndex("blocked").let { i -> i >= 0 && c.getInt(i) != 0 },
+        request = c.getColumnIndex("request").let { i -> i >= 0 && c.getInt(i) != 0 }
     )
 
     private fun readMessage(c: Cursor): ChatMessage? {
@@ -1465,8 +1634,23 @@ class CommsStore(
     /** SQL that keeps only messages not yet past their time: an expired one is never shown, even before it is deleted. */
     private fun alive(): String = "(expires_at IS NULL OR expires_at > ${System.currentTimeMillis()})"
 
+    /**
+     * SQL that keeps out a group message from a blocked identity: one whose
+     * sender has a blocked number, unless the group knows another key for that
+     * number (someone else with the same number on another relay), or one from
+     * a member the group knows by a blocked key, whatever number they have now.
+     * Unblocking shows them again.
+     */
+    private fun notFromBlockedMember(): String =
+        "NOT (messages.gid IS NOT NULL AND messages.sender IS NOT NULL AND EXISTS (" +
+            "SELECT 1 FROM blocked_keys b LEFT JOIN group_members gm ON gm.gid = messages.gid AND gm.number = messages.sender " +
+            "WHERE (b.number = messages.sender AND (gm.ed25519 IS NULL OR gm.ed25519 = '' OR gm.ed25519 = b.ed25519)) " +
+            "OR (gm.ed25519 IS NOT NULL AND gm.ed25519 != '' AND gm.ed25519 = b.ed25519)))"
+
     private companion object {
-        const val DB_VERSION = 11
+        const val DB_VERSION = 12
         const val BUSY_TIMEOUT_MS = 10_000
+        /** SQL for a row of the contacts table that is a contact: neither blocked nor a message request. */
+        const val ACTIVE = "blocked = 0 AND request = 0"
     }
 }

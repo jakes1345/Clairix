@@ -4,7 +4,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { advance, makePhone, makeRelay, mockFetch, resetClock } from "./harness/fake-env.mjs";
-import { DAY_MS, HOUR_MS, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
+import { DAY_MS, HOUR_MS, dayFloor, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
 import { sha256Hex } from "../src/env.ts";
 
 afterEach(() => resetClock());
@@ -1061,4 +1061,193 @@ test("a pass in the wrong form is refused before a token is spent", async () => 
   const [t] = await alice.tokens(1);
   assert.equal((await alice.send(t, bob.number, undefined, undefined, { pass: "nope" })).status, 400);
   assert.equal((await alice.send(t, bob.number)).status, 202);
+});
+
+// ── Abuse reports ──────────────────────────────────────────────────────────
+
+const ADMIN = "admin-secret-0123456789";
+const hash = (c) => c.repeat(64);
+
+/** A report as the app files one: a report token, and nothing that names the phone. */
+function fileReport(relay, token, body) {
+  return relay.call("POST", "/v1/report", { body, headers: token === null ? {} : { "x-clairix-token": token } });
+}
+
+/** The operator's view, with the admin secret. */
+function adminReports(relay, method = "GET", body, secret = ADMIN) {
+  return relay.call(method, "/v1/admin/reports", { body, headers: { "x-admin-secret": secret, "cf-connecting-ip": "203.0.113.200" } });
+}
+
+test("a report spends a report token, names nobody, and waits for the operator by the day", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const [t1, t2] = await alice.tokens(2, "report");
+  const res = await fileReport(relay, t1, { number: mallory.number, envelope: hash("a"), reason: "threats" });
+  assert.equal(res.status, 202);
+  // A token buys one report; none, or one of another kind, buys nothing.
+  assert.equal((await fileReport(relay, t1, { number: mallory.number, reason: "spam" })).status, 403);
+  assert.equal((await fileReport(relay, null, { number: mallory.number, reason: "spam" })).status, 401);
+  const [delivery] = await alice.tokens(1);
+  assert.equal((await fileReport(relay, delivery, { number: mallory.number, reason: "spam" })).status, 403);
+  // A report that names its sender is refused outright.
+  const named = await relay.call("POST", "/v1/report", {
+    body: { number: mallory.number, reason: "spam" },
+    headers: { "x-clairix-token": t2, "x-clairix-number": alice.number },
+  });
+  assert.equal(named.status, 400);
+
+  // Kept: who was reported, why, an envelope's hash and the day; nothing about Alice.
+  const stored = everythingStored(relay, (n) => n === "abuse-reports");
+  assert.ok(stored.includes(mallory.number));
+  assert.ok(!stored.includes(alice.number));
+  const kept = [...relay.env.MAILBOX.storageOf("abuse-reports")].filter(([k]) => k.startsWith("r:")).map(([, v]) => v);
+  assert.deepEqual(kept, [{ number: mallory.number, relay: null, envelope: hash("a"), reason: "threats", day: dayFloor(Date.now()) }]);
+
+  const view = await adminReports(relay);
+  assert.equal(view.status, 200);
+  assert.deepEqual(view.json.numbers, [
+    { number: mallory.number, relay: null, reports: 1, reasons: { threats: 1 }, envelopes: [hash("a")], firstDay: dayFloor(Date.now()), lastDay: dayFloor(Date.now()) },
+  ]);
+});
+
+test("a malformed report is refused before its token is spent", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const [t] = await alice.tokens(1, "report");
+  for (const body of [
+    { number: "12345", reason: "spam" },
+    { number: "482913605", reason: "rude" },
+    { number: "482913605", reason: "spam", envelope: "not-a-hash" },
+    { number: "482913605", reason: "spam", envelope: hash("A") },
+    { number: "482913605", reason: "spam", relay: "http://plain.example" },
+  ]) {
+    assert.equal((await fileReport(relay, t, body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await fileReport(relay, t, { number: "482913605", reason: "spam" })).status, 202);
+});
+
+test("the same envelope counts once, another relay's number is kept apart, and nothing says how often a number was reported", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const tokens = await alice.tokens(6, "report");
+  assert.equal((await fileReport(relay, tokens[0], { number: "482913605", envelope: hash("b"), reason: "harassment" })).status, 202);
+  // The same envelope again (a phone retrying): one report.
+  assert.equal((await fileReport(relay, tokens[1], { number: "482913605", envelope: hash("b"), reason: "harassment" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[2], { number: "482913605", envelope: hash("c"), reason: "spam" })).status, 202);
+  // The same digits on another relay are someone else; this relay's own address is no other relay.
+  assert.equal((await fileReport(relay, tokens[3], { number: "482913605", relay: "https://other.example", reason: "impersonation" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[4], { number: "111222333", relay: relay.origin, reason: "other" })).status, 202);
+  const numbers = (await adminReports(relay)).json.numbers;
+  assert.deepEqual(numbers.map((n) => [n.number, n.relay, n.reports]), [
+    ["482913605", null, 2],
+    ["111222333", null, 1],
+    ["482913605", "https://other.example", 1],
+  ]);
+  assert.deepEqual(numbers[0].reasons, { harassment: 1, spam: 1 });
+  assert.deepEqual(numbers[0].envelopes.sort(), [hash("b"), hash("c")]);
+});
+
+test("the operator closes what was reported about a number, and reports go after 90 days", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const [t1, t2, t3] = await alice.tokens(3, "report");
+  await fileReport(relay, t1, { number: "482913605", envelope: hash("d"), reason: "threats" });
+  await fileReport(relay, t2, { number: "111222333", reason: "spam" });
+  const closed = await adminReports(relay, "DELETE", { number: "482913605" });
+  assert.equal(closed.status, 200);
+  assert.equal(closed.json.closed, 1);
+  assert.deepEqual((await adminReports(relay)).json.numbers.map((n) => n.number), ["111222333"]);
+  assert.equal((await adminReports(relay, "DELETE", { number: "bad" })).status, 400);
+  assert.equal((await adminReports(relay, "POST")).status, 405);
+
+  await fileReport(relay, t3, { number: "999888777", reason: "other" });
+  for (let day = 0; day < 92; day++) {
+    advance(DAY_MS);
+    await relay.env.MAILBOX.runDueAlarms();
+  }
+  assert.deepEqual((await adminReports(relay)).json.numbers, []);
+  assert.equal(relay.env.MAILBOX.storageOf("abuse-reports").size, 0);
+});
+
+test("only the admin secret reads reports, and with none set nobody does", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  assert.equal((await adminReports(relay, "GET", undefined, "wrong-secret-0123456789")).status, 403);
+  assert.equal((await adminReports(relay, "GET", undefined, "")).status, 403);
+  const closedRelay = makeRelay();
+  assert.equal((await adminReports(closedRelay)).status, 503);
+});
+
+// ── Open registration ──────────────────────────────────────────────────────
+
+/** A registration for a new identity, signed as the app signs one, with [secret] (none when null). */
+async function registration(relay, { secret = null, ip = "192.0.2.10", keys = null } = {}) {
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const b64 = (u8) => Buffer.from(u8).toString("base64");
+  const sign = async (t) => b64(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(t))));
+  const ed25519 = b64(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+  const curveKey = () => {
+    const k = crypto.getRandomValues(new Uint8Array(32));
+    k[31] &= 0x3f;
+    return b64(k);
+  };
+  const curve25519 = keys?.curve25519 ?? curveKey();
+  const sealing = keys?.sealing ?? curveKey();
+  const body = JSON.stringify({
+    ts: Date.now(),
+    ...(secret === null ? {} : { secret }),
+    ed25519, curve25519, sealing,
+    signature: await sign(`${curve25519}|${sealing}`),
+    oneTimeKeys: [],
+  });
+  return relay.call("POST", "/v1/register", { body, headers: { "x-clairix-sig": await sign(body), "cf-connecting-ip": ip } });
+}
+
+test("without an invite or the secret a relay gives no number, unless its operator opened registration", async () => {
+  for (const vars of [{}, { OPEN_REGISTRATION: "off" }, { OPEN_REGISTRATION: "yes please" }]) {
+    const relay = makeRelay(vars);
+    const res = await registration(relay);
+    assert.equal(res.status, 403, JSON.stringify(vars));
+    assert.match(res.json.error, /invite/);
+    // An empty secret is no secret.
+    assert.equal((await registration(relay, { secret: "", ip: "192.0.2.11" })).status, 403);
+    // And a wrong one is still refused as before.
+    assert.equal((await registration(relay, { secret: "wrong-secret-0123456789", ip: "192.0.2.12" })).status, 403);
+  }
+});
+
+test("open registration takes phones with no invite or secret up to its daily cap, and keeps only a count", async () => {
+  const relay = makeRelay({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: "2" });
+  assert.equal((await registration(relay, { ip: "192.0.2.21" })).status, 201);
+  assert.equal((await registration(relay, { secret: "", ip: "192.0.2.22" })).status, 201);
+  const third = await registration(relay, { ip: "192.0.2.23" });
+  assert.equal(third.status, 429);
+  assert.match(third.json.error, /invite/);
+  assert.ok(Number(third.headers.get("retry-after")) > 0);
+  // The secret and invites are untouched by the cap.
+  assert.equal((await registration(relay, { secret: "test-enrollment-secret-0123456789", ip: "192.0.2.24" })).status, 201);
+  const opened = [...relay.env.MAILBOX.storageOf("open-registration")];
+  assert.deepEqual(opened, [["openRegistrations", { day: dayFloor(Date.now()), count: 2 }]]);
+  // A new day, a new allowance.
+  advance(DAY_MS);
+  assert.equal((await registration(relay, { ip: "192.0.2.25" })).status, 201);
+});
+
+test("an open registration that fails gives its place back", async () => {
+  const relay = makeRelay({ OPEN_REGISTRATION: "true", OPEN_REGISTRATION_PER_DAY: "1" });
+  const victim = await makePhone(relay);
+  // Someone else's keys: refused, and today's one open registration is still there.
+  const stolen = await registration(relay, { keys: { curve25519: victim.curve25519, sealing: victim.sealing }, ip: "192.0.2.31" });
+  assert.equal(stolen.status, 409);
+  assert.equal((await registration(relay, { ip: "192.0.2.32" })).status, 201);
+  assert.equal((await registration(relay, { ip: "192.0.2.33" })).status, 429);
+});
+
+test("open registration still meets the per-address limit every registration does", async () => {
+  const relay = makeRelay({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: "100" });
+  const statuses = [];
+  for (let i = 0; i < 11; i++) statuses.push((await registration(relay, { ip: "192.0.2.40" })).status);
+  assert.deepEqual(statuses.slice(0, 10), Array(10).fill(201));
+  assert.equal(statuses[10], 429);
+  assert.equal((await registration(relay, { ip: "192.0.2.41" })).status, 201);
 });

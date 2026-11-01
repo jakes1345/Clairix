@@ -76,6 +76,23 @@ The cell check learns what is normal over days. The screen shows the baseline's 
 
 Clairix Full is installed from outside a store, which is one of the signals the stalkerware scan looks for. The check is working as intended. The Play edition is not flagged.
 
+### I have no invite
+
+Messaging, calls, SOS and the duress phrase need a Clairix number, and our relay gives one only to someone invited by a person already on it: they tap **Invite** in Comms, then send you the link or show you the QR code. The rest of Clairix works without a number: the tracker, camera, spyware and network checks, and the app lock.
+
+If there is nobody you can ask:
+
+- Look under **Relays you can join** in Comms setup. Each relay on the list says how to get on it. A relay whose operator has opened registration takes a limited number of new people a day with no invite and no secret: choose it, leave the enrollment secret empty and tap **Register**. If it says the day's numbers are gone, try again the next day.
+- Run a relay of your own, on a server you rent or on a Cloudflare account, as the [relay's README](https://github.com/jakes1345/Clairix/tree/main/comms-worker) describes. You then make the invites yourself.
+
+### Someone I do not know wrote to me, or someone will not leave me alone
+
+A first message from a number that is not in your contacts waits under **Requests** at the top of Comms. Open it to read it; they are not told you did, and a call from them is noted as missed instead of ringing. **Accept** makes them a contact. **Decline** blocks the number and deletes what it sent. Someone who joined with an invite you made, or who writes in a group you are both in, is added as a contact instead; block them on their page if you need to.
+
+To stop a contact reaching you, open their page (their name at the top of the conversation) and choose **Block** to keep the conversation as a record, or **Block and delete** to remove it too. Nothing they send reaches your phone afterwards, and they are not told. **Report** on the same page tells your relay's operator; do it before **Block and delete**, because a report names the last envelope they sent. Blocked numbers are listed in Comms settings, where you can unblock them.
+
+While your phone is locked it cannot open anything, so a message from a blocked number or a request can still show as "New Clairix message", and a call as "Clairix call", until you unlock it. Then a blocked number's is dropped, and a request's call is noted as missed.
+
 ### I lost my phone, or wiped Clairix. Can you restore my Clairix number?
 
 No. Your identity key is the only credential, and it existed only on that phone. Register again and re-pair with your contacts. This is deliberate: there is nothing on our side that could be stolen, subpoenaed or guessed.
