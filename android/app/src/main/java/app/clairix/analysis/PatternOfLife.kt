@@ -255,8 +255,6 @@ object PatternOfLife {
         } else { windowLo = 0; windowHi = 0; windowMin = 0 }
         val weekdaysObserved = fixes.map { LocalDate.ofInstant(Instant.ofEpochMilli(it.time), zone) }.toSet()
             .count { it.dayOfWeek != DayOfWeek.SATURDAY && it.dayOfWeek != DayOfWeek.SUNDAY }
-        val inWindow = homeWeekdayDepartures.values.count { it in windowLo..windowHi }
-        val inWindowPct = if (weekdaysObserved > 0 && windowMin > 0) inWindow * 100 / weekdaysObserved else 0
 
         // 4. Route repetition.
         val (tripCount, repeated, repeatedOf) = routeRepetition(fixes, stays)
@@ -273,10 +271,14 @@ object PatternOfLife {
             else -> 0f
         }.coerceIn(0f, 1f)
 
-        // 6. Suggestions.
+        // 6. Suggestions. Times in them go to the quarter hour ("07:45–08:15", not
+        // "07:52–08:04"): enough for the owner to see her habit, and less for
+        // anyone reading over her shoulder. The share is counted for that window.
         val suggestions = ArrayList<String>()
         if (home != null && depMinutes.size >= 3) {
-            suggestions += "You leave home ${clock(windowLo)}–${clock(windowHi)} on $inWindowPct% of weekdays."
+            val (shownLo, shownHi) = quarterWindow(windowLo, windowHi)
+            val shownPct = if (weekdaysObserved > 0) homeWeekdayDepartures.values.count { it in shownLo..shownHi } * 100 / weekdaysObserved else 0
+            suggestions += "You leave home ${clock(shownLo)}–${clock(shownHi)} on $shownPct% of weekdays."
             if (windowMin <= 30) suggestions += "Consider varying your departure time by ±15 minutes."
             else if (windowMin <= 60) suggestions += "Your departure window is under an hour; widening it makes you harder to wait for."
         } else if (home != null) {
@@ -287,7 +289,7 @@ object PatternOfLife {
             if (back.isNotEmpty()) {
                 val tightest = back.minByOrNull { it.stdMinutes }!!
                 if (tightest.stdMinutes <= 20f) {
-                    suggestions += "You leave work around ${clock(tightest.meanMinuteOfDay)} on ${tightest.weekday.name.lowercase().replaceFirstChar { it.uppercase() }}s (± ${tightest.stdMinutes.toInt()} min). Someone who knows that knows where to stand."
+                    suggestions += "You leave work around ${clock(nearestQuarter(tightest.meanMinuteOfDay))} on ${tightest.weekday.name.lowercase().replaceFirstChar { it.uppercase() }}s (± ${tightest.stdMinutes.toInt()} min). Someone who knows that knows where to stand."
                 }
             }
         }
@@ -624,6 +626,20 @@ object PatternOfLife {
         return if (union == 0) 0.0 else inter.toDouble() / union
     }
 }
+
+/**
+ * A departure window as the suggestions show it, widened out to whole quarter
+ * hours so it still holds every departure the measured one did: 07:52–08:04 is
+ * 07:45–08:15. A window inside one quarter hour shows as that quarter.
+ */
+internal fun quarterWindow(loMinute: Int, hiMinute: Int): Pair<Int, Int> {
+    val lo = Math.floorDiv(loMinute, 15) * 15
+    val hi = Math.floorDiv(hiMinute + 14, 15) * 15
+    return lo to if (hi > lo) hi else lo + 15
+}
+
+/** A time of day to the nearest quarter hour: 17:37 is 17:30, 17:38 is 17:45. */
+internal fun nearestQuarter(minuteOfDay: Int): Int = Math.floorDiv(minuteOfDay + 7, 15) * 15
 
 /** "08:05" for 485 minutes into the day. */
 internal fun clock(minuteOfDay: Int): String {

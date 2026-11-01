@@ -12,6 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -193,11 +195,6 @@ object AppSettings {
 fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}) {
     val context = LocalContext.current
     val trusted by Registry.trusted.collectAsStateWithLifecycle()
-    val status by Registry.status.collectAsStateWithLifecycle()
-    val detections by Registry.detections.collectAsStateWithLifecycle()
-    val timeline by Registry.timeline.collectAsStateWithLifecycle()
-    val cell by Registry.cell.collectAsStateWithLifecycle()
-    val nfc by Registry.nfc.collectAsStateWithLifecycle()
 
     var aggressiveScan by remember { mutableStateOf(AppSettings.aggressiveScan) }
     var infrastructureAlerts by remember { mutableStateOf(AppSettings.infrastructureAlerts) }
@@ -211,6 +208,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     val biometricEnabled by AppLock.biometricEnabled.collectAsStateWithLifecycle()
     var hasDuress by remember { mutableStateOf(AppLock.hasDuress(context)) }
     var wipeAfter by remember { mutableIntStateOf(AppLock.wipeAfter(context)) }
+    var wipeChosen by remember { mutableStateOf(AppLock.wipeChoiceConfirmed(context)) }
     var relockAfterMs by remember { mutableLongStateOf(AppLock.relockAfterMs(context)) }
     var showPasscodeSetup by remember { mutableStateOf(false) }
     var showPasscodeDisable by remember { mutableStateOf(false) }
@@ -553,11 +551,31 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                     else
                                         "Clairix locks when you leave. Each run of wrong passcodes locks you out for longer."
                                 else
-                                    "Set a 6 to 12 digit passcode. All app data is wiped after too many wrong guesses.",
+                                    "Set a 6 to 12 digit passcode. Then you choose what wrong passcodes do: lock you " +
+                                        "out for longer each time, or wipe Clairix.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
                         }
+                    }
+                    if (lockEnabled && wipeAfter == UNASKED_WIPE_AFTER && !wipeChosen) {
+                        // Earlier versions armed this limit with every new passcode and asked nothing.
+                        Notice(
+                            Tone.Caution,
+                            "$UNASKED_WIPE_AFTER wrong passcodes in a row wipe Clairix, with no backup and no undo. " +
+                                "Earlier versions set that limit whenever a passcode was made, without asking, so it " +
+                                "may not be one you chose. Keep it, or pick another under Wrong passcode limit.",
+                            title = "Check your wipe limit",
+                            action = {
+                                GhostButton(
+                                    "Keep $UNASKED_WIPE_AFTER",
+                                    onClick = {
+                                        wipeChosen = true
+                                        scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, UNASKED_WIPE_AFTER) }
+                                    }
+                                )
+                            }
+                        )
                     }
                     if (lockEnabled) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -586,6 +604,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             label = ::wipeAfterLabel,
                             onSelect = { choice ->
                                 wipeAfter = choice
+                                wipeChosen = true
                                 scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, choice) }
                             }
                         )
@@ -631,8 +650,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     PasscodeSetupPanel(
                         context = context,
                         isChanging = lockEnabled,
-                        onDone = { showPasscodeSetup = false },
-                        onCancel = { showPasscodeSetup = false }
+                        onDone = {
+                            showPasscodeSetup = false
+                            wipeAfter = AppLock.wipeAfter(context)
+                            wipeChosen = AppLock.wipeChoiceConfirmed(context)
+                        },
+                        onCancel = { showPasscodeSetup = false },
+                        onExportEvidence = if (BuildConfig.FULL_ACCESS) { { shareEvidenceReport(context) } } else null
                     )
                 }
             }
@@ -722,12 +746,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             }
                         }
                     )
+                    // With a passcode set, the export asks for it (or a biometric) every time.
+                    val askOwner = rememberOwnerCheck()
                     PrimaryButton(
                         "Export evidence",
-                        onClick = {
-                            val intent = Report.share(context, status, detections, timeline, cell, nfc)
-                            context.startActivity(Intent.createChooser(intent, "Share evidence report"))
-                        },
+                        onClick = askOwner.guard("export the evidence report") { shareEvidenceReport(context) },
                         icon = Icons.Filled.Share,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -837,6 +860,78 @@ private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
     else -> "$attempts attempts"
 }
 
+/** The limit earlier versions armed, unasked, with every new passcode. */
+private const val UNASKED_WIPE_AFTER = 3
+
+/**
+ * Writes the evidence report as it stands and opens the share sheet: the Data
+ * section's Export button, and the shortcut in [WipeChoiceDialog] wherever a
+ * passcode is set in the full edition, before a wipe limit is picked.
+ */
+internal fun shareEvidenceReport(context: Context) {
+    val intent = Report.share(
+        context, Registry.status.value, Registry.detections.value, Registry.timeline.value,
+        Registry.cell.value, Registry.nfc.value
+    )
+    context.startActivity(Intent.createChooser(intent, "Share evidence report"))
+}
+
+/** What a wipe takes, in the words the dialog after a new passcode uses. */
+internal val WIPE_WARNING =
+    if (BuildConfig.FULL_ACCESS)
+        "Wiping erases every message, contact, your Clairix number and the evidence timeline. There is no backup and no undo."
+    else
+        "Wiping erases every message, contact and your Clairix number. There is no backup and no undo."
+
+/** What a pick in [WipeChoiceDialog] means, in [AppLock]'s own numbers. */
+internal fun wipeAfterOutcome(choice: Int?): String = when (choice) {
+    null -> "Pick one to go on. You can change it later in Settings."
+    0 -> "Nothing is wiped. After 5 wrong passcodes in a row Clairix waits 30 seconds before the next try, " +
+        "then twice as long after each further wrong one, up to an hour."
+    1 -> "The first wrong passcode wipes Clairix. The lock screen never says that a limit exists."
+    else -> "$choice wrong passcodes in a row wipe Clairix. The lock screen never says how many tries are left."
+}
+
+/**
+ * What wrong passcodes should do, asked the moment a passcode is saved. It has
+ * no Cancel and nothing is picked to begin with, so the owner makes the choice
+ * herself: earlier versions armed a wipe after 3 without a word. Where there is
+ * evidence to lose it offers to export it first.
+ */
+@Composable
+private fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, onChosen: (Int) -> Unit) {
+    var picked by remember { mutableStateOf<Int?>(null) }
+    ClairixDialog(
+        title = "What should happen after wrong passcodes?",
+        // Back and a tap outside do nothing: this needs an answer.
+        onDismiss = {},
+        confirmLabel = "Save",
+        onConfirm = { picked?.let(onChosen) },
+        confirmEnabled = picked != null,
+        dismissLabel = null
+    ) {
+        // Scrolls when large text makes it taller than the dialog.
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(WIPE_WARNING, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
+            ChoiceChips<Int?>(
+                choices = AppLock.WIPE_AFTER_CHOICES,
+                selected = picked,
+                label = { wipeAfterLabel(it ?: 0) },
+                onSelect = { picked = it }
+            )
+            Text(wipeAfterOutcome(picked), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            if (onExportEvidence != null) {
+                SecondaryButton(
+                    "Export evidence",
+                    onClick = onExportEvidence,
+                    icon = Icons.Filled.Share,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
 private fun relockLabel(ms: Long): String = when (ms) {
     0L -> "Immediately"
     30_000L -> "30 seconds"
@@ -911,12 +1006,20 @@ private fun WarningText(text: String) {
     Text(text, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
 }
 
+/**
+ * Setting or changing the passcode, step by step: in Settings, inline on the
+ * onboarding page that asks whether anyone else uses the phone, and under the
+ * banner on the pages that show the owner's routine. Saving a passcode on a
+ * phone where nobody has chosen what wrong passcodes do goes straight on to
+ * [WipeChoiceDialog]; [onDone] comes once that is answered.
+ */
 @Composable
-private fun PasscodeSetupPanel(
+internal fun PasscodeSetupPanel(
     context: Context,
     isChanging: Boolean,
     onDone: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onExportEvidence: (() -> Unit)? = null
 ) {
     var step by remember { mutableIntStateOf(if (isChanging) 0 else 1) }
     // step 0 = confirm current, step 1 = enter new, step 2 = confirm new
@@ -924,7 +1027,21 @@ private fun PasscodeSetupPanel(
     var code2 by remember { mutableStateOf("") }
     var currentCode by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    var choosingWipe by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    if (choosingWipe) {
+        WipeChoiceDialog(
+            onExportEvidence = onExportEvidence,
+            onChosen = { choice ->
+                scope.launch {
+                    withContext(Dispatchers.IO) { AppLock.setWipeAfter(context, choice) }
+                    choosingWipe = false
+                    onDone()
+                }
+            }
+        )
+    }
 
     CodePanel(
         title = when {
@@ -967,7 +1084,10 @@ private fun PasscodeSetupPanel(
                         val r = withContext(Dispatchers.IO) {
                             AppLock.setPasscode(context, code1)
                         }
-                        r.onSuccess { onDone() }.onFailure { error = it.message ?: "Couldn't save the passcode" }
+                        r.onSuccess {
+                            // A first passcode never arms a wipe by itself: the owner picks.
+                            if (AppLock.wipeChoiceConfirmed(context)) onDone() else choosingWipe = true
+                        }.onFailure { error = it.message ?: "Couldn't save the passcode" }
                     }
                 }
             }

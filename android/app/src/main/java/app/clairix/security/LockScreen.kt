@@ -15,6 +15,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import app.clairix.ClairixIcons
 import androidx.compose.material3.Text
@@ -162,7 +164,10 @@ fun LockScreen() {
     val showLockout = countdown > 0L
     val active = !checking && countdown == 0L
 
-    Box(
+    // Scrolls when it does not fit (a 640 dp phone, large text), so the Unlock
+    // button that every code shorter than 12 digits needs can always be reached;
+    // at least the window's height, so where it fits it sits centred as before.
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(c.base)
@@ -170,9 +175,13 @@ fun LockScreen() {
         contentAlignment = Alignment.Center
     ) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
         ) {
             // ── The mark and what this screen is ───────────────────────────
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {

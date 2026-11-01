@@ -29,7 +29,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.clairix.security.AppLock
 import app.clairix.ui.components.GhostButton
 import app.clairix.ui.components.IconWell
 import app.clairix.ui.components.PrimaryButton
@@ -154,7 +156,20 @@ internal val ACTIVITY_TOUR: Map<String, Pair<String, String>> = mapOf(
         "device-admin permission that only watches logins).")
 )
 
-internal fun tourStops(fullAccess: Boolean): List<TourStop> {
+/**
+ * The Settings stop's follow-up to onboarding's "Does anyone else use this
+ * phone?" while Clairix still has no passcode; empty once it has one.
+ * [lockOffered] says whether onboarding showed that page or it was skipped.
+ */
+internal fun passcodeFollowUp(passcodeSet: Boolean, lockOffered: Boolean): String = when {
+    passcodeSet -> ""
+    lockOffered -> "You started without a passcode for Clairix. Until one is set, anyone who opens Clairix on this " +
+        "phone can read it: set one under App passcode. "
+    else -> "Clairix has no passcode yet. Until one is set, anyone who opens Clairix on this phone can read it: set " +
+        "one under App passcode. "
+}
+
+internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOffered: Boolean = false): List<TourStop> {
     val out = ArrayList<TourStop>()
     out += TourStop(
         "bars", "Bottom of the screen", "Find your way",
@@ -219,7 +234,9 @@ internal fun tourStops(fullAccess: Boolean): List<TourStop> {
         "settings", "Gear, top right", "Settings",
         "App passcode (with biometrics, wipe after wrong passcodes and a duress passcode), how long history is kept, theme" +
             if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.",
-        "This tour is in Settings too, under About, whenever you want it again.",
+        passcodeFollowUp(passcodeSet, lockOffered) +
+            (if (fullAccess) "With a passcode set, Patterns, Unlocks, the tracker map and Export ask for it each time they open. " else "") +
+            "This tour is in Settings too, under About, whenever you want it again.",
         Icons.Filled.Settings, TourTarget.Settings
     )
     return out
@@ -231,7 +248,10 @@ internal fun tourStops(fullAccess: Boolean): List<TourStop> {
  */
 @Composable
 internal fun TourScreen(onClose: () -> Unit, onGo: (TourTarget) -> Unit) {
-    val stops = remember { tourStops(BuildConfig.FULL_ACCESS) }
+    val context = LocalContext.current
+    val stops = remember {
+        tourStops(BuildConfig.FULL_ACCESS, passcodeSet = AppLock.isEnabled(context), lockOffered = isLockOffered(context))
+    }
     val pages = stops.size + 1
     val pager = rememberPagerState(pageCount = { pages })
     val scope = rememberCoroutineScope()

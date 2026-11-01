@@ -6,7 +6,6 @@ import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
-import android.util.Base64
 import app.clairix.EmulationGuard
 import app.clairix.Registry
 import app.clairix.comms.CommsMedia
@@ -19,6 +18,7 @@ import java.security.MessageDigest
 import java.security.ProviderException
 import java.security.SecureRandom
 import java.security.UnrecoverableKeyException
+import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.Mac
@@ -63,8 +63,13 @@ object AppLock {
     const val MIN_LENGTH = 6
     const val MAX_LENGTH = 12
 
-    /** Wipe after this many wrong passcodes in a row; 0 means never wipe (lock out instead). */
-    const val DEFAULT_WIPE_AFTER = 3
+    /**
+     * Wipe after this many wrong passcodes in a row; 0 means never wipe (lock out
+     * instead). Nothing wipes until the owner picks a limit: setting a passcode
+     * asks her straight away ([wipeChoiceConfirmed]), and until she answers the
+     * escalating lockout is what slows a guesser down.
+     */
+    const val DEFAULT_WIPE_AFTER = 0
     val WIPE_AFTER_CHOICES = listOf(1, 3, 5, 10, 0)
 
     /**
@@ -91,6 +96,11 @@ object AppLock {
     /** [SystemClock.elapsedRealtime] of the last wrong guess: monotonic, so the date cannot be moved to get past it. */
     private const val K_LAST_FAIL = "last_fail_elapsed"
     private const val K_WIPE_AFTER = "wipe_after"
+    /** Set once the owner herself picked [K_WIPE_AFTER]; earlier versions wrote a limit of 3 without asking. */
+    private const val K_WIPE_CHOSEN = "wipe_after_chosen"
+    /** Wall-clock times of wrong passcodes nobody has been told about yet, comma-separated. */
+    private const val K_WRONG_AT = "wrong_at"
+    private const val WRONG_KEPT = 50
     private const val K_RELOCK_MS = "relock_ms"
     private const val K_BIOMETRIC = "biometric_enabled"
 
@@ -133,6 +143,26 @@ object AppLock {
     /** Whether biometric unlock is enabled (requires a passcode to be set). */
     val biometricEnabled: StateFlow<Boolean> = _biometricEnabled.asStateFlow()
 
+    /** Wrong passcodes the owner has not been told about: how many, and when the last one was (wall clock). */
+    data class WrongAttempts(val count: Int, val lastAt: Long)
+
+    private val _wrongAttempts = MutableStateFlow<WrongAttempts?>(null)
+    /**
+     * Set by an unlock that followed wrong passcodes typed before that lock
+     * screen came up (by someone else, or by the owner on an earlier visit),
+     * so the app can say so once it is open; [dismissWrongAttempts] clears it.
+     * Never shown on the lock screen, which says nothing about attempts.
+     */
+    val wrongAttempts: StateFlow<WrongAttempts?> = _wrongAttempts.asStateFlow()
+
+    /**
+     * When the lock screen now up, or last passed, came up (wall clock): the
+     * screen going off, Clairix leaving the screen with relock set to
+     * immediately, or a new process. Wrong passcodes typed after it are taken
+     * as the owner's own slips on her way in and are not reported to her.
+     */
+    @Volatile private var lockedSince = 0L
+
     @Volatile private var initialised = false
 
     /** When the app last left the screen ([SystemClock.elapsedRealtime]); 0 while it is on screen. */
@@ -148,6 +178,7 @@ object AppLock {
             val on = isEnabled(context)
             _enabled.value = on
             _locked.value = on
+            if (on) lockedSince = seam.now()
             _biometricEnabled.value = on && isBiometricEnabled(context)
             watchScreen(context)
             // A phone with a passcode set before decoys existed, and no duress
@@ -280,14 +311,24 @@ object AppLock {
      * Unlocks the app after the BiometricPrompt authorised [cipher]: the proof is
      * that the operation the Keystore refused before now completes. A success
      * callback without a usable cipher opens nothing. Does not touch the attempt
-     * counter; the sensor's own lockout paces biometric tries.
+     * counter; the sensor's own lockout paces biometric tries. Wrong passcodes
+     * from before this lock screen are reported, as after a passcode unlock.
      */
     fun unlockWithBiometric(cipher: Cipher?): Boolean {
-        if (Wiper.isActive || !_biometricEnabled.value || cipher == null) return false
-        val proven = runCatching { cipher.doFinal(ByteArray(16)); true }.getOrDefault(false)
-        if (!proven) return false
+        if (!confirmWithBiometric(cipher)) return false
+        appContext?.let { app -> synchronized(attemptLock) { reportWrongAttempts(prefs(app)) } }
         unlocked()
         return true
+    }
+
+    /**
+     * The same proof as [unlockWithBiometric], for a page or an export inside the
+     * unlocked app that asks again: true when the BiometricPrompt really
+     * authorised [cipher]. The lock state and the attempt counter are left alone.
+     */
+    fun confirmWithBiometric(cipher: Cipher?): Boolean {
+        if (Wiper.isActive || !_biometricEnabled.value || cipher == null) return false
+        return runCatching { cipher.doFinal(ByteArray(16)); true }.getOrDefault(false)
     }
 
     private fun revokeBiometric(context: Context) {
@@ -300,13 +341,29 @@ object AppLock {
 
     fun wipeAfter(context: Context): Int = prefs(context).getInt(K_WIPE_AFTER, DEFAULT_WIPE_AFTER)
 
+    /**
+     * Whether the owner picked what wrong passcodes do herself, in the dialog
+     * that follows setting a passcode or in Settings. False after a passcode is
+     * set and before she answers, and on a phone whose passcode an earlier
+     * version set, which quietly armed a wipe after 3.
+     */
+    fun wipeChoiceConfirmed(context: Context): Boolean =
+        runCatching { prefs(context).getBoolean(K_WIPE_CHOSEN, false) }.getOrDefault(false)
+
+    /** The owner's own pick of what wrong passcodes do; see [WIPE_AFTER_CHOICES]. */
     fun setWipeAfter(context: Context, attempts: Int) {
         require(attempts in WIPE_AFTER_CHOICES) { "unsupported wipe threshold $attempts" }
         synchronized(attemptLock) {
             // A lowered limit applies to the failures already on the counter; start
             // it again so changing the setting cannot itself set off the wipe.
-            prefs(context).edit().putInt(K_WIPE_AFTER, attempts).putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
+            prefs(context).edit().putInt(K_WIPE_AFTER, attempts).putBoolean(K_WIPE_CHOSEN, true)
+                .putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
         }
+    }
+
+    /** The app has told the owner about [wrongAttempts]. */
+    fun dismissWrongAttempts() {
+        _wrongAttempts.value = null
     }
 
     fun relockAfterMs(context: Context): Long = prefs(context).getLong(K_RELOCK_MS, DEFAULT_RELOCK_MS)
@@ -329,6 +386,7 @@ object AppLock {
     fun lock() {
         if (!_enabled.value) return
         _locked.value = true
+        lockedSince = seam.now()
         Registry.lockVault()
         appContext?.let { app ->
             EmulationGuard.disarm(app)
@@ -398,8 +456,9 @@ object AppLock {
     /**
      * Puts [code] to the lock. Blocking (Keystore work and a synchronous disk
      * write); call it off the main thread. With [unlockOnSuccess] false the
-     * right passcode only confirms the owner (changing settings) and the lock
-     * state is left alone; a wrong one counts the same either way.
+     * right passcode only confirms the owner (changing settings, or a page or
+     * an export that asks again) and the lock state is left alone; a wrong one
+     * counts the same either way.
      */
     fun attempt(context: Context, code: String, unlockOnSuccess: Boolean = true): Verdict =
         synchronized(attemptLock) { attemptLocked(context.applicationContext, code, unlockOnSuccess) }
@@ -426,7 +485,7 @@ object AppLock {
             // The counter reached the limit on an attempt whose verdict never
             // landed (the process was killed mid-check). Killing the app is not a
             // way to keep guessing: the wipe the limit called for happens now.
-            Wiper.start(context)
+            seam.wipe(context)
             return Verdict.Wiping
         }
         if (wipeAfter == 0) {
@@ -438,7 +497,7 @@ object AppLock {
         // mid-check has still spent the attempt.
         val counted = p.edit()
             .putInt(K_FAILED, failed + 1)
-            .putLong(K_LAST_FAIL, SystemClock.elapsedRealtime())
+            .putLong(K_LAST_FAIL, seam.elapsedRealtime())
             .commit()
         if (!counted) return Verdict.Unavailable("Could not record the attempt")
 
@@ -450,7 +509,7 @@ object AppLock {
         }
         if (key == null) {
             // A verifier whose key is gone was not left by this app on this phone.
-            Wiper.start(context)
+            seam.wipe(context)
             return Verdict.Wiping
         }
 
@@ -478,7 +537,10 @@ object AppLock {
         return when {
             isMain -> {
                 p.edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
-                if (unlockOnSuccess) unlocked()
+                if (unlockOnSuccess) {
+                    reportWrongAttempts(p)
+                    unlocked()
+                }
                 Verdict.Accepted
             }
             isDuress -> {
@@ -486,11 +548,50 @@ object AppLock {
                 Verdict.Wiping
             }
             wipeAfter > 0 && failed + 1 >= wipeAfter -> {
-                Wiper.start(context)
+                seam.wipe(context)
                 Verdict.Wiping
             }
-            else -> Verdict.Rejected(if (wipeAfter == 0) lockoutRemaining(p, failed + 1) else 0L)
+            else -> {
+                noteWrongAttempt(p)
+                Verdict.Rejected(if (wipeAfter == 0) lockoutRemaining(p, failed + 1) else 0L)
+            }
         }
+    }
+
+    /** A wrong passcode, anywhere it is asked for: kept until an unlock reports it. */
+    private fun noteWrongAttempt(p: SharedPreferences) {
+        val stamps = wrongStamps(p) + seam.now()
+        p.edit().putString(K_WRONG_AT, stamps.takeLast(WRONG_KEPT).joinToString(",")).commit()
+    }
+
+    private fun wrongStamps(p: SharedPreferences): List<Long> =
+        p.getString(K_WRONG_AT, null)?.split(',')?.mapNotNull { it.toLongOrNull() } ?: emptyList()
+
+    /**
+     * The lock has just been passed: the wrong passcodes kept since the last
+     * report go, and those typed before this lock screen came up become
+     * [wrongAttempts]. Called under [attemptLock].
+     */
+    private fun reportWrongAttempts(p: SharedPreferences) {
+        val stamps = wrongStamps(p)
+        if (stamps.isEmpty()) return
+        p.edit().remove(K_WRONG_AT).commit()
+        val news = wrongAttemptsBefore(stamps, lockedSince) ?: return
+        _wrongAttempts.value = _wrongAttempts.value
+            ?.let { WrongAttempts(it.count + news.count, maxOf(it.lastAt, news.lastAt)) }
+            ?: news
+    }
+
+    /**
+     * Of the wrong passcodes entered at [stamps] (wall clock), those before
+     * [sittingSince], when the lock screen just passed came up; null when there
+     * are none. The ones after it were typed at that lock screen by whoever
+     * then got in, the owner, a moment ago, and need no notice.
+     */
+    internal fun wrongAttemptsBefore(stamps: List<Long>, sittingSince: Long): WrongAttempts? {
+        val earlier = stamps.filter { it < sittingSince }
+        if (earlier.isEmpty()) return null
+        return WrongAttempts(earlier.size, earlier.maxOf { it })
     }
 
     /** The Keystore, not the guess, failed: the pre-counted attempt is returned. */
@@ -513,7 +614,7 @@ object AppLock {
         val steps = (failed - FREE_ATTEMPTS).coerceAtMost(20)
         val duration = (LOCKOUT_BASE_MS shl steps).coerceAtMost(LOCKOUT_MAX_MS)
         val last = p.getLong(K_LAST_FAIL, 0L)
-        val now = SystemClock.elapsedRealtime()
+        val now = seam.elapsedRealtime()
         if (now < last) {
             p.edit().putLong(K_LAST_FAIL, now).commit()
             return duration
@@ -625,29 +726,64 @@ object AppLock {
 
     private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").also { it.load(null) }
 
-    private fun existingKey(): SecretKey? {
-        val ks = keyStore()
-        if (!ks.containsAlias(KEY_ALIAS)) return null
-        return (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+    /**
+     * What the passcode check takes from the phone beyond its preferences file:
+     * the Keystore key the verifiers are made with, the monotonic clock the
+     * lockout runs on, the wall clock wrong attempts are dated by, and the wipe.
+     * [Platform] is the phone's own; a JVM test puts a software key, clocks it
+     * moves by hand and a wipe it only records in its place.
+     */
+    internal interface Seam {
+        /** The lock's HMAC key, or null when there is none. Throws when the Keystore does not answer. */
+        fun existingKey(): SecretKey?
+        /** Makes the lock's HMAC key. */
+        fun createKey(): SecretKey
+        /** [SystemClock.elapsedRealtime]: not settable by the owner, restarted at boot. */
+        fun elapsedRealtime(): Long
+        /** [System.currentTimeMillis]. */
+        fun now(): Long
+        /** Starts [Wiper]: the failure limit was reached, or a verifier outlived its key. */
+        fun wipe(context: Context)
     }
 
-    private fun createKey(): SecretKey {
-        fun generate(strongBox: Boolean): SecretKey {
-            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore")
-            generator.init(
-                KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
-                    .setIsStrongBoxBacked(strongBox)
-                    .build()
-            )
-            return generator.generateKey()
+    internal object Platform : Seam {
+        override fun existingKey(): SecretKey? {
+            val ks = keyStore()
+            if (!ks.containsAlias(KEY_ALIAS)) return null
+            return (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
         }
-        // StrongBox (a separate secure chip) where the phone has one; the TEE otherwise.
-        return try {
-            generate(strongBox = true)
-        } catch (e: ProviderException) {
-            generate(strongBox = false)
+
+        override fun createKey(): SecretKey {
+            fun generate(strongBox: Boolean): SecretKey {
+                val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore")
+                generator.init(
+                    KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
+                        .setIsStrongBoxBacked(strongBox)
+                        .build()
+                )
+                return generator.generateKey()
+            }
+            // StrongBox (a separate secure chip) where the phone has one; the TEE otherwise.
+            return try {
+                generate(strongBox = true)
+            } catch (e: ProviderException) {
+                generate(strongBox = false)
+            }
         }
+
+        override fun elapsedRealtime(): Long = SystemClock.elapsedRealtime()
+
+        override fun now(): Long = System.currentTimeMillis()
+
+        override fun wipe(context: Context) = Wiper.start(context)
     }
+
+    /** [Platform], except under a JVM test. */
+    @Volatile internal var seam: Seam = Platform
+
+    private fun existingKey(): SecretKey? = seam.existingKey()
+
+    private fun createKey(): SecretKey = seam.createKey()
 
     /**
      * A fresh key for biometric unlock, bound to the biometrics enrolled at this
@@ -692,8 +828,11 @@ object AppLock {
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // java.util's Base64 writes exactly what android.util.Base64 with NO_WRAP did
+    // (standard alphabet, padded, one line), so files from earlier versions read
+    // the same; and it runs on the JVM, where the lock is unit-tested.
     private fun SharedPreferences.bytes(key: String): ByteArray? =
-        getString(key, null)?.let { runCatching { Base64.decode(it, Base64.NO_WRAP) }.getOrNull() }
+        getString(key, null)?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
 
-    private fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    private fun encode(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
 }

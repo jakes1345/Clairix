@@ -1,6 +1,7 @@
 package app.clairix
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,6 +19,28 @@ class TourTest {
         ACTIVITY_SUB_TABS.forEach { assertTrue("missing $it", "act_$it" in ids) }
         assertTrue("sos" in ids && "settings" in ids && "drive" in ids && "comms" in ids)
         stops.forEach { s -> assertTrue("${s.id} has no text", s.what.length > 20 && s.how.length > 20) }
+    }
+
+    @Test
+    fun theSettingsStopFollowsUpOnboardingWhileNoPasscodeIsSet() {
+        fun settings(fullAccess: Boolean, passcodeSet: Boolean, offered: Boolean): String =
+            tourStops(fullAccess, passcodeSet = passcodeSet, lockOffered = offered).single { it.id == "settings" }.how
+        assertTrue(settings(fullAccess = true, passcodeSet = false, offered = true).startsWith("You started without a passcode"))
+        assertTrue(settings(fullAccess = true, passcodeSet = false, offered = false).startsWith("Clairix has no passcode yet"))
+        assertTrue(settings(fullAccess = false, passcodeSet = false, offered = true).startsWith("You started without a passcode"))
+        // Once there is a passcode the stop says nothing about setting one.
+        assertFalse(settings(fullAccess = true, passcodeSet = true, offered = true).contains("set one under App passcode"))
+        assertTrue(settings(fullAccess = true, passcodeSet = true, offered = false).startsWith("With a passcode set, Patterns"))
+        assertTrue(settings(fullAccess = false, passcodeSet = true, offered = true).startsWith("This tour is in Settings"))
+    }
+
+    @Test
+    fun onboardingRecordsThatItOfferedAPasscode() {
+        val context = PrefsContext()
+        assertFalse(isLockOffered(context))
+        markLockOffered(context)
+        assertTrue(isLockOffered(context))
+        assertTrue(context.prefs("prefs").getBoolean("onboarding_lock_offered", false))
     }
 
     @Test

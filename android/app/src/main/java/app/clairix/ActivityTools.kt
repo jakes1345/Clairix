@@ -23,10 +23,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.clairix.analysis.LocationCluster
 import app.clairix.analysis.LocationHistory
 import app.clairix.analysis.PatternOfLife
 import app.clairix.analysis.PatternReport
 import app.clairix.analysis.clock
+import app.clairix.security.AppLock
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.BiometricTripwireResult
 import app.clairix.security.UnlockLedger
@@ -50,11 +52,21 @@ import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
 
 // The Activity tab's analysis pages: pattern of life and the unlock ledger.
+// Both are a watcher's brief, so with a passcode set each asks for it every time
+// it opens (OwnerGate); with none set each says plainly that anyone can read it.
 
 // ── 4. Pattern of life ─────────────────────────────────────────────────────────
 
 @Composable
 internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
+    // Nothing is read from the location log until the page is open.
+    OwnerGate(title = "Pattern of life", purpose = "open Patterns", onBack = onBack) {
+        PatternOfLifeContent(onBack)
+    }
+}
+
+@Composable
+private fun PatternOfLifeContent(onBack: (() -> Unit)?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var report by remember { mutableStateOf<PatternReport?>(null) }
@@ -62,6 +74,9 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
     var analysing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var showClear by remember { mutableStateOf(false) }
+    var mapPlace by remember { mutableStateOf<LocationCluster?>(null) }
+    val lockEnabled by AppLock.enabled.collectAsStateWithLifecycle()
+    var settingPasscode by remember { mutableStateOf(false) }
 
     fun analyse() {
         if (analysing) return
@@ -116,7 +131,14 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
         )
     }
 
+    mapPlace?.let { place ->
+        PlaceMapDialog(label = place.label, lat = place.lat, lon = place.lon, onDismiss = { mapPlace = null })
+    }
+
     ToolPageList(title = "Pattern of life", onBack = onBack) {
+        if (!lockEnabled || settingPasscode) item(key = "§no-passcode") {
+            NoPasscodeBanner(setting = settingPasscode, onSettingChange = { settingPasscode = it })
+        }
         if (analysing) item(key = "§progress") { LoadingBlock("Analysing $fixes fixes — stops, departures and routes…") }
         error?.let { e -> item(key = "§error") { Notice(Tone.Danger, e, title = "Error") } }
 
@@ -177,13 +199,11 @@ internal fun PatternOfLifePage(onBack: (() -> Unit)? = null) {
                 item(key = "§places-hdr") { SectionHeader("Places") }
                 items(r.clusters, key = { "place|${it.id}" }) { c ->
                     ClairixCard(spacing = 4.dp) {
+                        // A name, not coordinates: the owner knows where home is, and a
+                        // glance at this card should not hand the address to anyone else.
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text(c.label, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
-                            Text(
-                                "%.5f, %.5f".format(Locale.US, c.lat, c.lon),
-                                style = MaterialTheme.typography.monoSmall,
-                                color = ClairixTheme.colors.textSubtle
-                            )
+                            GhostButton("Show on map", onClick = { mapPlace = c })
                         }
                         KeyValueRow("Visits", "${c.visits} on ${c.days} ${if (c.days == 1) "day" else "days"}")
                         KeyValueRow("Time here", "${c.dwellMinutes / 60} h ${c.dwellMinutes % 60} min")
@@ -261,8 +281,17 @@ private fun unlockLabel(kind: UnlockKind): String = when (kind) {
 
 @Composable
 internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
+    OwnerGate(title = "Unlock ledger", purpose = "open the unlock ledger", onBack = onBack) {
+        UnlockLedgerContent(onBack)
+    }
+}
+
+@Composable
+private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val lockEnabled by AppLock.enabled.collectAsStateWithLifecycle()
+    var settingPasscode by remember { mutableStateOf(false) }
     var adminActive by remember { mutableStateOf(UnlockLedger.isAdminActive(context)) }
     var usageAccess by remember { mutableStateOf(UnlockLedger.hasUsageAccess(context)) }
     var events by remember { mutableStateOf<List<UnlockEvent>?>(null) }
@@ -304,6 +333,9 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
     val endMin = sleepEnd.toIntOrNull()
 
     ToolPageList(title = "Unlock ledger", onBack = onBack) {
+        if (!lockEnabled || settingPasscode) item(key = "§no-passcode") {
+            NoPasscodeBanner(setting = settingPasscode, onSettingChange = { settingPasscode = it })
+        }
         item(key = "§sources-hdr") { SectionHeader("Sources") }
         item(key = "§sources") {
             ClairixCard {

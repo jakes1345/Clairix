@@ -70,8 +70,8 @@ and time, and nothing about senders, lookups or activity.
 timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the
 whole Comms database (contacts, messages, groups), the Comms settings, keys
 and saved cards are sealed on disk under keys in the phone's secure hardware, so a
-copy of the app's files is ciphertext. The app lock wipes after a run of wrong
-passcodes (three by default; you can choose the number, or none), a separate
+copy of the app's files is ciphertext. The app lock can wipe after a run of wrong
+passcodes (a number you pick when you set it; until you do, none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
 Clairix" page wipes on demand; a wipe deletes the keys first, so cutting it
 short leaves only ciphertext. Locking collapses every message notification
@@ -120,8 +120,10 @@ Read this part twice.
   screen recording) and tell you. It cannot stop or remove an implant below
   it, and it does not claim to remove viruses.
 - **A phone seized while unlocked**, or taken from your hand with Clairix
-  open. Whatever the app can show you, the person holding it can see. The
-  wipe needs you to reach it, or the wrong-passcode limit to be hit.
+  open. Whatever the app can show you, the person holding it can see, except
+  that with a passcode set, Patterns, Unlocks, the tracker map and the
+  evidence export ask for it again each time they are opened. The wipe needs
+  you to reach it, or the wrong-passcode limit to be hit.
 - **Where you are, from the network.** Your carrier, and anyone who compels
   it, always knows roughly where a phone is from the towers it talks to, and
   the law in most countries lets it keep that. Clairix can detect a fake
@@ -222,10 +224,12 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   are. Unlocked and in another app, Android shows a call banner carrying
   Clairix's name instead of the screen, which is why the page can also lock
   the phone as it schedules, once Clairix's device admin is on.
-- **App lock.** A passcode for Clairix itself, with optional biometrics.
-  Wrong passcodes wipe after a limit you choose, or lock you out for longer
-  each time if you turn the wipe off. The passcode is never stored; only a
-  verifier made with a hardware key is.
+- **App lock.** A passcode for Clairix itself, with optional biometrics,
+  offered on the first run. Wrong passcodes lock you out for longer each
+  time; they wipe Clairix only after a limit you pick, which it asks for as
+  soon as you set the passcode. Once you are in, it tells you when a wrong
+  passcode was entered while you were away. The passcode is never stored;
+  only a verifier made with a hardware key is.
 
 ---
 
@@ -246,7 +250,7 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   certificate; turn it on if you would rather lose the relay than trust a
   new certificate without checking.
 - **Wipe after N wrong passcodes** (Settings → App lock): 1, 3, 5, 10 or
-  never.
+  never. Asked for when you set the passcode; never until you answer.
 - **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
   or forever. 30 by default. The location log, the timeline, vehicle trips
   and the unlock ledger older than that are deleted; the cell-tower baseline

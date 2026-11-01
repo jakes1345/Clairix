@@ -423,6 +423,8 @@ class MainActivity : AppCompatActivity() {
                         ) {
                             LockScreen()
                         }
+                        // Once past the lock: wrong passcodes entered while she was away.
+                        WrongPasscodeNotice()
                     }
                 }
             }
@@ -1592,7 +1594,8 @@ private fun MainApp(
                         onShowExplainer = { d -> explainerTarget = ExplainerTarget.BleDevice(d) }
                     )
                 } else {
-                    MapScreen()
+                    // The trail of where she has been: behind the passcode whenever one is set.
+                    OwnerGate(title = "Map", purpose = "open the map", onBack = null) { MapScreen() }
                 }
                 category == ScanCategory.CAMERAS -> CameraSweepScreen()
                 category == ScanCategory.CELL -> CellScreen(
@@ -1740,9 +1743,11 @@ internal fun ScanScreen(
 
         // ── Actions ──
         item(key = "§export") {
+            // With a passcode set, the export asks for it (or a biometric) every time.
+            val askOwner = rememberOwnerCheck()
             SecondaryButton(
                 "Export evidence report",
-                onClick = {
+                onClick = askOwner.guard("export the evidence report") {
                     val i = Report.share(context, status, detections, timeline, cell, nfc)
                     context.startActivity(Intent.createChooser(i, "Share evidence report"))
                 },
