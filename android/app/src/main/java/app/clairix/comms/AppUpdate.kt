@@ -110,13 +110,29 @@ internal fun updateNotice(latest: LatestRelease?, versionCode: Int, dismissedVer
  * Why an envelope must not be sent, or null when it may. Below the oldest safe
  * version nothing is sent: an emergency brake for a version with a security
  * flaw. An SOS ([alert] [RelayClient.ALERT_SOS]) still goes: someone in danger
- * with an old version is better served by an alert than by none.
+ * with an old version is better served by an alert than by none. So does what
+ * an SOS cannot reach a member without ([forSos], see [carriesSos]).
  */
-internal fun sendRefusalFor(notice: UpdateNotice, alert: String?): String? {
+internal fun sendRefusalFor(notice: UpdateNotice, alert: String?, forSos: Boolean = false): String? {
     val newer = notice.newer
-    if (!notice.unsafe || newer == null || alert == RelayClient.ALERT_SOS) return null
+    if (!notice.unsafe || newer == null || alert == RelayClient.ALERT_SOS || forSos) return null
     return "Not sent: this version of Clairix has a security flaw that ${newer.versionName} fixes, and it sends nothing " +
         "but SOS alerts until it is updated. Settings > About has the update."
+}
+
+/**
+ * Whether a payload of [type] (with group control [op] for group [gid]) is
+ * part of getting an SOS out, so the brake below the oldest safe version
+ * ([sendRefusalFor]) lets it go: the SOS itself, and the request for a group's
+ * member list while an SOS to that group is still being tried
+ * ([heldSosGroups], the groups with such a row). Without the second, an SOS to
+ * a group whose list on this phone is out of date would wait for an answer to
+ * a request the brake never let leave.
+ */
+internal fun carriesSos(type: String, op: String?, gid: String?, heldSosGroups: Set<String>): Boolean = when (type) {
+    CommsWire.T_PANIC -> true
+    CommsWire.T_GROUP_CTRL -> op == CommsWire.OP_ROSTER_REQUEST && gid != null && gid in heldSosGroups
+    else -> false
 }
 
 /**
@@ -187,7 +203,7 @@ object AppUpdate {
     }
 
     /** Why an envelope with [alert] must not be sent now ([sendRefusalFor]); null when it may. */
-    fun sendRefusal(alert: String?): String? = sendRefusalFor(_notice.value, alert)
+    fun sendRefusal(alert: String?, forSos: Boolean = false): String? = sendRefusalFor(_notice.value, alert, forSos)
 
     private fun publish() {
         _notice.value = updateNotice(latest, BuildConfig.VERSION_CODE, dismissed)
