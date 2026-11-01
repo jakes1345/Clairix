@@ -140,7 +140,11 @@ counts and durations are judged:
   allowed: it switches nothing on;
 - after the soak test, ten minutes with comms online: the same wake-lock, alarm
   and held-lock budgets, and no Bluetooth scan time, since the scanner was
-  stopped before the messaging tests.
+  stopped before the messaging tests. Bluetooth is switched off and on just
+  before this window: Android 34's Bluetooth stack was seen keeping a scan
+  registered to the app after the process that started it had gone, and the
+  switch ends every registration, while a scan the app is really running
+  starts again when Bluetooth comes back and is still counted.
 
 Android does not record the timeout an app passes when it takes a wake lock, so
 the "no wake lock without a timeout" rule is also kept in the sources:
