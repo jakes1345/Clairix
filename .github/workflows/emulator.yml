@@ -348,6 +348,14 @@ jobs:
           done
           "$ADB" shell input keyevent KEYCODE_HOME
           grep -q "ServiceRecord" power/scanner-service.txt || { echo "::error::The scanner was not running when the power window began, so there was nothing to measure; see power/scanner-service.txt"; exit 1; }
+          # A scanner just started counts the phone as moving until it has seen
+          # no movement for minutes (MotionPolicy.STILL_AFTER_MS): precise fixes
+          # every 15 s, and the network-location wake-ups they bring. The window
+          # judges scenario S1, a phone lying still with the scanner running
+          # (docs/audit/POWER.md), so the scanner is settled first, as it would
+          # be by then on a phone on a table.
+          "$ADB" shell am broadcast -a app.clairix.debug.FORCE_STILL -p app.clairix > /dev/null
+          sleep 20
           "$ADB" shell dumpsys battery unplug
           "$ADB" shell dumpsys batterystats --reset
           "$ADB" shell input keyevent KEYCODE_SLEEP

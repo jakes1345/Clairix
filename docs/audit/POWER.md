@@ -125,7 +125,9 @@ emulator's battery is unplugged for the window (`dumpsys battery unplug`) so tha
 batterystats counts at all; it has no battery model worth a percentage, so only
 counts and durations are judged:
 
-- after the smoke test, ten minutes with the scanner running and the screen off:
+- after the smoke test, ten minutes with the scanner running and the screen off,
+  started again (the instrumentation's end takes the process with it) and settled
+  first as scenario S1's phone on a table would be by then:
   partial wake-lock time blamed on Clairix at most 60 s per ten minutes, wake-up
   alarms at most one per ten minutes (and one more for an alarm that falls on
   both edges of the window), no Clairix wake lock held for over a minute in
