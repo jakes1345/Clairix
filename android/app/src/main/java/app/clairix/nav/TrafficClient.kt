@@ -2,6 +2,7 @@ package app.clairix.nav
 
 import android.content.Context
 import android.util.Log
+import app.clairix.Store
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.RelayClient
 import kotlinx.coroutines.CoroutineScope
@@ -19,7 +20,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
-import java.io.File
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -355,7 +355,6 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
         const val LIVE_INTERVAL_MS = 60_000L
         /** The relay's live window is 10 min; past half that without a refresh our copy is too old to trust. */
         const val LIVE_STALE_MS = 5 * 60_000L
-        const val TYPICAL_FRESH_SEC = 7L * 24 * 3600
         const val HOURS_PER_WEEK = 168
         const val PROVIDER_NAV_INTERVAL_MS = 2 * 60_000L
         /** Provider incidents not refreshed for this long are dropped rather than shown as current. */
@@ -363,7 +362,8 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
     }
 
     private val appContext = context.applicationContext
-    private val cacheFile = File(File(appContext.filesDir, "nav"), "typical-$region.json")
+    /** Sealed, and kept no longer than a week or the owner's history retention ([TypicalSpeedCache]). */
+    private val cache = Store(TypicalSpeedCache.file(appContext, region))
 
     private val live = ConcurrentHashMap<String, Float>()
     @Volatile private var liveFetchedAtMs = 0L
@@ -638,7 +638,7 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
             val wanted = LinkedHashSet<String>()
             for (s in segs) {
                 val at = typicalFetchedAt[s]
-                if (at == null || now - at > TYPICAL_FRESH_SEC) wanted.add(s)
+                if (at == null || now - at > TypicalSpeedCache.FRESH_SEC) wanted.add(s)
             }
             if (wanted.isEmpty()) return@withLock
             val relay = navRelay(appContext) ?: return@withLock
@@ -674,32 +674,26 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
     }
 
     private fun loadTypicalCache() {
-        if (!cacheFile.isFile) return
-        try {
-            val root = JSONObject(cacheFile.readText())
-            val now = System.currentTimeMillis() / 1000
-            val segs = root.optJSONObject("segments") ?: return
-            val keys = segs.keys()
-            while (keys.hasNext()) {
-                val k = keys.next()
-                val o = segs.optJSONObject(k) ?: continue
-                val t = o.optLong("t", 0L)
-                if (now - t > TYPICAL_FRESH_SEC) continue
-                typicalFetchedAt[k] = t
-                o.optJSONArray("h")?.let { parseProfile(it) }?.let { typical[k] = it }
-            }
-        } catch (e: IOException) {
-            Log.w(TAG, "Typical cache unreadable: ${e.message}")
-        } catch (e: JSONException) {
-            Log.w(TAG, "Typical cache corrupt, discarding: ${e.message}")
-            cacheFile.delete()
+        // The store opens the sealed file (and seals one an earlier version left in the clear).
+        val root = cache.json
+        val oldest = TypicalSpeedCache.oldestKeptSec(appContext, System.currentTimeMillis() / 1000)
+        val segs = root.optJSONObject("segments") ?: return
+        val keys = segs.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val o = segs.optJSONObject(k) ?: continue
+            val t = o.optLong("t", 0L)
+            if (t < oldest) continue
+            typicalFetchedAt[k] = t
+            o.optJSONArray("h")?.let { parseProfile(it) }?.let { typical[k] = it }
         }
     }
 
     private fun saveTypicalCache(now: Long) {
+        val oldest = TypicalSpeedCache.oldestKeptSec(appContext, now)
         val segs = JSONObject()
         for ((k, t) in typicalFetchedAt) {
-            if (now - t > TYPICAL_FRESH_SEC) continue
+            if (t < oldest) continue
             val o = JSONObject().put("t", t)
             val h = typical[k]
             if (h != null) {
@@ -711,17 +705,7 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
             }
             segs.put(k, o)
         }
-        val text = JSONObject().put("region", region).put("savedAt", now).put("segments", segs).toString()
-        try {
-            cacheFile.parentFile?.mkdirs()
-            val tmp = File(cacheFile.parentFile, cacheFile.name + ".tmp")
-            tmp.writeText(text)
-            if (!tmp.renameTo(cacheFile)) {
-                cacheFile.delete()
-                if (!tmp.renameTo(cacheFile)) throw IOException("Could not replace ${cacheFile.name}")
-            }
-        } catch (e: IOException) {
-            Log.w(TAG, "Could not save typical cache: ${e.message}")
-        }
+        // Written now, on this IO thread, under typicalLock: one writer, sealed, replaced whole.
+        cache.replace(JSONObject().put("region", region).put("savedAt", now).put("segments", segs))
     }
 }

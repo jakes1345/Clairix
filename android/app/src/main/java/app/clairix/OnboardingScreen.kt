@@ -61,7 +61,8 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 private const val ONBOARDING_PREFS = "prefs"
-private const val ONBOARDING_DONE_KEY = "onboarding_done"
+/** Also written by a duress wipe's decoy (security/Wiper.kt), which has done its first run. */
+internal const val ONBOARDING_DONE_KEY = "onboarding_done"
 private const val LOCK_OFFERED_KEY = "onboarding_lock_offered"
 // The full app walks through the scanner; the comms-only build has pages about
 // encrypted messaging and ends on Get started instead of Start scanning. Both

@@ -45,6 +45,10 @@
     <!-- Bring the relay connection back after a reboot or an update. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Fake incoming call (Comms menu, both editions): rings at the exact moment
+         the owner picked, even in Doze. A special access the owner grants. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <!-- The relay (and, in the full app, map tile downloads from OpenStreetMap). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -189,6 +193,69 @@
         <!-- Decline / hang-up buttons on call notifications. -->
         <receiver
             android:name=".comms.CallActionReceiver"
+            android:exported="false" />
+
+        <!--
+            Fake incoming call: a pretend ring the owner schedules as a reason to
+            leave, in the Comms menu of both editions. Its screen shows over the
+            lock screen like a real call and is kept out of recents; only Clairix's
+            own alarm and notification can open it.
+        -->
+        <activity
+            android:name=".security.FakeCallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity="app.clairix.fakecall"
+            android:excludeFromRecents="true"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.Clairix" />
+
+        <!-- The fake call's alarm and its Decline button. -->
+        <receiver
+            android:name=".security.FakeCallReceiver"
+            android:exported="false" />
+
+        <!--
+            The fake call's ring: a short foreground service (no type permission and
+            no prerequisites; the ring lasts 45 s) that plays the phone's ringtone
+            and vibrates from the background, under a wake lock, so the call rings
+            whether or not any screen opens. Its notification is the incoming-call
+            card. Started by the alarm; ends with the ring (answer, decline, Cancel
+            or the ring's own timer). On Android 12 and 13, which have no such type,
+            it runs as an untyped foreground service.
+        -->
+        <service
+            android:name=".security.FakeCallRingService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+
+        <!--
+            After the duress passcode's wipe: ends the process that showed the old
+            data and opens the lock screen afresh in a new one. Runs for a moment in
+            a process of its own, since a process cannot reliably restart itself.
+            Not exported: only the wipe starts it.
+        -->
+        <activity
+            android:name=".security.WipeRelaunchActivity"
+            android:exported="false"
+            android:process=":relaunch"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Clairix" />
+
+        <!-- A wipe's request to the relay to delete the account, tried again until
+             the relay takes it or it expires (a day), whether or not Clairix runs. -->
+        <receiver
+            android:name=".security.RelayFarewellAlarm"
+            android:exported="false" />
+
+        <!-- History older than the owner's retention, deleted once a day even when
+             neither the scanner nor the app is open. -->
+        <receiver
+            android:name=".security.HistoryRetentionAlarm"
             android:exported="false" />
 
         <!-- Portrait QR scanner for pairing; the library's default is landscape. -->

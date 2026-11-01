@@ -57,7 +57,10 @@ fun LockScreen() {
     var code        by remember { mutableStateOf("") }
     var checking    by remember { mutableStateOf(false) }
     var shake       by remember { mutableStateOf(false) }
-    var errorText   by remember { mutableStateOf("") }
+    // Back from the duress wipe in a fresh process (AppLock.takeWipeNotice): this
+    // screen carries on from the last one, with its words and without a prompt.
+    val afterWipe = remember { AppLock.takeWipeNotice() }
+    var errorText   by remember { mutableStateOf(if (afterWipe) "Wrong passcode" else "") }
     var lockoutMs   by remember { mutableLongStateOf(0L) }
     var countdown   by remember { mutableLongStateOf(0L) }
     val maxLen = AppLock.MAX_LENGTH
@@ -89,9 +92,10 @@ fun LockScreen() {
         }
     }
 
-    // Auto-show the biometric prompt when the lock screen first appears.
+    // Auto-show the biometric prompt when the lock screen first appears (not on
+    // the duress wipe's return: the screen before it had it dismissed).
     LaunchedEffect(biometricEnabled) {
-        if (biometricEnabled && activity != null) promptBiometric()
+        if (biometricEnabled && activity != null && !afterWipe) promptBiometric()
     }
 
     // Auto-submit once the code reaches the set length, OR on an explicit

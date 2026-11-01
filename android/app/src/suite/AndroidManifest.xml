@@ -22,9 +22,6 @@
          A runtime permission; without it the scanner simply never knows. -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
-    <!-- Fake incoming call: rings at the exact moment the owner picked, even in Doze. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-
     <!-- Stalkerware scan: Android 11+ hides most installed apps from a package
          listing without this, and an app hiding on the phone is the whole point. -->
     <uses-permission
@@ -178,40 +175,9 @@
             </intent-filter>
         </receiver>
 
-        <!--
-            Fake incoming call: a pretend ring the owner schedules as a reason to
-            leave. Its screen shows over the lock screen like a real call and is kept
-            out of recents; only Clairix's own alarm and notification can open it.
-        -->
-        <activity
-            android:name=".security.FakeCallActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:taskAffinity="app.clairix.fakecall"
-            android:excludeFromRecents="true"
-            android:showOnLockScreen="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:theme="@style/Theme.Clairix" />
-
-        <!-- The fake call's alarm and its Decline button. -->
-        <receiver
-            android:name=".security.FakeCallReceiver"
-            android:exported="false" />
-
-        <!--
-            The fake call's ring: a short foreground service (no type permission and
-            no prerequisites; the ring lasts 45 s) that plays the phone's ringtone
-            and vibrates from the background, under a wake lock, so the call rings
-            whether or not any screen opens. Its notification is the incoming-call
-            card. Started by the alarm; ends with the ring (answer, decline, Cancel
-            or the ring's own timer). On Android 12 and 13, which have no such type,
-            it runs as an untyped foreground service.
-        -->
-        <service
-            android:name=".security.FakeCallRingService"
-            android:exported="false"
-            android:foregroundServiceType="shortService" />
+        <!-- The fake call's activity, receiver and ring service are declared in
+             src/main/AndroidManifest.xml: the Comms menu carries Fake call in both
+             editions. -->
 
     </application>
 </manifest>

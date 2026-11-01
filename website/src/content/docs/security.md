@@ -12,7 +12,7 @@ The following is created and stored only on your device. It is not uploaded, and
 - Your duress phrase, stored encrypted and compared only in memory.
 - Hidden-camera sweep frames. The camera feed is analysed live and no frame is saved.
 
-Android backups are turned off for Clairix, so none of this is copied to a cloud backup. You can delete all of it at any time with Panic Wipe, or by uninstalling the app. History (the location log, the timeline, vehicle trips and the unlock ledger) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings.
+Android backups are turned off for Clairix, so none of this is copied to a cloud backup. You can delete all of it at any time with Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or by uninstalling the app. History (the location log, the timeline, vehicle trips, the unlock ledger, and the map's tile and traffic caches) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings, once a day even when Clairix is closed. The cell-tower baseline keeps which towers are usual, not when you were near them, and forgets a tower not seen for three times the retention; an exported evidence report is deleted from the phone after a day.
 
 ## What leaves your phone, and where it goes {#egress}
 
@@ -100,7 +100,7 @@ What the relay can observe: the recipient of each envelope, its size, the time, 
 
 We say the rest plainly too. A relay operator, or the platform under it, who captured live requests could see the network address each one came from. Apps from before Beta 6 fetch tokens the relay hands out, which it could tie to the account; current tokens are blind and that link is gone. That is possible only while a request is in flight; none of it is written down. If your IP address matters to you, turn on Tor in Comms settings (it is built into the app, and relays with an onion address are reached without leaving Tor), or use a VPN. If you use a VPN or a Tor app outside Clairix, also turn on "Refuse the relay if its key changes" (Phone check → Certificates): a Tor exit relay sits between you and our relay, and in October 2026 more than 300 hijacked exits swapped in fake keys to steal SSH passwords. Messages stay end-to-end encrypted either way, and a forged web certificate would have to fool the normal certificate checks first; with the key pinned, even one that did is refused.
 
-You delete your relay account from inside the app with Panic Wipe or Unpair, or by email. [How to delete your account.](/delete-account)
+You delete your relay account from inside the app with Wipe Clairix or Delete identity and number (both in Settings, under Wipe and delete), or by email. [How to delete your account.](/delete-account)
 
 ## No analytics, by design
 

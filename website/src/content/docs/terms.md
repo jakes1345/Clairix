@@ -96,7 +96,7 @@ You agree to indemnify and hold Clairix harmless from claims, damages and expens
 
 ## 15. Termination
 
-You may stop using the Service at any time. Panic Wipe or Unpair deletes your relay account. We may suspend or terminate your access if you violate these terms, if required by law, or if we discontinue the Service. Sections 6, 9, 12, 13, 14 and 16 survive termination.
+You may stop using the Service at any time. Wipe Clairix, or Delete identity and number, deletes your relay account (see [how to delete your account](/delete-account)). We may suspend or terminate your access if you violate these terms, if required by law, or if we discontinue the Service. Sections 6, 9, 12, 13, 14 and 16 survive termination.
 
 ## 16. Governing law and disputes
 

@@ -544,7 +544,8 @@ object AppLock {
                 Verdict.Accepted
             }
             isDuress -> {
-                Wiper.start(context)
+                // The code goes with the wipe: the decoy it leaves opens to it.
+                Wiper.start(context, duressCode = code)
                 Verdict.Wiping
             }
             wipeAfter > 0 && failed + 1 >= wipeAfter -> {
@@ -671,9 +672,11 @@ object AppLock {
     }
 
     /**
-     * Sets the duress passcode: entered on the lock screen, it wipes Clairix
-     * exactly as the failure limit would, and looks like any wrong passcode.
-     * Null removes it. Needs the lock to be on. Blocking.
+     * Sets the duress passcode: entered on the lock screen, it looks like any
+     * wrong passcode and wipes Clairix as the failure limit would, but leaves a
+     * decoy rather than a first run: the lock screen stays, and from then on
+     * this code opens an emptied Clairix ([Wiper]). Null removes it. Needs the
+     * lock to be on. Blocking.
      */
     fun setDuress(context: Context, code: String?): Result<Unit> = runCatching {
         synchronized(attemptLock) {
@@ -720,6 +723,65 @@ object AppLock {
             _biometricEnabled.value = false
             backgroundedAt = 0L
         }
+    }
+
+    // ── The decoy a duress wipe leaves ──────────────────────────────────────
+
+    /**
+     * The decoy's lock for [code], the duress passcode just entered: a fresh
+     * Keystore key at [KEY_ALIAS] and the code's verifier under it. Called by
+     * [Wiper] once every key, the old lock's among them, is gone, so nothing of
+     * the old lock survives in the new one. Blocking (Keystore work).
+     */
+    internal fun makeDecoyLock(code: String): DecoyLock {
+        val key = existingKey() ?: createKey()
+        val salt = ByteArray(SALT_LEN).also { random.nextBytes(it) }
+        val input = code.toByteArray(Charsets.UTF_8)
+        try {
+            return DecoyLock(encode(salt), encode(mac(key, salt, input)))
+        } finally {
+            input.fill(0)
+        }
+    }
+
+    /**
+     * Writes the decoy's lock after a duress wipe: [lock] as the passcode, a
+     * duress slot no code matches (as on any phone without a duress passcode),
+     * and the owner's wipe limit and relock delay, so the lock screen behaves as
+     * it did. The limit counts as chosen, as it is on any lock set up since the
+     * choice was asked for: a decoy that asked "Check your wipe limit" would be
+     * one no new install could be. Biometric unlock comes back only if it was on
+     * and a strong biometric is still enrolled to bind a new key to. Blocking.
+     */
+    internal fun writeDecoy(context: Context, lock: DecoyLock, wipeAfter: Int, relockMs: Long, biometric: Boolean): Boolean {
+        val edit = prefs(context).edit().clear()
+            .putString(K_SALT, lock.salt)
+            .putString(K_VERIFIER, lock.verifier)
+            .putInt(K_FAILED, 0)
+            .putInt(K_WIPE_AFTER, if (wipeAfter in WIPE_AFTER_CHOICES) wipeAfter else DEFAULT_WIPE_AFTER)
+            .putBoolean(K_WIPE_CHOSEN, true)
+            .putLong(K_RELOCK_MS, if (relockMs in RELOCK_CHOICES) relockMs else DEFAULT_RELOCK_MS)
+        decoyDuress(edit)
+        val bio = biometric && runCatching { createBiometricKey() }.isSuccess
+        edit.putBoolean(K_BIOMETRIC, bio)
+        return edit.commit()
+    }
+
+    @Volatile private var wipeNotice = false
+
+    /**
+     * The duress wipe brought Clairix back to its lock screen in a fresh process
+     * ([WipeRelaunchActivity]); the new lock screen says what the last one said.
+     */
+    fun noteWipeRelaunch() {
+        wipeNotice = true
+    }
+
+    /** Whether the lock screen opens on "Wrong passcode", as the one the duress code was typed into ended. Asked once. */
+    fun takeWipeNotice(): Boolean {
+        val notice = wipeNotice
+        wipeNotice = false
+        return notice
     }
 
     // ── Keystore ────────────────────────────────────────────────────────────

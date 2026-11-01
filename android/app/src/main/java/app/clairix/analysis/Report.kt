@@ -32,6 +32,34 @@ object Report {
     /** How long an exported report stays in the cache for a share target to read. */
     const val EXPORT_RETENTION_MS = 24 * 60 * 60_000L
 
+    /**
+     * Reports live in a folder of their own, the only cache folder the file
+     * provider exposes besides the camera's; earlier versions wrote them at the
+     * cache root, where a share target could reach everything else too.
+     */
+    private const val REPORTS_DIR = "reports"
+
+    /**
+     * Deletes exported reports older than [EXPORT_RETENTION_MS], and any left at
+     * the cache root by earlier versions; returns how many went. A report is the
+     * one file the app writes in the clear, with the positions where devices were
+     * seen, so it is not left lying in the cache: it is kept a day, not deleted
+     * at once, because a mail client reads the attachment when it actually sends,
+     * which offline can be well after the share, and deleting the file underneath
+     * it lost the report. Runs at every export and on the retention schedule
+     * ([app.clairix.security.HistoryRetention]), so the last export does not wait
+     * for the next one to go.
+     */
+    fun pruneExports(cacheDir: File, now: Long): Int {
+        val isReport = java.io.FileFilter { f -> f.isFile && f.name.startsWith("clairix_") && f.name.endsWith(".txt") }
+        var removed = 0
+        cacheDir.listFiles(isReport)?.forEach { if (it.delete()) removed++ }
+        File(cacheDir, REPORTS_DIR).listFiles(isReport)
+            ?.filter { now - it.lastModified() > EXPORT_RETENTION_MS }
+            ?.forEach { if (it.delete()) removed++ }
+        return removed
+    }
+
     fun share(
         context: Context,
         status: ScanStatus,
@@ -42,21 +70,9 @@ object Report {
         wifi: List<WifiAnomaly> = emptyList()
     ): Intent {
         val text = toText(status, detections, timeline, cell, nfc, wifi)
-        // Each report carries the GPS locations where devices were observed, if any,
-        // so earlier ones are not left lying in the cache indefinitely. They are kept
-        // for a day, not deleted at once: a
-        // mail client reads the attachment when it actually sends, which offline can
-        // be well after the share, and deleting the file underneath it lost the report.
         val now = System.currentTimeMillis()
-        // Reports live in a folder of their own, the only cache folder the file
-        // provider exposes besides the camera's; earlier versions wrote them at
-        // the cache root, where a share target could reach everything else too.
-        val dir = File(context.cacheDir, "reports").also { it.mkdirs() }
-        val isReport = java.io.FileFilter { f -> f.isFile && f.name.startsWith("clairix_") && f.name.endsWith(".txt") }
-        context.cacheDir.listFiles(isReport)?.forEach { it.delete() }
-        dir.listFiles(isReport)
-            ?.filter { now - it.lastModified() > EXPORT_RETENTION_MS }
-            ?.forEach { it.delete() }
+        pruneExports(context.cacheDir, now)
+        val dir = File(context.cacheDir, REPORTS_DIR).also { it.mkdirs() }
         val file = File(dir, "clairix_${now}.txt")
         file.writeText(text)
         val uri: Uri = FileProvider.getUriForFile(

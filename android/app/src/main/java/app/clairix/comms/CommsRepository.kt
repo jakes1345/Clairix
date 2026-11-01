@@ -1024,31 +1024,45 @@ object CommsRepository {
         }
     }
 
-    /** Deletes the mailbox on the relay (best effort) and everything local. */
     /**
      * The relay account deletions, signed now for a wipe to send once the
-     * phone is erased (see [RelayClient.preparedWipe]): this relay's, then the
-     * one on the relay this phone moved away from, while it still has one.
+     * phone is erased, [count] copies [stepMs] apart (see
+     * [RelayClient.preparedWipes]): this relay's, then the one on the relay
+     * this phone moved away from, while it still has one.
      */
-    fun preparedRelayWipes(): List<okhttp3.Request> {
+    fun preparedRelayWipes(count: Int, stepMs: Long): List<RelayClient.PreparedWipe> {
         if (!initialised || !config.isRegistered) return emptyList()
-        return listOfNotNull(relay.preparedWipe(), if (config.previousRelay != null) previousRelay.preparedWipe() else null)
+        return listOfNotNull(
+            relay.preparedWipes(count, stepMs),
+            if (config.previousRelay != null) previousRelay.preparedWipes(count, stepMs) else null
+        )
     }
 
-    fun sendRelayWipe(request: okhttp3.Request, timeoutSec: Long) = relay.sendPrepared(request, timeoutSec)
-
+    /** Deletes the mailbox on the relay (best effort) and everything local. */
     suspend fun unpair() = withContext(Dispatchers.IO) {
         lock.withLock {
             setBusy(true)
+            // Signed now, while the identity exists: if the relay has not confirmed the
+            // deletion in the few seconds below, it waits in a file and is tried again
+            // for a day (security/RelayFarewell.kt), so an offline phone does not leave
+            // the account behind on the relay.
+            val farewells = runCatching { app.clairix.security.RelayFarewell.prepareAll() }.getOrDefault(emptyList())
+            val told = java.util.concurrent.atomic.AtomicBoolean(false)
             // The relay gets a few seconds to delete the account; an unreachable relay
-            // must not hold up what follows (a wipe gives this whole call six). The
-            // call itself blocks on its own thread until the client's timeout.
+            // must not hold up what follows. The call itself blocks on its own thread
+            // until the client's timeout.
             val remote = scope.launch(Dispatchers.IO) {
-                runCatching { relay.wipe() }.onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
+                runCatching { relay.wipe() }
+                    .onSuccess { told.set(true) }
+                    .onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
                 // The account this phone moved away from goes too, if that relay answers.
                 if (config.previousRelay != null) runCatching { previousRelay.wipe() }
             }
             withTimeoutOrNull(RELAY_WIPE_BUDGET_MS) { remote.join() }
+            if (!told.get() && farewells.isNotEmpty()) runCatching {
+                app.clairix.security.RelayFarewell.keep(appContext.filesDir, farewells)
+                app.clairix.security.RelayFarewell.arm(appContext, app.clairix.security.RelayFarewell.FIRST_TRY_MS)
+            }
             runCatching { UnifiedPush.unregister(appContext) }
             CommsService.stop(appContext)
             LiveLink.disconnect()

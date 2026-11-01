@@ -188,6 +188,11 @@ object UnlockLedger {
     private fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = synchronized(lock) {
         val (s, _) = ledgerLocked() ?: return null
         val event = insertLocked(ts, kind, extra) ?: return null
+        // The device-admin receiver writes here on every unlock whether or not
+        // the app or the scanner runs, so it also drops what has aged past the
+        // owner's retention: the ledger cannot outgrow it on a phone whose owner
+        // never opens Clairix (HistoryRetention covers the rest).
+        appContext?.let { app -> HistoryRetention.cutoff(app)?.let { cutoff -> dropOlderThanLocked(cutoff) } }
         // The row is in memory; the sealed file follows within seconds, one
         // write for a burst of rows, serialised under [lock] on the IO dispatcher.
         s.touch(5_000L, guard = lock)
@@ -215,7 +220,22 @@ object UnlockLedger {
 
     /** Deletes rows before [cutoff] and writes the ledger; returns how many. Blocking; call off the main thread. */
     fun pruneOlderThan(cutoff: Long): Int = synchronized(lock) {
+        val (s, _) = ledgerLocked() ?: return 0
+        val removed = dropOlderThanLocked(cutoff)
+        if (removed > 0) s.flush()
+        removed
+    }
+
+    /**
+     * Takes rows before [cutoff] out of the document, leaving the write to the
+     * caller; returns how many. Every row is looked at: a backfill can add rows
+     * older than the newest ones. Caller holds [lock].
+     */
+    private fun dropOlderThanLocked(cutoff: Long): Int {
         val (s, arr) = ledgerLocked() ?: return 0
+        var oldest = Long.MAX_VALUE
+        for (i in 0 until arr.length()) arr.optJSONArray(i)?.let { oldest = minOf(oldest, it.optLong(1)) }
+        if (oldest >= cutoff) return 0
         val kept = JSONArray()
         for (i in 0 until arr.length()) {
             val row = arr.optJSONArray(i) ?: continue
@@ -227,9 +247,8 @@ object UnlockLedger {
             held.clear()
             for (i in 0 until kept.length()) kept.optJSONArray(i)?.let { held += key(it.optLong(1), it.optString(2)) }
             s.markDirty()
-            s.flush()
         }
-        removed
+        return removed
     }
 
     private fun publish(event: UnlockEvent) {

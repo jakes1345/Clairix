@@ -24,7 +24,11 @@ export interface Env {
   TURN_KEY_API_TOKEN?: string;
   /** Optional: ClairixCoin minted for every new registration (a whole number, e.g. "100"). Unset or "0": none. */
   COIN_INITIAL_BALANCE?: string;
-  /** Optional: protects POST /v1/admin/coin/mint. Unset: minting is off. */
+  /**
+   * Optional: protects the operator's routes, POST /v1/admin/coin/mint and
+   * DELETE /v1/admin/accounts/:number (a deletion requested by email). Unset:
+   * both are off.
+   */
   ADMIN_SECRET?: string;
   /** Optional: comma-separated URLs of WZDx v4 GeoJSON feeds, polled every 10 minutes for work zones. */
   WZDX_FEEDS?: string;

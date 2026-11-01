@@ -246,6 +246,8 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         AppSettings.load(this)
         AppLock.init(this)
+        // Back from the duress wipe in a fresh process: the lock screen says what the last one said.
+        if (intent?.getBooleanExtra(app.clairix.security.WipeRelaunchActivity.EXTRA_NOTICE, false) == true) AppLock.noteWipeRelaunch()
         // Nothing this app shows belongs in a screenshot, a screen recording or
         // the Recents thumbnail: a card's UID and APDUs, the timeline with its
         // positions, a conversation, the Device tab. Secure always, passcode or
@@ -1357,10 +1359,11 @@ private fun MainApp(
 
     val tab = enumByName<HomeTab>(tabName)?.takeIf { it in tabs } ?: tabs.first()
     val category = enumByName<ScanCategory>(categoryName)
-    // The tracker actions belong to the Trackers category and the Comms menu to
-    // the full build; a saved name outside those is dropped rather than shown.
+    // The tracker actions belong to the Trackers category, and the Comms menu
+    // holds what this edition has (commsActionsFor); a saved name outside those
+    // is dropped rather than shown.
     val trackerAction = enumByName<TrackerAction>(trackerActionName)?.takeIf { category == ScanCategory.TRACKERS }
-    val commsAction = enumByName<CommsAction>(commsActionName)?.takeIf { BuildConfig.FULL_ACCESS }
+    val commsAction = enumByName<CommsAction>(commsActionName)?.takeIf { it in commsActionsFor(BuildConfig.FULL_ACCESS) }
 
     val status by Registry.status.collectAsStateWithLifecycle()
     val unreadMessages by CommsRepository.unread.collectAsStateWithLifecycle()
@@ -1534,8 +1537,8 @@ private fun MainApp(
         HomeTab.COMMS -> commsAction?.title ?: HomeTab.COMMS.label
         HomeTab.DRIVE, HomeTab.ACTIVITY -> tab.label
     }
-    val menu = if (tab == HomeTab.COMMS && commsAction == null && BuildConfig.FULL_ACCESS) {
-        CommsAction.entries.map { action -> ShellMenuItem(action.title, action.icon) { commsActionName = action.name } }
+    val menu = if (tab == HomeTab.COMMS && commsAction == null) {
+        commsActionsFor(BuildConfig.FULL_ACCESS).map { action -> ShellMenuItem(action.title, action.icon) { commsActionName = action.name } }
     } else {
         emptyList()
     }

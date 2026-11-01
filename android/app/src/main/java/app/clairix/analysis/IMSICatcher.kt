@@ -494,8 +494,9 @@ class IMSICatcher(
         val ctKey = ctKey(cell)
 
         val cellRec = cells.optJSONObject(cell.key) ?: JSONObject().also { cells.put(cell.key, it) }
-        if (!cellRec.has("firstSeen")) cellRec.put("firstSeen", now)
-        cellRec.put("lastSeen", now)
+        // The day, not the moment: what retention needs to forget a tower nobody
+        // passes any more, and no record of when the phone was near it.
+        cellRec.put("lastSeen", dayFloor(now))
         cellRec.put("count", cellRec.optInt("count", 0) + 1)
         cellRec.put("rat", cell.rat.name)
 
@@ -535,7 +536,7 @@ class IMSICatcher(
         if (tac != null) {
             val rec = cellTacs.optJSONObject(ctKey)
             when {
-                rec == null -> cellTacs.put(ctKey, JSONObject().put("tac", tac).put("since", now))
+                rec == null -> cellTacs.put(ctKey, JSONObject().put("tac", tac))
                 rec.optString("tac", "") == tac -> {
                     rec.remove("pendingTac"); rec.remove("pendingPolls"); rec.remove("pendingSince")
                 }
@@ -546,7 +547,7 @@ class IMSICatcher(
                     val polls = rec.optInt("pendingPolls", 0) + 1
                     rec.put("pendingPolls", polls)
                     if (polls >= TAC_RELEARN_POLLS && now - rec.optLong("pendingSince", now) >= TAC_RELEARN_MS) {
-                        rec.put("tac", tac).put("since", now)
+                        rec.put("tac", tac)
                         rec.remove("pendingTac"); rec.remove("pendingPolls"); rec.remove("pendingSince")
                     }
                 }
@@ -612,6 +613,23 @@ class IMSICatcher(
     @Synchronized
     fun flush() {
         store.flush()
+    }
+
+    /**
+     * The owner's history retention, applied to the baseline ([BaselineRetention]):
+     * it keeps which towers and areas are usual here, not when the phone was near
+     * them. Returns how many values changed; writes the baseline when any did.
+     * Synchronized on this object, the lock every mutation of the store's JSON
+     * happens under; see [Store].
+     */
+    @Synchronized
+    fun applyRetention(cutoff: Long?, now: Long = clock()): Int {
+        val changed = BaselineRetention.apply(store.json, cutoff, now)
+        if (changed > 0) {
+            store.markDirty()
+            store.flush()
+        }
+        return changed
     }
 
     /** Wipes the learned baseline and the in-memory history behind it. */
@@ -685,5 +703,107 @@ class IMSICatcher(
         }
         val maturity = (totalVisits.coerceIn(0, MATURE_VISITS) / MATURE_VISITS.toFloat())
         return Triple(uniqueCells, totalVisits, maturity)
+    }
+}
+
+/** Midnight UTC at or before [ts]. */
+internal fun dayFloor(ts: Long): Long = ts - Math.floorMod(ts, BaselineRetention.DAY_MS)
+
+/**
+ * What the owner's history retention means for the cell-tower baseline. The
+ * rules need which towers and areas are usual and how often each was visited,
+ * not when: the baseline is what "normal" is measured against, so it is not
+ * deleted with the history, but it must not be a dated log of every area the
+ * phone has been in either.
+ *
+ *  - A tower's last sighting is kept to the day (see [IMSICatcher.updateBaseline]).
+ *  - The exact times the rules still measure against (the 30-minute visit gap,
+ *    the hour a carrier re-plan takes to be accepted, the day a tower must read
+ *    timing advance 0 to count as normal) are kept only while one can matter,
+ *    [EXACT_KEEP_MS], then rounded down to the day, which changes no rule's
+ *    answer: every threshold is a day or less.
+ *  - A tower or area not seen for [STALE_PERIODS] retention periods is no
+ *    longer "normal" here and is forgotten, with the tower's place in its
+ *    area's list and its area mapping. Kept for ever only when history is.
+ *  - What earlier versions wrote and nothing reads (when each tower was first
+ *    seen, when each tower's area was learned) is dropped.
+ */
+internal object BaselineRetention {
+
+    const val DAY_MS = 24 * 60 * 60_000L
+    const val EXACT_KEEP_MS = 2 * DAY_MS
+    const val STALE_PERIODS = 3
+
+    /**
+     * Applies the retention to the baseline document [data] in place, with
+     * [cutoff] the oldest moment history keeps (null: kept for ever). Returns
+     * how many values changed.
+     */
+    fun apply(data: JSONObject, cutoff: Long?, now: Long): Int {
+        var changed = 0
+        val exactBefore = now - EXACT_KEEP_MS
+        val forgetBefore = cutoff?.let { now - STALE_PERIODS * (now - it) }
+        fun toDay(rec: JSONObject, field: String) {
+            if (!rec.has(field)) return
+            val t = rec.optLong(field, 0L)
+            val day = dayFloor(t)
+            if (t != 0L && day != t) {
+                rec.put(field, day)
+                changed++
+            }
+        }
+        fun stale(t: Long) = forgetBefore != null && t != 0L && t < forgetBefore
+
+        val forgotten = HashSet<String>()
+        data.optJSONObject("cells")?.let { cells ->
+            for (key in cells.keys().asSequence().toList()) {
+                val rec = cells.optJSONObject(key) ?: continue
+                if (rec.remove("firstSeen") != null) changed++
+                toDay(rec, "lastSeen")
+                if (rec.optLong("taZeroFirst", 0L) in 1L until exactBefore) toDay(rec, "taZeroFirst")
+                if (stale(rec.optLong("lastSeen", 0L))) {
+                    cells.remove(key)
+                    forgotten += key
+                    changed++
+                }
+            }
+        }
+        data.optJSONObject("tacs")?.let { tacs ->
+            for (key in tacs.keys().asSequence().toList()) {
+                val rec = tacs.optJSONObject(key) ?: continue
+                if (rec.optLong("lastSeenTs", 0L) in 1L until exactBefore) toDay(rec, "lastSeenTs")
+                if (stale(rec.optLong("lastSeenTs", 0L))) {
+                    tacs.remove(key)
+                    changed++
+                }
+            }
+            // A forgotten tower (mcc-mnc-area-cell) leaves its area's list of towers.
+            for (cellKey in forgotten) {
+                val parts = cellKey.split("-", limit = 4)
+                if (parts.size != 4) continue
+                val area = tacs.optJSONObject("${parts[0]}-${parts[1]}-${parts[2]}") ?: continue
+                val list = area.optJSONArray("cells") ?: continue
+                val kept = JSONArray()
+                for (i in 0 until list.length()) list.optString(i).let { if (it != parts[3]) kept.put(it) }
+                if (kept.length() != list.length()) {
+                    area.put("cells", kept)
+                    changed++
+                }
+            }
+        }
+        data.optJSONObject("cellTacs")?.let { cellTacs ->
+            for (key in cellTacs.keys().asSequence().toList()) {
+                val rec = cellTacs.optJSONObject(key) ?: continue
+                if (rec.remove("since") != null) changed++
+                if (rec.optLong("pendingSince", 0L) in 1L until exactBefore) toDay(rec, "pendingSince")
+                // Keyed mcc-mnc-technology-cell; the tower it maps is mcc-mnc-<its area>-cell.
+                val parts = key.split("-", limit = 4)
+                if (parts.size == 4 && "${parts[0]}-${parts[1]}-${rec.optString("tac")}-${parts[3]}" in forgotten) {
+                    cellTacs.remove(key)
+                    changed++
+                }
+            }
+        }
+        return changed
     }
 }

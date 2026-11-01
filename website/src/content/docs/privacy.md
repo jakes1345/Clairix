@@ -19,7 +19,7 @@ The following is created and stored only on your phone. We never upload it and c
 - Hidden-camera sweep images. The camera feed is analysed live and is not saved.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
 
-You can delete all of this at any time with Panic Wipe in the app, or by uninstalling Clairix. History (the location log, the timeline, vehicle trip records and the unlock ledger) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
+You can delete all of this at any time with Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or by uninstalling Clairix. History (the location log, the timeline, vehicle trip records, the unlock ledger, and the map's tile and traffic caches) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. The cell-tower baseline keeps which towers are usual where you go, not when you were near them, and forgets a tower not seen for three times the retention. An evidence report you export is deleted from the phone a day later. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
 
 ## 2. Information that leaves your device
 
@@ -102,8 +102,8 @@ In particular:
 
 ## 6. Deleting your data
 
-- **On your device.** Use Panic Wipe, or uninstall the app.
-- **On the relay.** Panic Wipe and Unpair both unregister your number from the relay and delete your account: your keys, queued envelopes, push endpoint and, in Clairix Full, your coin balance and transfer history. A few things are not removed straight away:
+- **On your device.** Use Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or uninstall the app.
+- **On the relay.** Wipe Clairix and Delete identity and number (Settings → Wipe and delete, or Comms → Settings) both ask the relay to delete your account: your keys, queued envelopes, push endpoint and, in Clairix Full, your coin balance and transfer history. If the relay cannot be reached, the request waits on your phone and is tried again for up to a day. A few things are not removed straight away:
   - Anonymous traffic samples expire within two hours.
   - People you have messaged keep their own copies of your messages, and in Clairix Full, people you sent coins to keep their own record of the transfer.
 - **By email.** You can also write to support@clairix.app and ask us to delete your relay account. Tell us your Clairix number. We have no other way to identify your account. Requests are handled within 30 days.

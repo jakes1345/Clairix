@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -16,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +27,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.Report
+import app.clairix.comms.CommsRepository
 import app.clairix.security.AppLock
 import app.clairix.security.HistoryRetention
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +65,16 @@ object AppSettings {
     private const val KEY_THEME = "theme"
     private const val KEY_INFRASTRUCTURE_ALERTS = "infrastructure_alerts"
     private const val KEY_SHOW_ALERT_DETAILS = "show_alert_details"
+
+    /**
+     * What a duress wipe's decoy keeps of these settings (security/Wiper.kt):
+     * the look and how the scanner runs, so the lock screen and the app behind
+     * it look and behave as they did. None of them is a record of anything.
+     */
+    internal val DECOY_KEYS: Set<String> = setOf(
+        KEY_AGGRESSIVE_SCAN, KEY_FOLLOW_THRESHOLD, KEY_PERSISTENCE_THRESHOLD, KEY_SCAN_ENABLED,
+        KEY_RESUME_AFTER_REBOOT, KEY_THEME, KEY_INFRASTRUCTURE_ALERTS, KEY_SHOW_ALERT_DETAILS,
+    )
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
     const val DEFAULT_PERSISTENCE_THRESHOLD_MIN = 10f
@@ -337,6 +350,37 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     val theme by AppSettings.theme.collectAsStateWithLifecycle()
     val c = ClairixTheme.colors
+
+    // ── Wipe and delete ──────────────────────────────────────────────────
+    //
+    // The Wipe page opens here as well as from the Comms menu, so it is there to
+    // find in Settings whatever else changes; the relay account can be given up
+    // from here too, without the rest of the app.
+    var showWipe by rememberSaveable { mutableStateOf(false) }
+    var confirmUnpair by remember { mutableStateOf(false) }
+    val comms by CommsRepository.state.collectAsStateWithLifecycle()
+    if (showWipe) {
+        BackHandler { showWipe = false }
+        Column(Modifier.fillMaxSize().background(c.base).navigationBarsPadding()) {
+            WipePage(onBack = { showWipe = false })
+        }
+        return
+    }
+    if (confirmUnpair) {
+        ClairixDialog(
+            title = "Give up this Clairix number?",
+            text = "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
+                "Registering again gives a different number; contacts will have to add you afresh. " +
+                "Everything else in Clairix stays.",
+            confirmLabel = "Delete identity and number",
+            confirmTone = Tone.Danger,
+            onConfirm = {
+                confirmUnpair = false
+                scope.launch { CommsRepository.unpair() }
+            },
+            onDismiss = { confirmUnpair = false }
+        )
+    }
 
     // This screen replaces the whole tab tree, so it does not inherit the insets
     // applied around the tabs and keeps clear of the system bars itself.
@@ -643,7 +687,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 StatusPill(if (hasDuress) "Set" else "Not set", if (hasDuress) Tone.Safe else Tone.Neutral)
                             }
                             Text(
-                                "A second code that quietly wipes Clairix. It looks like any wrong passcode.",
+                                "A second code that quietly wipes Clairix. It looks like any wrong passcode, and Clairix " +
+                                    "stays on its lock screen; from then on this code is the passcode, and opens it empty.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
@@ -736,8 +781,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
             // ── Data management ──────────────────────────────────────────────
             //
-            // Evidence export and the scanner's clear-all; Comms keeps its own delete
-            // (Delete identity and number in Comms settings).
+            // Evidence export and the scanner's clear-all. Giving up the Clairix
+            // number is under Wipe and delete below (and in Comms settings).
 
             if (BuildConfig.FULL_ACCESS) item(key = "§data-hdr") { SectionHeader("Data") }
 
@@ -751,7 +796,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
                     SChoiceRow(
                         title = "Keep history for",
-                        subtitle = "The location log, the timeline, vehicle trips and the unlock ledger older than this are deleted: now, at each start, and every hour while scanning. What is gone cannot be taken from the phone. The cell-tower baseline is kept: it is what normal is measured against.",
+                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. The cell-tower baseline is what normal is measured against, so it keeps which towers are usual here, not when you were near them, and forgets a tower not seen for three times this long. An exported report is deleted after a day.",
                         choices = HistoryRetention.CHOICES,
                         selected = retentionDays,
                         label = ::retentionLabel,
@@ -772,6 +817,41 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         modifier = Modifier.fillMaxWidth()
                     )
                     SecondaryButton("Clear all data", onClick = { showClearDialog = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                }
+            }
+
+            // ── Wipe and delete ──────────────────────────────────────────────
+
+            item(key = "§wipe-hdr") { SectionHeader("Wipe and delete") }
+
+            item(key = "§wipe") {
+                ClairixCard(spacing = 8.dp) {
+                    Text("Wipe Clairix", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(
+                        "Erases everything Clairix holds on this phone and asks the relay to delete your account. " +
+                            "The same page as Comms, menu, Wipe Clairix: type WIPE to confirm.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                    SecondaryButton("Wipe Clairix", onClick = { showWipe = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                    Hairline(Modifier.padding(vertical = 4.dp))
+                    Text("Delete identity and number", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(
+                        if (comms.registered)
+                            "Gives up your Clairix number: the relay deletes the account, and this phone its identity, " +
+                                "contacts and messages. Everything else in Clairix stays."
+                        else
+                            "This phone has no Clairix number to give up.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                    SecondaryButton(
+                        "Delete identity and number",
+                        onClick = { confirmUnpair = true },
+                        tone = Tone.Danger,
+                        enabled = comms.registered && !comms.busy,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
 

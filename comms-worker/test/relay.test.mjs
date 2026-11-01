@@ -678,6 +678,55 @@ test("a key belongs to one account; deleting the account gives it back", async (
   assert.equal(stillMine, false);
 });
 
+test("the operator deletes an account asked for by email: keys freed, mailbox wiped, and only with the admin secret", async () => {
+  const secret = "operator-secret-0123456789";
+  const relay = makeRelay({ ADMIN_SECRET: secret });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const [token] = await bob.tokens(1);
+  assert.equal((await bob.send(token, alice.number)).status, 202);
+  const path = `/v1/admin/accounts/${alice.number}`;
+  const as = (given) => ({ headers: { "x-admin-secret": given, "cf-connecting-ip": "203.0.113.20" } });
+  // No secret, a wrong one, or another method: nothing happens.
+  assert.equal((await relay.call("DELETE", path, { headers: { "cf-connecting-ip": "203.0.113.20" } })).status, 403);
+  assert.equal((await relay.call("DELETE", path, as("not-the-secret-0123456789"))).status, 403);
+  assert.equal((await relay.call("POST", path, as(secret))).status, 405);
+  assert.ok(relay.env.MAILBOX.storageOf(alice.number).get("profile"));
+  // With it, the account goes as if its owner had deleted it, the number written as people write it.
+  const spaced = `${alice.number.slice(0, 3)}%20${alice.number.slice(3, 6)}%20${alice.number.slice(6)}`;
+  const res = await relay.call("DELETE", `/v1/admin/accounts/${spaced}`, as(secret));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.json, { ok: true, number: alice.number });
+  // The queued envelope, the keys and everything else in the mailbox are gone ...
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).size, 0);
+  assert.equal((await alice.signed("GET", "/v1/me")).status, 401);
+  // ... and the keys belong to nobody: another registration may take them.
+  const free = await relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(`key:${await sha256Hex(alice.ed25519)}`)).claimKey("000000000");
+  assert.equal(free, true);
+  // A number with no account here, and something that is not a number.
+  assert.equal((await relay.call("DELETE", path, as(secret))).status, 404);
+  assert.equal((await relay.call("DELETE", "/v1/admin/accounts/12345", as(secret))).status, 400);
+  assert.equal((await relay.call("DELETE", "/v1/admin/accounts/%E0%A4%A", as(secret))).status, 400);
+  // Bob is untouched.
+  assert.equal((await bob.signed("GET", "/v1/me")).status, 200);
+});
+
+test("without ADMIN_SECRET the operator's delete is off, and guesses at the secret are limited per address", async () => {
+  const off = makeRelay();
+  const alice = await makePhone(off);
+  const offRes = await off.call("DELETE", `/v1/admin/accounts/${alice.number}`, { headers: { "x-admin-secret": "anything-at-all-0123", "cf-connecting-ip": "203.0.113.21" } });
+  assert.equal(offRes.status, 503);
+  assert.ok(off.env.MAILBOX.storageOf(alice.number).get("profile"));
+  const relay = makeRelay({ ADMIN_SECRET: "operator-secret-0123456789" });
+  const statuses = [];
+  for (let i = 0; i < 12; i++) {
+    const res = await relay.call("DELETE", "/v1/admin/accounts/123456789", { headers: { "x-admin-secret": `guess-${i}-0123456789`, "cf-connecting-ip": "203.0.113.22" } });
+    statuses.push(res.status);
+  }
+  assert.deepEqual(statuses.slice(0, 10), Array(10).fill(403));
+  assert.deepEqual(statuses.slice(10), [429, 429]);
+});
+
 test("an account from before keys were recorded has them recorded on its next request", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);

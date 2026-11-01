@@ -270,7 +270,21 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         }
 
         item(key = "§lock-hdr") { SectionHeader("Put the phone away") }
-        item(key = "§lock") {
+        // The comms-only build declares no device admin (the unlock ledger's is the
+        // full app's), so there is nothing to lock the phone with, nor to enable.
+        if (!BuildConfig.FULL_ACCESS) item(key = "§lock") {
+            ClairixCard {
+                Text(
+                    "Schedule the call, then lock the phone with its power button and put it away. Locked, the phone " +
+                    "shows the call screen over the lock screen like any call; unlocked and in another app, it shows a " +
+                    "call banner that carries Clairix's name instead. Clairix Comms cannot lock the phone for you: that " +
+                    "needs the full app's device admin.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+            }
+        }
+        if (BuildConfig.FULL_ACCESS) item(key = "§lock") {
             ClairixCard {
                 Box(Modifier.fillMaxWidth()) {
                     SecondaryButton(
@@ -497,9 +511,12 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
 // ── Wipe ───────────────────────────────────────────────────────────────────────
 
 /**
- * The one-tap wipe the lock screen's duress code also triggers, for when there
- * is time to open the app: everything Clairix holds is erased and the relay
- * account deleted. Typing the word is the only safeguard; there is no undo.
+ * The wipe on demand, for when there is time to open the app: everything
+ * Clairix holds is erased and the relay asked to delete the account. Reached
+ * from the Comms menu and from Settings, in both editions. The wrong-passcode
+ * limit runs the same wipe, and so does the duress code, which leaves a decoy
+ * instead of closing ([Wiper]). Typing the word is the only safeguard; there
+ * is no undo.
  */
 @Composable
 internal fun WipePage(onBack: (() -> Unit)? = null) {
@@ -517,19 +534,41 @@ internal fun WipePage(onBack: (() -> Unit)? = null) {
                 Text("What is erased", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
                     "• Every conversation, contact, group and call record, and the keys behind them\n" +
-                    "• Your Clairix number: the relay is asked to delete the account, given a few seconds\n" +
+                    "• Your Clairix number: the relay is asked to delete the account\n" +
                     "• The scanner's timeline, location history, cell-tower baseline and trips\n" +
                     "• The card vault, the passcode, the duress phrase and every setting\n" +
                     "• Downloaded maps and map tiles, voicemails, attachments and the comms log\n" +
-                    "• Every notification, the clipboard, the push registration and the device-admin role, " +
-                    "so nothing in the shade or in Settings says what was here",
+                    "• Every notification and Clairix's notification categories, the clipboard, the push " +
+                    "registration and the device-admin role",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
-                    "Clairix then restarts as a fresh install. There is no undo and no backup to restore " +
-                    "from. The same wipe runs when the duress passcode is entered at the lock screen, " +
-                    "or after too many wrong passcodes.",
+                    "In this order: every key in the phone's secure hardware, then every file, setting and " +
+                    "database; then the relay is told, and Clairix closes. It opens next as a new install. " +
+                    "There is no undo and no backup to restore from.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                Text(
+                    "If the relay cannot be reached, the request to delete the account waits on this phone, in a " +
+                    "file that names your Clairix number and nothing else, and is tried again about every ten " +
+                    "minutes, whether or not Clairix is open, for up to a day; after that, write to support@clairix.app. " +
+                    "With Tor on, it is sent only through Tor, while the wipe runs.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                Text(
+                    "Android keeps what is its own: Clairix stays installed, and Settings still lists the access " +
+                    "you gave it and its battery and location use. When having the app at all is the risk, " +
+                    "uninstall it afterwards.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                Text(
+                    "The wrong-passcode limit runs the same wipe. So does the duress passcode at the lock screen, " +
+                    "with one difference: Clairix does not close. It stays on its lock screen, and from then on " +
+                    "that code opens it, empty.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )

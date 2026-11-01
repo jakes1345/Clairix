@@ -71,9 +71,13 @@ timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the
 whole Comms database (contacts, messages, groups), the Comms settings, keys
 and saved cards are sealed on disk under keys in the phone's secure hardware, so a
 copy of the app's files is ciphertext. The app lock can wipe after a run of wrong
-passcodes (a number you pick when you set it; until you do, none), a separate
-duress passcode wipes at once and shows nothing unusual, and the "Wipe
-Clairix" page wipes on demand; a wipe deletes the keys first, so cutting it
+passcodes (a number you pick when you set it; until you do, none) and then
+closes. A separate duress passcode wipes at once and leaves a decoy: the lock
+screen says "Wrong passcode" as it does for any wrong guess, goes blank for a
+moment while Clairix restarts behind it and is back, and from then on that code
+opens Clairix, empty (no history, contacts or Clairix number, first run done).
+The "Wipe Clairix" page (Comms menu, or Settings) wipes on demand; a wipe
+deletes the keys first, so cutting it
 short leaves only ciphertext. Locking collapses every message notification
 into "Unlock to read" and every alert (a tracker, a cell anomaly, a
 phone-security warning) into one "Unlock to see alerts", stops read receipts,
@@ -215,12 +219,19 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
 
 ## Emergency features
 
-- **Wipe Clairix.** In the Comms menu: type WIPE, one button. It cancels every
-  notification, clears the clipboard, unregisters push, gives up the
-  device-admin role, disarms any card, asks the relay to delete the account
-  (waiting at most four seconds), destroys every key in the secure hardware
-  and deletes every file. The same wipe runs when the duress passcode is
-  entered at the lock screen or the wrong-passcode limit is hit.
+- **Wipe Clairix.** In the Comms menu or in Settings, in both editions: type
+  WIPE, one button. It destroys every key in the secure hardware first; then
+  it deletes every file, setting and database, cancels every notification and
+  deletes Clairix's notification categories, clears the clipboard, unregisters
+  push, gives up the device-admin role and disarms any card; then it asks the
+  relay to delete the account, and Clairix closes. If the relay cannot be
+  reached, that request waits on the phone, in a file that names the Clairix
+  number and nothing else, and is tried again about every ten minutes for up
+  to a day (with Tor on, only through Tor, while the wipe runs). The
+  wrong-passcode limit runs the same wipe; so does the duress passcode, except
+  that Clairix stays on its lock screen and that code then opens it, empty.
+  Android keeps the app installed, and its settings keep the access you gave
+  it and its battery history: uninstall Clairix when its presence is the risk.
 - **Duress phrase.** A sentence you can type into any chat. It is sent as
   written; underneath, an SOS with your position (the last known one, or a
   fresh fix when the phone can read one within a few seconds) goes to every
@@ -280,9 +291,12 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
 - **Wipe after N wrong passcodes** (Settings → App lock): 1, 3, 5, 10 or
   never. Asked for when you set the passcode; never until you answer.
 - **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
-  or forever. 30 by default. The location log, the timeline, vehicle trips
-  and the unlock ledger older than that are deleted; the cell-tower baseline
-  is kept.
+  or forever. 30 by default. The location log, the timeline, vehicle trips,
+  the unlock ledger and the map's tile and traffic caches older than that are
+  deleted, once a day even with Clairix closed. The cell-tower baseline is
+  kept, as which towers are usual and not when you were near them, and a tower
+  not seen for three times the period is forgotten. An exported evidence
+  report is deleted from the phone after a day.
 - **Route around known plate readers** and **Say when one is ahead** (Drive,
   route options): both on by default. The list is what OpenStreetMap has,
   largely from the DeFlock project; a camera nobody has mapped is not on it,

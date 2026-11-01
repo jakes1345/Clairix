@@ -219,7 +219,8 @@ android {
     //
     // tier — how much of the app a build carries:
     //   suite  the whole app: scanner, map, cell/NFC/Wi-Fi/device tabs, tools, COMMS
-    //   comms  COMMS only: encrypted messages, calls, groups and SOS, nothing else
+    //   comms  COMMS only: encrypted messages, calls, groups and SOS, with the safety
+    //          pages (duress phrase, fake call, Wipe Clairix); no scanner or tools
     //
     // Variants built: playSuite (the Play upload), fullSuite and fullComms. The
     // comms-only build is handed out directly, never through Play, so playComms

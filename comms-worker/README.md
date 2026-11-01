@@ -392,6 +392,44 @@ report on, or stop taking that relay's envelopes with `FEDERATION`. A few
 attempts a minute per address are allowed, so the secret cannot be guessed;
 without `ADMIN_SECRET` the endpoint is off.
 
+### Deleting an account on request
+
+People normally delete their own account from the app (Wipe Clairix, or
+Delete identity and number), which signs `DELETE /v1/me`. Someone who has lost
+the phone, or whose app will not open, can ask by email instead
+(clairix.app/delete-account promises an answer within 30 days). The relay holds
+nothing that could confirm who is asking, so a request that names a Clairix
+number on your relay is acted on as it stands. To do it:
+
+1. Set the admin secret once, if it is not set yet (16 characters at least; it
+   also guards coin minting and the abuse-report listing):
+
+   ```sh
+   npx wrangler secret put ADMIN_SECRET
+   ```
+
+2. Run the script from this folder with the relay's address and the number
+   from the email. The secret comes from the environment, never the command
+   line:
+
+   ```sh
+   ADMIN_SECRET=… node scripts/delete-account.mjs https://relay.example "482 913 605"
+   ```
+
+   It prints `Deleted …` and exits 0 when the account is gone, or says there is
+   no such account (exit 3), which is also the answer when the owner's own wipe
+   got there first.
+3. Reply to the email that the account is deleted.
+
+The script calls `DELETE /v1/admin/accounts/<number>` with `X-Admin-Secret`.
+It does what the owner's own deletion does: the keys the account claimed are
+released and its mailbox (queued envelopes, push endpoint, pass key, coin
+balance and history) is wiped. Messages already delivered stay on the phones
+that received them. The route needs no signed request (you hold no key of the
+account's), is off while `ADMIN_SECRET` is unset, and takes a few tries a minute
+from one address, so the secret cannot be guessed by brute force; the script
+waits when it is told to.
+
 ### Calls (optional TURN)
 
 Calls are WebRTC audio between the two phones, keyed by DTLS fingerprints that
@@ -428,7 +466,7 @@ COIN_INITIAL_BALANCE = "100"    # coins every new registration starts with
 ```
 
 ```sh
-npx wrangler secret put ADMIN_SECRET   # 16+ characters; lets the operator mint
+npx wrangler secret put ADMIN_SECRET   # 16+ characters; lets the operator mint (and delete accounts on request)
 ```
 
 Minting is `POST /v1/admin/coin/mint` with `{"to": "<Clairix number>", "amount": 50}`,
@@ -572,6 +610,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/coin/pay` | `{to, amount, note?}` → `{txid, balance, ok}`: pays a contact; 30 a minute |
 | GET | `/v1/coin/history` | `{txs}`: the last transactions, newest first (`?limit=`, up to 100) |
 | POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `ADMIN_SECRET` is set |
+| DELETE | `/v1/admin/accounts/:number` | With `X-Admin-Secret` and no signature → `{ok, number}`: deletes the account as `DELETE /v1/me` does, for a deletion requested by email (`scripts/delete-account.mjs`, see above); 404 for no such account; off unless `ADMIN_SECRET` is set; a few tries a minute per address |
 | POST | `/v1/traffic/probe` | `{region, trip, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; a traffic token, no identity |
 | GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}`; a traffic token |
 | GET | `/v1/traffic/typical?region=&segs=a,b` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments; a traffic token |

@@ -165,6 +165,15 @@ internal enum class CommsAction(val title: String) {
         }
 }
 
+/**
+ * The Comms menu of an edition. Get help, Fake call, Duress phrase and Wipe
+ * Clairix are in both: the comms-only build is the one a helper hands a
+ * survivor. The offline mesh is the full app's alone: its Bluetooth service and
+ * permissions are declared only in src/suite.
+ */
+internal fun commsActionsFor(fullAccess: Boolean): List<CommsAction> =
+    if (fullAccess) CommsAction.entries else CommsAction.entries.filter { it != CommsAction.MESH }
+
 /** The Activity tab's sub-tabs, in order. */
 internal val ACTIVITY_SUB_TABS = listOf("Timeline", "Patterns", "Unlocks")
 

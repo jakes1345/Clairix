@@ -428,22 +428,34 @@ class RelayClient(
 
     fun wipe() { signed("DELETE", "/v1/me") }
 
-    /**
-     * The account deletion, signed now, to be sent with [sendPrepared] after the
-     * keys that sign it are gone: a wipe destroys them first and asks the relay
-     * last, so the network never holds up what is erased on the phone. The
-     * relay accepts it for its five-minute window.
-     */
-    fun preparedWipe(): Request? = runCatching {
-        val builder = signedRequest("DELETE", "/v1/me", null)
-        val signing = builder.build().tag(Signing::class.java) ?: return@runCatching null
-        sign(builder, signing).tag(Signing::class.java, null).build()
-    }.getOrNull()
+    /** A request signed ahead of time for the relay-clock moment [ts]: the headers that carry it. */
+    class Presigned(val ts: Long, val headers: List<Pair<String, String>>)
 
-    /** Sends a request [preparedWipe] made, on a connection of its own, waiting at most [timeoutSec]. */
-    fun sendPrepared(request: Request, timeoutSec: Long) {
-        runCatching { anonymousClient(timeoutSec).newCall(request).execute().close() }
-    }
+    /** The account deletion, signed for a run of moments: where it goes, the pin it is checked against, and the copies. */
+    class PreparedWipe(val url: String, val pin: String?, val offsetMs: Long, val copies: List<Presigned>)
+
+    /**
+     * The account deletion, signed now for [count] moments [stepMs] apart from
+     * the relay's present time, to be sent after the keys that sign it are gone:
+     * a wipe destroys them first and asks the relay last, so the network never
+     * holds up what is erased on the phone. The relay takes each copy within five
+     * minutes of its moment, so steps under ten minutes leave no gap, and the
+     * phone sends whichever is current when it can reach the relay
+     * (security/RelayFarewell.kt). Null without an account or an identity.
+     */
+    fun preparedWipes(count: Int, stepMs: Long): PreparedWipe? = runCatching {
+        val start = relayNow()
+        var url: String? = null
+        val copies = (0 until count).map { k ->
+            val builder = signedRequest("DELETE", "/v1/me", null, allowTransport = false)
+            val signing = builder.build().tag(Signing::class.java) ?: return@runCatching null
+            val ts = start + k * stepMs
+            val request = sign(builder, signing, ts).tag(Signing::class.java, null).build()
+            url = request.url.toString()
+            Presigned(ts, request.headers.toList())
+        }
+        PreparedWipe(url ?: return@runCatching null, pin(), clockOffsetMs, copies)
+    }.getOrNull()
 
     // ── Contacts and envelopes ────────────────────────────────────────────
 
@@ -966,14 +978,16 @@ class RelayClient(
         return builder
     }
 
-    /** Adds the signature headers for one attempt: a fresh nonce and the relay's current time. */
-    private fun sign(builder: Request.Builder, s: Signing): Request.Builder {
+    /**
+     * Adds the signature headers for one attempt: a fresh nonce and the relay's
+     * current time, or the moment [ts] a copy is signed ahead for ([preparedWipes]).
+     */
+    private fun sign(builder: Request.Builder, s: Signing, ts: Long = relayNow()): Request.Builder {
         val number = number() ?: throw RelayException("Not registered with a relay")
         val signer: (ByteArray) -> String = s.transport?.let { t -> { bytes: ByteArray -> t.sign(bytes) } }
             ?: (identity() ?: throw RelayException("No identity on this device")).let { id -> { bytes: ByteArray -> id.sign(bytes) } }
         // The relay rejects a timestamp more than five minutes from its own clock,
         // so a phone whose clock is off signs with the relay's time once it knows it.
-        val ts = relayNow()
         val nonce = ByteArray(18).also { SecureRandom().nextBytes(it) }
             .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
         val payload = "$number\n$ts\n$nonce\n${s.method}\n${s.pathAndQuery}\n${sha256Hex(s.bodyText)}"

@@ -24,7 +24,7 @@ dimensions (`edition` first, then `tier`, so a variant reads `<edition><Tier>`):
 | Variant | Edition | What it is | Where it goes |
 |---|---|---|---|
 | `fullSuite` | Full | The whole app, including the Card Vault with NFC card emulation and ClairixCoin | `clairix-<tag>.apk` on GitHub Releases and clairix.app |
-| `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS only | `clairix-comms-<tag>.apk` on GitHub Releases |
+| `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS, with the duress phrase, fake call and Wipe Clairix; no scanner | `clairix-comms-<tag>.apk` on GitHub Releases |
 | `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, uploaded to Google Play |
 
 There is no `playComms`: the comms-only build is never published on Play.
@@ -88,13 +88,18 @@ gradle test                         # unit tests for every variant
   contacts at random intervals, so real messages are not the only traffic.
   Off by default.
 - **Settings → App lock → wipe after N wrong passcodes** (1, 3, 5, 10 or never)
-  and the duress passcode.
-- **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists
-  what it takes with it, in order.
+  and the duress passcode, whose wipe leaves an empty decoy behind the lock
+  screen that the duress passcode then opens.
+- **Comms menu → Wipe Clairix**, or **Settings → Wipe and delete → Wipe
+  Clairix**, wipes on demand, in both editions; `security/Wiper.kt` lists what
+  it takes with it, in order, and `security/RelayFarewell.kt` how the relay is
+  told when it cannot be reached at once.
 - **Settings → "Keep history for"**: 7, 30 or 90 days, or forever (30 by
-  default). The location log, the timeline, vehicle trips and the unlock
-  ledger older than that are deleted every quarter hour while scanning and
-  at each start (`security/HistoryRetention.kt`).
+  default). The location log, the timeline, vehicle trips, the unlock ledger
+  and the map's tile and traffic caches older than that are deleted at each
+  start, every quarter hour while scanning and once a day otherwise; the
+  cell-tower baseline keeps which towers are usual, not when
+  (`security/HistoryRetention.kt`).
 
 ## Reproducing a build
 

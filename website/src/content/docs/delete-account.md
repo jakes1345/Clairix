@@ -2,24 +2,25 @@
 
 ### Delete the relay account and keep the rest of the app
 
-1. Open Clairix and go to **Comms**.
-2. Open **Settings** in Comms.
-3. Tap **Unpair** and confirm.
+1. Open Clairix and tap the gear at the top right for **Settings**.
+2. Under **Wipe and delete**, tap **Delete identity and number** and confirm.
 
-Clairix asks the relay to delete your account, unregisters push, and then removes your identity keys, contacts and message history from the phone. You can register again later, but you will get a new Clairix number and your contacts will need to re-pair with you.
+The same button is at the bottom of **Comms → Settings**. Clairix asks the relay to delete your account, unregisters push, and then removes your identity keys, contacts and message history from the phone. If the relay cannot be reached, the request waits on the phone and is tried again for up to a day, as it is after a wipe (below). You can register again later, but you will get a new Clairix number and your contacts will need to add you again.
 
-### Delete everything Clairix holds (Panic Wipe)
+### Delete everything Clairix holds (Wipe Clairix)
 
-1. Open Clairix and go to **Settings**.
-2. Tap **Panic Wipe** and confirm.
+1. Open **Comms**, tap the menu (⋮) at the top and choose **Wipe Clairix**. It is also in **Settings**, under **Wipe and delete**.
+2. Type **WIPE** and tap **Wipe everything now**.
 
-Panic Wipe first asks the relay to delete your account, then deletes every key in the phone's secure keystore, every preferences file, every database and every file the app holds, including cached map tiles, and restarts the app to a blank slate. Once started it cannot be stopped. It erases Clairix's own data only. It does not erase your phone.
+The wipe first destroys every key in the phone's secure keystore, then deletes every preferences file, every database and every file the app holds, including cached map tiles, and every notification. It then asks the relay to delete your account, and Clairix closes; it opens next as a new install. Once started it cannot be stopped. It erases Clairix's own data only. It does not erase your phone, and Android keeps what is its own: the app stays installed, and the system's settings still show the access you gave it. If having the app at all is the risk, uninstall it after the wipe.
 
-If the relay cannot be reached at that moment, the wipe still completes on the phone. The relay account will then expire on its own as described below, or you can ask us to delete it by email.
+The wrong-passcode limit runs the same wipe, and so does the duress passcode, except that Clairix stays on its lock screen afterwards and that code then opens it, empty.
+
+If the relay cannot be reached at that moment, the wipe still completes on the phone, and the request to delete the account waits on it, in a file that names your Clairix number and nothing else. It is tried again about every ten minutes, whether or not Clairix is open, for up to a day. If you use Tor in Clairix, it is sent only through Tor, while the wipe runs. If it never gets through, the account stays on the relay until you ask us to delete it by email (Option 2): accounts are not deleted for being dormant.
 
 ### Uninstalling
 
-Uninstalling Clairix removes all of its data from your phone. It does not tell the relay to delete your account. Use Unpair or Panic Wipe first, or email us.
+Uninstalling Clairix removes all of its data from your phone. It does not tell the relay to delete your account. Use **Delete identity and number** or **Wipe Clairix** first, or email us.
 
 ## Option 2: By email
 
@@ -28,7 +29,7 @@ If you no longer have the phone, or the app will not open, write to **support@cl
 - Your **Clairix number** (nine digits). This is the only identifier we hold, and without it we cannot find your account. It is shown in Comms settings and to the contacts you paired with; if you have lost it, ask one of them.
 - Optionally, the approximate date you registered.
 
-We will delete the account and confirm by reply within 30 days, usually much sooner. We will not ask you for your name or any other personal information, because we do not hold any to match it against.
+We will delete the account and confirm by reply within 30 days, usually much sooner. We will not ask you for your name or any other personal information, because we do not hold any to match it against. How we do it is public: [the relay operator's runbook](https://github.com/jakes1345/Clairix/blob/main/comms-worker/README.md#deleting-an-account-on-request).
 
 Because the relay has no email address or phone number on file, we cannot verify that a request comes from the account's owner. We treat a deletion request that names a valid Clairix number as authoritative. If someone deletes your account without your consent, the harm is limited to needing to re-pair with your contacts, since no message content is held on the relay.
 
@@ -36,15 +37,15 @@ Because the relay has no email address or phone number on file, we cannot verify
 
 <div class="stack deletion">
 
-| Data | In-app Unpair / Panic Wipe | Email request |
+| Data | In the app: Delete identity and number, or Wipe Clairix | Email request |
 |---|---|---|
-| Clairix number and public keys | Deleted at once | Deleted on processing |
-| Encrypted envelopes waiting for you | Deleted at once | Deleted on processing |
-| Push endpoint | Deleted at once | Deleted on processing |
+| Clairix number and public keys | Deleted when the relay is reached | Deleted on processing |
+| Encrypted envelopes waiting for you | Deleted when the relay is reached | Deleted on processing |
+| Push endpoint | Deleted when the relay is reached | Deleted on processing |
 | Unused invite codes you created | Expire within 7 days | Expire within 7 days |
 | Keys, contacts and message history on your phone | Deleted at once | Not affected; uninstall the app |
-| Scan results, timeline, location history, unlock ledger, reports on your phone | Panic Wipe deletes; Unpair keeps | Not affected; uninstall the app |
-| Clairix Full only: coin balance and transfer history | Deleted at once | Deleted on processing |
+| Scan results, timeline, location history, unlock ledger, reports on your phone | Wipe Clairix deletes; Delete identity and number keeps | Not affected; uninstall the app |
+| Clairix Full only: coin balance and transfer history | Deleted when the relay is reached | Deleted on processing |
 
 </div>
 

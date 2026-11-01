@@ -168,11 +168,14 @@ twice on two machines in CI, which fails unless the two builds agree.
    uninstalled normally afterwards. `unpair()` calls `relay.wipe()` first
    with a 25 s timeout inside a 6 s budget, so with the relay unreachable the
    notification cancel and push unregister never run. *Reported.* **Done:**
-   "Wipe Clairix" page under the Comms menu (type WIPE, one button); the
-   wipe now cancels every notification, clears the clipboard, unregisters
-   push, deactivates the device admin and disarms the card before touching
-   the files; `unpair()` bounds the relay call to four seconds on its own
-   thread so the local steps always run.
+   "Wipe Clairix" page under the Comms menu (type WIPE, one button), and
+   since the gap audit of 2026-10-31 also in Settings and in the comms-only
+   build; the wipe now cancels every notification (and deletes the
+   notification channels), clears the clipboard, unregisters push,
+   deactivates the device admin and disarms the card before touching the
+   files; `unpair()` bounds the relay call to four seconds on its own thread
+   so the local steps always run, and both it and the wipe keep a deletion the
+   relay did not take for retrying over the next day (`RelayFarewell`).
 10. **HCE stays armed** after vault lock, app lock and screen off
     (`MainActivity.kt:559-565`, `CardEmulationService.kt:59-62`); only the
     device PIN gates it. *Reported.* **Done for the app lock and the wipe:**
@@ -367,15 +370,20 @@ twice on two machines in CI, which fails unless the two builds agree.
 
 ## README claims to correct
 
-All **done** in PR #14: the root README carries the threat model (who it is
+PR #14 did part of this: the root README carries the threat model (who it is
 built against, what it protects, what it cannot do, what the relay keeps),
 names the "Wipe Clairix" page (9) and the duress phrase's no-group case (31),
-and lists what the relay stores and for how long (1, 2, 3); the website's
-security and privacy pages and the delete-account page say the same, with
-the live-capture caveat (addresses and token-batch fetches are visible in
-flight, never written down), and the privacy policy's effective date moved;
-the in-app privacy text names every network destination; the worker README's
-one-time-key limits match the code.
+and lists what the relay stores and for how long (1, 2, 3); the worker
+README's one-time-key limits match the code. It did not align the website:
+the gap audit of 2026-10-31 (item 9) found the delete-account, privacy,
+terms, security and emergency pages and the home page still sending people to
+"Panic Wipe" and "Unpair", controls no edition has, with the wipe's order and
+timing told the pre-reorder way, and the in-app privacy text naming fewer
+destinations than the code reaches (gap audit items 8 and 10). **Done since
+for the wipe and deletion copy:** every page names Wipe Clairix (Comms menu or
+Settings, type WIPE) and Delete identity and number, says the keys go first
+and the relay is told last and retried for a day, and `npm run check-copy`
+(website) fails the build on either old name.
 
 ## Suggested order
 

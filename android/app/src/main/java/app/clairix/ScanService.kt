@@ -428,9 +428,10 @@ class ScanService : LifecycleService() {
         location = LocationServices.getFusedLocationProviderClient(this)
         screenOn = getSystemService(PowerManager::class.java)?.isInteractive ?: true
 
-        cellStore = Store(this, "imsi_baseline.json")
+        cellStore = Store(this, CELL_FILE)
         cellMonitor = CellMonitor(this)
         imsiCatcher = IMSICatcher(cellStore)
+        liveImsi = imsiCatcher
         vehicleTrips = VehicleTrips(Store(this, TRIPS_FILE))
         liveTrips = vehicleTrips
         // Shared with the activity, which records NFC scans into the same log.
@@ -1555,6 +1556,7 @@ class ScanService : LifecycleService() {
 
     override fun onDestroy() {
         liveTrips = null
+        liveImsi = null
         stopScanning()
         StalkwareWatch.stopWatchingPackages(this)
         val now = System.currentTimeMillis()
@@ -1622,6 +1624,19 @@ class ScanService : LifecycleService() {
         /** Forgets vehicle trips that ended before [cutoff]; returns how many. File I/O; call off the main thread. */
         fun pruneTripsOlderThan(context: Context, cutoff: Long): Int =
             (liveTrips ?: VehicleTrips(Store(context.applicationContext, TRIPS_FILE))).pruneOlderThan(cutoff)
+
+        private const val CELL_FILE = "imsi_baseline.json"
+
+        /** The live service's cell baseline, for [applyCellRetention] to work on in place; null while no service is alive. */
+        @Volatile private var liveImsi: IMSICatcher? = null
+
+        /**
+         * The history retention for the cell-tower baseline ([IMSICatcher.applyRetention]);
+         * [cutoff] null keeps every tower. Returns how many values changed. File I/O and
+         * Keystore work when no service is alive; call off the main thread.
+         */
+        fun applyCellRetention(context: Context, cutoff: Long?, now: Long): Int =
+            (liveImsi ?: IMSICatcher(Store(context.applicationContext, CELL_FILE))).applyRetention(cutoff, now)
 
         /** Which of the owner's accessories rode along on the remembered drives. File I/O when no service is alive. */
         fun accessoryUse(context: Context): List<VehicleTrips.AccessoryUse> =

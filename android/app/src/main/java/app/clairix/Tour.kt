@@ -49,7 +49,8 @@ import kotlinx.coroutines.launch
  */
 
 private const val TOUR_PREFS = "prefs"
-private const val TOUR_SEEN_KEY = "tour_seen"
+/** Also written by a duress wipe's decoy (security/Wiper.kt), which has seen its tour. */
+internal const val TOUR_SEEN_KEY = "tour_seen"
 
 fun isTourSeen(context: Context): Boolean =
     context.getSharedPreferences(TOUR_PREFS, Context.MODE_PRIVATE).getBoolean(TOUR_SEEN_KEY, false)
@@ -144,8 +145,16 @@ internal fun commsPageTour(a: CommsAction): Pair<String, String> = when (a) {
         "travel from phone to phone, sealed, until one reaches the person they are for. Every phone on the way needs the mesh " +
         "on. Off by default, because a phone running it can be seen to be running Clairix."
     CommsAction.WIPE -> "Erase everything Clairix holds, now." to
-        "Type WIPE and press the button: notifications, keys in the secure hardware, the account on the relay and every file " +
-        "go. The same wipe runs on the duress passcode or after too many wrong passcodes, if you turn those on in Settings."
+        "Type WIPE and press the button: the keys in the secure hardware, every file, setting and notification go, the relay " +
+        "is asked to delete the account, and Clairix closes. Settings has the same page. The wrong-passcode limit runs the " +
+        "same wipe; the duress passcode does too, but leaves Clairix on its lock screen, opening from then on to that code, empty."
+}
+
+/** "a, b and c". */
+private fun menuList(names: List<String>): String = when (names.size) {
+    0 -> ""
+    1 -> names[0]
+    else -> names.dropLast(1).joinToString(", ") + " and " + names.last()
 }
 
 /** The Activity tab's sub-tabs, in [ACTIVITY_SUB_TABS] order. A test checks every one has text. */
@@ -211,15 +220,15 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
         "End-to-end encrypted messages, calls, voicemail and groups. The relay that carries them cannot read them and is not told who sent them.",
         "Add someone with an invite link or by scanning their QR code. If a contact's security key changes, their messages wait " +
             "in a review box until you check. In any conversation or group, Disappearing sets how long after they are read " +
-            "messages are deleted, on both phones. Screenshots are blocked on these screens." +
-            if (fullAccess) " The menu (⋮) at the top holds Get help, Fake call, Duress phrase, Offline mesh and Wipe Clairix." else "",
+            "messages are deleted, on both phones. Screenshots are blocked on these screens. The menu (⋮) at the top holds " +
+            menuList(commsActionsFor(fullAccess).map { it.title }) + ".",
         ClairixIcons.Forum, TourTarget.Tab(HomeTab.COMMS)
     )
+    for (a in commsActionsFor(fullAccess)) {
+        val (w, h) = commsPageTour(a)
+        out += TourStop("comms_${a.name}", "Comms → ⋮ → ${a.title}", a.title, w, h, a.icon, TourTarget.CommsPage(a))
+    }
     if (fullAccess) {
-        for (a in CommsAction.entries) {
-            val (w, h) = commsPageTour(a)
-            out += TourStop("comms_${a.name}", "Comms → ⋮ → ${a.title}", a.title, w, h, a.icon, TourTarget.CommsPage(a))
-        }
         out += TourStop(
             "drive", "Drive", "Navigate, Radio, Vehicle",
             "Navigate: turn-by-turn on offline maps you download per region, routed around known plate readers and spoken before " +
@@ -238,7 +247,8 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
         "settings", "Gear, top right", "Settings",
         "Get help (helplines where you are), the app passcode (with biometrics, wipe after wrong passcodes and a " +
             "duress passcode), how long history is kept, theme" +
-            if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.",
+            (if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.") +
+            " Wipe Clairix and Delete identity and number are near the bottom.",
         passcodeFollowUp(passcodeSet, lockOffered) +
             (if (fullAccess) "With a passcode set, Patterns, Unlocks, the tracker map and Export ask for it each time they open. " else "") +
             "This tour is in Settings too, under About, whenever you want it again.",

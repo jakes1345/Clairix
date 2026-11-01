@@ -46,7 +46,20 @@ class TourTest {
     @Test
     fun theCommsOnlyTourHasNothingTheCommsBuildLacks() {
         val ids = tourStops(fullAccess = false).map { it.id }
-        assertTrue(ids.none { it.startsWith("cat_") || it.startsWith("tool_") || it.startsWith("comms_") || it.startsWith("act_") || it == "drive" })
+        assertTrue(ids.none { it.startsWith("cat_") || it.startsWith("tool_") || it.startsWith("act_") || it == "drive" })
         assertTrue("comms" in ids && "sos" in ids && "settings" in ids)
+        // Its Comms menu: Get help and the safety pages, without the full app's offline mesh.
+        assertEquals(listOf("comms_GET_HELP", "comms_FAKE_CALL", "comms_DURESS", "comms_WIPE"), ids.filter { it.startsWith("comms_") })
+    }
+
+    @Test
+    fun theSafetyMenuIsInBothEditionsAndTheMeshOnlyInTheFullOne() {
+        assertEquals(CommsAction.entries, commsActionsFor(fullAccess = true))
+        val comms = commsActionsFor(fullAccess = false)
+        assertTrue(CommsAction.GET_HELP in comms && CommsAction.FAKE_CALL in comms && CommsAction.DURESS in comms && CommsAction.WIPE in comms)
+        assertTrue(CommsAction.MESH !in comms)
+        // The Comms stop names exactly what the menu holds.
+        val stop = tourStops(fullAccess = false).first { it.id == "comms" }
+        assertTrue(stop.how, stop.how.endsWith("The menu (⋮) at the top holds Get help, Fake call, Duress phrase and Wipe Clairix."))
     }
 }

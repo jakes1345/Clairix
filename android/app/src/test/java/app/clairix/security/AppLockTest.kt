@@ -316,4 +316,24 @@ class AppLockTest {
         AppLock.setPasscode(context, passcode).getOrThrow()
         assertEquals("a new passcode starts with no wipe", 0, AppLock.wipeAfter(context))
     }
+
+    // ── The duress decoy ───────────────────────────────────────────────────
+
+    @Test
+    fun theDuressDecoyOpensToTheDuressCodeAndLooksLikeALockSetUpToday() {
+        // What a duress wipe leaves (security/Wiper.kt): the owner had kept the
+        // old unasked limit of 3, which Settings asks her to check.
+        context.prefs(AppLock.PREFS_NAME).edit().putInt("wipe_after", 3).commit()
+        assertFalse(AppLock.wipeChoiceConfirmed(context))
+        val duressCode = "48261937"
+        val lock = AppLock.makeDecoyLock(duressCode)
+        assertTrue(AppLock.writeDecoy(context, lock, wipeAfter = 3, relockMs = AppLock.DEFAULT_RELOCK_MS, biometric = false))
+
+        assertTrue("the limit carried over counts as chosen, as on any new lock", AppLock.wipeChoiceConfirmed(context))
+        assertEquals(3, AppLock.wipeAfter(context))
+        assertEquals("nothing counted against the decoy yet", 0, failedOnDisk())
+        assertFalse("no duress passcode on the decoy", AppLock.hasDuress(context))
+        assertEquals(AppLock.Verdict.Accepted, guess(duressCode))
+        assertTrue("the old passcode opens nothing", guess(passcode) is AppLock.Verdict.Rejected)
+    }
 }

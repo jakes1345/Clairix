@@ -44,6 +44,10 @@ class BootReceiver : BroadcastReceiver() {
         // The comms-only build has no scanner service to bring back.
         if (!BuildConfig.FULL_ACCESS) return
 
+        // A reboot clears alarms: history keeps ageing out on a phone whose owner
+        // never opens Clairix (the unlock ledger is written on every unlock).
+        app.clairix.security.HistoryRetention.ensureScheduled(context)
+
         // The stalkerware check, whether or not the scanner is on: after a reboot, and after an
         // update, which may bring a newer stalkerware list. Compared with the last check; what is
         // new is alerted. Runs off the main thread with the broadcast held open.

@@ -423,6 +423,29 @@ jobs:
           grep -q "^OK (2 tests)" ../lockscreen.txt || { echo "::error::The lock screen tests failed; see lockscreen.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../lockscreen.txt; then echo "::error::Lock screen tests were skipped"; exit 1; fi
 
+      - name: Run the duress passcode test
+        working-directory: android
+        timeout-minutes: 10
+        run: |
+          # After everything else: the duress passcode erases the app's data. It
+          # also ends the app's process and brings the lock screen back in a new
+          # one, so it runs under SeparateProcessRunner, in a process of its own.
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 500 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.security.DuressFlowDeviceTest -e duress true \
+            app.clairix.test/app.clairix.SeparateProcessRunner | tee ../duress.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-duress.txt
+          if grep -A1 "FATAL EXCEPTION" ../logcat-duress.txt | grep -q "Process: app.clairix"; then
+            echo "::error::Clairix crashed during the duress passcode test; see logcat-duress.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-duress.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (1 test)" ../duress.txt || { echo "::error::The duress passcode test failed; see duress.txt"; exit 1; }
+          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../duress.txt; then echo "::error::The duress passcode test was skipped"; exit 1; fi
+
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -436,6 +459,8 @@ jobs:
             logcat-e2e.txt
             lockscreen.txt
             logcat-lockscreen.txt
+            duress.txt
+            logcat-duress.txt
             tor.txt
             logcat-tor.txt
             soak.txt

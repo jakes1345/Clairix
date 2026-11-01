@@ -11,9 +11,11 @@ Run from this `website/` folder. Node 22.22 or newer (see `.nvmrc`).
 |---|---|
 | `npm ci` | Install exact dependencies from `package-lock.json` |
 | `npm run dev` | Sync the brand files, then start the dev server at http://localhost:4321 |
-| `npm run build` | Sync the brand files, then build the static site into `dist/` |
+| `npm run build` | Sync the brand files, check the copy (below), then build the static site into `dist/` |
 | `npm run preview` | Serve the built `dist/` locally |
-| `npm run check` | Type-check the project with `astro check` |
+| `npm run check` | Check the copy, then type-check the project with `astro check` |
+| `npm run check-copy` | Fail if any page names an app control that does not exist ("Panic Wipe", or "Unpair" with nothing said of what is unpaired); the controls are Wipe Clairix and Delete identity and number (`scripts/copy-check.mjs`) |
+| `npm test` | The copy check's own tests (`node --test`, no dependencies) |
 | `npm run sync-brand` | Copy tokens, fonts, logos and icons from `../brand` (runs automatically before dev, build and check) |
 | `node scripts/render-og.mjs` | Re-render the per-page Open Graph images in `public/og/` (needs Playwright; commit the PNGs) |
 

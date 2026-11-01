@@ -162,6 +162,10 @@ export { IncidentCache, Mailbox, Traffic };
  *   POST   /v1/coin/pay        {to, amount, note?, txid?}  → {txid, balance, ok}: moves coins to a contact; a repeat with the same txid moves nothing twice
  *   GET    /v1/coin/history                                → {txs: [...]}, newest first
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
+ * The operator (no signature; X-Admin-Secret must match ADMIN_SECRET; a few tries a minute per address):
+ *   DELETE /v1/admin/accounts/:number                      → {ok, number}: deletes the account as DELETE /v1/me
+ *                                                            does, for a deletion requested by email
+ *                                                            (scripts/delete-account.mjs)
  * Federation (federation.ts): /v1/send and /v1/lookup take an optional "relay", the https address of the
  * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
  * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
@@ -303,6 +307,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
     const body = parseLookupBody(bodyText, isLoopbackDev(request));
     return answerLookup(env, body.target, body.pin, body.claim, async () => body.oneTime && (await other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST)));
+  }
+
+  // ── The operator: the admin secret and no identity (adminDeleteAccount) ──
+  if (path.startsWith(ADMIN_ACCOUNTS_PREFIX)) {
+    if (request.method !== "DELETE") throw new HttpError(405, "DELETE only");
+    return adminDeleteAccount(env, request, path);
   }
 
   // ── Authenticated ─────────────────────────────────────────────────────
@@ -576,6 +586,44 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   throw new HttpError(404, "Not found");
 }
+
+/**
+ * DELETE /v1/admin/accounts/:number: the operator deletes an account on a
+ * request by email (scripts/delete-account.mjs; the runbook is README.md,
+ * "Deleting an account on request"). It does what the owner's own DELETE
+ * /v1/me does: the keys the account claimed are released and its mailbox
+ * (queued envelopes, push endpoint, pass key, coin balance and history) is
+ * wiped. Guarded like the coin mint above, by the timing-safe X-Admin-Secret
+ * check, and off unless ADMIN_SECRET is set; unlike the mint it takes no signed
+ * request, because the operator holds no key of the account's to sign with.
+ * Each address gets a few tries a minute, as registration does, so the secret
+ * cannot be guessed by brute force. Reached before signatures are parsed (see
+ * route()).
+ */
+async function adminDeleteAccount(env: Env, request: Request, path: string): Promise<Response> {
+  const guard = env.MAILBOX.get(env.MAILBOX.idFromName(`admin-guard:${request.headers.get("cf-connecting-ip") ?? "unknown"}`));
+  const allowed = await guard.rateOk("admin", Mailbox.REGISTER_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many admin requests; try again in a minute", allowed.retryAfter);
+  const secret = requireSecret(env, "ADMIN_SECRET");
+  const given = request.headers.get("x-admin-secret") ?? "";
+  if (!(await secretEquals(given, secret))) throw new HttpError(403, "Admin secret rejected");
+  let raw: string;
+  try {
+    raw = decodeURIComponent(path.slice(ADMIN_ACCOUNTS_PREFIX.length));
+  } catch {
+    throw new HttpError(400, "Not a Clairix number");
+  }
+  const number = normaliseNumber(raw);
+  if (!number) throw new HttpError(400, "Not a Clairix number");
+  const them = env.MAILBOX.get(env.MAILBOX.idFromName(number));
+  const profile = await them.profile();
+  if (!profile) throw new HttpError(404, "No such Clairix number on this relay");
+  await releaseKeys(env, profile);
+  await them.wipe();
+  return json({ ok: true, number });
+}
+
+const ADMIN_ACCOUNTS_PREFIX = "/v1/admin/accounts/";
 
 /**
  * A contact's keys, by Clairix number. Unlisted numbers are only handed out

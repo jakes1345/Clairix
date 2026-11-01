@@ -56,7 +56,7 @@ Clairix is free to use and requires Android 12 or newer.
 
 ### Emergency tools
 
-SOS to groups with end-to-end encrypted location; duress phrase; scheduled fake call; app lock with hardware-backed verifier, wipe-on-failure and duress passcode; panic wipe.
+SOS to groups with end-to-end encrypted location; duress phrase; scheduled fake call; app lock with hardware-backed verifier, wipe-on-failure and a duress passcode that wipes and leaves an empty decoy behind the lock screen; Wipe Clairix, in the Comms menu and in Settings. All of them in both Clairix Full and Clairix Comms.
 
 ### Privacy
 

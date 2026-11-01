@@ -1,6 +1,7 @@
 package app.clairix
 
 import android.app.Application
+import app.clairix.security.RelayFarewell
 import app.clairix.security.Wiper
 
 /**
@@ -13,11 +14,17 @@ import app.clairix.security.Wiper
 class ClairixApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // The duress wipe's relaunch (security/WipeRelaunchActivity) runs for a
+        // moment in a process of its own; nothing below is for it.
+        if (Application.getProcessName() != packageName) return
         if (Wiper.isPending(this)) Wiper.start(this)
         // Before anything reads the comms vault (a push, the call service).
         app.clairix.comms.VaultBox.init(this)
         // Before any relay request: with "Connect through Tor" on, the first one
         // already goes through Tor (or fails), never out directly.
         app.clairix.comms.TorTransport.init(this)
+        // A wipe's request to the relay to delete the account, still waiting
+        // because the relay could not be reached: sent now, off this thread.
+        RelayFarewell.resume(this)
     }
 }
