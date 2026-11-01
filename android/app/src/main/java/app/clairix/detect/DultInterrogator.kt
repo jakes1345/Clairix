@@ -140,8 +140,8 @@ object DultInterrogator {
      * stays around is asked once it separates, or once it is confirmed following.
      */
     val SUPPORTED: Set<String> = setOf(
-        "airtag", "findmy", "tile", "chipolo", "chipolo_spot",
-        "pebblebee", "motorola_tag", "smarttag", "google_find_hub_separated", "dult"
+        "airtag", "findmy", "tile", "chipolo",
+        "pebblebee", "smarttag", "google_find_hub_separated", "dult"
     )
 
     /**

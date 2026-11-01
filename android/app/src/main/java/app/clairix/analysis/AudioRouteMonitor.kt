@@ -452,6 +452,15 @@ object AudioRouteMonitor {
     /** The accessories marked as the owner's, for Phone check; filled by [loadMarks]. */
     val marks: StateFlow<List<Mark>> = _marks.asStateFlow()
 
+    /**
+     * Settings, Clear all data: forgets when each paired accessory was first seen connected.
+     * The headsets marked as the owner's stay, as the trusted devices and the spyware check's
+     * marks do. Writes a sealed file; call off the main thread.
+     */
+    fun forget(context: Context) {
+        record(context).clearSeen()
+    }
+
     /** Reads the marks into [marks]. Reads a sealed file; call off the main thread. */
     fun loadMarks(context: Context) {
         _marks.value = runCatching { record(context).marks().values.sortedByDescending { it.at } }.getOrDefault(emptyList())
@@ -512,6 +521,15 @@ internal class AccessoryRecord(private val store: Store) {
         synchronized(lock) {
             val acks = root().optJSONObject(ACKS) ?: JSONObject().also { root().put(ACKS, it) }
             acks.put(key, JSONObject().put("name", name).put("at", at))
+            store.markDirty()
+            store.flush()
+        }
+    }
+
+    /** Forgets every first connection; the marks stay. */
+    fun clearSeen() {
+        synchronized(lock) {
+            if (root().remove(SEEN) == null) return
             store.markDirty()
             store.flush()
         }

@@ -276,4 +276,25 @@ class ScannerRecordingsTest {
         assertEquals(1, s.list().size)
         assertNull(s.list().firstOrNull { it.freqHz == 155_475_000L })
     }
+
+    @Test
+    fun clearAllDataDeletesEveryRecordingAndNothingElse() {
+        val sealedDir = tmp.newFolder("sealed-all")
+        val s = store(sealedDir)
+        s.begin(Header(1L, 1L, "", 1_000)).apply { write(samples(2_000)); close() }
+        val underWay = s.begin(Header(2L, 2L, "", 1_000)).apply { write(samples(2_000)) }
+        val legacyDir = tmp.newFolder("legacy-all")
+        val plain = File(legacyDir, "1793450117000_155475000.raw").apply { writeBytes(ByteArray(4_000)) }
+        val other = File(legacyDir, "notes.txt").apply { writeText("not a recording") }
+        val kept = File(sealedDir, "something.json").apply { writeText("{}") }
+
+        assertEquals(3, ScannerRecordings.deleteEverything(sealedDir, listOf(legacyDir)))
+        assertFalse(plain.exists())
+        assertTrue(other.exists())
+        assertTrue(kept.exists())
+        // The recording under way finishes into a file that is already gone.
+        underWay.close()
+        assertTrue(s.list().isEmpty())
+        assertTrue(ScannerRecordings.findLegacy(listOf(legacyDir)).isEmpty())
+    }
 }

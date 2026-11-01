@@ -136,4 +136,31 @@ class MapDownloadsTest {
         h.put(region.toByteArray(Charsets.US_ASCII))
         return h.array()
     }
+
+    @Test
+    fun theWeeklyCheckWaitsForAnUnmeteredConnection() {
+        val week = MapDownloads.UPDATE_CHECK_EVERY_MS
+        assertTrue(MapDownloads.updateCheckDue(0L, 1_000L, metered = false))
+        assertFalse(MapDownloads.updateCheckDue(0L, 1_000L, metered = true))
+        assertFalse(MapDownloads.updateCheckDue(10_000L, 10_000L + week - 1, metered = false))
+        assertTrue(MapDownloads.updateCheckDue(10_000L, 10_000L + week, metered = false))
+        assertFalse(MapDownloads.updateCheckDue(10_000L, 10_000L + week, metered = true))
+    }
+
+    @Test
+    fun theSignedChecksumSettlesItOnlyWhenItMatchesTheRecordedOne() {
+        val sum = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        assertTrue(MapDownloads.checksumCurrent(sum, sum))
+        assertTrue(MapDownloads.checksumCurrent(sum, sum.uppercase()))
+        // A newer build: the dates decide.
+        assertFalse(MapDownloads.checksumCurrent(sum, sum.replace('9', '8')))
+        // A map installed before checksums were recorded: the dates decide.
+        assertFalse(MapDownloads.checksumCurrent(null, sum))
+    }
+
+    @Test
+    fun theUpdateLineNamesTheRegionTheBuildAndTheSize() {
+        assertEquals("Newer Texas map available (built 31 Oct 2026, 202 MB)", MapDownloads.updateLine("Texas", "31 Oct 2026", "202 MB"))
+        assertEquals("Newer Ohio map available (90 MB)", MapDownloads.updateLine("Ohio", null, "90 MB"))
+    }
 }

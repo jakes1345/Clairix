@@ -324,7 +324,16 @@ release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 | Foreground service | Scanning has to continue while the screen is off, or it never accumulates enough evidence |
 | Wi-Fi state | Reads the networks in range for the Wi-Fi checks, and asks Android for a fresh Wi-Fi scan: while the scanner runs, every two minutes with the screen on or the phone moving and every ten minutes once it has settled with the screen off; with the scanner off, once a minute from the Wi-Fi tab while it is open (with the scanner on, the tab shows the scanner's results and asks for none); and once each time you tap "Scan for setup hotspots" under Hidden cameras. Android caps how often an app may ask and hands out its last results otherwise |
 | NFC | The passive HF tag sweep on the NFC tab |
-| Background location | Optional, requested only from Settings → "Resume scanning after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning simply waits until you open the app |
+| Background location | Optional, requested only from Settings → "Resume after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning simply waits until you open the app |
+| Nearby devices (`BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE`) | Connecting to an OBD-II adapter, asking a tracker for its identifier and naming paired accessories; advertising only for the detector self-test and the offline mesh while it is on |
+| Camera | The hidden-camera sweep and scanning a contact's pairing code. No frame is saved unless the owner keeps a photo of a finding |
+| Microphone | Used during a call you place or answer, while you hold the record button for a voice note, and while the Ultrasound tool is open, when it listens for 17.5-21.5 kHz beacons. Only spectrum numbers are kept; no audio is stored or sent |
+| Installed apps (`QUERY_ALL_PACKAGES`) | The stalkerware check matches every installed app against its signed list, on the phone; Android 11+ hides most apps without it |
+| Usage access (`PACKAGE_USAGE_STATS`, special access) | Fills the unlock ledger in from before its device admin was enabled, and shows the spyware check which apps ran in the background without ever being opened |
+| Device admin | The unlock ledger's lock-screen successes and failures, and "Schedule and lock" on the fake call page; nothing else |
+| Basic phone state (`READ_BASIC_PHONE_STATE`) | The data network type for the Cell tab; granted at install on Android 13+ |
+| Exact alarms | The fake call rings at the minute the owner picked, even in Doze |
+| Screen-recording detection, Advanced Protection status | Granted at install: whether Clairix's own screen is being recorded (Android 15+), and whether Advanced Protection is on (Android 16+) |
 
 Declining notifications costs you the alert and the fake call (its page says so, and
 schedules nothing until notifications and full-screen calls are allowed), not the

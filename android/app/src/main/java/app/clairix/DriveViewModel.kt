@@ -119,6 +119,8 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { scanner.loadSaved() }
         // Read now, and again each time a recording is finished.
         viewModelScope.launch { scanner.recordingsChanged.collect { refreshRecordings() } }
+        // Stop on drive mode's notification ends it here, as the switch on the Drive tab does.
+        viewModelScope.launch { DriveService.stopRequests.collect { deactivateDriveMode() } }
     }
 
     fun activateDriveMode() {

@@ -10,6 +10,7 @@ import android.os.SystemClock
 import app.clairix.Registry
 import app.clairix.ScanService
 import app.clairix.ScannerRecordings
+import app.clairix.Store
 import app.clairix.TimelineLog
 import app.clairix.analysis.HiddenCameraScanner
 import app.clairix.analysis.LocationHistory
@@ -87,7 +88,7 @@ object HistoryRetention {
      * trips, the unlock ledger, the tile cache, the typical-speed cache, the radio
      * scanner's recordings, the hidden-camera sweep's findings and the timeline
      * (a photo kept on an event goes with it); coarsens and thins the cell-tower baseline; deletes exported
-     * reports older than a day. Runs when the setting changes, at each start of
+     * reports older than a day and store files set aside as unreadable more than 30 days ago. Runs when the setting changes, at each start of
      * the app, every hour while the scanner runs
      * ([app.clairix.analysis.ScanPacing.RETENTION_EVERY_MS]) and once a day by
      * alarm; the location log and the tile cache look at their oldest entry
@@ -100,6 +101,9 @@ object HistoryRetention {
         ensureScheduled(app)
         // Whatever the retention: a report is shared once, and kept only for the app it went to.
         runCatching { Report.pruneExports(app.cacheDir, now) }
+        // Whatever the retention too: a store file that could not be read was set
+        // aside, nothing can open it, and after 30 days it goes.
+        runCatching { Store.pruneSetAside(app.filesDir, now) }
         val cutoff = cutoff(app, now)
         runCatching { ScanService.applyCellRetention(app, cutoff, now) }
         if (cutoff == null) return

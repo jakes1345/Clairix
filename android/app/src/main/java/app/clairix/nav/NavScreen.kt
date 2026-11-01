@@ -355,6 +355,8 @@ private fun NavMapLayer(
                 nav != null -> ManeuverBanner(nav)
                 navState is NavState.Routing -> StatusCard("Finding your route…", busy = true, onCancel = vm::stopNavigation)
                 else -> {
+                    // A newer build of the map in use: one line, and the way to it.
+                    updates[graph.region]?.let { newer -> MapUpdateBanner(regionName, newer, onShowRegions) }
                     SearchBar(
                         state = search,
                         regionName = regionName,
@@ -730,6 +732,23 @@ private fun NavMap(
     }
 
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+}
+
+/** "Newer Texas map available (built 31 Oct 2026, 202 MB)" over the Drive tab's map, with Update. */
+@Composable
+private fun MapUpdateBanner(regionName: String, newer: PublishedGraph, onShowRegions: () -> Unit) {
+    Surface(shape = ClairixShapes.Card, tonalElevation = 6.dp, shadowElevation = 6.dp) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                MapDownloads.updateLine(regionName, newer.builtAtEpochSec?.let(::fmtDate), fmtBytes(newer.compressedBytes)),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            GhostButton("Update", onClick = onShowRegions)
+        }
+    }
 }
 
 // ── Search ─────────────────────────────────────────────────────────────
@@ -1548,8 +1567,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                             )
                             if (newer != null) {
                                 Text(
-                                    (newer.builtAtEpochSec?.let { "Newer map built ${fmtDate(it)}" } ?: "Newer map") +
-                                        " · ${fmtBytes(newer.compressedBytes)} download",
+                                    MapDownloads.updateLine(r.name, newer.builtAtEpochSec?.let(::fmtDate), fmtBytes(newer.compressedBytes)),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                 )

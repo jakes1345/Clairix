@@ -46,7 +46,11 @@ giving them your real number or your identity key.
   of a new session also carries the claim ticket of the one-time key it was
   built on, which the relay handed to the sender's account with the key; that
   envelope is linkable to that lookup, as the lookup itself already showed who
-  wanted to reach whom. None of this is written down.
+  wanted to reach whom. The relay writes none of this down: its rate limits
+  are counted in memory, its log lines name no address, and Workers
+  observability is off in wrangler.toml. Cloudflare keeps its own records of
+  the traffic it carries (a request its firewall blocks, for example), under
+  its own privacy policy, outside the Worker's control.
 - Whether an envelope came from someone the recipient has written to, though
   not who. The phone gives its relay a pass key and gives its contacts the same
   key inside their end-to-end encrypted messages; their envelopes then carry a

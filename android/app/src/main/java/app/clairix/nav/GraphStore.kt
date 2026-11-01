@@ -118,6 +118,29 @@ class GraphStore(context: Context) {
 
     fun isInstalled(slug: String): Boolean = SLUG_RE.matches(slug) && fileFor(slug).isFile
 
+    /** Where the signed checksum of the download an installed graph came from is kept. */
+    private fun checksumFile(slug: String): File = File(dir, "$slug.agr.sha256")
+
+    /**
+     * The signed SHA-256 of the download [slug]'s installed graph came from, recorded at
+     * install; null for a graph installed before this was recorded, or none at all.
+     */
+    fun recordedChecksum(slug: String): String? {
+        if (!SLUG_RE.matches(slug) || !fileFor(slug).isFile) return null
+        return runCatching { checksumFile(slug).readText(Charsets.US_ASCII).trim() }.getOrNull()?.takeIf { SHA256_RE.matches(it) }
+    }
+
+    /**
+     * The checksum published for [slug]'s map today, once its signature by the Clairix asset
+     * signing key has checked: about a hundred bytes and a signature, the cheapest way to
+     * learn whether the map on GitHub is still the one on the phone. Throws when it cannot be
+     * read or does not verify.
+     */
+    suspend fun publishedChecksum(slug: String): String = withContext(Dispatchers.IO) {
+        require(SLUG_RE.matches(slug)) { "Not a map region: $slug" }
+        fetchChecksum(downloadUrl(slug) + ".sha256")
+    }
+
     /** Opens an installed region's graph. */
     fun open(slug: String): RoadGraph = RoadGraph.open(fileFor(slug))
 
@@ -151,6 +174,7 @@ class GraphStore(context: Context) {
         if (!SLUG_RE.matches(slug)) return false
         File(dir, "$slug.agr.gz.part").delete()
         File(dir, "$slug.agr.tmp").delete()
+        checksumFile(slug).delete()
         val f = fileFor(slug)
         return !f.exists() || f.delete()
     }
@@ -184,6 +208,9 @@ class GraphStore(context: Context) {
                 throw IOException("The downloaded map is for ${graph.region}, not $slug")
             }
             Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            // What the weekly check compares the published checksum with. A graph whose record
+            // could not be written is still installed; the check then compares build dates.
+            runCatching { checksumFile(slug).writeText(expected.lowercase(), Charsets.US_ASCII) }
             _progress.value = GraphDownload.Done(slug)
             Result.success(target)
         } catch (e: kotlinx.coroutines.CancellationException) {

@@ -2792,7 +2792,7 @@ object CommsRepository {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
             if (kind !in THREAT_KINDS) throw IllegalArgumentException("Unknown threat kind \"$kind\"")
             if (severity !in THREAT_SEVERITIES) throw IllegalArgumentException("Unknown severity \"$severity\"")
-            if (lat == null || lon == null) throw IllegalArgumentException("No GPS fix to attach; a shared threat needs a position")
+            require(lat != null && lon != null) { "No position to attach; a shared threat needs one. Check that location is on and try again" }
             val ctx = groupContext(gid)
             if (!ctx.has(ctx.me)) throw RelayException("You are no longer in this group")
             val id = UUID.randomUUID().toString()

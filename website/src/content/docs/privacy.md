@@ -18,6 +18,8 @@ The following is created and stored only on your phone. We never upload it and c
 - Your duress phrase and app-lock settings.
 - Hidden-camera sweep findings, checklist progress and any photo you keep. The camera feed is analysed live and is not saved unless you press Keep a photo on a finding: that one picture, with the time and your position written on it, is kept encrypted on your phone with the finding's timeline entry and deleted with it.
 - Radio scanner recordings, only if you turn "Record transmissions" on in Drive (it is off by default, and off again whenever drive mode ends). Each transmission is encrypted with a key held in your phone's secure hardware, stops after 10 minutes, and is deleted with your history (see below) or once all recordings pass 256 MB, oldest first. You can play and delete them on the Scanner card. Recordings made by earlier versions were not encrypted; the Scanner card offers to encrypt or delete any that are left, and does neither until you choose.
+- What the Ultrasound tool hears. The microphone is used while the Ultrasound tool is open, when it listens for 17.5-21.5 kHz beacons. Only spectrum numbers are kept, and a timeline entry, with your position, when it hears a beacon; no audio is stored or sent.
+- A record of the last crash, if Clairix has crashed: the error's stack trace (code locations, never the error text), the app version, the phone model and the Android version, encrypted with a key held in your phone's secure hardware. Settings → About shows it with Copy, Share and Delete. It is never sent by the app; it leaves your phone only if you share or send it yourself, and the next crash replaces it.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
 
 You can delete all of this at any time with Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or by uninstalling Clairix. History (the location log, the timeline with any photo kept on it, vehicle trip records, the unlock ledger, the hidden-camera sweep's findings, and the map's tile and traffic caches) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. The cell-tower baseline keeps which towers are usual where you go, not when you were near them, and forgets a tower not seen for three times the retention. An evidence report you export is deleted from the phone a day later. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
@@ -71,11 +73,11 @@ Spoken directions are made by your phone's text-to-speech engine, not by us. Cla
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's tile server. That server sees your IP address and the area being viewed. The project can move the map to another tile server without an app update, through a setting it publishes signed on GitHub; the app checks for it about once a day while a map is open, uses it only if the signature verifies, and names the server it uses in Settings, About.
 - **Address search.** A search runs on your phone over the road names of the offline map you downloaded, and a dropped pin is named after the nearest road on that map; nothing is sent. Only when you choose "Search online instead" is the search text sent to OpenStreetMap's Nominatim service.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
-- **Offline road maps, work-zone lists and plate-reader lists.** Maps cover the United States only for now (the 50 states, DC and Puerto Rico). These are downloaded from GitHub, which sees your IP address and the region you downloaded. Before a map downloads, the app reads its first few kilobytes and last four bytes from GitHub to show its size and build date; once a week at most, when you open Drive, it does the same for each map on your phone to see whether a newer one was published. GitHub sees your IP address and those regions. The files are signed, and the app refuses one it cannot verify. The plate-reader list is the licence-plate cameras mapped in OpenStreetMap for that region; the app shows them, warns you before one and routes around them, all on the phone.
+- **Offline road maps, work-zone lists and plate-reader lists.** Maps cover the United States only for now (the 50 states, DC and Puerto Rico). These are downloaded from GitHub, which sees your IP address and the region you downloaded. Before a map downloads, the app reads its first few kilobytes and last four bytes from GitHub to show its size and build date; once a week at most, when you open Drive on Wi-Fi or another unmetered connection, it reads the signed checksum of each map on your phone to see whether a newer one was published, and only when it differs reads those few bytes too, to show the newer map's build date and size. GitHub sees your IP address and those regions. The files are signed, and the app refuses one it cannot verify. The plate-reader list is the licence-plate cameras mapped in OpenStreetMap for that region; the app shows them, warns you before one and routes around them, all on the phone.
 
 ### 2.8 Things you choose to share
 
-When you export a report or share an invite link, Clairix hands it to the app you pick through Android's share menu. What happens next is up to that app.
+When you export a report, share an invite link or share the record of the last crash, Clairix hands it to the app you pick through Android's share menu. Report a problem (Settings → About) opens your own mail app on a message to support@clairix.app with the app version, phone model and Android version filled in; it is sent only if you send it. What happens next is up to that app.
 
 ### 2.9 Blocking, message requests and reports
 
@@ -96,7 +98,7 @@ The GPS check also asks Android for a position from Wi-Fi and cell towers, to co
 ## 3. What we do not do
 
 - We do not sell your data.
-- We do not use advertising or analytics services. There is no analytics SDK, advertising SDK or crash reporter in the app.
+- We do not use advertising or analytics services. There is no analytics SDK, advertising SDK or crash reporter in the app. The record of the last crash stays on your phone (section 1).
 - We do not track you across apps or websites.
 - We do not use your data to build advertising profiles.
 - We do not collect your name, email address, phone number or contact list.
@@ -109,13 +111,13 @@ Google Play services, where it is installed on your phone, is not a provider of 
 
 ## 5. Permissions
 
-Clairix asks for each permission when you use the feature that needs it. Location, Bluetooth, camera, microphone, NFC, phone state, usage access and device-admin access are used only for the features described inside the app, and the results stay on your device except as described in section 2.
+Clairix asks for each permission when you use the feature that needs it. Location, Bluetooth, camera, microphone, NFC, Wi-Fi state, phone state, notifications, the installed-app list, usage access and device-admin access are used only for the features described inside the app, and the results stay on your device except as described in section 2. The full list, with what each one is for, is at https://clairix.app/security#permissions.
 
 In particular:
 
 - **Background location** is used only by the tracker scanner you start, to tell whether a device is moving with you. Location history stays on the device.
 - **Camera** is used for the hidden-camera sweep and to scan a contact's pairing code. The sweep records nothing unless you press Keep a photo on a finding (see section 1).
-- **Microphone** is used only during a call you place or answer, and while you hold the record button for a voice note.
+- **Microphone** is used during a call you place or answer, while you hold the record button for a voice note, and while the Ultrasound tool is open, when it listens for 17.5-21.5 kHz beacons. Only spectrum numbers are kept; no audio is stored or sent.
 - **Send SMS** (Clairix Full and Clairix Comms only; the Google Play edition does not ask for it) is asked for when you turn on "Also text this number", and used only to send the SOS text described in section 2.5, to the number you entered. Clairix cannot read or receive your texts.
 - **Access to the installed-app list** is used only by the spyware check, on the device. Nothing about your apps leaves the phone: the check matches them against a stalkerware list built into the app, and about once a day while you use Clairix it asks GitHub for a newer, signed copy of that list, which tells GitHub your IP address and that the list was asked for.
 

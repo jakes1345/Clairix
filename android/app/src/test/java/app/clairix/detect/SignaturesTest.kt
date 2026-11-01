@@ -36,6 +36,25 @@ class SignaturesTest {
         assertSame(Signatures.FINDMY, Signatures.match(Advert(apple = byteArrayOf(0x12, 0x19))))
     }
 
+    /**
+     * A third-party Find My item's frame is a status byte, a rotating public key and a hint:
+     * nothing in it names the maker. Whatever fills the key bytes and the low status bits, a
+     * Chipolo Spot and any other third-party item read as the same Find My item, and Chipolo's
+     * own service UUIDs are what name a Chipolo.
+     */
+    @Test
+    fun aThirdPartyFindMyItemIsNotTakenForAnyOneMaker() {
+        for (seed in 0 until 16) {
+            val frame = findMy(0x19, 2).also { f ->
+                f[2] = (f[2].toInt() or (seed and 0x0F) or ((seed and 0x03) shl 6)).toByte()
+                for (i in 3 until f.size) f[i] = (seed * 31 + i * 7).toByte()
+            }
+            assertSame(Signatures.FINDMY, Signatures.match(Advert(apple = frame)))
+        }
+        assertSame(Signatures.CHIPOLO, Signatures.match(shorts(0xFE33)))
+        assertSame(Signatures.CHIPOLO, Signatures.match(shorts(0xFE65)))
+    }
+
     @Test
     fun theSelfTestBeaconIsWhatTheClassifierCallsASeparatedAirTag() {
         val payload = BleCanary.buildPayload()

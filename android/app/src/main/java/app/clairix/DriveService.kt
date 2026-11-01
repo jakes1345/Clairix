@@ -17,6 +17,9 @@ import androidx.core.content.ContextCompat
 import app.clairix.security.NotificationPresentation
 import app.clairix.security.NotificationText
 import app.clairix.security.PlatformAlerts
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 /**
  * Keeps the process in the foreground while drive mode is on, so the SDR stream, scanner
@@ -38,6 +41,9 @@ class DriveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // The notification's Stop: drive mode ends in the view model that runs it (the
+            // radio, the recording, the OBD link), and this service with it either way.
+            _stopRequests.tryEmit(Unit)
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -81,6 +87,10 @@ class DriveService : Service() {
         private const val NOTIFICATION_ID = 0x0D21
         private const val ACTION_STOP = "app.clairix.DRIVE_STOP"
 
+        private val _stopRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+        /** The notification's Stop was tapped; [DriveViewModel] ends drive mode on it. */
+        val stopRequests: SharedFlow<Unit> = _stopRequests.asSharedFlow()
+
         /**
          * Whether drive mode is on in this process (the service holds the foreground).
          * The scanner's trip memory reads it as a sign the journey is in the owner's own car.
@@ -113,11 +123,18 @@ class DriveService : Service() {
                 Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
+            val stop = PendingIntent.getService(
+                context,
+                1,
+                Intent(context, DriveService::class.java).setAction(ACTION_STOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
             return NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_clairix)
                 .setContentTitle(shown.title)
                 .setContentText(shown.text)
                 .setContentIntent(open)
+                .addAction(0, "Stop", stop)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)

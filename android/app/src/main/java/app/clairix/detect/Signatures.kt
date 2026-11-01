@@ -85,8 +85,9 @@ object Signatures {
 
     val FINDMY = TrackerType(
         "findmy", "Apple Find My item", "Apple / third party", Threat.HIGH,
-        "An item on Apple's Find My network, away from its owner: Chipolo ONE Spot, Pebblebee, " +
-            "Motorola Tag or similar. Same global crowdsourced network as an AirTag."
+        "An item on Apple's Find My network, away from its owner: a Chipolo Spot, a Pebblebee, " +
+            "a eufy SmartTrack or similar. Its advertisement does not say which maker made it. Same " +
+            "global crowdsourced network as an AirTag."
     )
 
     val FINDMY_NEAR_OWNER = TrackerType(
@@ -135,7 +136,8 @@ object Signatures {
 
     val CHIPOLO = TrackerType(
         "chipolo", "Chipolo tracker", "Chipolo", Threat.HIGH,
-        "Runs its own crowdsourced network, and the ONE Spot variant also joins Apple's."
+        "Runs Chipolo's own crowdsourced network. Chipolo's Spot and Point models use Apple's or " +
+            "Google's network instead, and show up as a Find My item or a Find Hub tag."
     )
 
     val PEBBLEBEE = TrackerType(
@@ -153,19 +155,9 @@ object Signatures {
         "Crowdsourced Nut network. Cheap and widely sold outside the US."
     )
 
-    val MOTOROLA_TAG = TrackerType(
-        "motorola_tag", "Motorola MA1", "Motorola / Apple", Threat.HIGH,
-        "Find My compatible tracker. Same Apple global crowdsourced network as AirTag."
-    )
-
     val INVOXIA = TrackerType(
         "invoxia", "Invoxia GPS tracker", "Invoxia", Threat.HIGH,
         "Cellular + BLE GPS tracker designed for vehicle and asset tracking."
-    )
-
-    val CHIPOLO_SPOT = TrackerType(
-        "chipolo_spot", "Chipolo ONE Spot", "Chipolo", Threat.HIGH,
-        "Works on Apple's Find My network in addition to Chipolo's own."
     )
 
     val GPS_BLE = TrackerType(

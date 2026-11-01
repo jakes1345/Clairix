@@ -29,8 +29,12 @@ data class PublishedGraph(
  * The figures come from the published file itself: its first few kilobytes unpack to the
  * graph's header (when it was built, which region), the response says how big the file
  * is, and a gzip file's last four bytes are its unpacked size. A map on the phone is
- * compared with the published one by that build time, at most once a week, so "Update"
- * appears only when there is something newer.
+ * compared with the published one at most once a week, and only on an unmetered
+ * connection ([updateCheckDue]): first by the signed checksum of the download, recorded
+ * when the map was installed ([checksumCurrent]), which settles it without reading the
+ * map when nothing changed; when that differs, or a map from before checksums were
+ * recorded has none, by the published map's build time. "Update" appears only when
+ * there is something newer, and says what ([updateLine]).
  */
 object MapDownloads {
 
@@ -87,6 +91,30 @@ object MapDownloads {
     /** Whether a week has passed since the last comparison (or the clock went back past it). */
     fun updateCheckDue(lastCheckedMs: Long, nowMs: Long): Boolean =
         lastCheckedMs <= 0L || nowMs < lastCheckedMs || nowMs - lastCheckedMs >= UPDATE_CHECK_EVERY_MS
+
+    /**
+     * [updateCheckDue], and on a connection the owner does not pay for by the megabyte: the
+     * check runs on its own, so it waits for Wi-Fi rather than spend mobile data unasked.
+     */
+    fun updateCheckDue(lastCheckedMs: Long, nowMs: Long, metered: Boolean): Boolean =
+        !metered && updateCheckDue(lastCheckedMs, nowMs)
+
+    /**
+     * Whether the signed checksum published today, [published], is the one recorded when the
+     * map on the phone was installed, [recorded]: then the map is the current one and nothing
+     * more is read. False when they differ or nothing was recorded (a map from before
+     * checksums were kept), and the build dates decide.
+     */
+    fun checksumCurrent(recorded: String?, published: String): Boolean =
+        recorded != null && recorded.equals(published, ignoreCase = true)
+
+    /**
+     * What the picker and the Drive tab say about a newer map of [regionName]: "Newer Texas
+     * map available (built 31 Oct 2026, 202 MB)", with [builtOn] the build date as the screen
+     * formats it (null when unknown) and [download] the download's size, formatted.
+     */
+    fun updateLine(regionName: String, builtOn: String?, download: String): String =
+        "Newer $regionName map available (" + (builtOn?.let { "built $it, " } ?: "") + "$download)"
 
     /** The whole file's size from a Content-Range header such as "bytes 0-4095/90335665"; null otherwise. */
     fun totalFromContentRange(header: String?): Long? {

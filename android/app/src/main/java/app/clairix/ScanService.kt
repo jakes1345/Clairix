@@ -978,7 +978,7 @@ class ScanService : LifecycleService() {
                         Registry.publishAlert(
                             Alert(
                                 id = "karma@${hit.bssid}@$now", ts = now, severity = Severity.CRITICAL,
-                                title = "Rogue access point answered the canary probe",
+                                title = "A fake Wi-Fi hotspot is nearby",
                                 detail = KarmaCanary.describe(hit),
                                 kind = EventKind.WIFI_ANOMALY, dedupeKey = "karma@${hit.bssid}"
                             )
@@ -1018,7 +1018,7 @@ class ScanService : LifecycleService() {
                             it.persistent && !it.following && it.address !in trusted
                         }
                         if (correlatedBle.isNotEmpty() && (wifiBait.isNotEmpty() || karmaHits.isNotEmpty())) {
-                            val wifiPart = if (karmaHits.isNotEmpty()) "rogue access point answered the canary" else "Wi-Fi bait"
+                            val wifiPart = if (karmaHits.isNotEmpty()) "a fake Wi-Fi hotspot" else "Wi-Fi bait"
                             val evt2 = TimelineEvent(
                                 id = "corr@${correlatedBle.first().key}@$now",
                                 kind = EventKind.CORRELATED_SURVEILLANCE,
@@ -1491,6 +1491,10 @@ class ScanService : LifecycleService() {
         runCatching { StalkwareWatch.clear(this) }
         // The camera sweep's findings, checklist and self-test, kept in their own store.
         runCatching { app.clairix.analysis.HiddenCameraScanner.forget(this) }
+        // When each paired accessory was first seen connected (the owner's marks stay).
+        runCatching { app.clairix.analysis.AudioRouteMonitor.forget(this) }
+        // The radio scanner's recordings, and any plain ones an earlier version left.
+        runCatching { ScannerRecordings.deleteEverything(this) }
         LocationHistory.clear(this)
         alerted.clear()
         followAlerts.clear()
@@ -1631,9 +1635,9 @@ class ScanService : LifecycleService() {
                 }
         )
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_CELL, "Cell alerts", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_CELL, "Phone network alerts", NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Potential cellular anomaly detected"
+                    description = "A fake cell tower may be nearby, or your phone was pushed onto an older, weaker network"
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )

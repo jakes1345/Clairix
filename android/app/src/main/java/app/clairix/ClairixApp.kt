@@ -17,6 +17,8 @@ class ClairixApp : Application() {
         // The duress wipe's relaunch (security/WipeRelaunchActivity) runs for a
         // moment in a process of its own; nothing below is for it.
         if (Application.getProcessName() != packageName) return
+        // A crash from here on leaves a local record for Settings, About (never sent anywhere).
+        CrashJournal.install(this)
         if (Wiper.isPending(this)) Wiper.start(this)
         // Before anything reads the comms vault (a push, the call service).
         app.clairix.comms.VaultBox.init(this)

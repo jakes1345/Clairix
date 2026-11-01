@@ -459,6 +459,20 @@ class ScannerRecordings(
         /** For [app.clairix.security.HistoryRetention]: deletes recordings last written before [cutoff]. */
         fun pruneOlderThan(context: Context, cutoff: Long): Int = of(context).pruneOlderThan(cutoff)
 
+        /**
+         * For Settings, Clear all data: deletes every recording in [dir], the one being
+         * written included (its writer finishes into a file that is already gone), and the
+         * plain ones an earlier version left in [legacyDirs]. Returns how many went.
+         */
+        fun deleteEverything(context: Context): Int = deleteEverything(dir(context), legacyDirs(context))
+
+        /** [deleteEverything] over [dir] and [legacy]: only recordings, never another file there. */
+        internal fun deleteEverything(dir: File, legacy: List<File>): Int {
+            val sealed = dir.listFiles { f -> f.isFile && (f.name.endsWith(SUFFIX) || f.name.endsWith(TMP_SUFFIX)) }
+                ?.count { it.delete() } ?: 0
+            return sealed + findLegacy(legacy).count { it.file.delete() }
+        }
+
         /** Where the recorder used to write: the app's external files ("scanner"), or its files directory when there was none. */
         fun legacyDirs(context: Context): List<File> {
             val app = context.applicationContext

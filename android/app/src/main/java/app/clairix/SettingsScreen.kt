@@ -342,7 +342,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     if (showClearDialog) {
         ClairixDialog(
             title = "Clear all data?",
-            text = "This removes every detection, the cell tower baseline and the whole timeline. There's no undo.",
+            text = CLEAR_ALL_DATA_TEXT,
             confirmLabel = "Clear data",
             confirmTone = Tone.Danger,
             onConfirm = {
@@ -967,6 +967,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     KeyValueRow("Package", BuildConfig.APPLICATION_ID)
                     KeyValueRow("Edition", if (BuildConfig.FULL_ACCESS) "Full: scanner, tools and Comms" else "Comms only", mono = false)
                     SecondaryButton("Take the tour", onClick = onTour, tone = Tone.Accent)
+                    CrashReportSection()
 
                     if (BuildConfig.FULL_ACCESS) {
                         Hairline(Modifier.padding(vertical = 4.dp))
@@ -1093,6 +1094,16 @@ internal fun shareEvidenceReport(context: Context) {
     )
     context.startActivity(Intent.createChooser(intent, "Share evidence report"))
 }
+
+/**
+ * What Settings, Clear all data removes, as [ScanService]'s clearAllData does it: keep the
+ * two in step. What stays is said too, since a wipe is the control that takes everything.
+ */
+internal const val CLEAR_ALL_DATA_TEXT =
+    "This removes every detection, the whole timeline with any photo kept on it, the location log, vehicle trips, " +
+        "the cell tower baseline, the camera sweep's findings, the spyware check's last findings, when each paired " +
+        "accessory was first seen, and the radio scanner's recordings, older unencrypted ones included. Your settings, " +
+        "trusted devices, the apps and headsets you marked as yours, the unlock ledger and Comms stay. There's no undo."
 
 /** What a wipe takes, in the words the dialog after a new passcode uses. */
 internal val WIPE_WARNING =

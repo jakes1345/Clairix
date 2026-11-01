@@ -152,4 +152,20 @@ class AudioRouteMonitorTest {
         reopened.unmark("bt:$buds")
         assertTrue(AccessoryRecord(store(file)).marks().isEmpty())
     }
+
+    @Test
+    fun clearAllDataForgetsFirstConnectionsAndKeepsTheOwnersMarks() {
+        val file = File(Files.createTempDirectory("audio").toFile().apply { deleteOnExit() }, AudioRouteMonitor.FILE)
+        val buds = "AA:BB:CC:DD:EE:FF"
+        val record = AccessoryRecord(store(file))
+        record.mark("bt:$buds", "Pixel Buds", 1_000L)
+        record.noteConnected(listOf(buds), bonded = setOf(buds), now = 2_000L)
+        record.clearSeen()
+        val reopened = AccessoryRecord(store(file))
+        assertNull(reopened.firstConnected(buds))
+        assertEquals("Pixel Buds", reopened.marks()["bt:$buds"]?.name)
+        // Seen again, it is a first connection again.
+        reopened.noteConnected(listOf(buds), bonded = setOf(buds), now = 5_000L)
+        assertEquals(5_000L, reopened.firstConnected(buds))
+    }
 }

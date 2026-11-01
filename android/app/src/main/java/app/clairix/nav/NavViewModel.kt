@@ -406,16 +406,41 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Compares each map on the phone with the published one, at most once a week per
-     * region ([MapDownloads.updateCheckDue]): two small reads from GitHub, the first few
-     * kilobytes and the last four bytes of the file. Offline, it tries again next time.
+     * region and only on an unmetered connection ([MapDownloads.updateCheckDue]). First the
+     * signed checksum (about a hundred bytes and its signature, verified as a download's
+     * is): when it is the one recorded at install, the map is current and that is all.
+     * Otherwise two small reads from GitHub, the first few kilobytes and the last four
+     * bytes of the file, give the newer map's build date and size. A checksum that does
+     * not verify, or no connection, leaves it for next time.
      */
     private suspend fun checkForUpdates() {
         val now = System.currentTimeMillis()
         for (r in _installed.value) {
-            if (!MapDownloads.updateCheckDue(prefs.getLong(KEY_UPDATE_CHECKED + r.slug, 0L), now)) continue
+            if (!MapDownloads.updateCheckDue(prefs.getLong(KEY_UPDATE_CHECKED + r.slug, 0L), now, metered())) continue
+            val signed = publishedChecksumOrNull(r.slug) ?: continue
+            val recorded = withContext(Dispatchers.IO) { store.recordedChecksum(r.slug) }
+            if (MapDownloads.checksumCurrent(recorded, signed)) {
+                rememberCurrent(r.slug, now)
+                continue
+            }
             val published = publishedOrNull(r.slug) ?: continue
             rememberPublished(published, now)
         }
+        showKnownUpdates()
+    }
+
+    /** [GraphStore.publishedChecksum], or null when it could not be read or did not verify. */
+    private suspend fun publishedChecksumOrNull(slug: String): String? = try {
+        store.publishedChecksum(slug)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    /** The map on the phone is the published one: checked now, and nothing newer to offer. */
+    private fun rememberCurrent(slug: String, now: Long) {
+        prefs.edit().putLong(KEY_UPDATE_CHECKED + slug, now).remove(KEY_UPDATE_SEEN + slug).apply()
         showKnownUpdates()
     }
 

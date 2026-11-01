@@ -40,7 +40,7 @@ Samsung's One UI adds its own layer of battery management on top of Android's, a
 - If **Adaptive battery** or **Put unused apps to sleep** is on, Samsung may still sleep Clairix after a few days without use. Opening the app resets this. Menu names vary by One UI version; look for anything that mentions sleeping or background usage.
 - Clairix recognises Samsung's own system apps, Galaxy Store installs and Knox components in the spyware check, so a stock Galaxy should not show them as suspicious. If a preloaded Samsung app is flagged, send us the package name shown on the card and we will add it to the known list.
 - Biometric unlock: on some phones, including some Samsung models, the system reports an invalidated biometric key in an unusual way. Clairix handles this, but if biometric unlock stops working after you add a fingerprint, that is by design: enrolling a new fingerprint or face invalidates the key. Enter your passcode and switch biometric unlock on again in Settings.
-- Clairix uses the phone's StrongBox security chip for keys where one is present, which includes recent Galaxy flagships.
+- The app-lock passcode key and the key that notices a new fingerprint or face use the phone's StrongBox security chip where there is one, which includes recent Galaxy flagships; Clairix's other keys live in the phone's trusted execution environment.
 
 ### The scan is running but nothing is listed
 
@@ -125,13 +125,14 @@ There is no reset. The passcode is never stored, only a verifier that cannot be 
 
 ## Report a bug
 
-Write to support@clairix.app with:
+The quickest way is **Report a problem** in Settings → About: it opens your mail app on a message to support@clairix.app with the Clairix version, phone model and Android version filled in, and nothing else. You write the rest and send it yourself. Or write to support@clairix.app with:
 
 1. **What you did**, step by step.
 2. **What you expected** and **what happened** instead.
 3. **Phone model, Android version and Clairix version.**
-4. For Comms problems, the **diagnostics log**: in Comms settings, open Diagnostics and tap **Copy**. The log records connections and delivery events. It never contains message text.
-5. For scanner problems, an **evidence report export** is helpful if you are comfortable sharing it. It contains device identifiers and positions, so send it only if you are. You can delete lines before sending.
+4. **If Clairix crashed**, the crash record: after a crash, Settings → About shows "Clairix crashed last time" with **Copy** and **Share**. It holds the error's stack trace (code locations, never the error text), the app version, the phone model and the Android version: nothing from your conversations, no places, no identifiers. It stays on your phone until you send it, and **Delete** removes it.
+5. For Comms problems, the **diagnostics log**: in Comms settings, open Diagnostics and tap **Copy**. The log records connections and delivery events. It never contains message text.
+6. For scanner problems, an **evidence report export** is helpful if you are comfortable sharing it. It contains device identifiers and positions, so send it only if you are. You can delete lines before sending.
 
 Please do not send screenshots of conversations or anyone else's personal information. We reply by email within five business days. We have no telemetry, so your report is the only way we learn about a problem.
 

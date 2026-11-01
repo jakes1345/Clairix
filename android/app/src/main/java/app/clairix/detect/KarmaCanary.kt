@@ -429,8 +429,7 @@ object KarmaCanary {
 
     /** Human explanation for the alert and the timeline. */
     fun describe(anomaly: WifiAnomaly): String =
-        "An access point (${anomaly.bssid}, ${anomaly.rssi} dBm) answered a probe for a network name Clairix made up " +
-            "for this phone and nobody else knows. Only a device that answers every probe request — " +
-            "a Karma / Pineapple style interception box — does that. Do not join any Wi-Fi here; " +
-            "turn Wi-Fi off and leave."
+        "A Wi-Fi hotspot nearby (${anomaly.bssid}, ${anomaly.rssi} dBm) claimed to be a network whose name Clairix " +
+            "made up for this phone and nobody else knows. Only equipment built to trick phones into connecting to it " +
+            "does that (a Karma or Wi-Fi Pineapple device). Do not join any Wi-Fi here; turn Wi-Fi off and leave."
 }
