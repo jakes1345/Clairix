@@ -86,7 +86,7 @@ const emergency: { icon: IconName; title: string; body: string }[] = [
   { icon: 'phrase', title: 'Duress phrase', body: 'An ordinary-looking sentence you can type into any chat. The message goes out as written. Underneath, the SOS fires. Anyone watching the screen sees a normal conversation.' },
   { icon: 'phone', title: 'Fake call', body: 'Schedule an incoming call for 30 seconds, 2 minutes or 5 minutes from now. Your phone rings with its own ringtone and, locked, shows a real-looking call screen; unlocked in another app, a call banner with Clairix’s name. Answer it and walk away, or have it place a real encrypted call to a contact.' },
   { icon: 'lock', title: 'App lock', body: 'A passcode protects Clairix itself, with optional biometric unlock. Too many wrong attempts can wipe the app’s data. A separate duress passcode wipes it at once and is taken as a wrong guess; the lock screen stays, and from then on that code opens an empty Clairix, with no history, contacts or number.' },
-  { icon: 'wipe', title: 'Wipe Clairix', body: 'In the Comms menu or in Settings: type WIPE and Clairix destroys its keys first, then deletes everything it holds on your phone, then asks the relay to delete your account, retrying for a day if the relay cannot be reached.' },
+  { icon: 'wipe', title: 'Wipe Clairix', body: 'In the Comms menu or in Settings: type WIPE and Clairix destroys its keys first, then deletes everything it holds on your phone, then asks the relay to delete your account, retrying for a day if the relay cannot be reached (with Tor on, it tries only before Clairix closes).' },
 ];
 
 const trust: { icon: IconName; title: string; body: string }[] = [

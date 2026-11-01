@@ -39,16 +39,20 @@ import kotlin.math.abs
  * and whichever copy is current when the network is there is the one sent.
  * Until the relay has taken one, or the last has passed, they wait in [FILE], a
  * plain file in the app's private files (after a wipe every key that could seal
- * it is gone). It names the relay and the Clairix number and nothing else about
- * the account. It is sent as soon as it can be: after a wipe at the next start
- * of the app (at once, for the duress decoy), and on an alarm the system keeps
- * whether or not Clairix is running, until it goes or expires.
+ * it is gone). It holds the relay's address and pin, the Clairix number and the
+ * signed copies, which prove this phone held that identity; nothing else about
+ * the account. It is sent as soon as it can be: by a wipe that closes Clairix,
+ * for a few seconds before it does ([Wiper]); by the duress decoy as it starts;
+ * and on an alarm the system keeps whether or not Clairix is running, until it
+ * goes or expires.
  *
  * A deletion signed while Tor was on is never sent any other way, because sent
- * directly it would give the relay this phone's address beside the number. The
- * wipe tries it through Tor before the app closes and then drops it (a wiped
- * phone has no Tor any more); after Delete identity and number Tor stays on, so
- * it is kept and tried through Tor, and dropped if Tor is turned off.
+ * directly it would give the relay this phone's address beside the number
+ * ([sendable]). The wipe tries it through Tor before the app closes, if Tor is
+ * on in that process, and then drops it (a wiped phone has no Tor any more); a
+ * wipe resumed after a restart has no Tor at all, so it drops it unsent. After
+ * Delete identity and number Tor stays on, so it is kept and tried through
+ * Tor, and dropped if Tor is turned off.
  */
 internal object RelayFarewell {
 
@@ -113,6 +117,9 @@ internal object RelayFarewell {
         /** The relay could not be asked; try again later. */
         RETRY,
     }
+
+    /** Whether [p] may go out now: one signed with Tor on goes through Tor ([torOn]: on in this process) or not at all. */
+    fun sendable(p: Prepared, torOn: Boolean): Boolean = !p.viaTor || torOn
 
     // ── Choosing a copy ─────────────────────────────────────────────────────
 
@@ -266,36 +273,65 @@ internal object RelayFarewell {
 
     /**
      * Tries every waiting deletion once and keeps what is left for the alarm.
-     * Not while a wipe runs: it writes this file itself when it ends.
+     * Not while a wipe runs: it writes this file itself when it ends, and sends
+     * it with [flushFile] as its last act.
      */
     suspend fun flush(app: Context) {
         sending.withLock {
             if (Wiper.isActive) return
-            val now = System.currentTimeMillis()
-            val waiting = synchronized(fileLock) { load(app.filesDir) }
-            val left = waiting.filterNot { expired(it, now) }.filter { p ->
-                // Through Tor or not at all: one signed with Tor on is dropped once Tor is off (see the class comment).
-                if (p.viaTor && !TorTransport.enabled) false
-                else deliver(p, now) { copy -> ask(p, copy) } == Outcome.RETRY
-            }
-            val after = synchronized(fileLock) {
-                // A deletion kept while these were being sent goes back with what is left.
-                val added = load(app.filesDir).filter { it !in waiting }
-                (left + added).also { runCatching { save(app.filesDir, it) } }
-            }
-            if (after.isEmpty()) cancel(app) else arm(app, RETRY_MS)
+            flushFile(app.filesDir, System.currentTimeMillis(), TorTransport.enabled, RETRY_MS, alarmOf(app)) { p, copy -> ask(p, copy) }
         }
+    }
+
+    /** [flushFile]'s alarm on the phone: armed that far ahead, or cancelled for null. */
+    fun alarmOf(context: Context): (Long?) -> Unit = { delayMs -> if (delayMs == null) cancel(context) else arm(context, delayMs) }
+
+    /**
+     * Tries every deletion waiting in [filesDir] once, through [send], and keeps
+     * what is left. The next try is armed ([alarm], [RETRY_MS] ahead) before
+     * this one starts: the alarm's receiver lets Android have the process back
+     * after [RECEIVER_BUDGET_MS], and a process frozen or ended in the middle of
+     * a request must still leave a try to come. Afterwards the alarm is
+     * cancelled (null) when nothing is left, or set [retryMs] ahead.
+     */
+    fun flushFile(
+        filesDir: File,
+        now: Long,
+        torOn: Boolean,
+        retryMs: Long,
+        alarm: (Long?) -> Unit,
+        send: (Prepared, Signed) -> Answer?,
+    ) {
+        val waiting = synchronized(fileLock) { load(filesDir) }
+        if (waiting.isNotEmpty()) alarm(RETRY_MS)
+        val left = waiting.filterNot { expired(it, now) }.filter { p ->
+            // Through Tor or not at all: one signed with Tor on is dropped once Tor is off (see the class comment).
+            sendable(p, torOn) && deliver(p, now) { copy -> send(p, copy) } == Outcome.RETRY
+        }
+        val after = synchronized(fileLock) {
+            // A deletion kept while these were being sent goes back with what is left.
+            val added = load(filesDir).filter { it !in waiting }
+            (left + added).also { runCatching { save(filesDir, it) } }
+        }
+        alarm(if (after.isEmpty()) null else retryMs)
     }
 
     /**
      * Sends [list] now, on the calling thread, each request given [callTimeoutSec]
      * (a wipe, for the deletions that must go through Tor while it is still up).
-     * Returns what could not go.
+     * One signed with Tor on is not sent unless [torOn]. Returns what could not go.
      */
-    fun deliverNow(list: List<Prepared>, callTimeoutSec: Long): List<Prepared> {
-        val now = System.currentTimeMillis()
-        return list.filter { p -> !expired(p, now) && deliver(p, now) { copy -> ask(p, copy, callTimeoutSec) } == Outcome.RETRY }
-    }
+    fun deliverNow(
+        list: List<Prepared>,
+        callTimeoutSec: Long,
+        torOn: Boolean,
+        now: Long = System.currentTimeMillis(),
+        send: (Prepared, Signed) -> Answer? = askWithin(callTimeoutSec),
+    ): List<Prepared> =
+        list.filter { p -> sendable(p, torOn) && !expired(p, now) && deliver(p, now) { copy -> send(p, copy) } == Outcome.RETRY }
+
+    /** Puts copies to the relay ([ask]) with [callTimeoutSec] for each: a wipe has only a few seconds left. */
+    fun askWithin(callTimeoutSec: Long): (Prepared, Signed) -> Answer? = { p, copy -> ask(p, copy, callTimeoutSec) }
 
     /**
      * Puts one copy to the relay, on a connection of its own (no pooled session

@@ -28,6 +28,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
@@ -1143,8 +1144,13 @@ object CommsRepository {
         )
     }
 
-    /** Deletes the mailbox on the relay (best effort) and everything local. */
-    suspend fun unpair() = withContext(Dispatchers.IO) {
+    /**
+     * Deletes the mailbox on the relay (best effort) and everything local. Not
+     * cancellable once called: the screens call it from their own scope, and
+     * leaving the screen during the relay's few seconds must not abandon it
+     * halfway (identity still on the phone, no deletion kept for retrying).
+     */
+    suspend fun unpair() = withContext(NonCancellable + Dispatchers.IO) {
         lock.withLock {
             setBusy(true)
             // Signed now, while the identity exists: if the relay has not confirmed the

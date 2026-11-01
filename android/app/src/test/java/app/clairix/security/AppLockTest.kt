@@ -508,4 +508,33 @@ class AppLockTest {
         assertEquals("the decoy behaves as the lock did: no wipe", 0, AppLock.wipeAfter(context))
         assertEquals(0, AppLock.pausedWipeAfter(context))
     }
+
+    @Test
+    fun theWrongPasscodeNoticeAfterADuressRelaunchIsShownOnceAndOnlyRightAfterTheWipe() {
+        // Another app sending the relaunch's extra, with no duress wipe behind it: a plain lock screen.
+        AppLock.noteWipeRelaunch(context, relaunched = true)
+        assertFalse(AppLock.takeWipeNotice())
+
+        val lock = AppLock.makeDecoyLock("48261937")
+        assertTrue(AppLock.writeDecoy(context, lock, wipeAfter = 0, relockMs = AppLock.DEFAULT_RELOCK_MS, biometric = false))
+        platform.wall += 8_000L
+        AppLock.noteWipeRelaunch(context, relaunched = true)
+        assertTrue("the relaunch opens on what the last lock screen said", AppLock.takeWipeNotice())
+        assertFalse("asked once", AppLock.takeWipeNotice())
+
+        // The screen restored after its process died, or recreated for a theme change: the mark is spent.
+        AppLock.noteWipeRelaunch(context, relaunched = true)
+        assertFalse(AppLock.takeWipeNotice())
+        assertFalse(context.prefs(AppLock.PREFS_NAME).contains("wipe_notice_at"))
+
+        // A decoy whose relaunch never came (Clairix was not on screen), opened later: no notice, and the mark goes.
+        assertTrue(AppLock.writeDecoy(context, lock, wipeAfter = 0, relockMs = AppLock.DEFAULT_RELOCK_MS, biometric = false))
+        platform.wall += AppLock.WIPE_NOTICE_MS + 1
+        AppLock.noteWipeRelaunch(context, relaunched = true)
+        assertFalse(AppLock.takeWipeNotice())
+        assertFalse(context.prefs(AppLock.PREFS_NAME).contains("wipe_notice_at"))
+
+        assertFalse(AppLock.wipeNoticeDue(0L, platform.wall))
+        assertFalse("a clock moved back is not a recent wipe", AppLock.wipeNoticeDue(platform.wall + 1, platform.wall))
+    }
 }

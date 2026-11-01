@@ -104,6 +104,10 @@ object AppLock {
     private const val WRONG_KEPT = 50
     private const val K_RELOCK_MS = "relock_ms"
     private const val K_BIOMETRIC = "biometric_enabled"
+    /** When the duress wipe wrote the decoy's lock ([writeDecoy]): its relaunch, moments later, opens on "Wrong passcode". Read once. */
+    private const val K_WIPE_NOTICE_AT = "wipe_notice_at"
+    /** How long after [K_WIPE_NOTICE_AT] the relaunch may still show the notice; the wipe's last steps take seconds. */
+    internal const val WIPE_NOTICE_MS = 60_000L
 
     private const val SALT_LEN = 16
     private val DOMAIN = "clairix-applock-v1".toByteArray(Charsets.UTF_8)
@@ -821,6 +825,7 @@ object AppLock {
             .putInt(K_WIPE_AFTER, if (wipeAfter in WIPE_AFTER_CHOICES) wipeAfter else DEFAULT_WIPE_AFTER)
             .putBoolean(K_WIPE_CHOSEN, true)
             .putLong(K_RELOCK_MS, if (relockMs in RELOCK_CHOICES) relockMs else DEFAULT_RELOCK_MS)
+            .putLong(K_WIPE_NOTICE_AT, seam.now())
         decoyDuress(edit)
         val bio = biometric && runCatching { createBiometricKey() }.isSuccess
         edit.putBoolean(K_BIOMETRIC, bio)
@@ -830,12 +835,22 @@ object AppLock {
     @Volatile private var wipeNotice = false
 
     /**
-     * The duress wipe brought Clairix back to its lock screen in a fresh process
-     * ([WipeRelaunchActivity]); the new lock screen says what the last one said.
+     * Called as the main screen is created. [relaunched]: it was opened by the
+     * duress wipe's relaunch ([WipeRelaunchActivity]), not restored or recreated.
+     * The new lock screen then says what the last one said, once: only if the
+     * wipe wrote the decoy's lock moments ago, a mark this consumes either way,
+     * so a screen Android later restores from that intent, or another app
+     * sending the same extra, opens on a plain lock screen.
      */
-    fun noteWipeRelaunch() {
-        wipeNotice = true
+    fun noteWipeRelaunch(context: Context, relaunched: Boolean) {
+        val p = prefs(context)
+        val at = p.getLong(K_WIPE_NOTICE_AT, 0L)
+        if (at != 0L) p.edit().remove(K_WIPE_NOTICE_AT).apply()
+        if (relaunched && wipeNoticeDue(at, seam.now())) wipeNotice = true
     }
+
+    /** Whether a decoy written at [at] (0: none) is recent enough at [now] for the relaunch's notice. */
+    internal fun wipeNoticeDue(at: Long, now: Long): Boolean = at > 0L && now - at in 0L..WIPE_NOTICE_MS
 
     /** Whether the lock screen opens on "Wrong passcode", as the one the duress code was typed into ended. Asked once. */
     fun takeWipeNotice(): Boolean {

@@ -35,17 +35,18 @@ import java.util.concurrent.TimeUnit
  * all. Thirty days by default: enough for a pattern-of-life report and for a
  * tracker to show itself across trips, not a year of where the owner has been.
  * The cell-tower baseline is what "normal" is measured against, so it is not
- * deleted with the history; it keeps which towers are usual, not when the
- * phone was near them: exact times go after two days, and a tower or area not
- * seen for three retention periods is forgotten (see
+ * deleted with the history; it keeps which towers and areas are usual and the
+ * last day each was seen: exact times go after two days, and a tower or area
+ * not seen for three retention periods is forgotten, never with history kept
+ * for ever (see
  * [app.clairix.analysis.IMSICatcher.applyRetention]). An exported evidence
  * report is kept a day for the app it was shared to, whatever the retention.
  * Evidence the owner saved about an app ([app.clairix.analysis.EventLog.KEPT])
  * stays on the timeline whatever the retention, until "Clear all data" or a
  * wipe: the app may be gone by the time it is needed.
  *
- * It runs when the setting changes, at each start of the app, every quarter
- * hour while the scanner runs, and once a day on an alarm the system keeps
+ * It runs when the setting changes, at each start of the app, every hour while
+ * the scanner runs ([app.clairix.analysis.ScanPacing.RETENTION_EVERY_MS]), and once a day on an alarm the system keeps
  * ([HistoryRetentionAlarm]), so history ages out on a phone whose owner has
  * neither the scanner nor the app open (the unlock ledger keeps growing then).
  */

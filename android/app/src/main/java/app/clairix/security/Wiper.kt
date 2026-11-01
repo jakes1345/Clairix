@@ -1,14 +1,18 @@
 package app.clairix.security
 
+import android.app.Notification
 import android.app.NotificationManager
+import android.app.Service
 import android.app.admin.DevicePolicyManager
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Process
+import android.os.SystemClock
 import androidx.core.app.NotificationManagerCompat
 import app.clairix.AppSettings
 import app.clairix.CardEmulationBridge
+import app.clairix.DriveService
 import app.clairix.ONBOARDING_DONE_KEY
 import app.clairix.Registry
 import app.clairix.ScanService
@@ -16,7 +20,10 @@ import app.clairix.TOUR_SEEN_KEY
 import app.clairix.analysis.TlsCanary
 import app.clairix.comms.CallService
 import app.clairix.comms.CommsService
+import app.clairix.comms.TorTransport
+import app.clairix.comms.mesh.MeshService
 import app.clairix.detect.KarmaCanary
+import app.clairix.nav.NavigationService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,7 +73,9 @@ import java.security.KeyStore
  *   3. Duress only: make the decoy's lock, a fresh key and the code's verifier
  *      under it ([AppLock.makeDecoyLock]), and write it into the mark at once,
  *      so a wipe cut short from here on still leaves it.
- *   4. Stop the foreground services, so nothing keeps writing.
+ *   4. Stop every foreground service ([FOREGROUND_SERVICES]), so nothing keeps
+ *      writing, and the alarms the system keeps for the app (a scheduled fake
+ *      call among them: it would ring in the decoy).
  *   5. What lives outside the app's files and would otherwise survive: every
  *      notification and notification channel (a message preview in the shade,
  *      a channel listed by name and purpose in Settings), the clipboard (a
@@ -83,13 +92,18 @@ import java.security.KeyStore
  *      owner has been).
  *   9. Duress only: write the decoy's settings and lock.
  *  10. Keep the relay deletions in a plain file until the relay has taken one
- *      ([RelayFarewell]). It is sent as soon as Clairix runs again (at once,
- *      for the decoy), and an alarm keeps trying whether or not it does. A
- *      deletion signed with Tor on is tried through Tor before the app closes,
- *      and never sent directly.
+ *      ([RelayFarewell]). A wipe that closes Clairix then tries them for up to
+ *      [RELAY_BUDGET_MS] before it does; the decoy sends them as soon as it
+ *      starts, a moment later. Whatever is left an alarm keeps trying, whether
+ *      or not Clairix runs. A deletion signed with Tor on is tried through Tor
+ *      before the app closes, only while Tor is on in this process (a wipe
+ *      resumed after a restart never starts it), and never sent directly.
  *  11. Delete the "wipe pending" mark, last of all, so a wipe cut short
  *      anywhere is resumed at the next start ([app.clairix.ClairixApp]).
- *  12. Back to the lock screen in a fresh process (duress), or close.
+ *  12. Delete the notification channels again, once the services stopped at
+ *      step 4 have left the foreground (Android refuses to delete a channel a
+ *      foreground service is using); then back to the lock screen in a fresh
+ *      process (duress), or close.
  *
  * [isActive] is also read by the stores that buffer writes ([app.clairix.Store]):
  * a flush after step 6 would put a plaintext timeline straight back on disk. It
@@ -101,8 +115,11 @@ object Wiper {
     var isActive = false
         private set
 
-    /** How long the deletions that must go through Tor get, while this process still has Tor, before the app closes anyway. */
-    private const val TOR_BUDGET_MS = 6_000L
+    /** How long the relay deletions get at the end of the wipe (each request as long) before the app closes anyway. */
+    private const val RELAY_BUDGET_MS = 6_000L
+
+    /** How long step 12 waits for the stopped services to leave the foreground before deleting the channels anyway. */
+    private const val SERVICES_GONE_MS = 2_000L
 
     /**
      * After asking for the relaunch: still alive this long, this process was not
@@ -170,7 +187,7 @@ object Wiper {
                 }
                 plan = run(plan, duressCode, roots, AndroidWipeSystem(app))
             } finally {
-                finish(app, plan)
+                finish(app, plan, resumed = resumed != null)
             }
         }
     }
@@ -309,14 +326,47 @@ object Wiper {
         return Decoy(prefs, HistoryRetention.days(app), AppLock.wipeAfter(app), AppLock.relockAfterMs(app), AppLock.isBiometricEnabled(app))
     }
 
-    /** Step 10's Tor part, then step 12. */
-    private suspend fun finish(app: Context, plan: WipePlan) {
+    /**
+     * What step 10 sends before the process ends: the deletions signed with Tor
+     * on, only while Tor is on in this process ([torOn]); and, for a wipe that
+     * closes Clairix, those waiting in the file. The decoy leaves the file to its
+     * own process, which sends it as it starts.
+     */
+    internal fun finalSends(plan: WipePlan, torOn: Boolean): FinalSends = FinalSends(
+        viaTor = plan.farewells.filter { it.viaTor && RelayFarewell.sendable(it, torOn) },
+        waiting = plan.decoy == null,
+    )
+
+    /** See [finalSends]. */
+    internal data class FinalSends(val viaTor: List<RelayFarewell.Prepared>, val waiting: Boolean)
+
+    /** Step 10's sends, on this thread, each request given the whole budget: the Tor ones are dropped after, the rest left to the alarm. */
+    private fun sendFarewells(app: Context, sends: FinalSends, torOn: Boolean) {
+        val callSec = RELAY_BUDGET_MS / 1000
+        if (sends.viaTor.isNotEmpty()) RelayFarewell.deliverNow(sends.viaTor, callSec, torOn)
+        if (!sends.waiting) return
+        RelayFarewell.flushFile(
+            app.filesDir, System.currentTimeMillis(), torOn, RelayFarewell.FIRST_TRY_MS,
+            RelayFarewell.alarmOf(app), RelayFarewell.askWithin(callSec),
+        )
+    }
+
+    /**
+     * Step 10's sends, then step 12. A wipe [resumed] in a new process has no Tor
+     * ([TorTransport.init] does not start it while a wipe runs), so nothing goes
+     * through it then.
+     */
+    private suspend fun finish(app: Context, plan: WipePlan, resumed: Boolean) {
         try {
-            val viaTor = plan.farewells.filter { it.viaTor }
-            if (viaTor.isNotEmpty()) {
-                withTimeoutOrNull(TOR_BUDGET_MS) { runInterruptible { RelayFarewell.deliverNow(viaTor, TOR_BUDGET_MS / 1000) } }
+            val torOn = !resumed && TorTransport.enabled
+            val sends = finalSends(plan, torOn)
+            if (sends.viaTor.isNotEmpty() || (sends.waiting && RelayFarewell.waiting(app))) {
+                withTimeoutOrNull(RELAY_BUDGET_MS) { runInterruptible { sendFarewells(app, sends, torOn) } }
             }
             if (RelayFarewell.waiting(app)) RelayFarewell.arm(app, RelayFarewell.FIRST_TRY_MS)
+            // 12. Before the relaunch, which ends this process before the finally below runs.
+            awaitForegroundGone(app)
+            deleteChannels(app)
             if (plan.decoy != null && WipeRelaunchActivity.relaunch(app)) delay(RELAUNCH_GRACE_MS)
         } finally {
             stopServices(app)
@@ -327,18 +377,53 @@ object Wiper {
         }
     }
 
-    /** These foreground services run START_STICKY; without stopping them Android would restart them, and the process, after it ends. */
+    /**
+     * Every foreground service the app declares, in any edition (a service the
+     * running edition lacks is simply not found). Some run START_STICKY, and
+     * without stopping them Android would restart them, and the process, after it
+     * ends; and a channel a foreground service is using cannot be deleted, so a
+     * running mesh would leave "Offline mesh" listed in the decoy's settings.
+     */
+    internal val FOREGROUND_SERVICES: List<Class<out Service>> = listOf(
+        ScanService::class.java,
+        CommsService::class.java,
+        CallService::class.java,
+        MeshService::class.java,
+        DriveService::class.java,
+        NavigationService::class.java,
+        FakeCallRingService::class.java,
+    )
+
     private fun stopServices(app: Context) {
-        runCatching { app.stopService(Intent(app, ScanService::class.java)) }
-        runCatching { app.stopService(Intent(app, CommsService::class.java)) }
-        runCatching { app.stopService(Intent(app, CallService::class.java)) }
+        for (service in FOREGROUND_SERVICES) runCatching { app.stopService(Intent(app, service)) }
         // Alarms live with the system, not in the files erased below.
         runCatching { TlsCanary.stop(app) }
         runCatching { HistoryRetention.cancelSchedule(app) }
         // So does the Wi-Fi trap's network suggestion, which the scanner withdraws only
         // in onDestroy, and a wipe may end the process before that runs.
         runCatching { KarmaCanary.withdrawForWipe(app) }
+        // And a scheduled fake call: its alarm carries a contact's number and would ring,
+        // as "Mum", in an app that had just been wiped. This also ends one already ringing.
+        runCatching { FakeCall.cancel(app) }
     }
+
+    /**
+     * Waits, up to [SERVICES_GONE_MS], until none of this app's foreground
+     * services still shows its notification: they were asked to stop at step 4,
+     * and stop on the main thread in their own time.
+     */
+    private suspend fun awaitForegroundGone(app: Context) {
+        val nm = app.getSystemService(NotificationManager::class.java) ?: return
+        val until = SystemClock.elapsedRealtime() + SERVICES_GONE_MS
+        while (SystemClock.elapsedRealtime() < until) {
+            val flags = runCatching { nm.activeNotifications.map { it.notification.flags } }.getOrDefault(emptyList())
+            if (!anyForeground(flags)) return
+            delay(100)
+        }
+    }
+
+    /** Whether any of these notification [flags] is a foreground service's. */
+    internal fun anyForeground(flags: List<Int>): Boolean = flags.any { (it and Notification.FLAG_FOREGROUND_SERVICE) != 0 }
 
     /** Every notification channel and channel group the app has made. */
     private fun deleteChannels(app: Context) {

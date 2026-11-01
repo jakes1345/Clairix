@@ -14,7 +14,7 @@ import java.nio.file.Files
 
 /**
  * The cell-tower baseline under the history retention: it keeps which towers
- * and areas are usual, not when the phone was near them, forgets what has not
+ * and areas are usual and the last day each was seen, forgets what has not
  * been seen for three retention periods, and the rules it feeds answer the
  * same afterwards.
  */

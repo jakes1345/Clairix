@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
+import app.clairix.security.Wiper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -135,7 +136,10 @@ object TorTransport {
                 return if (socks && p > 0 && requestingPort == p) PasswordAuthentication(username, password.toCharArray()) else null
             }
         })
-        if (enabled) start()
+        // Not while a wipe cut short is being finished (security/Wiper.kt): Arti would
+        // write its files in the middle of it. Connections still go to Tor's closed
+        // port, never out directly, and the wipe sends nothing through Tor then.
+        if (enabled && !Wiper.isActive) start()
     }
 
     /**

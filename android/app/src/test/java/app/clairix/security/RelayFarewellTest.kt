@@ -134,4 +134,59 @@ class RelayFarewellTest {
         assertFalse(RelayFarewell.file(dir).exists())
         assertEquals(emptyList<RelayFarewell.Prepared>(), RelayFarewell.load(dir))
     }
+
+    @Test
+    fun aDeletionSignedWithTorOnIsNeverHandedToAClientWhileTorIsOff() {
+        val tor = prepared(copies = 10, viaTor = true)
+        val direct = prepared(copies = 10).copy(url = "https://direct.example/v1/me")
+        val sentTo = ArrayList<String>()
+        val send = { p: RelayFarewell.Prepared, _: RelayFarewell.Signed -> sentTo += p.url; answer(200) }
+
+        // A wipe finished in a new process, where Tor never started: the Tor copy is dropped unsent.
+        val left = RelayFarewell.deliverNow(listOf(tor, direct), callTimeoutSec = 6, torOn = false, now = t0, send = send)
+        assertEquals(emptyList<RelayFarewell.Prepared>(), left)
+        assertEquals(listOf("https://direct.example/v1/me"), sentTo)
+
+        // The same from the file, on the alarm.
+        sentTo.clear()
+        RelayFarewell.save(dir, listOf(tor))
+        RelayFarewell.flushFile(dir, t0, torOn = false, retryMs = RelayFarewell.RETRY_MS, alarm = {}, send = send)
+        assertEquals(emptyList<String>(), sentTo)
+        assertFalse("dropped, not kept for later", RelayFarewell.file(dir).exists())
+
+        // With Tor on in this process it goes (through Tor: the client's proxy is Tor's).
+        RelayFarewell.deliverNow(listOf(tor), callTimeoutSec = 6, torOn = true, now = t0, send = send)
+        assertEquals(listOf(tor.url), sentTo)
+        assertTrue(RelayFarewell.sendable(direct, torOn = false))
+        assertFalse(RelayFarewell.sendable(tor, torOn = false))
+    }
+
+    @Test
+    fun theNextTryIsArmedBeforeAnyRequestGoesOut() {
+        val events = ArrayList<String>()
+        val alarm = { delay: Long? -> events += if (delay == null) "cancel" else "arm $delay" }
+        RelayFarewell.save(dir, listOf(prepared(copies = 10)))
+
+        // The relay does not answer (the process could be frozen right here).
+        RelayFarewell.flushFile(dir, t0, torOn = false, retryMs = RelayFarewell.FIRST_TRY_MS, alarm = alarm) { _, _ ->
+            events += "ask"
+            null
+        }
+        assertEquals(listOf("arm ${RelayFarewell.RETRY_MS}", "ask", "arm ${RelayFarewell.FIRST_TRY_MS}"), events)
+        assertTrue("kept for the next try", RelayFarewell.file(dir).exists())
+
+        // It answers: nothing left, nothing armed.
+        events.clear()
+        RelayFarewell.flushFile(dir, t0, torOn = false, retryMs = RelayFarewell.RETRY_MS, alarm = alarm) { _, _ ->
+            events += "ask"
+            answer(200)
+        }
+        assertEquals(listOf("arm ${RelayFarewell.RETRY_MS}", "ask", "cancel"), events)
+        assertFalse(RelayFarewell.file(dir).exists())
+
+        // Nothing waiting: no try armed at all.
+        events.clear()
+        RelayFarewell.flushFile(dir, t0, torOn = false, retryMs = RelayFarewell.RETRY_MS, alarm = alarm) { _, _ -> answer(200) }
+        assertEquals(listOf("cancel"), events)
+    }
 }

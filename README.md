@@ -282,14 +282,17 @@ maintainer on the live service, not in this repository.
   it deletes every file, setting and database, cancels every notification and
   deletes Clairix's notification categories, clears the clipboard, unregisters
   push, gives up the device-admin role and disarms any card; then it asks the
-  relay to delete the account, and Clairix closes. If the relay cannot be
-  reached, that request waits on the phone, in a file that names the Clairix
-  number and nothing else, and is tried again about every ten minutes for up
-  to a day (with Tor on, only through Tor, while the wipe runs). The
-  wrong-passcode limit runs the same wipe; so does the duress passcode, except
-  that Clairix stays on its lock screen and that code then opens it, empty.
-  Android keeps the app installed, and its settings keep the access you gave
-  it and its battery history: uninstall Clairix when its presence is the risk.
+  relay, for a few seconds, to delete the account, and Clairix closes. If
+  the relay cannot be reached, that request waits on the phone, in a file that
+  holds the Clairix number, the relay's address and copies of the request
+  signed with the identity key, and is tried again about every ten minutes for
+  up to a day; uninstalling deletes the file, and a request still waiting then
+  is never sent. With Tor on it goes only through Tor, before Clairix closes,
+  and is not kept. The wrong-passcode limit runs the same wipe; so does the
+  duress passcode, except that Clairix stays on its lock screen and that code
+  then opens it, empty. Android keeps the app installed, and its settings keep
+  the access you gave it, its battery history and a count of the notification
+  categories Clairix deleted: uninstall Clairix when its presence is the risk.
 - **Duress phrase.** A sentence you can type into any chat. It is sent as
   written; underneath, an SOS with your position (the last known one, or a
   fresh fix when the phone can read one within a few seconds) goes to every
@@ -391,8 +394,9 @@ maintainer on the live service, not in this repository.
   or forever. 30 by default. The location log, the timeline, vehicle trips,
   the unlock ledger, the radio scanner's recordings and the map's tile and
   traffic caches older than that are deleted, once a day even with Clairix closed. The cell-tower baseline is
-  kept, as which towers are usual and not when you were near them, and a tower
-  not seen for three times the period is forgotten. An exported evidence
+  kept: which towers and areas are usual and the last day each was seen (the
+  exact time for two days), and one not seen for three times the period is
+  forgotten (never, with forever). An exported evidence
   report is deleted from the phone after a day.
 - **Satellite-only positioning** (Settings → Location): off by
   default. On, every position fix comes from the satellite receiver alone

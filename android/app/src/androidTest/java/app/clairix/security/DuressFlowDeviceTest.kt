@@ -1,5 +1,7 @@
 package app.clairix.security
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
@@ -12,6 +14,8 @@ import app.clairix.HomeTab
 import app.clairix.ONBOARDING_DONE_KEY
 import app.clairix.TOUR_SEEN_KEY
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -26,12 +30,13 @@ import java.io.File
  * runs in turn:
  *
  * 1. [prepare] (`-e duress prepare`): an owner who has used the app, with the first
- *    run and tour done, a passcode, a duress code and a file that must not survive.
+ *    run and tour done, a passcode, a duress code, a file that must not survive and
+ *    the offline mesh's notification channel, which the decoy never makes.
  * 2. From outside the app (.github/scripts/duress-ui.py): Clairix is opened, the
  *    duress code typed on its lock screen as a person types it, and ten seconds later
  *    the lock screen must still be there saying "Wrong passcode", in a new process,
  *    with no first-run page.
- * 3. [decoy] (`-e duress decoy`): the data is gone; what is left is the decoy, its
+ * 3. [decoy] (`-e duress decoy`): the data and the channel are gone; what is left is the decoy, its
  *    first run done and a lock that the old passcode does not open and the duress
  *    code does. The workflow then relaunches Clairix from outside: the lock screen
  *    again, never the first run.
@@ -55,6 +60,9 @@ class DuressFlowDeviceTest {
     private val duress = "61849302"
     private val evidence: File get() = File(context.filesDir, "duress-test-evidence.txt")
     private val prefsDir: File get() = File(context.applicationInfo.dataDir, "shared_prefs")
+    private val notifications: NotificationManager get() = context.getSystemService(NotificationManager::class.java)
+    /** The offline mesh's channel (comms/mesh/MeshService.kt): listed in Settings, it would say the mesh was used. */
+    private val meshChannel = "mesh"
 
     private fun assumeStep(step: String) =
         assumeTrue("part of the workflow's duress flow; run with -e duress $step", InstrumentationRegistry.getArguments().getString("duress") == step)
@@ -99,8 +107,10 @@ class DuressFlowDeviceTest {
         AppLock.setPasscode(context, passcode).getOrThrow()
         AppLock.setDuress(context, duress).getOrThrow()
         evidence.writeText("the timeline, the contacts, the conversations")
+        notifications.createNotificationChannel(NotificationChannel(meshChannel, "Offline mesh", NotificationManager.IMPORTANCE_LOW))
         assertTrue("the duress code was not set", AppLock.hasDuress(context))
         assertTrue(evidence.exists())
+        assertNotNull(notifications.getNotificationChannel(meshChannel))
     }
 
     @Test
@@ -112,6 +122,8 @@ class DuressFlowDeviceTest {
         assertTrue(File(prefsDir, "${AppLock.PREFS_NAME}.xml").readText().contains("verifier"))
         assertTrue(File(prefsDir, "prefs.xml").readText().contains("name=\"$ONBOARDING_DONE_KEY\" value=\"true\""))
         assertFalse("the decoy carries a duress passcode", AppLock.hasDuress(context))
+        assertNull("a notification channel from before the wipe survived it", notifications.getNotificationChannel(meshChannel))
+        assertFalse("the relaunch's one-time mark outlived the relaunch", File(prefsDir, "${AppLock.PREFS_NAME}.xml").readText().contains("wipe_notice_at"))
 
         launch()
         assertTrue("the decoy's lock screen did not come up", lockScreenShown(20_000))

@@ -1,4 +1,4 @@
-## Option 1: In the app (immediate)
+## Option 1: In the app
 
 ### Delete the relay account and keep the rest of the app
 
@@ -12,11 +12,11 @@ The same button is at the bottom of **Comms → Settings**. Clairix asks the rel
 1. Open **Comms**, tap the menu (⋮) at the top and choose **Wipe Clairix**. It is also in **Settings**, under **Wipe and delete**.
 2. Type **WIPE** and tap **Wipe everything now**.
 
-The wipe first destroys every key in the phone's secure keystore, then deletes every preferences file, every database and every file the app holds, including cached map tiles, and every notification. It then asks the relay to delete your account, and Clairix closes; it opens next as a new install. Once started it cannot be stopped. It erases Clairix's own data only. It does not erase your phone, and Android keeps what is its own: the app stays installed, and the system's settings still show the access you gave it. If having the app at all is the risk, uninstall it after the wipe.
+The wipe first destroys every key in the phone's secure keystore, then deletes every preferences file, every database and every file the app holds, including cached map tiles, and every notification. It then asks the relay to delete your account, for a few seconds, and Clairix closes; it opens next as a new install. Once started it cannot be stopped. It erases Clairix's own data only. It does not erase your phone, and Android keeps what is its own: the app stays installed, and the system's settings still show the access you gave it. If having the app at all is the risk, uninstall it after the wipe.
 
 The wrong-passcode limit runs the same wipe, and so does the duress passcode, except that Clairix stays on its lock screen afterwards and that code then opens it, empty.
 
-If the relay cannot be reached at that moment, the wipe still completes on the phone, and the request to delete the account waits on it, in a file that names your Clairix number and nothing else. It is tried again about every ten minutes, whether or not Clairix is open, for up to a day. If you use Tor in Clairix, it is sent only through Tor, while the wipe runs. If it never gets through, the account stays on the relay until you ask us to delete it by email (Option 2): accounts are not deleted for being dormant.
+If the relay cannot be reached at that moment, the wipe still completes on the phone, and the request to delete the account waits on it, in a file that holds your Clairix number, the relay's address and copies of the request signed with your identity key. It is tried again about every ten minutes, whether or not Clairix is open, for up to a day. Uninstalling Clairix deletes that file, so a request still waiting then is never sent. If you use Tor in Clairix, it is sent only through Tor, before Clairix closes, and is not kept or tried again. If it never gets through, the account stays on the relay until you ask us to delete it by email (Option 2): accounts are not deleted for being dormant.
 
 ### Uninstalling
 

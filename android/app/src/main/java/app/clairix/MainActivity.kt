@@ -250,8 +250,13 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         AppSettings.load(this)
         AppLock.init(this)
-        // Back from the duress wipe in a fresh process: the lock screen says what the last one said.
-        if (intent?.getBooleanExtra(app.clairix.security.WipeRelaunchActivity.EXTRA_NOTICE, false) == true) AppLock.noteWipeRelaunch()
+        // Back from the duress wipe in a fresh process: the lock screen says what the last one said,
+        // once (not when Android restores or recreates this screen from the same intent).
+        AppLock.noteWipeRelaunch(
+            this,
+            relaunched = savedInstanceState == null &&
+                intent?.getBooleanExtra(app.clairix.security.WipeRelaunchActivity.EXTRA_NOTICE, false) == true,
+        )
         // Nothing this app shows belongs in a screenshot, a screen recording or
         // the Recents thumbnail: a card's UID and APDUs, the timeline with its
         // positions, a conversation, the Device tab. Secure always, passcode or

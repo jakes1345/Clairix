@@ -1,5 +1,6 @@
 package app.clairix.security
 
+import android.app.Notification
 import app.clairix.Store
 import app.clairix.TestStoreCipher
 import kotlinx.coroutines.Dispatchers
@@ -11,8 +12,10 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
 import java.io.File
 import java.nio.file.Files
+import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * The wipe's reach and order, run over a temporary copy of an app's directories
@@ -297,5 +300,52 @@ class WiperTest {
         assertEquals(WipePlan(), Wiper.readMarker(roots.marker))
         write(roots.marker, "{not json")
         assertEquals(WipePlan(), Wiper.readMarker(roots.marker))
+    }
+
+    @Test
+    fun theLastSendsGoThroughTorOnlyWhileThisProcessHasItAndTheDecoyLeavesTheFileToItsOwnStart() {
+        val direct = farewell("https://relay.example/v1/me", viaTor = false)
+        val tor = farewell("https://tor.example/v1/me", viaTor = true)
+
+        // A plain wipe with Tor on: the Tor copy now, then the file.
+        val plain = Wiper.finalSends(WipePlan(farewells = listOf(direct, tor)), torOn = true)
+        assertEquals(listOf(tor), plain.viaTor)
+        assertTrue(plain.waiting)
+
+        // The same wipe resumed in a new process, where Tor is not running: never sent directly.
+        val resumed = Wiper.finalSends(WipePlan(farewells = listOf(direct, tor)), torOn = false)
+        assertEquals(emptyList<RelayFarewell.Prepared>(), resumed.viaTor)
+        assertTrue("the direct copies are still tried before Clairix closes", resumed.waiting)
+
+        // The decoy: the Tor copy before the relaunch, the file from the decoy's own process.
+        val duress = Wiper.finalSends(WipePlan(decoy = decoySettings, farewells = listOf(direct, tor)), torOn = true)
+        assertEquals(listOf(tor), duress.viaTor)
+        assertFalse(duress.waiting)
+    }
+
+    @Test
+    fun everyForegroundServiceInEveryEditionIsStoppedByTheWipe() {
+        val declared = listOf("src/main/AndroidManifest.xml", "src/suite/AndroidManifest.xml").flatMap { path ->
+            val doc = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+                .newDocumentBuilder().parse(File(path))
+            val nodes = doc.getElementsByTagName("service")
+            (0 until nodes.length).map { nodes.item(it) as Element }
+                .filter { it.getAttributeNS(ANDROID_NS, "foregroundServiceType").isNotEmpty() }
+                .map { "app.clairix" + it.getAttributeNS(ANDROID_NS, "name") }
+        }
+        // ScanService, CommsService, CallService, the fake call's ring, the mesh, drive and navigation.
+        assertTrue("foreground services missing from the manifests: $declared", declared.size >= 7)
+        assertEquals(declared.toSet(), Wiper.FOREGROUND_SERVICES.map { it.name }.toSet())
+    }
+
+    @Test
+    fun aForegroundServicesNotificationIsToldFromAnOrdinaryOne() {
+        assertFalse(Wiper.anyForeground(emptyList()))
+        assertFalse(Wiper.anyForeground(listOf(Notification.FLAG_ONGOING_EVENT)))
+        assertTrue(Wiper.anyForeground(listOf(0, Notification.FLAG_FOREGROUND_SERVICE or Notification.FLAG_ONGOING_EVENT)))
+    }
+
+    private companion object {
+        const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
     }
 }

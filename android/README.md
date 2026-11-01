@@ -102,8 +102,8 @@ gradle test                         # unit tests for every variant
   default). The location log, the timeline, vehicle trips, the unlock ledger
   and the map's tile and traffic caches older than that are deleted at each
   start, every hour while scanning and once a day otherwise; the
-  cell-tower baseline keeps which towers are usual, not when
-  (`security/HistoryRetention.kt`).
+  cell-tower baseline keeps which towers and areas are usual and the last day
+  each was seen, the exact time for two days (`security/HistoryRetention.kt`).
 
 ## Reproducing a build
 

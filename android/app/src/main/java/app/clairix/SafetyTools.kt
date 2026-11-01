@@ -549,23 +549,25 @@ internal fun WipePage(onBack: (() -> Unit)? = null) {
                 )
                 Text(
                     "In this order: every key in the phone's secure hardware, then every file, setting and " +
-                    "database; then the relay is told, and Clairix closes. It opens next as a new install. " +
-                    "There is no undo and no backup to restore from.",
+                    "database; then the relay is asked, for a few seconds, to delete the account, and Clairix " +
+                    "closes. It opens next as a new install. There is no undo and no backup to restore from.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
                     "If the relay cannot be reached, the request to delete the account waits on this phone, in a " +
-                    "file that names your Clairix number and nothing else, and is tried again about every ten " +
-                    "minutes, whether or not Clairix is open, for up to a day; after that, write to support@clairix.app. " +
-                    "With Tor on, it is sent only through Tor, while the wipe runs.",
+                    "file that holds your Clairix number, the relay's address and copies of the request signed " +
+                    "with your identity key, and is tried again about every ten minutes, whether or not Clairix " +
+                    "is open, for up to a day; after that, write to support@clairix.app. Uninstalling Clairix " +
+                    "deletes that file, so a request still waiting then is never sent. With Tor on, it is sent " +
+                    "only through Tor, before Clairix closes, and is not kept or tried again.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
                     "Android keeps what is its own: Clairix stays installed, and Settings still lists the access " +
-                    "you gave it and its battery and location use. When having the app at all is the risk, " +
-                    "uninstall it afterwards.",
+                    "you gave it, its battery and location use, and how many notification categories it has " +
+                    "deleted. When having the app at all is the risk, uninstall it afterwards.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
