@@ -131,32 +131,6 @@ internal class OwnerGateState(passcodeSet: Boolean, locked: Boolean) {
     }
 }
 
-/** An action behind the owner check; made by [rememberOwnerCheck]. */
-@Stable
-internal class OwnerCheck(private val request: (purpose: String, action: () -> Unit) -> Unit) {
-    /** [action] as an onClick, asking first whenever a passcode is set; [purpose] as for [OwnerGate]. */
-    fun guard(purpose: String, action: () -> Unit): () -> Unit = { request(purpose, action) }
-}
-
-/**
- * For a button whose action must ask first (the evidence export): the dialog
- * that asks is drawn here, where this is called, while it is up.
- */
-@Composable
-internal fun rememberOwnerCheck(): OwnerCheck {
-    var pending by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
-    pending?.let { (purpose, action) ->
-        OwnerCheckDialog(
-            purpose = purpose,
-            onConfirmed = { pending = null; action() },
-            onDismiss = { pending = null }
-        )
-    }
-    return remember {
-        OwnerCheck { purpose, action -> if (AppLock.enabled.value) pending = purpose to action else action() }
-    }
-}
-
 /** The typed passcode and what became of it, shared by the card and the dialog. */
 @Stable
 private class OwnerCheckEntry(

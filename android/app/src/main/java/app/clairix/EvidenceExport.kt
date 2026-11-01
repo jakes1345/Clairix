@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,6 +29,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.AppEvidence
 import app.clairix.analysis.CaAuditScanner
@@ -224,7 +227,8 @@ internal fun EvidenceExportButtons(textLabel: String, modifier: Modifier = Modif
 /**
  * Drawn once over the app: the pre-share dialog for an export asked for anywhere.
  * Locking drops the request, so an unlock someone else makes the owner do does
- * not open on it.
+ * not open on it; leaving Clairix takes back the owner's confirmation
+ * ([ExportOwnerCheck]).
  */
 @Composable
 internal fun EvidenceExportHost() {
@@ -235,19 +239,51 @@ internal fun EvidenceExportHost() {
     // With a passcode set, every export asks for it (or a biometric) first, whichever
     // button asked for it: the Export buttons, the safety card, Phone check's
     // stalkerware page or the offer before a wipe limit is picked.
-    var ownerConfirmed by remember { mutableStateOf(false) }
-    LaunchedEffect(pending) { if (pending == null) ownerConfirmed = false }
+    val check = remember { ExportOwnerCheck() }
+    LaunchedEffect(pending) { if (pending == null) check.exportEnded() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { check.left() }
     val format = pending ?: return
     if (locked) return
-    if (!ownerConfirmed && passcodeSet) {
+    if (!check.passes(passcodeSet)) {
         OwnerCheckDialog(
             purpose = "export the evidence report",
-            onConfirmed = { ownerConfirmed = true },
+            onConfirmed = { check.ownerConfirmed() },
             onDismiss = { EvidenceExport.dismiss() }
         )
         return
     }
     EvidenceExportDialog(format, onDone = { EvidenceExport.dismiss() })
+}
+
+/**
+ * The owner check in front of an export ([EvidenceExportHost]), as things happen
+ * to it. With a passcode set, an export waits for the owner to confirm. Leaving
+ * Clairix, even for a moment and well inside the relock delay, takes the
+ * confirmation back, as it closes the pages behind [OwnerGate]: an export left
+ * open at its period picker asks again when Clairix comes back, so whoever picks
+ * up the unlocked phone next cannot share it. An export that ends (shared,
+ * cancelled, dropped by the lock) leaves nothing confirmed for the next one.
+ */
+@Stable
+internal class ExportOwnerCheck {
+    private var confirmed by mutableStateOf(false)
+
+    /** Whether the export may go past the check now. */
+    fun passes(passcodeSet: Boolean): Boolean = !passcodeSet || confirmed
+
+    fun ownerConfirmed() {
+        confirmed = true
+    }
+
+    /** Clairix left the screen. */
+    fun left() {
+        confirmed = false
+    }
+
+    /** The export was shared, cancelled or dropped. */
+    fun exportEnded() {
+        confirmed = false
+    }
 }
 
 private enum class RangeEnd { FROM, TO }

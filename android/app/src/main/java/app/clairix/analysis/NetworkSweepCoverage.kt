@@ -56,6 +56,15 @@ internal object NetworkSweepCoverage {
         val narrowed: Boolean get() = networkPrefix < sweptPrefix
     }
 
+    /**
+     * Of the phone's networks, the one to sweep: the Wi-Fi itself. A VPN running
+     * over the Wi-Fi reports the Wi-Fi transport as well as its own, and its
+     * addresses are the tunnel's: sweeping them would report "nothing found" about
+     * a network that is not the room's. Null when the phone is on no Wi-Fi.
+     */
+    fun <T> wifiNetwork(networks: List<T>, isWifi: (T) -> Boolean, isVpn: (T) -> Boolean): T? =
+        networks.firstOrNull { isWifi(it) && !isVpn(it) }
+
     fun range(ip: Int, networkPrefix: Int): Range {
         val prefix = networkPrefix.coerceIn(0, 32)
         val swept = maxOf(prefix, SWEPT_PREFIX)
