@@ -2,6 +2,7 @@ package app.clairix.analysis
 
 import android.location.LocationManager
 import android.location.LocationRequest
+import app.clairix.security.SosLocation
 
 /**
  * Where position fixes come from, decided before any is asked for ([LocationPolicy.choose]).
@@ -171,7 +172,8 @@ object LocationPolicy {
  * phone to one spot, so that nothing ever moves with it and no follower is confirmed, or
  * walk it down a road so that a companion's phone looks like one. So the scanner does not
  * use a mock fix at all: it places no sighting, moves no odometer, and the phone's
- * position is unknown until a real fix comes.
+ * position is unknown until a real fix comes. The last real position stays in the status
+ * only while it is recent enough for an SOS to send as where the phone is ([keepLastReal]).
  */
 object MockFixes {
 
@@ -191,6 +193,25 @@ object MockFixes {
         track.update(fix)
         return true
     }
+
+    /**
+     * While fixes are mock, the scanner's status may keep the last real position for this
+     * long after it was taken, and no longer: the age [SosLocation] allows a last known
+     * position. An SOS raised while the status holds a position sends that one, without
+     * looking for another and without saying how old it is, so a position from before an
+     * app started faking (hours or days before, at the home someone fled) would read to
+     * the people coming to help as where the phone is now.
+     */
+    const val LAST_REAL_KEPT_MS = SosLocation.LAST_KNOWN_MAX_AGE_MS
+
+    /**
+     * Whether the status keeps the last real position at [now] while fixes are mock, given
+     * when that position was taken ([lastRealAt], 0 when there was none); both on the
+     * phone's monotonic clock. Once it may not, the status holds no position and an SOS
+     * looks for one itself, and says so when it finds only faked ones.
+     */
+    fun keepLastReal(lastRealAt: Long, now: Long): Boolean =
+        lastRealAt > 0L && now >= lastRealAt && now - lastRealAt <= LAST_REAL_KEPT_MS
 }
 
 /** What the screens are told about positions: published on [app.clairix.Registry.positioning]. */

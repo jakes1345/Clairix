@@ -135,4 +135,21 @@ class MockFixesTest {
         assertTrue(SosLocation.usable(mock = false, ageMs = Long.MAX_VALUE, maxAgeMs = Long.MAX_VALUE))
         assertFalse(SosLocation.usable(mock = false, ageMs = Long.MAX_VALUE, maxAgeMs = SosLocation.LAST_KNOWN_MAX_AGE_MS))
     }
+
+    @Test
+    fun theLastRealPositionIsKeptForAnSosOnlyWhileItIsRecent() {
+        // The same age an SOS allows a last known position: the status holds nothing older.
+        assertEquals(SosLocation.LAST_KNOWN_MAX_AGE_MS, MockFixes.LAST_REAL_KEPT_MS)
+        val realAt = 5_000_000L
+        assertTrue(MockFixes.keepLastReal(realAt, realAt))
+        assertTrue(MockFixes.keepLastReal(realAt, realAt + MockFixes.LAST_REAL_KEPT_MS))
+        // An app faking positions for longer: the position from before goes, so an SOS
+        // looks for one and says it found only faked ones, rather than sending the old one.
+        assertFalse(MockFixes.keepLastReal(realAt, realAt + MockFixes.LAST_REAL_KEPT_MS + 1))
+        assertFalse(MockFixes.keepLastReal(realAt, realAt + 3 * 24 * 3_600_000L))
+        // No real fix since the scan started: nothing to keep.
+        assertFalse(MockFixes.keepLastReal(0L, realAt))
+        // A clock that reads earlier than the fix is not trusted to say it is recent.
+        assertFalse(MockFixes.keepLastReal(realAt, realAt - 1))
+    }
 }
