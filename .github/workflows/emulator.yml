@@ -335,8 +335,19 @@ jobs:
           APP_UID="$("$ADB" shell pm list packages -U app.clairix | tr -d '\r' | sed -n 's/^package:app\.clairix uid:\([0-9]*\).*/\1/p' | head -1)"
           [ -n "$APP_UID" ] || { echo "::error::Could not read Clairix's uid"; exit 1; }
           echo "$APP_UID" > power/uid.txt
-          "$ADB" shell dumpsys activity services app.clairix/.ScanService > power/scanner-service.txt 2>&1 || true
-          grep -q "ServiceRecord" power/scanner-service.txt || echo "::warning::The scanner was not running when the power window began; see power/scanner-service.txt"
+          # The instrumentation runs in the app's process, and Android ends that
+          # process when the run finishes, scanner and all. Opening the app starts
+          # the scanner again (MainActivity.reconcileScanner, scanning having been
+          # turned on during the smoke run); then home, so the window measures the
+          # scanner in the background as an owner leaves it.
+          "$ADB" shell am start -W -n app.clairix/.MainActivity > /dev/null
+          for i in $(seq 1 30); do
+            "$ADB" shell dumpsys activity services app.clairix/.ScanService > power/scanner-service.txt 2>&1 || true
+            grep -q "ServiceRecord" power/scanner-service.txt && break
+            sleep 2
+          done
+          "$ADB" shell input keyevent KEYCODE_HOME
+          grep -q "ServiceRecord" power/scanner-service.txt || { echo "::error::The scanner was not running when the power window began, so there was nothing to measure; see power/scanner-service.txt"; exit 1; }
           "$ADB" shell dumpsys battery unplug
           "$ADB" shell dumpsys batterystats --reset
           "$ADB" shell input keyevent KEYCODE_SLEEP

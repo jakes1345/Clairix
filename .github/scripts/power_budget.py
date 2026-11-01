@@ -260,11 +260,22 @@ def _measurement_cost(block: str) -> tuple[bool, bool]:
 
 
 def parse_measurements(text: str, package: str = PACKAGE) -> list[Measurement]:
-    """The app's raw GNSS measurement registrations in `dumpsys location`."""
+    """The app's GNSS measurement registrations live in `dumpsys location` now.
+
+    Only what is registered at the moment of the dump counts. The "Historical
+    Aggregate Gnss Measurement Provider Data" section totals every request since
+    boot (a scanner that asked once a second while the phone moved, an hour
+    ago, is still listed there), and the event log keeps registrations long
+    since removed; neither says what holds the receiver on now.
+    """
     lines = text.splitlines()
     blocks: list[str] = []
+    live_section = False
     for i, line in enumerate(lines):
+        if re.search(r"historical", line, re.I):
+            continue
         if re.search(r"measurements?\b.*\b(provider|listeners?)\b", line, re.I) and line.rstrip().endswith(":"):
+            live_section = True
             section = _block(lines, i)
             j = 0
             while j < len(section):
@@ -279,10 +290,25 @@ def parse_measurements(text: str, package: str = PACKAGE) -> list[Measurement]:
                     j += 1 + len(rest)
                 else:
                     j += 1
-    if not blocks:
-        # No section by that name in this version's dump: any line naming both the app
-        # and a measurement request is one.
-        blocks = [line.strip() for line in lines if package in line and "GnssMeasurement" in line]
+    # The event log, replayed: a registration not removed since is live, whether or
+    # not this version lists listeners under the section above. Outside a named
+    # section (a version without one), any other line naming both the app and a
+    # measurement request is one too.
+    events: dict[str, str] = {}
+    listed = " ".join(blocks)
+    for line in lines:
+        if package not in line or re.search(r"historical|\bdelivered\b", line, re.I):
+            continue
+        ev = re.search(r"gnss measurements ([+-])registration (\S+)", line, re.I)
+        if ev:
+            if ev.group(1) == "+":
+                events[ev.group(2)] = line.strip()
+            else:
+                events.pop(ev.group(2), None)
+        elif not live_section and "GnssMeasurement" in line:
+            blocks.append(line.strip())
+    # One already listed in the section is not counted twice.
+    blocks.extend(b for key, b in events.items() if key not in listed)
     out = []
     for b in blocks:
         passive, inactive = _measurement_cost(b)

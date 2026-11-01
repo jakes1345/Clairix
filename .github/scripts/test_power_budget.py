@@ -240,3 +240,42 @@ def test_a_settled_scanner_holding_the_receiver_on_fails(tmp_path):
     assert run(tmp_path, location=LOCATION_RUNNING) == 0
     # No registration at all (Android 12, settled) passes.
     assert run(tmp_path, location="Location Manager State:\n  GNSS:\n    Measurements Provider:\n      listeners:\n", settled=True) == 0
+
+
+# What Android 15 printed after the scanner had asked once a second while moving
+# and then stopped: the live section is empty; history and the event log still
+# name the old request, which holds nothing on now.
+LOCATION_HISTORY_ONLY_35 = """\
+  Historical Aggregate Gnss Measurement Provider Data:
+    10123/app.clairix: min/max interval = 1s/1s, total duration = +3m46s787ms, tracking mode = always duty-cycling, GNSS measurement events = 226
+  GNSS Manager:
+    Measurements Provider:
+      service: unregistered
+      last measurements=[elapsedRealtimeNs=139287 measurementCount=7 avgBasebandCn0=27.143293]
+  Event Log:
+    11-01 16:43:21.221: gnss measurements +registration 10123/app.clairix/D47B5412 -> GnssMeasurementRequest[@+1s0ms]
+    11-01 16:44:38.239: gnss measurements delivered GnssMeasurements[7] to 10123/app.clairix/D47B5412
+    11-01 16:47:08.008: gnss measurements -registration 10123/app.clairix/D47B5412
+"""
+
+
+def test_history_and_removed_registrations_are_not_live_requests():
+    assert pb.parse_measurements(LOCATION_HISTORY_ONLY_35) == []
+
+
+def test_an_event_log_registration_never_removed_is_live():
+    text = "  Event Log:\n    11-01 16:43:21.221: gnss measurements +registration 10123/app.clairix/D4 -> GnssMeasurementRequest[@+1s0ms]\n"
+    found = pb.parse_measurements(text)
+    assert len(found) == 1 and not found[0].passive
+    removed = text + "    11-01 16:47:08.008: gnss measurements -registration 10123/app.clairix/D4\n"
+    assert pb.parse_measurements(removed) == []
+
+
+def test_the_failing_android_15_dump_now_passes(tmp_path):
+    assert run(tmp_path, location=LOCATION_HISTORY_ONLY_35, settled=True) == 0
+
+
+def test_a_registration_still_open_in_the_event_log_counts_even_with_an_empty_section():
+    text = LOCATION_HISTORY_ONLY_35.replace("    11-01 16:47:08.008: gnss measurements -registration 10123/app.clairix/D47B5412\n", "")
+    found = pb.parse_measurements(text)
+    assert len(found) == 1 and not found[0].passive and not found[0].inactive
