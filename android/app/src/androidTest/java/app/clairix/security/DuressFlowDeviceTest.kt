@@ -79,6 +79,21 @@ class DuressFlowDeviceTest {
     private fun firstRunShown(): Boolean =
         ui.has(By.text("Nothing hides.").pkg(pkg)) || ui.has(By.text("Not now").pkg(pkg)) || ui.has(By.textStartsWith("Tour · ").pkg(pkg))
 
+    /** True once "Wrong passcode" shows, false once the app opens, null if neither within [timeoutMs]. */
+    private fun refusedOrOpened(timeoutMs: Long): Boolean? {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (ui.has(By.text("Wrong passcode").pkg(pkg))) return true
+            if (ui.has(By.text(HomeTab.COMMS.label).pkg(pkg)) || ui.has(By.desc(HomeTab.COMMS.label).pkg(pkg))) return false
+            SystemClock.sleep(150)
+        }
+        return null
+    }
+
+    /** What the screen says, for a failure message. */
+    private fun screenTexts(): String =
+        ui.findAll(By.pkg(pkg)).mapNotNull { runCatching { it.text }.getOrNull() }.filter { it.isNotBlank() }.distinct().joinToString(" | ")
+
     /** The app itself, past the lock: the Comms tab's label in the tab bar, or its title in the comms-only build. */
     private fun appShown(timeoutMs: Long = 10_000): Boolean {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
@@ -130,7 +145,11 @@ class DuressFlowDeviceTest {
         assertFalse("a first-run page showed", firstRunShown())
         // The old passcode is gone with the data; the duress code opens the decoy.
         type(passcode)
-        assertTrue("the old passcode opened the decoy", ui.waitHas(By.text("Wrong passcode").pkg(pkg), 3_000))
+        // The verdict is Keystore work, which an emulator can take seconds over:
+        // waited for until one outcome or the other shows.
+        val refused = refusedOrOpened(15_000)
+        assertFalse("the old passcode opened the decoy", refused == false)
+        assertTrue("no verdict on the old passcode within 15 s; on screen: ${screenTexts()}", refused == true)
         type(duress)
         assertTrue("the duress code did not open the decoy", appShown())
         assertFalse("a first-run page showed behind the lock", firstRunShown())

@@ -78,8 +78,10 @@ class SmokeTest {
         // Android asking whether Clairix may suggest Wi-Fi networks (the Karma trap's
         // decoy network, added when scanning starts). Answer it as an owner would and
         // carry on; the screenshot shows it was there.
-        ui.find(By.res("com.android.permissioncontroller:id/permission_allow_foreground_only_button"))?.click()
-        ui.find(By.res("com.android.permissioncontroller:id/permission_allow_button"))?.click()
+        for (controller in PERMISSION_CONTROLLERS) {
+            ui.find(By.res("$controller:id/permission_allow_foreground_only_button"))?.click()
+            ui.find(By.res("$controller:id/permission_allow_button"))?.click()
+        }
         val current = device.currentPackageName
         if (current != pkg && current in SYSTEM_PROMPTS) {
             shot("system-prompt-$step")
@@ -98,7 +100,9 @@ class SmokeTest {
          * System apps that show a dialog over Clairix on its behalf. Android 12
          * shows the Wi-Fi suggestion prompt from the framework itself ("android").
          */
-        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller", "android")
+        /** The permission dialog's app: AOSP's, or Google's on images with Google APIs (Android 35's). */
+        val PERMISSION_CONTROLLERS = listOf("com.android.permissioncontroller", "com.google.android.permissioncontroller")
+        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "android") + PERMISSION_CONTROLLERS
         val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
     }
 

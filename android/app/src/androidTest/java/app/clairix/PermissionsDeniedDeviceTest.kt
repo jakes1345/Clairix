@@ -49,13 +49,19 @@ class PermissionsDeniedDeviceTest {
 
     private companion object {
         const val BACK_PATIENCE_MS = 10_000L
-        /** System apps that show a dialog over Clairix on its behalf; Android 12 shows the Wi-Fi suggestion prompt itself ("android"). */
-        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller", "android")
-        val DENY: Pattern = Pattern.compile("(?i)^(don.t allow|deny|no|not now|cancel)$")
-        val DENY_IDS = listOf(
-            "com.android.permissioncontroller:id/permission_deny_and_dont_ask_again_button",
-            "com.android.permissioncontroller:id/permission_deny_button",
+        /**
+         * System apps that show a dialog over Clairix on its behalf; Android 12 shows the
+         * Wi-Fi suggestion prompt itself ("android"). Images with Google APIs ship the
+         * permission controller under Google's package (Android 35's does).
+         */
+        val SYSTEM_PROMPTS = setOf(
+            "com.google.android.wifi.dialog", "com.android.wifi.dialog",
+            "com.android.permissioncontroller", "com.google.android.permissioncontroller", "android"
         )
+        val DENY: Pattern = Pattern.compile("(?i)^(don.t allow|deny|no|not now|cancel)$")
+        val DENY_IDS = listOf("com.android.permissioncontroller", "com.google.android.permissioncontroller").flatMap {
+            listOf("$it:id/permission_deny_and_dont_ask_again_button", "$it:id/permission_deny_button")
+        }
         val CATEGORIES = listOf("Trackers", "Hidden cameras", "Cell towers", "GPS", "Ultrasound", "Wi-Fi", "NFC", "Phone check")
         /** Any category's row: the hub is showing, however far it is scrolled. */
         val HUB: Pattern = Pattern.compile(CATEGORIES.joinToString("|") { "^" + Pattern.quote(it) + "$" })
