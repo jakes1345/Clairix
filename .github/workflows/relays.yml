@@ -52,10 +52,19 @@ jobs:
         run: |
           mkdir -p published dist
           if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern relays.json --dir published 2>/dev/null; then
-            if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-              cmp -s relays/relays.json published/relays.json && { echo "unchanged"; echo "UNCHANGED=1" >> "$GITHUB_ENV"; exit 0; }
+            if cmp -s relays/relays.json published/relays.json; then
+              echo "relays.json is the list already published"
+              if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+                echo "UNCHANGED=1" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              # A pull request that leaves the list as published (one that
+              # changes only relays/README.md, say) proposes no new list, so
+              # there is no later issue date to require: check it as it stands.
+              python tools/relays/check.py relays/relays.json --live
+            else
+              python tools/relays/check.py relays/relays.json --published published/relays.json --live
             fi
-            python tools/relays/check.py relays/relays.json --published published/relays.json --live
           else
             python tools/relays/check.py relays/relays.json --live
           fi
