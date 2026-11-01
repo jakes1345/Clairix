@@ -101,13 +101,16 @@ internal class MagneticBaseline {
      * The sensor's accuracy changed. Every transition re-seeds: the platform has
      * re-estimated the field, so the baseline and the spread learned before no
      * longer describe it, and a jump in the readings at this moment is the
-     * estimate moving, not a magnet.
+     * estimate moving, not a magnet. Returns whether it re-seeded (false for the
+     * accuracy already known), so the listener takes the platform's new offset
+     * estimate at the same moment ([HardIronHold.release]).
      */
-    fun accuracyChanged(newAccuracy: Int) {
-        if (newAccuracy == accuracy) return
+    fun accuracyChanged(newAccuracy: Int): Boolean {
+        if (newAccuracy == accuracy) return false
         accuracy = newAccuracy
         unreliable = newAccuracy == ACCURACY_UNRELIABLE
         reseed()
+        return true
     }
 
     private fun reseed() {
@@ -218,4 +221,39 @@ internal class MagneticBaseline {
         }
         return Reading(fieldUt, baseline, delta, threshold, peak, triggered, unreliable = false, warmingUp = false, started = started, peakGrew = peakGrew)
     }
+}
+
+/**
+ * The field magnitude the gauge judges, from a magnetometer event's values.
+ *
+ * From TYPE_MAGNETIC_FIELD_UNCALIBRATED, values[0..2] are the raw field with the
+ * phone's own hard-iron offset still in it, and values[3..5] the platform's
+ * estimate of that offset. The offset turns with the phone and the room's field
+ * does not, so the length of their sum changes as the phone tilts, by up to twice
+ * the smaller of the two: often far more than the gauge's trigger, which would
+ * read every tilt as a magnet. The calibrated stream subtracts the offset but
+ * steps whenever the platform re-estimates it.
+ *
+ * So the estimate is taken at the first sample and held: the length of (raw -
+ * held offset) stays put as the phone turns, and does not step when the
+ * platform's estimate moves. [release] takes a fresh estimate at the next sample;
+ * the listener calls it whenever the baseline re-seeds on an accuracy change.
+ * Values with no offset estimate (the calibrated stream) are used as they are.
+ */
+internal class HardIronHold {
+
+    private var held: FloatArray? = null
+
+    /** The next sample's offset estimate is held from then on. */
+    fun release() {
+        held = null
+    }
+
+    fun magnitude(values: FloatArray): Float {
+        if (values.size < 6) return length(values[0], values[1], values[2])
+        val b = held ?: floatArrayOf(values[3], values[4], values[5]).also { held = it }
+        return length(values[0] - b[0], values[1] - b[1], values[2] - b[2])
+    }
+
+    private fun length(x: Float, y: Float, z: Float): Float = sqrt(x * x + y * y + z * z)
 }

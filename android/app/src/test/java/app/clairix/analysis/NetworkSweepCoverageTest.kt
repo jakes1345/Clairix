@@ -112,6 +112,19 @@ class NetworkSweepCoverageTest {
         assertEquals("No camera-like hosts found on the last sweep", NetworkSweepCoverage.emptyText(NetworkScanProgress(lastScanTs = 1L, liveHosts = 9)))
     }
 
+    private data class Net(val name: String, val wifi: Boolean, val vpn: Boolean)
+
+    @Test
+    fun `the Wi-Fi is swept, not a VPN that reports the Wi-Fi under it`() {
+        // A VPN over Wi-Fi carries both transports; listed first, it used to be the one swept.
+        val vpn = Net("tun0", wifi = true, vpn = true)
+        val wifi = Net("wlan0", wifi = true, vpn = false)
+        val cell = Net("rmnet0", wifi = false, vpn = false)
+        assertEquals(wifi, NetworkSweepCoverage.wifiNetwork(listOf(vpn, cell, wifi), { it.wifi }, { it.vpn }))
+        assertNull(NetworkSweepCoverage.wifiNetwork(listOf(vpn, cell), { it.wifi }, { it.vpn }))
+        assertNull(NetworkSweepCoverage.wifiNetwork(emptyList<Net>(), { it.wifi }, { it.vpn }))
+    }
+
     @Test
     fun `addresses survive the round trip through ints`() {
         for (s in listOf("0.0.0.0", "10.0.0.1", "192.168.255.254", "255.255.255.255", "172.16.0.128")) {

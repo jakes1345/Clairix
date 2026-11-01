@@ -29,6 +29,35 @@ class OwnerCheckTest {
         assertFalse("a lock that never came cannot open it", gate.isOpen(passcodeSet = true))
     }
 
+    // ── The owner check in front of every export ───────────────────────────
+
+    @Test
+    fun anExportLeftOpenAsksAgainOnceClairixWasLeft() {
+        val check = ExportOwnerCheck()
+        assertFalse(check.passes(passcodeSet = true))
+        check.ownerConfirmed()
+        assertTrue(check.passes(passcodeSet = true))
+        // The period picker is left up and the phone put down, unlocked, inside the relock delay.
+        check.left()
+        assertFalse("whoever opens Clairix next must not find the share one tap away", check.passes(passcodeSet = true))
+    }
+
+    @Test
+    fun anExportThatEndedLeavesNothingConfirmedForTheNext() {
+        val check = ExportOwnerCheck()
+        check.ownerConfirmed()
+        check.exportEnded()
+        assertFalse(check.passes(passcodeSet = true))
+    }
+
+    @Test
+    fun withoutAPasscodeAnExportNeedsNoCheck() {
+        val check = ExportOwnerCheck()
+        assertTrue(check.passes(passcodeSet = false))
+        check.left()
+        assertTrue(check.passes(passcodeSet = false))
+    }
+
     @Test
     fun withoutAPasscodeThePageIsOpen() {
         val gate = OwnerGateState(passcodeSet = false, locked = false)

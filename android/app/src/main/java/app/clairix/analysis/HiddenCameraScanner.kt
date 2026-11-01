@@ -82,7 +82,6 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 // ── Data model ───────────────────────────────────────────────────────────────
 
@@ -1016,9 +1015,15 @@ object HiddenCameraScanner {
         val cm = app.getSystemService(ConnectivityManager::class.java)
         val wifiNet: Network? = cm?.let { m ->
             @Suppress("DEPRECATION")
-            runCatching { m.allNetworks.toList() }.getOrDefault(emptyList()).firstOrNull { n ->
-                m.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-            }
+            val networks = runCatching { m.allNetworks.toList() }.getOrDefault(emptyList())
+                .mapNotNull { n -> m.getNetworkCapabilities(n)?.let { n to it } }
+            // The Wi-Fi itself, not a VPN running over it: a VPN reports its underlying
+            // Wi-Fi transport too, and sweeping the tunnel says nothing about the room.
+            NetworkSweepCoverage.wifiNetwork(
+                networks,
+                isWifi = { it.second.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) },
+                isVpn = { it.second.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+            )?.first
         }
         val link: LinkProperties? = wifiNet?.let { cm?.getLinkProperties(it) }
         if (wifiNet == null || link == null) {
@@ -1527,6 +1532,7 @@ object HiddenCameraScanner {
      */
     private class MagneticListener(context: Context) : SensorEventListener {
         private val verdict = MagneticBaseline()
+        private val offset = HardIronHold()
         private val lat: Double?
         private val lon: Double?
         /** The open episode's finding, or null. */
@@ -1540,19 +1546,19 @@ object HiddenCameraScanner {
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-            verdict.accuracyChanged(accuracy)
+            // A re-seed takes the platform's offset estimate again, with the new baseline.
+            if (verdict.accuracyChanged(accuracy)) offset.release()
             if (verdict.unreliable) closeEpisode()
             // Re-seeded: settling again, or paused until the compass recovers.
             _magnetic.update { it.copy(triggered = false, unreliable = verdict.unreliable, warmingUp = !verdict.unreliable) }
         }
 
         override fun onSensorChanged(e: SensorEvent) {
-            // From TYPE_MAGNETIC_FIELD_UNCALIBRATED, values[0..2] are the raw field with the
-            // phone's own hard-iron bias still in it (values[3..5] estimate that bias). The
-            // bias is constant for the length of a sweep and the baseline absorbs it; the
-            // calibrated stream instead jumps whenever the platform re-estimates it.
-            val x = e.values[0]; val y = e.values[1]; val z = e.values[2]
-            val r = verdict.sample(sqrt(x * x + y * y + z * z), SystemClock.elapsedRealtime())
+            // From TYPE_MAGNETIC_FIELD_UNCALIBRATED: the raw field less the phone's own
+            // hard-iron offset as the platform estimated it when the gauge (re)started,
+            // held so a re-estimate does not step the reading, and subtracted so turning
+            // the phone does not move it ([HardIronHold]).
+            val r = verdict.sample(offset.magnitude(e.values), SystemClock.elapsedRealtime())
             if (r.started) {
                 episodeBaselineUt = r.baselineUt
                 episode = finding(System.currentTimeMillis(), r).also { report(it) }
