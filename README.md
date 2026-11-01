@@ -430,10 +430,13 @@ maintainer on the live service, not in this repository.
   no app switch Bluetooth off or unpair a device, so those stay in Settings.
 - **GPS** (Scan → GPS): runs while the page is open, and in the background
   with the scanner whenever the GPS is on anyway (the scanner's own fixes while
-  you move, navigation, another app). In the background it switches the
-  satellites on only on Android 12, and there only while you are moving; on
-  later versions the receiver clock and gain-control checks have data in the
-  background only when another app asks for raw measurements.
+  you move, navigation, another app). While you are moving it asks for the
+  receiver's raw measurements once a second, so the clock and gain-control
+  checks can tell a jammer from a tunnel. Once the phone has settled it
+  switches nothing on: on Android 14 and later those two checks then have data
+  only when another app asks for raw measurements, Android 13 takes one
+  reading as the phone settles and few after it, and Android 12 stops them
+  until you move.
   It catches the spoofers that are cheap to build; one that simulates a full
   sky at the right time passes the signal checks, and the Wi-Fi and cell
   comparison is the one it cannot pass while a tower or access point is in

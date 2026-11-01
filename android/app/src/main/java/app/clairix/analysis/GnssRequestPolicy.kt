@@ -8,8 +8,10 @@ package app.clairix.analysis
  * callback does not. Registered without a request it asks for the fastest rate the
  * chipset can report, and the receiver then runs for as long as it stays registered:
  * held by the scanner, that was a once-a-second satellite session for the whole scan,
- * on a desk or not. So it is registered only as the platform allows it to cost
- * nothing, or only while the phone is going somewhere ([measurements]).
+ * on a desk or not. So once the phone has settled it is registered only as the
+ * platform allows it to cost nothing; it asks for measurements itself only while the
+ * phone is going somewhere, when the scanner's own position fixes have the receiver
+ * on anyway ([measurements]).
  *
  * The Wi-Fi/cell position is what the satellites are held against: a satellite
  * spoofer does not touch it. The scanner's own fixes cannot stand in for it, because
@@ -49,19 +51,32 @@ object GnssRequestPolicy {
     const val FOREGROUND_INTERVAL_MS = 1_000
 
     /**
+     * The scanner's measurement rate while the phone moves. The jamming verdict needs
+     * the gain control to have been off for [GnssIntegrity.WINDOW_EPOCHS] readings in a
+     * row, each under [GnssIntegrity.MEASUREMENT_FRESH_MS] old, when the fix collapses:
+     * once a second has that within seconds, as Android 12's default request does.
+     */
+    const val MOVING_INTERVAL_MS = 1_000
+
+    /**
      * The measurement registration for API level [sdk]. A [foreground] holder (the GPS
      * screen, open and in front) switches the receiver on itself and gets measurements
-     * at its rate. Otherwise only the scanner holds the monitor: on Android 13 and later
-     * the registration is passive or as good as, and the clock and gain checks get
-     * measurements only when another app has asked for them (the satellite list and
-     * positions, which the other checks read, still arrive whenever anything has the
-     * receiver on); on Android 12, which cannot register without switching the receiver
-     * on, it is registered only while the phone is [moving], when the scanner's own
-     * position fixes have the satellites on anyway, and dropped once it settles.
+     * at its rate. Otherwise only the scanner holds the monitor. While the phone is
+     * [moving], the scanner's own position fixes (and navigation) have the receiver on
+     * anyway, so it asks for measurements itself: once every [MOVING_INTERVAL_MS] on
+     * Android 13 and later, the platform default on Android 12, which has no interval
+     * to give. A passive request would leave the clock and gain checks without data
+     * on the move, and a jammer would read as a tunnel. Once the phone has settled, on
+     * Android 13 and later the registration is passive or as good as, and the clock and
+     * gain checks get measurements only when another app has asked for them (the
+     * satellite list and positions, which the other checks read, still arrive whenever
+     * anything has the receiver on); on Android 12, which cannot register without
+     * switching the receiver on, it is dropped.
      */
     fun measurements(sdk: Int, foreground: Boolean, moving: Boolean): Measurements = when {
         foreground && sdk >= 33 -> Measurements.Every(FOREGROUND_INTERVAL_MS)
         foreground -> Measurements.Running
+        moving && sdk >= 33 -> Measurements.Every(MOVING_INTERVAL_MS)
         sdk >= 34 -> Measurements.Passive
         sdk == 33 -> Measurements.Rare
         moving -> Measurements.Running

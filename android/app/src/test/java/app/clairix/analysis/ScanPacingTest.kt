@@ -1,6 +1,7 @@
 package app.clairix.analysis
 
 import android.bluetooth.le.ScanSettings
+import app.clairix.ScanStatus
 import app.clairix.analysis.ScanPacing.BleScan
 import app.clairix.analysis.ScanPacing.Tab
 import org.junit.Assert.assertEquals
@@ -135,21 +136,12 @@ class ScanPacingTest {
     // ── Cell ──
 
     @Test
-    fun theCellIsAskedOnceAMinuteOnlyWhenTheRestIsConfirmed() {
-        assertEquals(15_000L, ScanPacing.cellPollMs(screenOn = true, moving = false, confirmedStill = true))
-        assertEquals(15_000L, ScanPacing.cellPollMs(screenOn = false, moving = true, confirmedStill = false))
-        assertEquals(60_000L, ScanPacing.cellPollMs(screenOn = false, moving = false, confirmedStill = true))
-        // Settled with no recent fix to show it (a train underground): no slower than before.
-        assertEquals(30_000L, ScanPacing.cellPollMs(screenOn = false, moving = false, confirmedStill = false))
-    }
-
-    @Test
-    fun aSettledCellPollStillCatchesAStintUnderNinetySeconds() {
-        // The strict ephemeral-cell rule looks for stints of 30 to 90 s; one reading
-        // apart, a stint measures one poll interval.
-        assertTrue(ScanPacing.CELL_SETTLED_MS in 30_000L..90_000L)
-        // And the five-minute checks still get several readings.
-        assertTrue(5 * min / ScanPacing.CELL_SETTLED_MS >= 4)
+    fun theCellIsAskedEveryFifteenSecondsInUseOrMovingAndEveryThirtyOtherwise() {
+        assertEquals(15_000L, ScanPacing.cellPollMs(screenOn = true, moving = false))
+        assertEquals(15_000L, ScanPacing.cellPollMs(screenOn = false, moving = true))
+        // Settled with the screen off is when the brief-cell rules run, so no slower
+        // than thirty seconds; see IMSICatcherTest for the stints that cadence catches.
+        assertEquals(30_000L, ScanPacing.cellPollMs(screenOn = false, moving = false))
     }
 
     // ── Wi-Fi ──
@@ -166,16 +158,34 @@ class ScanPacingTest {
 
     @Test
     fun tabsLeaveTheirReadingsToARunningScanner() {
-        for (tab in Tab.entries) assertNull(ScanPacing.tabRefreshMs(tab, scanning = true))
-        assertEquals(15_000L, ScanPacing.tabRefreshMs(Tab.CELL, scanning = false))
-        assertEquals(30_000L, ScanPacing.tabRefreshMs(Tab.DEVICE, scanning = false))
-        assertEquals(60_000L, ScanPacing.tabRefreshMs(Tab.WIFI, scanning = false))
+        val running = ScanStatus(scanning = true, serviceRunning = true)
+        val off = ScanStatus()
+        for (tab in Tab.entries) assertNull(ScanPacing.tabRefreshMs(tab, running))
+        assertEquals(15_000L, ScanPacing.tabRefreshMs(Tab.CELL, off))
+        assertEquals(30_000L, ScanPacing.tabRefreshMs(Tab.DEVICE, off))
+        assertEquals(60_000L, ScanPacing.tabRefreshMs(Tab.WIFI, off))
+    }
+
+    @Test
+    fun withBluetoothOffTheRunningScannerStillPublishesWhatTheTabsShow() {
+        // The service keeps polling the cell and looking at Wi-Fi when the Bluetooth
+        // scan cannot run; a tab reading for itself would overwrite the judged cell
+        // verdict and drop the Karma canary's hits from the Wi-Fi list.
+        for (status in listOf(
+            ScanStatus(scanning = false, bluetoothOn = false, error = "Bluetooth is off", serviceRunning = true),
+            ScanStatus(scanning = false, error = "Nearby devices permission not granted", serviceRunning = true),
+        )) {
+            assertTrue(ScanPacing.scannerPublishes(status))
+            for (tab in Tab.entries) assertNull(ScanPacing.tabRefreshMs(tab, status))
+        }
+        // A start that failed leaves no service behind: the tabs read for themselves.
+        assertFalse(ScanPacing.scannerPublishes(ScanStatus(scanning = false, error = "Location permission required to scan")))
     }
 
     @Test
     fun theWiFiTabStaysInsideAndroidsScanAllowance() {
         // Four requests in any two minutes for an app in front; the tab leaves room.
-        val period = ScanPacing.tabRefreshMs(Tab.WIFI, scanning = false)!!
+        val period = ScanPacing.tabRefreshMs(Tab.WIFI, ScanStatus())!!
         assertTrue(2 * min / period < 4)
         // And the scanner's own look is never more often than the tab's was allowed.
         assertTrue(ScanPacing.wifiScanEveryMs(screenOn = true, moving = true) >= 2 * min / 4)

@@ -134,7 +134,7 @@ twice on two machines in CI, which fails unless the two builds agree.
    verifier, TLS pins), not records of the owner's life. **Retention done**
    (PR #15): `HistoryRetention`, 30 days by default (7, 90 or forever),
    deletes the location log, the timeline, the vehicle trips and the unlock
-   ledger past it, every quarter hour while scanning and at each start.
+   ledger past it, every hour while scanning and at each start.
 7. **`KeystoreBox` key is not user-auth bound and not StrongBox**
    (`KeystoreBox.kt:48-55`). A logical extraction with the device unlocked
    reads everything it protects. *Reported.* **Considered, not done:** a

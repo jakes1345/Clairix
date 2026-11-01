@@ -284,6 +284,8 @@ class ScanService : LifecycleService() {
 
     /** Cuts the publish loop's wait short, so the screen coming on shows live data at once. */
     private val publishKick = Channel<Unit>(Channel.CONFLATED)
+    /** Cuts the cell loop's wait short when the screen comes on or the phone starts moving; see [ScanPacing.cellPollMs]. */
+    private val cellKick = Channel<Unit>(Channel.CONFLATED)
     private var lastHealthAt = 0L
     private var lastWifiAt = 0L
 
@@ -366,7 +368,7 @@ class ScanService : LifecycleService() {
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_ON -> { screenOn = true; restartScan(); publishKick.trySend(Unit) }
+                Intent.ACTION_SCREEN_ON -> { screenOn = true; restartScan(); publishKick.trySend(Unit); cellKick.trySend(Unit) }
                 Intent.ACTION_SCREEN_OFF -> { screenOn = false; restartScan() }
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
                     when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
@@ -554,7 +556,7 @@ class ScanService : LifecycleService() {
         val unrecordedStop = ScanRecord.claimSystemStop(this, AppSettings.scanEnabled)
         AppSettings.setScanEnabled(this, true)
         // Running again: whatever ended the last run is history now (the timeline keeps it).
-        Registry.update { it.copy(stoppedBySystem = false, stoppedAt = 0L) }
+        Registry.update { it.copy(stoppedBySystem = false, stoppedAt = 0L, serviceRunning = true) }
         registerSystemReceiver()
         // An app installed or changed while the scanner runs is checked for stalkerware a few
         // seconds later; Android only tells a receiver registered at run time.
@@ -756,8 +758,9 @@ class ScanService : LifecycleService() {
         if (running && scanActive && !screenOn &&
             blePlan(getSystemService(BluetoothManager::class.java)?.adapter) != activeBleScan
         ) restartScan()
-        // Moving ends an idle spell: the publish loop leaves its minute-long wait now.
-        if (pace == MotionPolicy.Pace.MOVING) publishKick.trySend(Unit)
+        // Moving ends an idle spell: the publish loop leaves its minute-long wait now,
+        // and the cell loop asks the modem at once instead of sleeping out its wait.
+        if (pace == MotionPolicy.Pace.MOVING) { publishKick.trySend(Unit); cellKick.trySend(Unit) }
         if (!running || !granted(Manifest.permission.ACCESS_FINE_LOCATION)) return
         try {
             // A request again replaces the earlier one.
@@ -842,15 +845,14 @@ class ScanService : LifecycleService() {
                 }
                 // The modem is asked for a fresh reading each time. While the phone is
                 // in use or on the move cells change quickly; screen off, every thirty
-                // seconds; settled with a recent fix to show it, once a minute; in low
-                // power every two minutes at most. See [ScanPacing.cellPollMs].
-                delay(
-                    ScanPacing.cellPollMs(
-                        screenOn = screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING,
-                        confirmedStill = motion.confirmedStill(System.currentTimeMillis()),
-                        lowPower = LowPowerMode.active
-                    )
-                )
+                // seconds; in low power every two minutes at most. The screen coming on or
+                // the phone starting to move cuts the wait short ([cellKick]). See
+                // [ScanPacing.cellPollMs].
+                withTimeoutOrNull(
+                    ScanPacing.cellPollMs(screenOn = screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING, lowPower = LowPowerMode.active)
+                ) {
+                    cellKick.receive()
+                }
             }
         }
     }
@@ -1826,12 +1828,12 @@ class ScanService : LifecycleService() {
         runCatching { KarmaCanary.stop(this) }
         Registry.update {
             if (running) it.copy(
-                scanning = false,
+                scanning = false, serviceRunning = false,
                 // A stop clears whatever the scan was saying; the flag says how it ended.
                 error = null, stoppedBySystem = bySystem, stoppedAt = if (bySystem) now else 0L
             ) else it.copy(
                 // A start that failed: its reason stays up, and so does an earlier system stop.
-                scanning = false
+                scanning = false, serviceRunning = false
             )
         }
         // The last reading stays on the Cell tab, but nothing is judging it any more;

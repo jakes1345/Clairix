@@ -323,4 +323,39 @@ class IMSICatcherTest {
         IMSICatcher(store, clock = { now })
         assertFalse(store.json.optJSONObject("cellTacs")!!.has("310-260-C"))
     }
+
+    /**
+     * A catcher holds a phone lying still with its screen off for [stintMs], starting
+     * [offsetMs] after a poll, and the scanner asks the modem at its settled cadence.
+     * Returns the ids of every finding raised.
+     */
+    private fun stillPhoneCaughtFor(stintMs: Long, offsetMs: Long): List<String> {
+        val c = catcher()
+        val poll = ScanPacing.cellPollMs(screenOn = false, moving = false)
+        val start = now
+        val catcherFrom = start + 4 * poll + offsetMs
+        val catcherTo = catcherFrom + stintMs
+        val ids = ArrayList<String>()
+        while (now < catcherTo + 7 * 60_000L) {
+            val serving = if (now in catcherFrom until catcherTo) cell("A") else cell("B")
+            ids += c.recordAndAnalyze(serving, null, settled = true).map { it.id }
+            now += poll
+        }
+        return ids
+    }
+
+    @Test
+    fun aStillPhoneAtTheSettledCellCadenceStillCatchesEveryBriefStint() {
+        // The strict rule wants a measured stint of 30 to 90 s. A stint is measured in
+        // poll intervals (first reading that saw the cell to the first that did not),
+        // so the cadence decides what a 40 s or an 80 s catcher reads as. At a minute
+        // an 80 s stint read as 120 s one time in three and a 40 s one was missed one
+        // time in three; whatever the phase, both must be caught.
+        for (stint in listOf(40_000L, 80_000L)) {
+            for (offset in 0L until ScanPacing.cellPollMs(screenOn = false, moving = false) step 5_000L) {
+                val ids = stillPhoneCaughtFor(stint, offset)
+                assertTrue("stint $stint offset $offset: $ids", "ephemeral_cell_strict:A" in ids)
+            }
+        }
+    }
 }

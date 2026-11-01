@@ -20,12 +20,22 @@ class GnssRequestPolicyTest {
     private val t0 = 5_000_000L
 
     @Test
-    fun theScannerAloneNeverKeepsTheReceiverOnFromAndroid13() {
-        for (moving in listOf(true, false)) {
-            assertEquals(Measurements.Passive, GnssRequestPolicy.measurements(sdk = 34, foreground = false, moving = moving))
-            assertEquals(Measurements.Passive, GnssRequestPolicy.measurements(sdk = 35, foreground = false, moving = moving))
-            assertEquals(Measurements.Rare, GnssRequestPolicy.measurements(sdk = 33, foreground = false, moving = moving))
+    fun aSettledScannerNeverKeepsTheReceiverOnFromAndroid13() {
+        assertEquals(Measurements.Passive, GnssRequestPolicy.measurements(sdk = 34, foreground = false, moving = false))
+        assertEquals(Measurements.Passive, GnssRequestPolicy.measurements(sdk = 35, foreground = false, moving = false))
+        assertEquals(Measurements.Rare, GnssRequestPolicy.measurements(sdk = 33, foreground = false, moving = false))
+    }
+
+    @Test
+    fun onTheMoveTheScannerAsksForMeasurementsSoAJammerIsNotATunnel() {
+        // A passive request hears measurements only for another app's request, and
+        // nothing else in Clairix makes one: on the move the gain check would have no
+        // readings and a jammed fix would read as a tunnel.
+        for (sdk in listOf(33, 34, 35)) {
+            assertEquals(Measurements.Every(GnssRequestPolicy.MOVING_INTERVAL_MS), GnssRequestPolicy.measurements(sdk, foreground = false, moving = true))
         }
+        // Fast enough that the gain alarm's run of readings fits in its freshness window.
+        assertTrue(GnssRequestPolicy.MOVING_INTERVAL_MS.toLong() * GnssIntegrity.WINDOW_EPOCHS <= GnssIntegrity.MEASUREMENT_FRESH_MS)
     }
 
     @Test

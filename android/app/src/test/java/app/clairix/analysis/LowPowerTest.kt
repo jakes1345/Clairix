@@ -87,9 +87,9 @@ class LowPowerTest {
 
     @Test
     fun theCellIsReadEveryTwoMinutesAndTheWifiEveryFifteenAtMost() {
-        assertEquals(2 * min, ScanPacing.cellPollMs(screenOn = true, moving = true, confirmedStill = false, lowPower = true))
-        assertEquals(2 * min, ScanPacing.cellPollMs(screenOn = false, moving = false, confirmedStill = true, lowPower = true))
-        assertEquals(15_000L, ScanPacing.cellPollMs(screenOn = true, moving = true, confirmedStill = false, lowPower = false))
+        assertEquals(2 * min, ScanPacing.cellPollMs(screenOn = true, moving = true, lowPower = true))
+        assertEquals(2 * min, ScanPacing.cellPollMs(screenOn = false, moving = false, lowPower = true))
+        assertEquals(15_000L, ScanPacing.cellPollMs(screenOn = true, moving = true, lowPower = false))
         assertEquals(15 * min, ScanPacing.wifiScanEveryMs(screenOn = true, moving = true, lowPower = true))
         assertEquals(15 * min, ScanPacing.wifiScanEveryMs(screenOn = false, moving = false, lowPower = true))
         assertEquals(2 * min, ScanPacing.wifiScanEveryMs(screenOn = true, moving = true, lowPower = false))

@@ -101,7 +101,7 @@ gradle test                         # unit tests for every variant
 - **Settings → "Keep history for"**: 7, 30 or 90 days, or forever (30 by
   default). The location log, the timeline, vehicle trips, the unlock ledger
   and the map's tile and traffic caches older than that are deleted at each
-  start, every quarter hour while scanning and once a day otherwise; the
+  start, every hour while scanning and once a day otherwise; the
   cell-tower baseline keeps which towers are usual, not when
   (`security/HistoryRetention.kt`).
 

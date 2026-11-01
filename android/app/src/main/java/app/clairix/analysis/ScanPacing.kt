@@ -1,6 +1,7 @@
 package app.clairix.analysis
 
 import android.bluetooth.le.ScanSettings
+import app.clairix.ScanStatus
 
 /**
  * How hard the scanner and the Scan tabs work, as decisions apart from the service
@@ -12,11 +13,14 @@ import android.bluetooth.le.ScanSettings
  * persistence is satisfied by sightings minutes apart. So while the screen is off,
  * the phone has settled ([MotionPolicy]) and no drive is under way ([idle]), the
  * scanner backs off: the Bluetooth controller scans at low power and hands results
- * over once a minute, the device list is rebuilt only when something was heard or
- * aged out, and the modem is asked about the serving cell once a minute. Every alert
- * stays packet-driven: it is raised as a packet is handled, never on these
- * cadences. The screen coming on, the phone moving or a drive starting brings the
- * usual pace back at once.
+ * over once a minute, and the device list is rebuilt only when something was heard or
+ * aged out. Bluetooth alerts stay packet-driven: they are raised as a packet is
+ * handled, never on these cadences. The cell and Wi-Fi checks are polls, so their
+ * cadences here bound how soon those alerts can come, and they run on coroutine
+ * timers that do not wake a sleeping phone: at rest with the screen off they run as
+ * often as stated only while something keeps the CPU awake (a Bluetooth batch, a
+ * position fix, Comms). The screen coming on, the phone moving or a drive starting
+ * brings the usual pace back at once.
  */
 object ScanPacing {
 
@@ -121,29 +125,23 @@ object ScanPacing {
     /** In use or on the move, cells change quickly. */
     const val CELL_ACTIVE_MS = 15_000L
 
-    /** Screen off without a confirmed rest: a pocket on a walk the fixes have not caught, a train underground. */
+    /**
+     * Screen off, moving or not. Not slower once the phone has settled: that is when
+     * the brief-cell rules run ([IMSICatcher] judges them only on a still phone), and
+     * they measure a stint in poll intervals. At thirty seconds a catcher that holds the
+     * phone for 30 to 90 s always reads as 30 to 90 s; at a minute an 80 s stint read
+     * as 120 s one time in three and a 40 s one fell between readings one time in
+     * three. Asking the modem is not what drains a resting phone.
+     */
     const val CELL_SCREEN_OFF_MS = 30_000L
 
     /**
-     * Settled, with a recent fix to show it, and the screen off. A minute still gives
-     * the five-minute checks five readings, and a cell that serves for under ninety
-     * seconds is still caught: one reading apart, it reads as a minute's stint.
+     * How long the cell loop waits before asking the modem again, unless the screen
+     * coming on or the phone moving cuts it short. In low power ([lowPower]) never
+     * less than [LowPower.CELL_POLL_MS].
      */
-    const val CELL_SETTLED_MS = 60_000L
-
-    /**
-     * How long the cell loop waits before asking the modem again; see
-     * [MotionPolicy.confirmedStill]. In low power ([lowPower]) never less than
-     * [LowPower.CELL_POLL_MS].
-     */
-    fun cellPollMs(screenOn: Boolean, moving: Boolean, confirmedStill: Boolean, lowPower: Boolean = false): Long {
-        val usual = when {
-            screenOn || moving -> CELL_ACTIVE_MS
-            confirmedStill -> CELL_SETTLED_MS
-            else -> CELL_SCREEN_OFF_MS
-        }
-        return maxOf(usual, LowPower.pacing(lowPower).cellPollFloorMs)
-    }
+    fun cellPollMs(screenOn: Boolean, moving: Boolean, lowPower: Boolean = false): Long =
+        maxOf(if (screenOn || moving) CELL_ACTIVE_MS else CELL_SCREEN_OFF_MS, LowPower.pacing(lowPower).cellPollFloorMs)
 
     // ── Wi-Fi ───────────────────────────────────────────────────────────────
 
@@ -175,12 +173,22 @@ object ScanPacing {
     }
 
     /**
-     * How often [tab] refreshes itself while it is on screen, or null when it leaves
-     * that to the scanner: while the scanner runs it publishes what each tab shows (the
-     * judged cell readings, the phone-health check every 30 s with the screen on, the
-     * Wi-Fi it scans every two minutes), and a tab asking again only repeats the work.
+     * Whether the scanner service is publishing what the Scan tabs show: the judged
+     * cell readings, the phone-health check, the Wi-Fi it scans with the Karma canary's
+     * answers. That is so whenever the service runs, Bluetooth scan or not
+     * ([ScanStatus.serviceRunning], not [ScanStatus.scanning]); a tab reading for itself
+     * then would overwrite the judged results with unjudged ones.
      */
-    fun tabRefreshMs(tab: Tab, scanning: Boolean): Long? = if (scanning) null else tab.ownMs
+    fun scannerPublishes(status: ScanStatus): Boolean = status.serviceRunning
+
+    /**
+     * How often [tab] refreshes itself while it is on screen, or null when it leaves
+     * that to the scanner ([scannerPublishes]): while the scanner runs it publishes what
+     * each tab shows (the judged cell readings, the phone-health check every 30 s with
+     * the screen on, the Wi-Fi it scans every two minutes), and a tab asking again only
+     * repeats the work.
+     */
+    fun tabRefreshMs(tab: Tab, status: ScanStatus): Long? = if (scannerPublishes(status)) null else tab.ownMs
 
     // ── Housekeeping ────────────────────────────────────────────────────────
 

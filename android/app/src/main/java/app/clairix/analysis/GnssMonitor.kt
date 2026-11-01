@@ -33,12 +33,14 @@ import kotlin.math.abs
  * callback is not like them: registered without a request it asks for the fastest rate
  * the chipset can report and keeps the receiver running for as long as it is registered,
  * which held a once-a-second satellite session for the whole scan. It is registered as
- * [GnssRequestPolicy.measurements] decides: passive on Android 14 and later, the longest
- * interval on Android 13, and on Android 12, which has neither, only while the phone is
- * moving ([setSettled]). Passive, it hears measurements only when another app asks for
- * them, so in the background the clock and gain checks often have none. Only a
- * foreground holder (the GPS screen) switches the receiver on itself, once a second,
- * with measurements at the same rate.
+ * [GnssRequestPolicy.measurements] decides. While the phone is moving, when the
+ * scanner's own fixes have the receiver on anyway, it asks for them once a second (the
+ * platform default on Android 12), so the gain check can tell a jammer from a tunnel.
+ * Once the scanner has seen the phone settle ([setSettled]) it is passive on Android 14
+ * and later, the longest interval on Android 13, and dropped on Android 12, which has
+ * neither. Passive, it hears measurements only when another app asks for them, so at
+ * rest the clock and gain checks often have none. A foreground holder (the GPS screen)
+ * switches the receiver on itself, once a second, with measurements at the same rate.
  *
  * The Wi-Fi/cell position the satellites are held against is this monitor's own
  * network-provider request, not the scanner's fused fixes, which may come from the
@@ -111,8 +113,8 @@ object GnssMonitor {
 
     /**
      * The scanner's view of whether the phone is going anywhere. Settled, the Wi-Fi/cell
-     * fixes slow down, and on Android 12 the measurement callback, which keeps the
-     * receiver on, is dropped until the phone moves again.
+     * fixes slow down, and the measurement request, which keeps the receiver on, turns
+     * passive (dropped on Android 12) until the phone moves again.
      */
     fun setSettled(value: Boolean) {
         executor.execute {

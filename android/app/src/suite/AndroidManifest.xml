@@ -27,8 +27,12 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- Wi-Fi tab: reads the connected network and the scan cache, and asks the
-         platform for a fresh scan when the tab is open (throttled by Android). -->
+    <!-- Wi-Fi checks: read the connected network and the scan cache, and ask the
+         platform for a fresh scan (throttled by Android): while the scanner runs,
+         every two minutes with the screen on or the phone moving and every ten
+         minutes once it has settled with the screen off; with the scanner off,
+         once a minute from the Wi-Fi tab while it is open; and once per tap of
+         "Scan for setup hotspots" under Hidden cameras. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 

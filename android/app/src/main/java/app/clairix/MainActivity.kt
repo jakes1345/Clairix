@@ -657,7 +657,7 @@ class MainActivity : AppCompatActivity() {
      * must not overwrite that with a reading nothing has judged.
      */
     private fun refreshCell() {
-        if (Registry.status.value.scanning) return
+        if (ScanPacing.scannerPublishes(Registry.status.value)) return
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 val reason = cellMonitor.unavailableReason()
@@ -667,7 +667,7 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
                 val snapshot = cellMonitor.sampleFull()
-                if (Registry.status.value.scanning) return@launch
+                if (ScanPacing.scannerPublishes(Registry.status.value)) return@launch
                 if (snapshot == null) {
                     Registry.publishCell(
                         CellStatus(
@@ -695,13 +695,13 @@ class MainActivity : AppCompatActivity() {
      * not ask Android for more of them.
      */
     private fun refreshWifi() {
-        if (Registry.status.value.scanning) return
+        if (ScanPacing.scannerPublishes(Registry.status.value)) return
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 // The snapshot requests a scan and waits for its results itself.
                 Registry.publishWifiStatus(WifiScanner.snapshot(applicationContext))
                 // The judgement on what is in range is cheap and service-free too.
-                if (!Registry.status.value.scanning) Registry.publishWifi(WifiScanner.scan(applicationContext))
+                if (!ScanPacing.scannerPublishes(Registry.status.value)) Registry.publishWifi(WifiScanner.scan(applicationContext))
             }
         }
     }
@@ -2927,7 +2927,7 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
     // With the scanner off, the tab takes its own reading every 15 s while it is on
     // screen and in front; with it on, the service's judged readings arrive on the
     // same cadence while the screen is on. See [ScanPacing.tabRefreshMs].
-    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.CELL, status.scanning), onShown)
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.CELL, status), onShown)
 
     val radio = cell.radio
     val c = cell.cell
@@ -3787,7 +3787,7 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
     // stay current; with it on, the service re-checks them every 30 s while the screen
     // is on. See [ScanPacing.tabRefreshMs].
     val liveMonitoring = status.scanning
-    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.DEVICE, status.scanning), onShown)
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.DEVICE, status), onShown)
     val problems = health.problems
     val checked = health.facts.size
     val issues = health.findings.size + problems.size
@@ -4066,7 +4066,7 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
     // asks for every two minutes while the screen is on, and requests none itself. With
     // the scanner off it asks for one a minute while it is in front: Android allows four
     // in two minutes. See [ScanPacing.tabRefreshMs].
-    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.WIFI, status.scanning), onShown)
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.WIFI, status), onShown)
 
     val conn = wifi.connection
     val flagged = wifi.nearby.count { it.flags.isNotEmpty() }

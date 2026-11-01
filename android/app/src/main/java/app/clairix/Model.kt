@@ -119,7 +119,13 @@ data class ScanStatus(
      * update, a kill, a battery manager); [stoppedAt] is when it was lost.
      */
     val stoppedBySystem: Boolean = false,
-    val stoppedAt: Long = 0L
+    val stoppedAt: Long = 0L,
+    /**
+     * The scanner service is running, whether or not [scanning] (the Bluetooth scan)
+     * is: with Bluetooth off, a failed scan or no Nearby permission it still polls the
+     * cell, looks at Wi-Fi and checks the phone, and publishes what the tabs show.
+     */
+    val serviceRunning: Boolean = false
 )
 
 // --- Cellular / IMSI catcher ------------------------------------------------
