@@ -147,13 +147,28 @@ class PermissionsDeniedDeviceTest {
         shot("MISSING-$t"); fail("Could not find \"$t\" by scrolling")
     }
 
-    /** The tour, if it opened: left at once, by Skip or, without one, by stepping to the end. */
+    /**
+     * The tour, if it opened: left at once, by Skip or, without one, by stepping
+     * to the end. With permissions refused, the system's prompt for the scan
+     * just started can arrive over the tour as it opens and take a tap meant
+     * for Skip, so each try first answers any prompt and then checks the tour
+     * has really gone.
+     */
     private fun leaveTheTour() {
-        if (!ui.waitHas(By.text("Where everything is"), 15_000)) return
-        if (tapIfShown(By.text("Skip"), "tour skip")) return
+        val tour = By.text("Where everything is")
+        if (!ui.waitHas(tour, 15_000)) return
+        repeat(5) {
+            alive("tour")
+            if (!ui.has(tour)) return
+            if (tapIfShown(By.text("Skip"), "tour skip", timeoutMs = 2_000)) {
+                device.waitForIdle(2_000)
+                if (!ui.has(tour)) return
+            }
+        }
         var pages = 0
         while (pages++ < 60) if (!tapIfShown(By.text("Next"), "tour next", timeoutMs = 3_000)) break
         tapIfShown(By.text("Done"), "tour done")
+        if (ui.has(tour)) { shot("TOUR-STUCK"); fail("The tour would not close") }
     }
 
     @Test
