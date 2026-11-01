@@ -57,7 +57,7 @@ You use the Service at your own risk and remain responsible for your own safety 
 
 ## 7. Clairix Full
 
-Clairix Full is distributed from our website as an APK and includes features not available in the Play edition. It is not reviewed by Google and does not update automatically. You are responsible for verifying the download against the published checksum and for installing updates. Features in Clairix Full that interact with cards or tokens are provided for lawful use with your own property only.
+Clairix Full is distributed from our website as an APK and includes features that the Google Play edition, when it is published, will leave out. It is not reviewed by Google and does not update automatically. You are responsible for verifying the download against the published checksum and for installing updates. Features in Clairix Full that interact with cards or tokens are provided for lawful use with your own property only.
 
 ClairixCoin is an in-app token with no monetary value. It cannot be purchased with money, cannot be redeemed for money or goods from us, and may be reset or discontinued at any time without liability.
 
@@ -77,7 +77,7 @@ The Clairix name, logo, app and website are owned by Clairix or its licensors. T
 
 ## 11. Third-party services
 
-Clairix uses OpenStreetMap for map tiles (unless a signed tile setting the project publishes names another tile server) and address search, GitHub for offline map downloads, the signed lists and settings the app keeps up to date and its daily check for a newer version, Cloudflare for hosting the relay and call relays, and Google Play for distribution of the Play edition. Your use of those services is subject to their terms. We are not responsible for them.
+Clairix uses OpenStreetMap for map tiles (unless a signed tile setting the project publishes names another tile server) and address search, GitHub for offline map downloads, the signed lists and settings the app keeps up to date and its daily check for a newer version, and Cloudflare for hosting the relay and call relays. Your use of those services is subject to their terms. We are not responsible for them.
 
 ## 12. Disclaimer of warranties
 

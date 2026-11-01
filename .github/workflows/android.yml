@@ -130,8 +130,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      # The check's own test first: a library linked for 4 KB pages has to fail it.
-      - name: Test the 16 KB page check
+      # The release checks' own tests first: a library linked for 4 KB pages has to
+      # fail the page check, and an APK signed by another key the signer check.
+      - name: Test the 16 KB page and bundle signer checks
         run: |
           python -m pip install pytest==9.1.1
           python -m pytest -q tools/android

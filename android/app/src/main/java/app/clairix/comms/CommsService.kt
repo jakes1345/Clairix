@@ -21,8 +21,13 @@ import kotlinx.coroutines.withTimeoutOrNull
  * so [LiveLink] can hold the relay socket open and envelopes (and call offers)
  * arrive the moment they are queued.
  *
- * It is a foreground service of the remote-messaging type: Android would
- * otherwise kill the process within minutes of the app leaving the screen.
+ * It is a foreground service of the special-use type: Android would otherwise
+ * kill the process within minutes of the app leaving the screen. None of
+ * Android's named types describes a socket to a relay held open so calls and
+ * messages arrive without a Google push service, so the manifest gives that
+ * reason in the service's PROPERTY_SPECIAL_USE_FGS_SUBTYPE. Special use may
+ * still start from BOOT_COMPLETED on Android 15 (BootReceiver relies on it) and
+ * has no running-time limit. Before Android 14 the service runs untyped.
  * The socket itself belongs to [LiveLink]; this service only takes a hold on
  * it and mirrors its state in the notification.
  */
@@ -79,7 +84,7 @@ class CommsService : Service() {
     private fun promote(connected: Boolean): Boolean = try {
         val notification = CommsNotifications.linkNotification(this, connected)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+            startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification)
         }

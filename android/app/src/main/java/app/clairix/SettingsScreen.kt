@@ -310,10 +310,15 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     if (showBackgroundDialog) {
         ClairixDialog(
-            title = "Allow location all the time",
-            text = "Android only lets Clairix restart scanning after a reboot if location access is set to " +
-                "\"Allow all the time\". Android opens the location permission page for Clairix: choose " +
-                "\"Allow all the time\" there, then come back.",
+            // Google Play's prominent disclosure for background location: what location is
+            // used for while the app is closed, and that it stays on the phone. The same
+            // sentence is the opening shot of docs/play/background-location.md's video.
+            title = "Allow location all the time?",
+            text = "Clairix uses your location when the app is closed to keep the tracker scan running and " +
+                "to tell whether a Bluetooth device is moving with you, including after the phone restarts. " +
+                "Your location history stays on this phone and is never uploaded.\n\n" +
+                "Android opens the location permission page for Clairix next: choose \"Allow all the time\" " +
+                "there, then come back.",
             confirmLabel = "Continue",
             onConfirm = {
                 showBackgroundDialog = false

@@ -3,7 +3,7 @@ This policy explains what information the Clairix app handles, where that inform
 Contact: support@clairix.app
 Website: https://clairix.app
 
-This policy covers the Clairix app in both the Google Play edition and the Clairix Full edition downloaded from our website. Where a section applies only to Clairix Full, it says so.
+This policy covers the Clairix app as distributed from our website and GitHub (Clairix Full and Clairix Comms). It will cover the Google Play edition when that is published. Where a section applies only to Clairix Full, it says so.
 
 ## 1. Information that stays on your device
 
@@ -132,7 +132,7 @@ Full instructions: https://clairix.app/delete-account
 
 ## 7. Children
 
-Clairix is not directed to children under 13, and we do not knowingly collect information from them. Google Play lists Clairix for adults.
+Clairix is for adults; you must be 18 or older (Terms, section 2). It is not directed to children, and we do not knowingly collect information from anyone under 18.
 
 ## 8. Security
 

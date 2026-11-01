@@ -88,13 +88,13 @@ The cell check learns what is normal over days. The screen shows the baseline's 
 
 Clairix's own spyware check skips Clairix. Another app's stalkerware scanner may list it, because to do its checks Clairix holds some of the access a monitoring app wants:
 
-- **Where it came from.** Clairix Full and the Comms edition are installed from an APK file, and Settings says so; the Play edition says Google Play.
+- **Where it came from.** Clairix Full and the Comms edition are installed from an APK file, and Settings says so; a copy installed from Google Play, once that edition exists, will say Google Play.
 - **Permissions.** Location, and "Allow all the time" if you let the scanner keep running in your pocket; the microphone, for calls, voice notes and the ultrasound listener; the camera, for the camera sweep and pairing codes; nearby devices; notifications. The scanner editions can also see every installed app, for the spyware check, and hold usage access and the alarms permission if you grant them.
 - **Device admin.** Only once you switch on the unlock ledger. **Settings > Security > Device admin apps** then lists Clairix with two policies: watching lock-screen events and locking the screen.
 - **Running in the background.** The scanner, and Comms when it stays online, run with a notification of their own.
 - **What it does not hold.** No accessibility service, notification access, keyboard, VPN or permission to draw over other apps.
 
-Run against itself, Clairix's own scoring gives Clairix Full 5 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location and the device-admin receiver; 7 with the unlock ledger's admin on. The Comms edition scores 3 and the Play edition 2, which is not listed. Other scanners weigh these things differently.
+Run against itself, Clairix's own scoring gives Clairix Full 5 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location and the device-admin receiver; 7 with the unlock ledger's admin on. The Comms edition scores 3; a copy installed from Google Play, once that edition exists, will score 2, which is not listed. Other scanners weigh these things differently.
 
 ### I have no invite
 

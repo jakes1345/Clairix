@@ -20,10 +20,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- COMMS: the camera scans a contact's pairing QR code; the relay connection
-         runs in a foreground service of the remote-messaging type while the
-         owner keeps comms online. -->
+         runs in a foreground service of the special-use type while the owner
+         keeps comms online (its reason is given on CommsService below). -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- COMMS calls: the microphone for the call itself, audio routing for
@@ -65,9 +65,14 @@
         android:theme="@style/Theme.Clairix">
 
         <!--
-            Portrait only: the whole UI is laid out for it, and a rotation would
-            recreate the Activity in the middle of a BiometricPrompt and drop the
-            result the vault is waiting for.
+            Portrait only, because every screen is laid out and tested for it alone.
+            The vault no longer needs it: BiometricPrompt's result goes through
+            Registry.vaultAuth, and whichever MainActivity instance is on screen
+            when it lands carries the operation out. The lock (here, on the two
+            call screens, the wipe relaunch and the QR scanner) comes off once the
+            layouts, and a vault unlock rotated mid-prompt, have been run on a
+            tablet and an unfolded foldable; from targetSdk 36 Android ignores it
+            on screens 600 dp wide and up anyway.
         -->
         <activity
             android:name=".MainActivity"
@@ -148,13 +153,20 @@
             COMMS relay connection. Holds the WebSocket to the owner's relay while
             comms are online, so encrypted envelopes arrive the moment they are
             queued. When it is not running, a UnifiedPush wake-up (below) or opening
-            the app fetches the inbox instead.
+            the app fetches the inbox instead. None of Android's named service types
+            fits a relay socket (remoteMessaging is for moving messages between a
+            person's own devices), so it is a special-use service, and the property
+            states why for Google Play's review (docs/play/foreground-services.md).
         -->
         <service
             android:name=".comms.CommsService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="remoteMessaging" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the end-to-end-encrypted relay connection open so incoming calls and messages arrive without a Google push service" />
+        </service>
 
         <!--
             UnifiedPush receiver: a distributor app the owner installs (ntfy, for

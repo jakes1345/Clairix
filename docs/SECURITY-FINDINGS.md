@@ -404,7 +404,10 @@ twice on two machines in CI, which fails unless the two builds agree.
     The `clairix://invite` filter stays for links made before Beta 8 (the
     relay's page reaches it only by an intent naming the package); a link
     still only fills in the setup screen. The Play edition, when published,
-    needs Play's app signing key added to `assetlinks.json`.
+    is to be signed by Play with the release key itself (`android/README.md`,
+    "Cutting a release" step 5a), so the one fingerprint covers it; if Google's
+    own app-signing key is used instead, its fingerprint is added to
+    `assetlinks.json` before the listing goes live (same step).
 31. The duress phrase sends nothing when the phone is in no group
     (`CommsRepository.kt:1459-1468`) and the UI does not warn. *Reported.*
     **Done:** the Duress phrase page says so, in red, while the owner is in

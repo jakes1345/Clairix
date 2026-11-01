@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { check, offences } from "./copy-check.mjs";
+import { check, offences, playLive } from "./copy-check.mjs";
 
 const site = fileURLToPath(new URL("..", import.meta.url));
 
@@ -36,4 +36,34 @@ test("unpairing something named, and the real controls, are left alone", () => {
   ]) {
     assert.deepEqual(offences(line), [], line);
   }
+});
+
+test("while the Play listing is not public, no page states Play distribution as fact", () => {
+  for (const line of [
+    "| **Distribution** | Google Play (package `app.clairix`); Clairix Full edition as a direct APK |",
+    "This policy covers the Clairix app in both the Google Play edition and the Clairix Full edition.",
+    "Google Play lists Clairix for adults.",
+    "and Google Play for distribution of the Play edition.",
+    "The Google Play edition is the version most people should install.",
+  ]) {
+    assert.ok(offences(line).length > 0, line);
+    assert.deepEqual(offences(line, true), [], `once live: ${line}`);
+  }
+});
+
+test("saying the Play edition is coming is left alone", () => {
+  for (const line of [
+    "The Google Play edition is coming soon. Requires Android 12 or newer.",
+    "The Google Play edition is in preparation.",
+    "It will cover the Google Play edition when that is published.",
+    "| **Distribution** | Direct APK from clairix.app and GitHub Releases (public beta); a Google Play edition is in preparation |",
+    "Android and Google Play are trademarks of Google LLC.",
+  ]) {
+    assert.deepEqual(offences(line), [], line);
+  }
+});
+
+test("PLAY_LIVE is read from the site's config", () => {
+  assert.equal(typeof playLive(site), "boolean");
+  assert.equal(playLive("/nonexistent"), false);
 });

@@ -19,7 +19,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Stalkerware scan: Android 11+ hides most installed apps from a package
-         listing without this, and an app hiding on the phone is the whole point. -->
+         listing without this, and an app hiding on the phone is the whole point.
+         The scan reads every installed package on the phone and sends nothing
+         about them anywhere (analysis/StalkwareScanner.kt; the Play declaration
+         is docs/play/query-all-packages.md). -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -63,10 +66,13 @@
 
     <!--
         Device tab: the root managers and hooking frameworks PhoneHealthMonitor
-        reports when installed. QUERY_ALL_PACKAGES above already lets the app see
-        every package, which the stalkerware check needs anyway: it matches every
-        installed app against its signed stalkerware list (analysis/StalkwareIoc.kt)
-        by package name and signing certificate, so no stalkerware is named here.
+        reports when installed. While QUERY_ALL_PACKAGES above is held every
+        package is visible anyway, so this list changes nothing today; it is kept
+        so these checks still see their packages if that permission is ever
+        withdrawn (a store review, or a build without it). The stalkerware check
+        does need every package: it matches every installed app against its signed
+        stalkerware list (analysis/StalkwareIoc.kt) by package name and signing
+        certificate, so no stalkerware is named here.
     -->
     <queries>
         <package android:name="com.topjohnwu.magisk" />

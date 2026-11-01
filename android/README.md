@@ -27,7 +27,7 @@ dimensions (`edition` first, then `tier`, so a variant reads `<edition><Tier>`):
 |---|---|---|---|
 | `fullSuite` | Full | The whole app, including the Card Vault with NFC card emulation and ClairixCoin | `clairix-<tag>.apk` on GitHub Releases and clairix.app |
 | `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS, with the duress phrase, fake call and Wipe Clairix; no scanner | `clairix-comms-<tag>.apk` on GitHub Releases |
-| `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, uploaded to Google Play |
+| `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, for the Play Console (the listing is not public yet) |
 
 There is no `playComms`: the comms-only build is never published on Play.
 
@@ -177,7 +177,12 @@ job can read, and only from main, a `release/v*` branch or a `v*` tag
 Keep the keystore and its passwords out of the repository, and keep a backup
 somewhere safe: a phone only accepts an update signed with the same key as the
 installed app, so losing it means every user has to uninstall and reinstall.
-The same key signs the Play bundle, which makes it the Play upload key.
+The same key signs the Play bundle, so it is the key Play checks each upload
+against (the upload key). That does not make it the key Play signs the APKs it
+delivers with (the app-signing key): Play App Signing fixes that key once, at
+the first upload, and unless the release key is enrolled there (step 5a under
+"Cutting a release"), Google generates its own, and Play installs and these
+APKs can never install over each other.
 
 Without `ANDROID_KEYSTORE_BASE64` the workflow stops before it builds: a
 release signed with any other key cannot be installed over an earlier one, and
@@ -239,8 +244,75 @@ release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
    issue titled "Release workflow failing" (or adds the run to the open one).
 4. Check the certificate digest the "Collect and verify artifacts" step prints:
    it must be the same as the previous release's, or phones will refuse the update.
+   The "Check the bundle and the APKs share one signing certificate" step
+   (`tools/android/check-bundle-signer.sh`) fails the release if the Play
+   bundle is signed by any other certificate than the APKs, and prints the
+   digest as `Release certificate SHA-256: …`; it is the `apksigner` digest in
+   `docs/KEYS.md`.
 5. Upload `clairix-play-<tag>.aab` in the Play Console (a beta goes to a testing
-   track first).
+   track first). The declarations Play reviews are prepared in
+   [docs/play/](../docs/play/README.md); before sending a release for review:
+   - Permissions declaration for `QUERY_ALL_PACKAGES`: paste the core-use text
+     from `docs/play/query-all-packages.md`.
+   - Location permissions for `ACCESS_BACKGROUND_LOCATION`: the feature
+     statement from `docs/play/background-location.md`, and the video recorded
+     from its script (unlisted YouTube link).
+   - Foreground service permissions: one entry and one video per type
+     (`specialUse`, `microphone`, `location`, `connectedDevice`) from
+     `docs/play/foreground-services.md`.
+   - Full-screen intent: the calling use case from
+     `docs/play/full-screen-intent.md`.
+   - Data safety: the answers in `docs/play/data-safety.md`, after its
+     "Mismatches" list is empty or each item has a recorded reason.
+   - Store listing: a privacy policy URL of https://clairix.app/privacy; the
+     content rating questionnaire answered for an app for adults (Terms,
+     section 2: 18 or older); target audience 18 and over.
+   - Re-read each file against the manifests of the build being uploaded: a
+     permission or service type added since the last review needs its own entry.
+   - The first time only, before any of this, step 5a.
+
+   5a. **The first Play upload: enrol the release key as the app-signing key.**
+   Play App Signing is mandatory for bundles, and the app-signing key is chosen
+   once, when the first bundle is uploaded; it cannot be changed to the release
+   key afterwards. In the Play Console, under the app's signing setup, choose
+   "Use an existing key" and the option to export and upload a key from a Java
+   keystore. The console offers Google's `pepk` tool and an encryption public
+   key; on a trusted machine holding the release keystore, run
+
+   ```bash
+   java -jar pepk.jar --keystore=release.keystore --alias="$ANDROID_KEY_ALIAS" \
+     --output=clairix-app-signing-key.zip --include-cert --rsa-aes-encryption \
+     --encryption-key-path=encryption_public_key.pem
+   ```
+
+   and upload the zip it writes (it holds the key encrypted to Google; delete
+   it afterwards). Do not register a separate upload key: the release workflow
+   signs the bundle with the release key, and the step in point 4 checks that.
+   Then upload the first bundle.
+
+   **Verify it before the listing goes live.** On the Play Console's app
+   signing page, the app-signing certificate's SHA-256 must equal the one in
+   `docs/KEYS.md` and in `website/public/.well-known/assetlinks.json`. Then
+   install the app from the internal testing track on a phone and check the
+   APK Play delivered:
+
+   ```bash
+   adb shell pm path app.clairix          # package:/data/app/…/base.apk
+   adb pull /data/app/…/base.apk play-base.apk
+   apksigner verify --print-certs play-base.apk | grep 'SHA-256 digest'
+   ```
+
+   The digest must equal the `Release certificate SHA-256` the release
+   workflow printed for that tag. When it does, record the check (date, tag,
+   digest) under "The APK signing certificate" in `docs/KEYS.md` and set
+   `PLAY_SAME_SIGNING_KEY = true` in `website/src/config/site.ts`: only then
+   does the download page say that one edition installs over the other. If it
+   does not (Google generated the key), the editions cannot replace each other
+   without uninstalling, which deletes the Comms identity: leave
+   `PLAY_SAME_SIGNING_KEY` false (the download page then says so), add the
+   app-signing certificate's SHA-256 to `assetlinks.json` before the listing
+   goes live (or `https://clairix.app/i` links stop opening in Play installs),
+   and record both digests in `docs/KEYS.md`.
 
 ## Permissions, and why each one is needed
 

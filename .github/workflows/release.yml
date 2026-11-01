@@ -389,7 +389,9 @@ jobs:
           for apk in "$OUT"/*.apk; do
             "$APKSIGNER" verify --print-certs "$apk"
           done
-          # The bundle is jar-signed; Play checks it against the registered upload key.
+          # The bundle is jar-signed; Play checks it against the upload key registered
+          # at the first upload, which is to be this same release key (android/README.md,
+          # "Cutting a release" step 5a).
           keytool -printcert -jarfile "$OUT/clairix-play-${TAG}.aab"
           (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-play-${TAG}.aab" \
             "sbom-android-${TAG}.cdx.json" "sbom-comms-crypto-${TAG}.cdx.json" > SHA256SUMS.txt)
@@ -407,6 +409,20 @@ jobs:
         run: |
           OUT=android/app/build/outputs/release-files
           tools/android/check-16k-alignment.sh "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk" "$OUT/clairix-play-${TAG}.aab"
+
+      # At the first Play upload this release key is enrolled in Play App Signing
+      # ("Use an existing key", android/README.md "Cutting a release" step 5a), so
+      # the APKs Play delivers carry the same certificate as the APKs here and the
+      # editions install over each other. That holds only while the bundle is
+      # signed by the key that signs the APKs; this step fails the release when they
+      # differ, and the digest it prints is the one a Play-delivered APK must show
+      # (step 5a's verification).
+      - name: Check the bundle and the APKs share one signing certificate
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          OUT=android/app/build/outputs/release-files
+          tools/android/check-bundle-signer.sh "$OUT/clairix-play-${TAG}.aab" "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk"
 
       # The checksum file is signed with the asset signing key (tools/signing),
       # whose public half is committed as android/asset-signing.pem, so a
@@ -633,9 +649,10 @@ jobs:
             echo "- **A new look.** Every screen has been redesigned: clearer status at the top of"
             echo "  each tab, bigger touch targets, and a choice of dark colour themes in"
             echo "  Settings → Appearance."
-            echo "- **Two editions.** Clairix now comes in a Google Play edition and a Full edition"
-            echo "  (this download). They are the same app, except that the Play edition leaves out"
-            echo "  the Card Vault with card emulation and ClairixCoin."
+            echo "- **Two editions.** Clairix is built as the Full edition (this download) and a"
+            echo "  Google Play edition, which is in preparation; https://clairix.app/download says"
+            echo "  whether it is out. They are the same app, except that the Play edition leaves"
+            echo "  out the Card Vault with card emulation and ClairixCoin."
             echo "- **Fixes** across the app, including the colour theme when an incoming call"
             echo "  starts Clairix and clearer wording on the certificate-pinning check."
             echo
@@ -645,7 +662,7 @@ jobs:
             echo "|---|---|"
             echo "| \`clairix-${TAG}.apk\` | **The Full edition.** The whole app, including the Card Vault and ClairixCoin. Most people want this one. |"
             echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: the scanner and tools are not reachable and none of their permissions are requested. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
-            echo "| \`clairix-play-${TAG}.aab\` | The Google Play bundle. Phones can't install this file directly; it is here for the Play Console. |"
+            echo "| \`clairix-play-${TAG}.aab\` | The bundle for the Play Console, signed with the same key as the APKs. Phones can't install this file directly. |"
             echo "| \`sbom-android-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Java and Kotlin library in the three files above, with its version. |"
             echo "| \`sbom-comms-crypto-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Rust crate in the encryption library the three files carry, with its version. |"
             echo "| \`SHA256SUMS.txt\` | Checksums to confirm your download is intact. |"
