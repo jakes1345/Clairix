@@ -87,10 +87,8 @@ class TorDeviceTest {
         // TLS handshake is one (see requestsLeaveThroughTor): it is asked again
         // through a new circuit. A key that does come back must be the listed one.
         var live: String? = null
-        for (attempt in 1..CHECK_TRIES) {
-            live = RelayDirectory.liveKey(listed.url)
-            if (live != null) break
-        }
+        var tries = 0
+        while (live == null && tries++ < CHECK_TRIES) live = RelayDirectory.liveKey(listed.url)
         assertEquals("the listed relay's key, through Tor, in $CHECK_TRIES tries", listed.key, live)
     }
 
