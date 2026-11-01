@@ -215,8 +215,13 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   else in it, the button says nobody would receive it instead of sending.
   A timeline entry records the count. Location is read at that moment and at
   no other time.
-- **Fake call.** Rings the phone with its real ringtone and a real-looking
-  call screen, so you can walk away.
+- **Fake call.** Rings the phone with its own ringtone and vibration for
+  45 seconds, honouring silent mode, and shows a real-looking call screen over
+  the lock screen, so you can walk away. It needs notifications and
+  full-screen calls allowed for Clairix; the page schedules nothing until they
+  are. Unlocked and in another app, Android shows a call banner carrying
+  Clairix's name instead of the screen, which is why the page can also lock
+  the phone as it schedules, once Clairix's device admin is on.
 - **App lock.** A passcode for Clairix itself, with optional biometrics.
   Wrong passcodes wipe after a limit you choose, or lock you out for longer
   each time if you turn the wipe off. The passcode is never stored; only a

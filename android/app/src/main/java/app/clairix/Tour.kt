@@ -127,7 +127,8 @@ internal fun trackerToolTour(a: TrackerAction): Pair<String, String> = when (a) 
 
 internal fun commsPageTour(a: CommsAction): Pair<String, String> = when (a) {
     CommsAction.FAKE_CALL -> "A pretend incoming call, as a reason to leave." to
-        "Set a time and a caller name. The phone rings with its real ringtone and a real-looking call screen, even locked."
+        "Set a time and a caller name. With notifications and full-screen calls allowed, the phone rings with its own " +
+        "ringtone and shows a call screen over the lock screen; unlocked in another app, it shows a call banner instead."
     CommsAction.DURESS -> "A sentence that quietly calls for help." to
         "Type it into any chat: it is sent as written, and underneath an SOS with your last position goes to every group you " +
         "are in. In no group it sends nothing, and the page says so."

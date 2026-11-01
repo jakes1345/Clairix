@@ -177,11 +177,12 @@
             android:foregroundServiceType="location" />
 
         <!--
-            Unlock ledger: a device admin with the watch-login policy only
-            (res/xml/unlock_admin.xml), so the platform reports every lock-screen
-            success, failure and credential change. Exported with the system-only
-            BIND_DEVICE_ADMIN permission, as every admin receiver must be; the owner
-            activates it from the Device tab.
+            Unlock ledger: a device admin with the watch-login policy, so the
+            platform reports every lock-screen success, failure and credential
+            change, and force-lock, so the Fake call page's "Schedule and lock" can
+            lock the screen (res/xml/unlock_admin.xml); nothing else. Exported with
+            the system-only BIND_DEVICE_ADMIN permission, as every admin receiver
+            must be; the owner activates it from the Device tab.
         -->
         <receiver
             android:name=".security.UnlockAdminReceiver"
@@ -215,6 +216,20 @@
         <receiver
             android:name=".security.FakeCallReceiver"
             android:exported="false" />
+
+        <!--
+            The fake call's ring: a short foreground service (no type permission and
+            no prerequisites; the ring lasts 45 s) that plays the phone's ringtone
+            and vibrates from the background, under a wake lock, so the call rings
+            whether or not any screen opens. Its notification is the incoming-call
+            card. Started by the alarm; ends with the ring (answer, decline, Cancel
+            or the ring's own timer). On Android 12 and 13, which have no such type,
+            it runs as an untyped foreground service.
+        -->
+        <service
+            android:name=".security.FakeCallRingService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
 
     </application>
 </manifest>

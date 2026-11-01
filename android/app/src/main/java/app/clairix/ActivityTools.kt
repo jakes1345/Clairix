@@ -312,7 +312,8 @@ internal fun UnlockLedgerPage(onBack: (() -> Unit)? = null) {
                         Text("Device admin", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
                             "Reports every successful and failed unlock and any PIN change as it happens. " +
-                            "Clairix never locks, wipes or sets a policy with it.",
+                            "Clairix locks the phone with it only when you press \"Schedule and lock\" on the " +
+                            "Fake call page; it never wipes or sets a policy.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )

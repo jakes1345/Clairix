@@ -1,5 +1,12 @@
 package app.clairix
 
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -9,13 +16,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import app.clairix.comms.CommsNotifications
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.Contact
 import app.clairix.comms.formatClairixNumber
 import app.clairix.security.DuressPhrase
 import app.clairix.security.FakeCall
+import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -48,15 +58,43 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var connectTo by remember { mutableStateOf<Contact?>(null) }
     var pickerOpen by remember { mutableStateOf(false) }
-    var canExact by remember { mutableStateOf(FakeCall.canScheduleExactly(context)) }
+    var lockMenuOpen by remember { mutableStateOf(false) }
+    // What the ring needs, checked the way Comms checks them for real calls:
+    // without notifications the call shows nowhere, and without full-screen
+    // calls a locked phone shows only a notification, so nothing is scheduled
+    // until both pass.
+    var readiness by remember { mutableStateOf(FakeCall.readiness(context)) }
+    var canLock by remember { mutableStateOf(FakeCall.canLock(context)) }
+    var adminActive by remember { mutableStateOf(UnlockLedger.isAdminActive(context)) }
     var pendingAt by remember { mutableStateOf(FakeCall.pendingAt(context)) }
     val now = rememberToolTick()
+    // Once refused twice, Android answers the request with "denied" without
+    // showing anything; the owner is then sent to the settings page instead.
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        readiness = FakeCall.readiness(context)
+        val blocked = context.findActivity()
+            ?.let { !ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true
+        if (!granted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && blocked) {
+            CommsNotifications.openAppNotificationSettings(context)
+        }
+    }
+    val allowNotifications: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            // Before API 33 there is no runtime permission; the switch lives in system settings.
+            CommsNotifications.openAppNotificationSettings(context)
+        }
+    }
 
     LaunchedEffect(Unit) {
         contacts = withContext(Dispatchers.IO) { runCatching { CommsRepository.contacts() }.getOrDefault(emptyList()) }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        canExact = FakeCall.canScheduleExactly(context)
+        // Every grant happens on Android's own pages, so they are re-read on return.
+        readiness = FakeCall.readiness(context)
+        canLock = FakeCall.canLock(context)
+        adminActive = UnlockLedger.isAdminActive(context)
         pendingAt = FakeCall.pendingAt(context)
     }
     // A pending call that has rung drops off the countdown.
@@ -71,11 +109,20 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         pendingAt = FakeCall.pendingAt(context)
     }
 
+    // Schedule, hide Clairix, lock the phone: the call then comes over the lock
+    // screen like any other, with no Clairix window behind it to be found.
+    fun scheduleAndLock(delayMs: Long) {
+        schedule(delayMs)
+        context.findActivity()?.moveTaskToBack(true)
+        FakeCall.lockNow(context)
+    }
+
     ToolPageList(title = "Fake call", onBack = onBack) {
         item(key = "§intro") {
             Text(
                 "A way out of a conversation or a situation that is going wrong. The phone rings with " +
-                "its own ringtone and shows an incoming call from whoever you name here.",
+                "its own ringtone and vibration, honouring silent mode, and shows an incoming call from " +
+                "whoever you name here.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -90,7 +137,7 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                         Column(Modifier.weight(1f)) {
                             Text("Rings in ${secs / 60}:${"%02d".format(Locale.US, secs % 60)}", style = MaterialTheme.typography.mono, color = ClairixTheme.colors.text)
                             Text(
-                                "Put the phone away; it will ring on its own." +
+                                "Lock the phone and put it away; it rings on its own." +
                                     (connectTo?.let { " Answering calls ${it.name} for real." } ?: ""),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClairixTheme.colors.textSubtle
@@ -168,24 +215,111 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         item(key = "§when") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PrimaryButton("30 s", onClick = { schedule(FakeCall.DELAY_30S) }, modifier = Modifier.weight(1f))
-                    PrimaryButton("2 min", onClick = { schedule(FakeCall.DELAY_2MIN) }, modifier = Modifier.weight(1f))
-                    PrimaryButton("5 min", onClick = { schedule(FakeCall.DELAY_5MIN) }, modifier = Modifier.weight(1f))
+                    PrimaryButton("30 s", onClick = { schedule(FakeCall.DELAY_30S) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
+                    PrimaryButton("2 min", onClick = { schedule(FakeCall.DELAY_2MIN) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
+                    PrimaryButton("5 min", onClick = { schedule(FakeCall.DELAY_5MIN) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
                 }
-                if (!canExact) {
+                if (FakeCall.Missing.NOTIFICATIONS in readiness.missing) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Notifications are off for Clairix, so the call could not show at all. Allow them to schedule one.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClairixTheme.colors.caution,
+                            modifier = Modifier.weight(1f)
+                        )
+                        GhostButton("Allow", onClick = allowNotifications)
+                    }
+                } else if (FakeCall.Missing.CALL_CHANNEL in readiness.missing) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Clairix's call notifications are switched off or set to silent, so the call may not take " +
+                            "the screen, or may ring without a sound. Set them to alert.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClairixTheme.colors.caution,
+                            modifier = Modifier.weight(1f)
+                        )
+                        GhostButton("Fix", onClick = { FakeCall.openChannelSettings(context) })
+                    }
+                }
+                if (FakeCall.Missing.FULL_SCREEN in readiness.missing) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Full-screen calls: off. On a locked phone the call would show only as a notification. " +
+                            "Allow them to schedule a call.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClairixTheme.colors.caution,
+                            modifier = Modifier.weight(1f)
+                        )
+                        GhostButton("Allow", onClick = { CommsNotifications.openFullScreenSettings(context) })
+                    }
+                }
+                if (!readiness.ringsOnTime) {
                     Text(
-                        "Exact alarms are not allowed for Clairix, so Android may ring a little late while " +
-                        "the phone is idle. Allow them for the call to land on the second.",
+                        "Exact alarms are not allowed for Clairix, so Android may ring the call late while the " +
+                        "phone is idle. Allow them for the call to land on the second.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.caution
                     )
                     SecondaryButton("Allow exact alarms", onClick = { FakeCall.requestExactAlarms(context) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
-                } else {
-                    Text("Exact alarms allowed — the call rings on time even with the screen off.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                } else if (readiness.missing.isEmpty()) {
+                    Text("Ready: the call rings on time, with the screen off or another app open.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                }
+            }
+        }
+
+        item(key = "§lock-hdr") { SectionHeader("Put the phone away") }
+        item(key = "§lock") {
+            ClairixCard {
+                Box(Modifier.fillMaxWidth()) {
+                    SecondaryButton(
+                        "Schedule and lock",
+                        onClick = { lockMenuOpen = true },
+                        tone = Tone.Accent,
+                        enabled = readiness.canSchedule && canLock,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    DropdownMenu(expanded = lockMenuOpen, onDismissRequest = { lockMenuOpen = false }, containerColor = ClairixTheme.colors.surfaceRaised, shape = ClairixShapes.Card) {
+                        for ((label, delayMs) in listOf("In 30 s" to FakeCall.DELAY_30S, "In 2 min" to FakeCall.DELAY_2MIN, "In 5 min" to FakeCall.DELAY_5MIN)) {
+                            DropdownMenuItem(
+                                text = { Text(label, style = MaterialTheme.typography.bodyLarge) },
+                                onClick = { lockMenuOpen = false; scheduleAndLock(delayMs) }
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Schedules the call, hides Clairix and locks the phone. Locked, the phone shows the call " +
+                    "screen over the lock screen like any call; unlocked and in another app, it shows a call " +
+                    "banner that carries Clairix's name instead.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                if (!canLock) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (adminActive) {
+                                "Clairix's device admin was approved before it could lock the screen. Approve it " +
+                                "again to let this button lock the phone."
+                            } else {
+                                "Locking needs Clairix's device admin, the one the Unlock ledger uses. It can lock " +
+                                "the screen and record unlock attempts; it cannot wipe the phone or change its PIN."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClairixTheme.colors.caution,
+                            modifier = Modifier.weight(1f)
+                        )
+                        GhostButton(if (adminActive) "Approve" else "Enable", onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) })
+                    }
                 }
             }
         }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 // ── 7. Duress phrase ───────────────────────────────────────────────────────────

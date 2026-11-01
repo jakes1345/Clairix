@@ -39,10 +39,12 @@ import java.util.concurrent.TimeUnit
  *
  * Two sources write the same ledger:
  *
- * - [UnlockAdminReceiver], a device admin with only the watch-login policy. The
- *   platform calls it on every lock-screen success, failure and credential
- *   change, in real time and whether or not Clairix is running. Enabling it is a
- *   one-time step the owner takes from the Device tab ([requestAdminIntent]).
+ * - [UnlockAdminReceiver], a device admin with the watch-login policy (and
+ *   force-lock, which only the Fake call page's "Schedule and lock" uses; see
+ *   [FakeCall.lockNow]). The platform calls it on every lock-screen success,
+ *   failure and credential change, in real time and whether or not Clairix is
+ *   running. Enabling it is a one-time step the owner takes from the Device tab
+ *   ([requestAdminIntent]).
  * - [UsageStatsManager]'s event stream, which records KEYGUARD_HIDDEN /
  *   KEYGUARD_SHOWN and SCREEN_INTERACTIVE / SCREEN_NON_INTERACTIVE for every
  *   app with usage access. It fills in history from before the admin was
@@ -287,8 +289,9 @@ object UnlockLedger {
             .putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 "Lets Clairix keep a record of every time this phone is unlocked, fails to unlock, or has its " +
-                    "PIN changed — so you can see whether it was used while you slept. Clairix never locks, " +
-                    "wipes or sets a password policy with this."
+                    "PIN changed — so you can see whether it was used while you slept. The one other thing " +
+                    "Clairix does with it is lock the screen when you press \"Schedule and lock\" on the Fake " +
+                    "call page; it never wipes or sets a password policy."
             )
 
     // ── Usage access ────────────────────────────────────────────────────────

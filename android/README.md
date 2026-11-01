@@ -223,13 +223,15 @@ a release build fails without the public key file.
 |---|---|
 | Nearby devices (`BLUETOOTH_SCAN`) | The scan itself |
 | Precise location | Android requires it for BLE scanning and for reading your own modem's serving cell (the IMSI-catcher checks), and this app genuinely uses the fix — it is what proves a device travelled with you |
-| Notifications | The one alert that matters, when something crosses into confirmed-following |
+| Notifications | The one alert that matters, when something crosses into confirmed-following; and the fake call's incoming-call card, which opens its screen over the lock screen |
 | Foreground service | Scanning has to continue while the screen is off, or it never accumulates enough evidence |
 | Wi-Fi state | Reads the system's existing scan results; the app never triggers a Wi-Fi scan of its own |
 | NFC | The passive HF tag sweep on the NFC tab |
 | Background location | Optional, requested only from Settings → "Resume scanning after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning simply waits until you open the app |
 
-Declining notifications costs you the alert, not the detector — scanning still runs.
+Declining notifications costs you the alert and the fake call (its page says so, and
+schedules nothing until notifications and full-screen calls are allowed), not the
+detector — scanning still runs.
 
 Detection data stays on the phone, sealed on disk under a key in the phone's
 secure hardware. The app's network connections are: the Clairix relay (Comms,

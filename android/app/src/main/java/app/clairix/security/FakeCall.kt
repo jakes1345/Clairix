@@ -6,16 +6,23 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
+import android.app.admin.DeviceAdminInfo
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
@@ -57,9 +64,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.clairix.CallActivity
 import app.clairix.comms.CallManager
+import app.clairix.comms.CommsNotifications
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.formatClairixNumber
 import kotlinx.coroutines.delay
@@ -73,6 +82,23 @@ import java.util.Locale
  * pretend call (a timer and an end button, so the owner can talk to nobody)
  * or, when a contact's Clairix number was given, places a real encrypted call
  * to them through [CallManager].
+ *
+ * The ring does not depend on any screen opening. The alarm starts
+ * [FakeCallRingService], a short foreground service whose notification is the
+ * incoming-call card (its full-screen intent opens [FakeCallActivity] over a
+ * locked or dark screen); the service rings through [FakeCallRinger], which
+ * holds a wake lock and ends the ring after [RING_MS]. The screen rings through
+ * the same [FakeCallRinger], so whichever comes second adds nothing and the call
+ * never sounds twice. When Android will not let the service start from the
+ * background (no exact-alarm permission, so the alarm was inexact), or Clairix
+ * cannot play the ringtone, the card itself rings instead: it goes out on
+ * [CHANNEL_RINGTONE], whose sound is the phone's ringtone, repeated until the
+ * card goes. Answer, decline and the page's Cancel all end the ring through
+ * [stopRinging].
+ *
+ * What a ring needs is [readiness]: notifications and full-screen calls allowed
+ * (the page schedules nothing without them), and exact alarms for a ring on the
+ * second from the background.
  */
 object FakeCall {
 
@@ -86,7 +112,21 @@ object FakeCall {
     private const val KEY_PENDING_CONTACT = "pending_contact"
     private const val KEY_PENDING_AT = "pending_at"
 
-    const val CHANNEL = "fake_call"
+    /**
+     * The call card while Clairix rings the call itself: no sound of its own, so
+     * the ringtone is heard once, plus the standard vibration, which survives
+     * Android muting the app's own.
+     */
+    const val CHANNEL = "incoming_call"
+    /**
+     * The call card when Clairix cannot ring the call itself: the sound is the
+     * phone's ringtone, repeated ([Notification.FLAG_INSISTENT]) until the card
+     * goes. Channel settings are fixed once a channel exists, so the sound has a
+     * channel of its own, and the old silent "fake_call" channel, whose name and
+     * description gave the feature away, is deleted rather than changed.
+     */
+    const val CHANNEL_RINGTONE = "incoming_call_ringtone"
+    private const val OLD_CHANNEL = "fake_call"
     const val NOTIFICATION_ID = 0x5D00_0001
     private const val ALARM_REQUEST = 0x5D00_0002
 
@@ -95,6 +135,14 @@ object FakeCall {
     const val ACTION_ANSWER = "app.clairix.FAKE_CALL_ANSWER"
     const val ACTION_DECLINE = "app.clairix.FAKE_CALL_DECLINE"
     const val EXTRA_CONTACT = "app.clairix.FAKE_CALL_CONTACT"
+
+    /** How long the phone rings, as a real call does, before the call is "missed". */
+    internal const val RING_MS = 45_000L
+    /**
+     * A moment longer than the ring: how long the quiet card lasts should nothing
+     * take it down, and how long the ring's wake lock may be held at most.
+     */
+    internal const val CARD_TIMEOUT_MS = RING_MS + 5_000L
 
     /** Who the screen says is calling. */
     data class Caller(val name: String, val number: String?)
@@ -112,12 +160,13 @@ object FakeCall {
     /**
      * Rings in [delayMs]. [contactNumber], when given, is the Clairix number of the
      * contact to really call if the owner answers. Uses an exact, idle-proof alarm
-     * when the owner has allowed exact alarms; otherwise an inexact one, which for
-     * these short delays with the screen on fires on time in practice.
+     * when the owner has allowed exact alarms; otherwise an inexact one, which can
+     * land late while the phone is idle and then usually rings through the card's
+     * own sound (see [ring]).
      */
     fun schedule(context: Context, delayMs: Long, contactNumber: String?) {
         val app = context.applicationContext
-        ensureChannel(app)
+        ensureChannels(app)
         val at = System.currentTimeMillis() + delayMs.coerceAtLeast(1_000L)
         prefs(app).edit().putString(KEY_PENDING_CONTACT, contactNumber).putLong(KEY_PENDING_AT, at).apply()
         val am = app.getSystemService(AlarmManager::class.java) ?: return
@@ -129,12 +178,12 @@ object FakeCall {
         }
     }
 
-    /** Cancels a scheduled call and dismisses one that is ringing. */
+    /** Cancels a scheduled call, and ends one that is ringing. */
     fun cancel(context: Context) {
         val app = context.applicationContext
         app.getSystemService(AlarmManager::class.java)?.cancel(alarmIntent(app, null))
         prefs(app).edit().remove(KEY_PENDING_CONTACT).remove(KEY_PENDING_AT).apply()
-        app.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        stopRinging(app)
     }
 
     /** When the pending fake call will ring, or null when none is scheduled. */
@@ -154,15 +203,175 @@ object FakeCall {
         }
     }
 
+    // ── What a ring needs ─────────────────────────────────────────────────────
+
+    /** What can stand between a scheduled call and a phone that rings with its call screen; see [readiness]. */
+    enum class Missing {
+        /** Notifications are off for Clairix: no card, no call screen, no banner. */
+        NOTIFICATIONS,
+        /** A call channel was switched off or set to silent: no call screen, or a card that rings silently. */
+        CALL_CHANNEL,
+        /** Full-screen calls are not allowed (Android 14 on): a locked phone shows a notification only. */
+        FULL_SCREEN,
+        /** Exact alarms are not allowed: the ring can be late while the phone is idle. */
+        EXACT_ALARMS
+    }
+
+    /** The Fake call page's decision: what is missing, and whether a call may be scheduled at all. */
+    data class Readiness(val missing: List<Missing>) {
+        /** Notifications and full-screen calls both allowed: the page schedules nothing otherwise. */
+        val canSchedule: Boolean get() = Missing.NOTIFICATIONS !in missing && Missing.FULL_SCREEN !in missing
+        /** Exact alarms allowed: the ring lands on the second, phone idle or not. */
+        val ringsOnTime: Boolean get() = Missing.EXACT_ALARMS !in missing
+    }
+
+    /** The decision from the four facts alone, missing ones in the order the page shows them. */
+    fun readiness(canPost: Boolean, channelsOk: Boolean, canUseFullScreen: Boolean, canScheduleExactly: Boolean): Readiness =
+        Readiness(
+            buildList {
+                if (!canPost) add(Missing.NOTIFICATIONS)
+                if (!channelsOk) add(Missing.CALL_CHANNEL)
+                if (!canUseFullScreen) add(Missing.FULL_SCREEN)
+                if (!canScheduleExactly) add(Missing.EXACT_ALARMS)
+            }
+        )
+
+    /** The same checks real calls get in Comms settings, read from the phone now. */
+    fun readiness(context: Context): Readiness = readiness(
+        canPost = CommsNotifications.canPost(context),
+        channelsOk = silencedChannel(context) == null,
+        canUseFullScreen = CommsNotifications.canUseFullScreen(context),
+        canScheduleExactly = canScheduleExactly(context)
+    )
+
     /**
-     * Rings now: posts the full-screen call notification (which opens
-     * [FakeCallActivity] over a locked or dark screen) and, when Clairix is allowed
-     * to, opens the screen directly as well.
+     * The first call channel the owner (or a phone's notification manager) has
+     * switched off or set to silent, or null when both still alert. A quiet card
+     * on a silenced channel neither pops up nor opens the call screen; a ringing
+     * card on one makes no sound.
+     */
+    private fun silencedChannel(context: Context): String? {
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return null
+        ensureChannels(context.applicationContext)
+        return listOf(CHANNEL, CHANNEL_RINGTONE).firstOrNull { id ->
+            nm.getNotificationChannel(id)?.let { it.importance < NotificationManager.IMPORTANCE_HIGH } == true
+        }
+    }
+
+    /** Opens the system settings of the silenced call channel. */
+    fun openChannelSettings(context: Context) {
+        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, silencedChannel(context) ?: CHANNEL)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+            .onFailure { CommsNotifications.openAppNotificationSettings(context) }
+    }
+
+    // ── The ring's rules ──────────────────────────────────────────────────────
+
+    /**
+     * Whether Clairix itself has the ring in hand, so the card must stay quiet:
+     * the ringtone is playing, or the ringer mode wants no ringtone (vibrate:
+     * Clairix vibrates; silent: nothing sounds at all). Otherwise the card rings
+     * with the ringtone as its own sound. One or the other, never both.
+     */
+    fun ringsItself(ringerMode: Int, ringtonePlaying: Boolean): Boolean =
+        ringerMode != AudioManager.RINGER_MODE_NORMAL || ringtonePlaying
+
+    /**
+     * How much longer a ring that began at [startedAt] runs at [now]: the rest of
+     * [RING_MS], never negative, and the whole of it should the clock have moved
+     * back. The call screen's timer and the ringer's agree on the moment the
+     * call is missed.
+     */
+    fun ringRemaining(startedAt: Long, now: Long): Long = (startedAt + RING_MS - now).coerceIn(0L, RING_MS)
+
+    // ── Schedule and lock ─────────────────────────────────────────────────────
+
+    /**
+     * Whether "Schedule and lock" can lock the phone: Clairix's device admin (the
+     * unlock ledger's, [UnlockLedger.adminComponent]) is active and was approved
+     * with the force-lock policy. An admin approved before that policy was asked
+     * for keeps feeding the ledger but cannot lock until it is approved again.
+     */
+    fun canLock(context: Context): Boolean = runCatching {
+        val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return false
+        val admin = UnlockLedger.adminComponent(context)
+        dpm.isAdminActive(admin) && dpm.hasGrantedPolicy(admin, DeviceAdminInfo.USES_POLICY_FORCE_LOCK)
+    }.getOrDefault(false)
+
+    /** Locks the phone now, where [canLock]; returns whether it did. */
+    fun lockNow(context: Context): Boolean {
+        if (!canLock(context)) return false
+        val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return false
+        return runCatching { dpm.lockNow() }.isSuccess
+    }
+
+    // ── Ringing ───────────────────────────────────────────────────────────────
+
+    /**
+     * Rings now. Starts the ring in [FakeCallRinger] (its wake lock and its
+     * [RING_MS] timer) and [FakeCallRingService], which posts the call card as
+     * its foreground notification and plays the ringtone. An exact alarm lets the
+     * service start from the background; after an inexact one Android refuses,
+     * and the card goes out ringing with its own sound instead. Opens the screen
+     * directly as well where Clairix is allowed to (in the foreground, or just
+     * out of it).
      */
     fun ring(context: Context, contactNumber: String?) {
         val app = context.applicationContext
-        ensureChannel(app)
+        ensureChannels(app)
         prefs(app).edit().remove(KEY_PENDING_AT).apply()
+        // A card left from an earlier call would make this one an update, which
+        // does not pop up or ring; a ring still under way keeps its card.
+        if (!FakeCallRinger.isRinging) app.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        FakeCallRinger.begin(app)
+        val service = Intent(app, FakeCallRingService::class.java).putExtra(EXTRA_CONTACT, contactNumber)
+        // ForegroundServiceStartNotAllowedException from the background without an
+        // exact alarm's exemption; null where the service is not declared.
+        val serviceStarted = runCatching { app.startForegroundService(service) != null }.getOrDefault(false)
+        if (!serviceStarted) {
+            FakeCallRinger.handToCard()
+            postRingtoneCard(app, contactNumber)
+        }
+        runCatching {
+            app.startActivity(
+                Intent(app, FakeCallActivity::class.java).setAction(ACTION_SHOW).putExtra(EXTRA_CONTACT, contactNumber)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            )
+        }
+    }
+
+    /**
+     * Ends the ring wherever it sounds and takes the card down. The service and
+     * the call screen hold listeners on [FakeCallRinger], so they end with it:
+     * the service leaves the foreground and stops itself (never stopService(),
+     * which could beat its startForeground() and get the app killed), and an
+     * unanswered screen closes.
+     */
+    internal fun stopRinging(context: Context) {
+        FakeCallRinger.stop()
+        context.applicationContext.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+    }
+
+    /** Posts the card that rings with its own sound. A no-op without notifications; never throws. */
+    internal fun postRingtoneCard(context: Context, contactNumber: String?) {
+        val app = context.applicationContext
+        if (!CommsNotifications.canPost(app)) return
+        runCatching { app.getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, card(app, contactNumber, ringtone = true)) }
+    }
+
+    /**
+     * The incoming-call card. With [ringtone] it goes out on [CHANNEL_RINGTONE]
+     * and repeats that channel's sound and vibration until it is cancelled, for
+     * [RING_MS] at most even with Clairix gone; without, on [CHANNEL], quiet
+     * apart from the channel's vibration. Either alerts once only: posting it
+     * again (a second start of the service) changes nothing that is heard.
+     */
+    internal fun card(context: Context, contactNumber: String?, ringtone: Boolean): Notification {
+        val app = context.applicationContext
+        ensureChannels(app)
         val who = caller(app)
         val show = screenIntent(app, ACTION_SHOW, contactNumber, 1)
         val answer = screenIntent(app, ACTION_ANSWER, contactNumber, 2)
@@ -172,7 +381,7 @@ object FakeCall {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val person = Person.Builder().setName(who.name).setImportant(true).build()
-        val n = NotificationCompat.Builder(app, CHANNEL)
+        val n = NotificationCompat.Builder(app, if (ringtone) CHANNEL_RINGTONE else CHANNEL)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Incoming call")
             .setContentText(who.name)
@@ -181,25 +390,31 @@ object FakeCall {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
             .setContentIntent(show)
             .setFullScreenIntent(show, true)
-            .setTimeoutAfter(RING_MS + 5_000L)
+            .setTimeoutAfter(if (ringtone) RING_MS else CARD_TIMEOUT_MS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
-        if (ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-            app.getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, n)
-        }
-        // Allowed only while Clairix is in the foreground (or just left it); the
-        // full-screen intent above covers the rest.
-        runCatching {
-            app.startActivity(
-                Intent(app, FakeCallActivity::class.java).setAction(ACTION_SHOW).putExtra(EXTRA_CONTACT, contactNumber)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            )
-        }
+        if (ringtone) n.flags = n.flags or Notification.FLAG_INSISTENT
+        return n
     }
 
-    internal const val RING_MS = 45_000L
+    /**
+     * What [FakeCallRingService] shows when it starts after its ring has already
+     * ended (declined or cancelled in the moment before): a service started in
+     * the foreground must go foreground before it may stop, or Android kills the
+     * app. Silent, with no full-screen intent; removed at once.
+     */
+    internal fun endedPlaceholder(context: Context): Notification {
+        ensureChannels(context.applicationContext)
+        return NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(android.R.drawable.sym_action_call)
+            .setContentTitle("Call ended")
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .build()
+    }
 
     private fun screenIntent(app: Context, action: String, contact: String?, code: Int): PendingIntent =
         PendingIntent.getActivity(
@@ -216,16 +431,38 @@ object FakeCall {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-    private fun ensureChannel(app: Context) {
+    /**
+     * The two call channels, named and described like any app's call channels
+     * (and unlike Comms' own "Calls", so the two can be told apart in settings).
+     */
+    private fun ensureChannels(app: Context) {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return
+        runCatching { nm.deleteNotificationChannel(OLD_CHANNEL) }
+        val cadence = longArrayOf(0, 800, 1200, 800, 1200)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Incoming calls (safety)", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Rings for a call you scheduled as a way out of a situation"
-                // The screen plays the phone's own ringtone; the channel adds vibration
+            NotificationChannel(CHANNEL, "Call screen", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Shows a ringing call over the lock screen"
+                // Clairix plays the phone's own ringtone; the channel adds vibration
                 // that survives Android muting the app's own.
                 setSound(null, null)
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 800, 1200, 800, 1200)
+                vibrationPattern = cadence
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_RINGTONE, "Call ringtone", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Rings with the phone's ringtone when Clairix cannot play it itself"
+                // The phone's default ringtone, whichever it is when the call rings.
+                setSound(
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                enableVibration(true)
+                vibrationPattern = cadence
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
         )
@@ -244,6 +481,185 @@ class FakeCallReceiver : BroadcastReceiver() {
     }
 }
 
+/**
+ * The ring itself: the one handle the service, the call screen and the card's
+ * buttons share. [begin] marks a ring as under way, holds a partial wake lock
+ * and arms the [FakeCall.RING_MS] timer; [start] adds the phone's actual
+ * default ringtone, looping, and the standard vibration cadence, both
+ * honouring the ringer mode, and does nothing more for a ring already sounding,
+ * so a call never rings twice; [handToCard] leaves the sound to a card that
+ * rings with its own; [stop] ends it all and tells whoever listens. Main thread
+ * only.
+ */
+internal object FakeCallRinger {
+    private val handler = Handler(Looper.getMainLooper())
+    private var ringtone: Ringtone? = null
+    private var vibrator: Vibrator? = null
+    private var wake: PowerManager.WakeLock? = null
+    private var timeout: Runnable? = null
+    private val stopListeners = mutableListOf<() -> Unit>()
+
+    /** Wall-clock time the current ring began, or null while none is under way. */
+    @Volatile
+    var startedAt: Long? = null
+        private set
+
+    val isRinging: Boolean get() = startedAt != null
+
+    /** Set once the card rings with its own sound; Clairix then stays quiet until the ring ends. */
+    var cardRings: Boolean = false
+        private set
+
+    /** Marks a ring as begun at [now], unless one is under way. */
+    fun begin(context: Context, now: Long = System.currentTimeMillis()) {
+        if (startedAt != null) return
+        val app = context.applicationContext
+        startedAt = now
+        wake = app.getSystemService(PowerManager::class.java)
+            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:fake-call")
+            ?.apply { setReferenceCounted(false); acquire(FakeCall.CARD_TIMEOUT_MS) }
+        timeout = Runnable { FakeCall.stopRinging(app) }.also { handler.postDelayed(it, FakeCall.RING_MS) }
+    }
+
+    /**
+     * Rings: begins the ring if need be, then plays the ringtone and vibrates
+     * unless they already are. Returns [FakeCall.ringsItself]: true when the
+     * sound is in Clairix's hands, false when the card should ring instead (no
+     * ringtone could be played, or the card already has the sound).
+     */
+    fun start(context: Context, now: Long = System.currentTimeMillis()): Boolean {
+        begin(context, now)
+        if (cardRings) return false
+        val app = context.applicationContext
+        val mode = app.getSystemService(AudioManager::class.java)?.ringerMode ?: AudioManager.RINGER_MODE_NORMAL
+        if (mode == AudioManager.RINGER_MODE_NORMAL && ringtone == null) {
+            val uri = RingtoneManager.getActualDefaultRingtoneUri(app, RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ringtone = runCatching {
+                RingtoneManager.getRingtone(app, uri)?.apply {
+                    audioAttributes = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    isLooping = true
+                    play()
+                }
+            }.getOrNull()
+        }
+        if (mode != AudioManager.RINGER_MODE_SILENT && vibrator == null) {
+            vibrator = app.getSystemService(VibratorManager::class.java)?.defaultVibrator?.takeIf { it.hasVibrator() }?.also {
+                val pattern = VibrationEffect.createWaveform(longArrayOf(0, 800, 1200), 0)
+                // Tagged as a ringtone: Android drops untagged vibration from an app
+                // that is not in the foreground, which is how this call arrives.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    it.vibrate(pattern, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    it.vibrate(pattern, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build())
+                }
+            }
+        }
+        return FakeCall.ringsItself(mode, ringtone != null)
+    }
+
+    /** Leaves the sound to the card: Clairix's ringtone and vibration stop, the ring and its timer go on. */
+    fun handToCard() {
+        silence()
+        cardRings = true
+    }
+
+    /** [listener] runs once, when the current ring ends. */
+    fun addStopListener(listener: () -> Unit) {
+        if (listener !in stopListeners) stopListeners += listener
+    }
+
+    fun removeStopListener(listener: () -> Unit) {
+        stopListeners -= listener
+    }
+
+    fun stop() {
+        timeout?.let { handler.removeCallbacks(it) }
+        timeout = null
+        silence()
+        wake?.let { runCatching { if (it.isHeld) it.release() } }
+        wake = null
+        startedAt = null
+        cardRings = false
+        val listeners = stopListeners.toList()
+        stopListeners.clear()
+        listeners.forEach { it() }
+    }
+
+    private fun silence() {
+        runCatching { ringtone?.stop() }
+        ringtone = null
+        runCatching { vibrator?.cancel() }
+        vibrator = null
+    }
+}
+
+/**
+ * Rings a [FakeCall] from the background: a short foreground service (no type
+ * permission and no prerequisites; its three minutes are far more than the
+ * 45 s ring needs) whose foreground notification is the incoming-call card.
+ * Started by the alarm through [FakeCall.ring]; ends with the ring, through a
+ * listener on [FakeCallRinger] — answer, decline, the page's Cancel, or the
+ * ring's own timer.
+ */
+class FakeCallRingService : Service() {
+
+    private val onRingStopped: () -> Unit = { leave() }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val contact = intent?.getStringExtra(FakeCall.EXTRA_CONTACT)
+        // A ring ended in the moment between the alarm and here still owes
+        // Android a startForeground() before this service may stop.
+        val due = FakeCallRinger.isRinging
+        val ringsItself = due && FakeCallRinger.start(this)
+        if (due && !ringsItself) FakeCallRinger.handToCard()
+        val notification = if (due) FakeCall.card(this, contact, ringtone = !ringsItself) else FakeCall.endedPlaceholder(this)
+        val inForeground = runCatching {
+            ServiceCompat.startForeground(this, FakeCall.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE)
+        }.isSuccess
+        if (!inForeground) {
+            // Refused after all: the card alone, ringing with its own sound.
+            if (due) {
+                FakeCallRinger.handToCard()
+                FakeCall.postRingtoneCard(this, contact)
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (FakeCallRinger.isRinging) FakeCallRinger.addStopListener(onRingStopped) else leave()
+        return START_NOT_STICKY
+    }
+
+    /** Android 14: the short service's time is up. It never is (the ring ends at 45 s); ending is all that is left. */
+    override fun onTimeout(startId: Int) {
+        FakeCall.stopRinging(this)
+        leave()
+    }
+
+    /** Android 15 on: the same, told with the service's type. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        FakeCall.stopRinging(this)
+        leave()
+    }
+
+    private fun leave() {
+        FakeCallRinger.removeStopListener(onRingStopped)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        FakeCallRinger.removeStopListener(onRingStopped)
+        super.onDestroy()
+    }
+}
+
 // The decoy deliberately does not wear the Clairix look: it copies a stock call
 // screen, in Material's default type and the fixed DecoyCallPalette, so that a
 // glance over the shoulder sees an ordinary incoming call whatever theme is set.
@@ -256,16 +672,20 @@ private val FcAvatar = DecoyCallPalette.Avatar
 
 /**
  * The incoming-call screen of a [FakeCall]. Shows over the lock screen and turns
- * the display on; excluded from recents so nothing is left behind. Plays the
- * phone's actual default ringtone and vibrates in the standard cadence, both
- * honouring the ringer mode, until answered, declined or [FakeCall.RING_MS] pass.
+ * the display on; excluded from recents so nothing is left behind. Rings through
+ * [FakeCallRinger], the ringer the service uses, so a screen that comes up to a
+ * call already ringing adds nothing to it, and one that is first (Clairix in the
+ * foreground) plays the phone's actual default ringtone and vibrates in the
+ * standard cadence, both honouring the ringer mode. The ring ending anywhere —
+ * declined on the card, timed out after [FakeCall.RING_MS], cancelled — closes
+ * the screen unless the call was answered.
  */
 class FakeCallActivity : ComponentActivity() {
 
-    private var ringtone: Ringtone? = null
-    private var vibrator: Vibrator? = null
-    private var wake: PowerManager.WakeLock? = null
     private var contactNumber: String? = null
+    /** Answered, on this screen or with the card's Answer button; kept across a configuration change. */
+    private val answered = mutableStateOf(false)
+    private val onRingStopped: () -> Unit = { if (!answered.value) finish() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -273,17 +693,22 @@ class FakeCallActivity : ComponentActivity() {
         setTurnScreenOn(true)
         contactNumber = intent?.getStringExtra(FakeCall.EXTRA_CONTACT)
         val who = FakeCall.caller(this)
-        val answerNow = intent?.action == FakeCall.ACTION_ANSWER
-        if (!answerNow) startRinging()
+        answered.value = savedInstanceState?.getBoolean(STATE_ANSWERED) ?: (intent?.action == FakeCall.ACTION_ANSWER)
+        FakeCallRinger.addStopListener(onRingStopped)
+        // A screen recreated by a configuration change finds the ring where it left it.
+        if (!answered.value && savedInstanceState == null) startRinging()
+        // What is left of the ring, which the service may have begun before this screen came up.
+        val now = System.currentTimeMillis()
+        val remaining = FakeCall.ringRemaining(FakeCallRinger.startedAt ?: now, now)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = FcGround, surface = FcGround)) {
                 Surface(color = FcGround, modifier = Modifier.fillMaxSize()) {
-                    var answered by remember { mutableStateOf(answerNow) }
-                    LaunchedEffect(answered) { if (answered) onAnswer() }
-                    if (!answered) {
-                        LaunchedEffect(Unit) { delay(FakeCall.RING_MS); dismiss() }
-                        Ringing(who, onDecline = { dismiss() }, onAnswer = { answered = true })
+                    val isAnswered by answered
+                    LaunchedEffect(isAnswered) { if (isAnswered) onAnswer() }
+                    if (!isAnswered) {
+                        LaunchedEffect(Unit) { delay(remaining); dismiss() }
+                        Ringing(who, onDecline = { dismiss() }, onAnswer = { answered.value = true })
                     } else {
                         InCall(who, onEnd = { dismiss() })
                     }
@@ -295,7 +720,17 @@ class FakeCallActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action == FakeCall.ACTION_ANSWER) { stopRinging(); onAnswer() }
+        // The card's Answer button with this screen already up: the same as Answer
+        // here. Marked answered first, so the ring ending does not close the screen.
+        if (intent.action == FakeCall.ACTION_ANSWER) {
+            answered.value = true
+            stopRinging()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_ANSWERED, answered.value)
     }
 
     /**
@@ -306,7 +741,6 @@ class FakeCallActivity : ComponentActivity() {
      */
     private fun onAnswer() {
         stopRinging()
-        getSystemService(NotificationManager::class.java)?.cancel(FakeCall.NOTIFICATION_ID)
         val number = contactNumber ?: return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
         runCatching { CommsRepository.init(applicationContext) }
@@ -321,59 +755,31 @@ class FakeCallActivity : ComponentActivity() {
 
     private fun dismiss() {
         stopRinging()
-        getSystemService(NotificationManager::class.java)?.cancel(FakeCall.NOTIFICATION_ID)
         finish()
     }
 
+    /**
+     * Rings through [FakeCallRinger], which the service may already be driving.
+     * Should no ringtone play here either, the card takes the sound, as it would
+     * for the service.
+     */
     private fun startRinging() {
-        if (wake == null) {
-            wake = getSystemService(PowerManager::class.java)
-                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:fake-call")
-                ?.apply { setReferenceCounted(false); acquire(FakeCall.RING_MS + 5_000L) }
-        }
-        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val mode = audio.ringerMode
-        if (mode == AudioManager.RINGER_MODE_NORMAL && ringtone == null) {
-            val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            ringtone = runCatching {
-                RingtoneManager.getRingtone(this, uri)?.apply {
-                    audioAttributes = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                    isLooping = true
-                    play()
-                }
-            }.getOrNull()
-        }
-        if (mode != AudioManager.RINGER_MODE_SILENT && vibrator == null) {
-            val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vibrator = vm.defaultVibrator.also {
-                if (!it.hasVibrator()) return@also
-                val pattern = VibrationEffect.createWaveform(longArrayOf(0, 800, 1200), 0)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    it.vibrate(pattern, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE))
-                } else {
-                    @Suppress("DEPRECATION")
-                    it.vibrate(pattern, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build())
-                }
-            }
-        }
+        if (FakeCallRinger.start(this) || FakeCallRinger.cardRings) return
+        FakeCallRinger.handToCard()
+        FakeCall.postRingtoneCard(this, contactNumber)
     }
 
-    private fun stopRinging() {
-        runCatching { ringtone?.stop() }
-        ringtone = null
-        runCatching { vibrator?.cancel() }
-        vibrator = null
-        wake?.let { runCatching { if (it.isHeld) it.release() } }
-        wake = null
-    }
+    /** Ends the ring wherever it sounds and takes the card down. */
+    private fun stopRinging() = FakeCall.stopRinging(this)
 
     override fun onDestroy() {
-        stopRinging()
+        FakeCallRinger.removeStopListener(onRingStopped)
+        if (!isChangingConfigurations) stopRinging()
         super.onDestroy()
+    }
+
+    private companion object {
+        const val STATE_ANSWERED = "answered"
     }
 }
 
