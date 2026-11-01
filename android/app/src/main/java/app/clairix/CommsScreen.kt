@@ -537,6 +537,7 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 )
                 GhostButton("Use a relay URL and secret instead", onClick = { onInvite(null) }, tone = Tone.Neutral)
             }
+            Notice(Tone.Caution, NO_CLOUD_BACKUP, title = "No cloud backup")
             Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
             Spacer(Modifier.height(16.dp))
             return@Column
@@ -640,6 +641,9 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        Notice(Tone.Caution, NO_CLOUD_BACKUP, title = "No cloud backup")
+        RestoreFromFileCard()
 
         Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
 
@@ -2483,7 +2487,7 @@ private fun MyCodeScreen(onBack: () -> Unit) {
             ClairixCard {
                 Text("Identity key", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(myKey, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
-                Text("Generated on this phone; the private half never leaves it. A reinstall makes a new identity and a new number.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                Text("Generated on this phone; the private half leaves it only inside a recovery file you save yourself (Comms settings). A reinstall makes a new identity and a new number, unless you restore a recovery file at setup.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -2547,7 +2551,8 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             text = {
                 Text(
                     "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
-                        "Registering again gives a different number; contacts will have to add you afresh.",
+                        "Registering again gives a different number; contacts will have to add you afresh. A recovery file " +
+                        "saved earlier still brings back these keys, contacts and groups, under a new number that contacts are told.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -2736,6 +2741,8 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 enabled = !state.busy
             )
         }
+
+        RecoveryFileCard()
 
         BlockedCard(onOpen = onOpenThread)
 

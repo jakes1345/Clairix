@@ -470,6 +470,38 @@ test("the one-time key pool holds 500", async () => {
   assert.equal(await bob.oneTimeKeys(), 500);
 });
 
+test("a phone restored from a recovery file makes its new keys the whole pool", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay, { oneTimeKeys: 5 });
+  // Alice holds a claim on one of the old phone's keys and has not written yet.
+  const claimed = (await alice.bundle(bob.number)).json.bundle;
+  assert.ok(claimed.oneTimeKey && !claimed.oneTimeKey.id.startsWith("restored-"));
+  const fresh = [await bob.signedKey("restored-1"), await bob.signedKey("restored-2"), await bob.signedKey("restored-3")];
+  const res = await bob.signed("PUT", "/v1/keys", { oneTimeKeys: fresh, replace: true });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.oneTimeKeys, 3);
+  // The claim's window passes: the old key is not put back in the pool.
+  advance(OTK_CLAIM_WINDOW_MS + 1);
+  assert.equal(await bob.oneTimeKeys(), 3);
+  // Whoever looks Bob up now gets one of the new keys, never an old one.
+  for (let i = 0; i < 3; i++) {
+    const asker = await makePhone(relay);
+    const k = (await asker.bundle(bob.number)).json.bundle.oneTimeKey;
+    assert.ok(k.id.startsWith("restored-"), `an old key ${k.id} was handed out after the restore`);
+  }
+  // Alice's late send on the old key is still taken, and spends none of the new ones.
+  advance(OTK_CLAIM_WINDOW_MS + 1);
+  const [token] = await alice.tokens(1);
+  assert.equal((await alice.send(token, bob.number, "AAAA", claimed.claim)).status, 202);
+  assert.equal(await bob.oneTimeKeys(), 3);
+  // Without replace (every app before recovery files) keys are added, as before.
+  const added = await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [await bob.signedKey("restored-4")] });
+  assert.equal(added.json.oneTimeKeys, 4);
+  // replace must be a boolean.
+  assert.equal((await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [], replace: "yes" })).status, 400);
+});
+
 // ── TURN ───────────────────────────────────────────────────────────────────
 
 test("every /v1/turn call gets credentials minted for it alone", async () => {

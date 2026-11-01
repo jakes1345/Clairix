@@ -228,6 +228,18 @@ class CommsConfig(context: Context) {
 
     fun setPreviousEmptied(ts: Long) { prefs.edit().putLong(KEY_PREVIOUS_EMPTIED, ts).apply() }
 
+    /**
+     * This phone came back from a recovery file under a new number (its old
+     * mailbox was gone): the date the move notices to its contacts carry.
+     * There is no previous mailbox to empty, so none is recorded.
+     */
+    fun setMovedAt(movedAt: Long) { prefs.edit().putLong(KEY_MOVED_AT, movedAt).apply() }
+
+    /** When the owner last saved a recovery file from this phone; 0 if never. The file itself is theirs, wherever they put it. */
+    val recoverySavedAt: Long get() = prefs.getLong(KEY_RECOVERY_SAVED, 0L)
+
+    fun setRecoverySavedAt(ts: Long) { prefs.edit().putLong(KEY_RECOVERY_SAVED, ts).apply() }
+
     fun forgetPreviousRelay() {
         prefs.edit().remove(KEY_PREVIOUS_RELAY).remove(KEY_PREVIOUS_NUMBER).remove(KEY_PREVIOUS_EMPTIED).apply()
     }
@@ -277,6 +289,7 @@ class CommsConfig(context: Context) {
         const val KEY_PASS = "pass_key"
         const val KEY_PASS_PUBLISHED = "pass_published"
         const val KEY_PASS_CREATED = "pass_created"
+        const val KEY_RECOVERY_SAVED = "recovery_saved_at"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

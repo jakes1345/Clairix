@@ -5,7 +5,7 @@
 1. Open Clairix and tap the gear at the top right for **Settings**.
 2. Under **Wipe and delete**, tap **Delete identity and number** and confirm.
 
-The same button is at the bottom of **Comms → Settings**. Clairix asks the relay to delete your account, unregisters push, and then removes your identity keys, contacts and message history from the phone. If the relay cannot be reached, the request waits on the phone and is tried again for up to a day, as it is after a wipe (below). You can register again later, but you will get a new Clairix number and your contacts will need to add you again.
+The same button is at the bottom of **Comms → Settings**. Clairix asks the relay to delete your account, unregisters push, and then removes your identity keys, contacts and message history from the phone. If the relay cannot be reached, the request waits on the phone and is tried again for up to a day, as it is after a wipe (below). You can register again later, but you will get a new Clairix number and your contacts will need to add you again, unless you restore a recovery file saved before (Restore from file at Comms setup), which brings back your keys, contacts and groups and tells your contacts the new number.
 
 ### Delete everything Clairix holds (Wipe Clairix)
 

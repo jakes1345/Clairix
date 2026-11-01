@@ -227,7 +227,8 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
         "End-to-end encrypted messages, calls, voicemail and groups. The relay that carries them cannot read them and is not told who sent them.",
         "Add someone with an invite link or by scanning their QR code. If a contact's security key changes, their messages wait " +
             "in a review box until you check. In any conversation or group, Disappearing sets how long after they are read " +
-            "messages are deleted, on both phones. Screenshots are blocked on these screens. The menu (⋮) at the top holds " +
+            "messages are deleted, on both phones. Screenshots are blocked on these screens. " + NO_CLOUD_BACKUP +
+            " Comms settings → Save a recovery file. The menu (⋮) at the top holds " +
             menuList(commsActionsFor(fullAccess).map { it.title }) + ".",
         ClairixIcons.Forum, TourTarget.Tab(HomeTab.COMMS)
     )

@@ -52,6 +52,8 @@ import uniffi.clairix_comms_crypto.CryptoException
 import uniffi.clairix_comms_crypto.PeerKeys
 import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.fingerprint
+import uniffi.clairix_comms_crypto.recoveryCodeGenerate
+import uniffi.clairix_comms_crypto.recoveryCodeNormalize
 import uniffi.clairix_comms_crypto.verify
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -734,6 +736,80 @@ object CommsRepository {
                 "Someone else may have taken over its address: do not register there."
         }
     }
+
+    // ── Recovery file ─────────────────────────────────────────────────────
+
+    /** Makes and restores recovery files; see [RecoveryRestorer]. */
+    private val recovery by lazy {
+        RecoveryRestorer(
+            config, identities, transportKeys, { store }, ::listedKeyProblem,
+            { identity, url, number -> RelayClient({ identity }, { url }, { number }) },
+            ONE_TIME_KEYS_BATCH.toUInt()
+        )
+    }
+
+    /** A new recovery code, shown to the owner once; nothing on the phone keeps it. */
+    fun newRecoveryCode(): String = recoveryCodeGenerate()
+
+    /** Whether [typed] is [code], however it was spaced or cased; false when either is not a recovery code. */
+    fun sameRecoveryCode(code: String, typed: String): Boolean {
+        val expected = recoveryCodeNormalize(code) ?: return false
+        return recoveryCodeNormalize(typed) == expected
+    }
+
+    /**
+     * This phone's recovery file, encrypted under [code]: the identity keys,
+     * the relay and number, contacts with their pinned keys and verification,
+     * groups and rosters (see [RecoveryRecord]); never a message or an Olm
+     * session. Takes about a second (Argon2id).
+     */
+    suspend fun recoveryFile(code: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        runCatching {
+            val record = lock.withLock { recovery.record(System.currentTimeMillis()) }
+            recovery.seal(record, code)
+        }
+    }
+
+    /** The owner saved a recovery file just now (it reached the place they chose). */
+    fun noteRecoverySaved() {
+        if (initialised) config.setRecoverySavedAt(System.currentTimeMillis())
+    }
+
+    /** When a recovery file was last saved from this phone; 0 if never. */
+    fun recoverySavedAt(): Long = if (initialised) config.recoverySavedAt else 0L
+
+    /**
+     * Brings this phone back from a recovery file, at setup: the same keys on
+     * the same relay, under the same number while the old mailbox is there,
+     * else registered again (with [secret] or [invite] if the relay wants
+     * one) under a new number that every contact is told. No session comes
+     * back; each conversation starts a new one.
+     */
+    suspend fun restoreFromFile(file: ByteArray, code: String, secret: String = "", invite: PairingCode? = null): RestoreOutcome =
+        withContext(Dispatchers.IO) {
+            val outcome = lock.withLock {
+                setBusy(true)
+                // What went wrong is the restore card's to say, not the registration form's.
+                recovery.restore(file, code, secret, invite).also { setBusy(false) }
+            }
+            if (outcome is RestoreOutcome.Restored) {
+                publishConfig()
+                CommsLog.add(
+                    "Restored from a recovery file as ${formatClairixNumber(outcome.number)}: ${outcome.contacts} contact(s), ${outcome.groups} group(s)" +
+                        if (outcome.sameNumber) "" else "; the old number was gone, so contacts are being told the new one"
+                )
+                CommsService.start(appContext)
+                runCatching { TlsCanary.start(appContext, runNow = true) }
+                LiveLink.refresh()
+                bump()
+                scope.launch {
+                    topUpTokens()
+                    flushMoveNotices()
+                    sync()
+                }
+            }
+            outcome
+        }
 
     // ── Moving to another relay ───────────────────────────────────────────
 

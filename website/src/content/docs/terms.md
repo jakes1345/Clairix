@@ -16,7 +16,7 @@ You must be at least 18 years old to use the Service. By using it you confirm th
 
 ## 3. Your account
 
-Comms creates an account on the Clairix relay consisting of a random Clairix number and your public keys. There is no password. Your identity key, held on your phone, is the only credential. If you lose the phone or wipe the app, we cannot recover the account, the number or your message history, and we cannot reset anything. Keep your phone and its passcode secure.
+Comms creates an account on the Clairix relay consisting of a random Clairix number and your public keys. There is no password. Your identity key, held on your phone, is the only credential. There is no cloud backup, and we cannot recover the account, the number or your message history for you, or reset anything. If you lose the phone or wipe the app, the account, the number and your contacts are lost unless you saved a recovery file (Comms settings → Save a recovery file), which brings back your keys, number, contacts and groups on a new phone, never your messages. The file and its recovery code are yours to keep: we never see either, and anyone who has both can use your account. Keep your phone, its passcode, and any recovery file and code secure.
 
 You may register through an invite from an existing user. Each account may create a limited number of invites per day. Do not share invites with people you do not know.
 

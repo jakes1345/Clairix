@@ -18,7 +18,9 @@ path = "src/bin/uniffi-bindgen.rs"
 vodozemac = { version = "0.11", features = ["experimental-session-config"] }
 uniffi = { version = "0.32", features = ["cli"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# raw_value: the recovery file copies an account's identity keys out of its
+# pickle without parsing them into values that are never wiped.
+serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
@@ -28,6 +30,9 @@ sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
 zeroize = { version = "1", features = ["derive"] }
+# The recovery file's key derivation (src/recovery.rs): Argon2id from RustCrypto,
+# the family chacha20poly1305 and sha2 above come from, pinned like voprf below.
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "zeroize"] }
 # Blind send tokens: RFC 9497 VOPRF, the same crate and version the relay's
 # comms-worker/voprf builds, so both ends are one implementation.
 voprf = { version = "=0.5.0", default-features = false, features = ["ristretto255-ciphersuite", "alloc"] }

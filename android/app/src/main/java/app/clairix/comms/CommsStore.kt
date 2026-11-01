@@ -739,6 +739,14 @@ class CommsStore(
             if (!c.moveToFirst()) null else runCatching { java.util.Base64.getDecoder().decode(c.getString(0)) }.getOrNull()?.takeIf { it.size == 32 }
         }
 
+    /** Every contact's pass key as they last gave it: number → (key, base64; when they made it). For a recovery file. */
+    fun passes(): Map<String, Pair<String, Long>> =
+        readableDatabase.rawQuery("SELECT number, key, created FROM passes", null).use { c ->
+            val out = HashMap<String, Pair<String, Long>>()
+            while (c.moveToNext()) out[c.getString(0)] = c.getString(1) to c.getLong(2)
+            out
+        }
+
     /** Keeps [key] (made at [created]) as [number]'s pass key unless a newer one is held; returns whether it was kept. */
     fun setPass(number: String, key: ByteArray, created: Long): Boolean {
         val db = beginWrite()
@@ -1239,6 +1247,14 @@ class CommsStore(
     /** The disappearing-messages timer of a conversation (a contact's number or a group id), in seconds; 0 when off. */
     fun timer(peer: String): Int =
         readableDatabase.rawQuery("SELECT ttl FROM timers WHERE peer = ?", arrayOf(peer)).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /** Every conversation's timer: conversation → (seconds, when it was set). For a recovery file. */
+    fun timers(): Map<String, Pair<Int, Long>> =
+        readableDatabase.rawQuery("SELECT peer, ttl, ts FROM timers", null).use { c ->
+            val out = HashMap<String, Pair<Int, Long>>()
+            while (c.moveToNext()) out[c.getString(0)] = c.getInt(1) to c.getLong(2)
+            out
+        }
 
     /**
      * Sets a conversation's timer, as changed at [ts]. A change older than the

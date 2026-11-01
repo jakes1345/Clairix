@@ -26,6 +26,9 @@ complexity:
   # Hoisted state means a parameter for every value and callback.
   LongParameterList:
     functionThreshold: 8
+    # A class that is handed its services (stores, key stores, client
+    # factories) so a test can hand it fakes.
+    constructorThreshold: 8
     ignoreDefaultParameters: true
     ignoreAnnotated: ['Composable']
   # How many functions a file or object holds is organisation, not a defect;

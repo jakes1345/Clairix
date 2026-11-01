@@ -62,15 +62,21 @@ class IdentityStore(context: Context) {
     }
 
     /** Creates and persists a brand-new identity, replacing any existing one. */
-    fun create(): Identity {
+    fun create(): Identity = adopt(Identity.create())
+
+    /**
+     * Makes [given] this phone's identity and persists it under a new pickle
+     * key, replacing any existing one: a brand-new identity, or one brought
+     * back from a recovery file. Throws when it cannot be written.
+     */
+    fun adopt(given: Identity): Identity {
         synchronized(lock) {
-            val fresh = Identity.create()
             val key = randomKey()
             prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()
             pickleKey = key
-            persistLocked(fresh, key)
-            identity = fresh
-            return fresh
+            persistLocked(given, key)
+            identity = given
+            return given
         }
     }
 

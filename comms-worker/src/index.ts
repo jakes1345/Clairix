@@ -127,8 +127,10 @@ export { IncidentCache, Mailbox, Traffic };
  *   GET    /v1/me                                          → profile + key counts, and whether a pass key is set
  *   PUT    /v1/keys            {oneTimeKeys, fallback?, sealingPrekey?} → replenish; a sealing prekey ({key, created, signature},
  *                                                            signed over clairix-sealing-prekey-v1|key|created) replaces
- *                                                            the one held only when newer
- *   PUT    /v1/listed          {listed}
+ *                                                            the one held only when newer; replace: true makes the keys
+ *                                                            given the whole pool (a phone restored from a recovery file,
+ *                                                            whose old keys' secrets went with the old phone)
+ *   PUT    /v1/listed         {listed}
  *   PUT    /v1/pass            {key|null}                  → the key contacts' passes are made with (32 bytes,
  *                                                            base64); the phone shares it only inside end-to-end
  *                                                            encrypted messages
@@ -381,11 +383,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/keys" && request.method === "PUT") {
-    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown; sealingPrekey?: unknown }>(bodyText);
+    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown; sealingPrekey?: unknown; replace?: unknown }>(bodyText);
     const oneTimeKeys = await checkedKeys(profile.ed25519, body.oneTimeKeys);
     const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(profile.ed25519, [body.fallback]))[0] ?? null;
     const sealingPrekey = await checkedSealingPrekey(profile.ed25519, body.sealingPrekey);
-    return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey));
+    if (body.replace !== undefined && typeof body.replace !== "boolean") throw new HttpError(400, "replace must be a boolean");
+    return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey, body.replace === true));
   }
 
   if (path === "/v1/transport" && request.method === "PUT") {

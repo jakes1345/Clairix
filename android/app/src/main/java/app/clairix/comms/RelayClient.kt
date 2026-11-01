@@ -389,12 +389,17 @@ class RelayClient(
     /**
      * Uploads one-time keys and the fallback key, and the current sealing
      * prekey, which the relay takes only when it is newer than the one it holds.
+     * With [replace], the one-time keys given become the relay's whole pool
+     * for this number (a phone restored from a recovery file: the keys the
+     * relay held were the old phone's, and their secrets went with it); a
+     * relay from before recovery files ignores it and adds them.
      */
-    fun putKeys(bundle: PublicBundle): Int {
+    fun putKeys(bundle: PublicBundle, replace: Boolean = false): Int {
         val body = JSONObject()
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
             .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
+            .apply { if (replace) put("replace", true) }
         return signed("PUT", "/v1/keys", body).optInt("oneTimeKeys", 0)
     }
 

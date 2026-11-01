@@ -572,20 +572,38 @@ export class Mailbox extends DurableObject<Env> {
   /**
    * Replaces the fallback key, adds one-time keys, and takes a sealing prekey
    * newer than the one held (an older one, replayed, is ignored).
+   *
+   * With [replace], the keys given are the whole pool: every key held is
+   * dropped first, and keys out on a claim are not put back when their window
+   * passes (their tickets are remembered as lapsed, so a late send still
+   * finds them spent). A phone restored from a recovery file asks for this:
+   * the keys held were made by the phone it replaces, which kept their
+   * secrets, so a contact handed one would write a first message nobody can
+   * read.
    */
-  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null, sealingPrekey: SealingPrekey | null = null): Promise<{ oneTimeKeys: number }> {
+  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null, sealingPrekey: SealingPrekey | null = null, replace = false): Promise<{ oneTimeKeys: number }> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) throw new Error("unregistered");
-    const existing = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
+    const existing = replace ? [] : ((await this.ctx.storage.get<SignedKey[]>("otks")) ?? []);
+    const claims = (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? [];
     // A key already handed out is spent on the owner's phone; offering it again
     // would make the next contact's first message undecryptable.
     const claimed = new Set((await this.ctx.storage.get<string[]>("claimedOtks")) ?? []);
-    for (const c of (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? []) claimed.add(c.key.id);
+    for (const c of claims) claimed.add(c.key.id);
     const known = new Set(existing.map((k) => k.id));
     const merged = existing.concat(oneTimeKeys.filter((k) => !known.has(k.id) && !claimed.has(k.id))).slice(-MAX_ONE_TIME_KEYS);
     if (fallback) profile.fallback = fallback;
     if (sealingPrekey && sealingPrekey.created > (profile.sealingPrekey?.created ?? -1)) profile.sealingPrekey = sealingPrekey;
-    await this.ctx.storage.put({ otks: merged, profile });
+    const writes: Record<string, unknown> = { otks: merged, profile };
+    if (replace && claims.length > 0) {
+      const now = Date.now();
+      writes.claims = [];
+      writes.lapsedClaims = ((await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [])
+        .concat(claims.map((c) => ({ ticket: c.ticket, keyId: c.key.id, at: dayFloor(now) })))
+        .filter((l) => now - l.at < OTK_LAPSED_TICKET_TTL_MS)
+        .slice(-OTK_LAPSED_TICKETS_MAX);
+    }
+    await this.ctx.storage.put(writes);
     return { oneTimeKeys: merged.length };
   }
 

@@ -22,6 +22,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | **P** | An intimate partner or family member with household access: knows or has watched the phone's PIN, handles the phone unlocked, may have installed a monitoring app or placed a tracker, and may make the owner unlock it | Read the lock screen and the notification shade; open any app on the unlocked phone and see which apps are installed; read the call log, messages, browser history and clipboard; add a fingerprint or face; change the PIN; demand the phone and the app be unlocked in front of them; notice when a tracker or a monitoring app stops reporting |
 | **Q** | The phone's location provider: Google Play services on most phones, or whoever compels Google | Learn where the phone is each time Clairix asks Android for a position: one worked out from Wi-Fi and cell towers sends it the identifiers of the networks and towers around the phone, with the phone's IP address |
 | **W** | The push service behind a phone's UnifiedPush endpoint, when the owner set up push wake-ups: the server the phone's distributor app uses (for ntfy, ntfy.sh unless its owner chose another, such as one the relay's operator runs; for Conversations, up.conversations.im), and whoever compels it | Learn the relay's address and when each wake was sent, which is when something arrived for the phone while its live connection was down (one wake covers everything until the phone fetches, or 30 seconds); learn the phone's network address and when its distributor app is connected; withhold or delay wakes, or send false ones, which only make the phone fetch over its signed channel. Never what arrived or from whom: the relay posts only the word "wake" |
+| **X** | Someone who gets a copy of the owner's recovery file: from the USB stick, computer or cloud folder it was saved to, or a household member who finds it | Try recovery codes offline, each at the cost of an Argon2id run (64 MiB, three passes) against a 120-bit generated code; with the code, everything the owner's identity can do from then on: restore it on another phone, take over the number while its mailbox exists, read what is sent to it afterwards and write as the owner. Not read past messages, which are not in the file |
 
 ## What Clairix protects, and against whom
 
@@ -42,6 +43,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | Knowing the phone was handled | The owner is told | P | Unlock ledger: unlocks in the owner's sleep window, wrong passcodes, PIN changes and the ledger's admin being switched off; biometric tripwire: a fingerprint or face added or removed |
 | The owner's safety when acting on a finding | Not steered into removing a tracker or a monitoring app before saving the evidence and thinking about who will notice | P | A safety card on the tracker and travelling-with-you explainers, the stalkerware findings, unlock and enrolment alerts and the Wipe page: removing it can tell whoever placed it, with export of the evidence first and a way to Get help; before a flagged app's settings open, a sheet offers to save its evidence (installer, install date, access, reasons, signing-certificate SHA-256, time) to the timeline and clipboard, to talk to someone first, or to open the settings anyway |
 | A way to help that fits the phone | Helplines for the owner's country, with a text or chat option where calling is not safe | P | Get help page (Settings and the Comms menu) from a bundled list, every entry checked against the service's own site or an official government page, with that page and the date stored; tap-to-call through the dialler, which needs no permission; the page says what a call, a text and a chat leave on the phone, and Clairix records nothing about it; the page and the sheet close when Clairix locks, so an unlock the owner is made to do does not open on them |
+| The identity, contacts and groups, when the phone is lost, smashed or wiped | Recoverable by the owner, and by nobody without the owner's code; never an old ratchet brought back | L, X, R | Recovery file the owner saves through the system file picker (comms-crypto src/recovery.rs, comms/RecoveryFile.kt, comms/RecoveryRestorer.kt): ChaCha20-Poly1305 under Argon2id of a generated 120-bit code with 20 check bits, the whole versioned header authenticated; it holds the identity and sealing keys, the relay and number, contacts with pinned keys and verification, the blocked list, groups and rosters, and never a message, an Olm session, a one-time or fallback key. A restore makes a new fallback key and sealing prekey, moves the key-id counters past the old phone's, replaces the relay's one-time key pool (`PUT /v1/keys` with `replace`), a new transport key and no push endpoint; if the mailbox is gone, the same keys register again and contacts get the move notice |
 | Releases, map files, the relay list | Only the project's signed artifacts are accepted | S, N | Ed25519 signatures checked by the app; pinned workflow actions; reproducible builds |
 | Being reachable | Messages keep moving when a relay is blocked | N, R | Alternate relay addresses; onion addresses; moving to another relay with contacts told; the offline mesh |
 | A mailbox's room for contacts | One sender cannot fill it against the people the owner writes to | U, F | Contacts' passes: envelopes without one share a small part of the queue and an hourly allowance |
@@ -58,7 +60,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
   uses it as a library and does not change it.
 - **The cryptographic primitives hold:** X25519, Ed25519, ChaCha20-Poly1305,
   HKDF-SHA256, HMAC-SHA256, AES-256-GCM, ristretto255 with SHA-512 (RFC 9497),
-  SQLCipher's page encryption.
+  Argon2id (RFC 9106, for the recovery file), SQLCipher's page encryption.
 - **Clocks are roughly right.** Signed relay requests carry a time checked to
   within five minutes; sealing prekeys are refused more than 14 days old or
   more than a day in the future; blind-token epochs are checked against the
@@ -113,6 +115,15 @@ These are stated to users in the README and are not findings:
 - That removing a tracker or a monitoring app is safe. Clairix cannot tell
   whether the person who placed it will notice; it says so before anything is
   removed and offers to save the evidence first.
+- Protecting a recovery file once it leaves the phone (X): it is the owner's
+  file, wherever they saved it, and Wipe Clairix and the duress passcode
+  cannot reach it. Anyone with the file and its code can be the owner from
+  then on. Restoring also does not take the keys back from the old phone: a
+  locked old phone loses its transport key and push endpoint, but one that
+  someone else can unlock still holds the same identity key.
+- Bringing back what arrived between losing the phone and restoring: it was
+  encrypted on sessions the file does not hold, and the restored phone asks
+  each sender for a new session instead.
 - That a call, text or chat to a helpline leaves no trace. The phone's call
   log, messaging app and browser keep their own records, and the Get help page
   says so.

@@ -117,7 +117,7 @@ While your phone is locked it cannot open anything, so a message from a blocked 
 
 ### I lost my phone, or wiped Clairix. Can you restore my Clairix number?
 
-No. Your identity key is the only credential, and it existed only on that phone. Register again and re-pair with your contacts. This is deliberate: there is nothing on our side that could be stolen, subpoenaed or guessed.
+We cannot: your identity key is the only credential, and we never have a copy. You can, if you saved a recovery file before (Comms settings → Save a recovery file). On the new phone, open Comms and choose **Restore from file**, then type the recovery code you wrote down. You get the same number back while your relay still has your mailbox; after a wipe, or if the number was deleted, the same keys are registered again under a new number, and your contacts' phones are told it. Your contacts, groups and verified keys come back, and contacts see the same safety number; your messages do not come back. Without a recovery file, register again and re-pair with your contacts. There is still nothing on our side that could be stolen, subpoenaed or guessed.
 
 ### I forgot my app-lock passcode
 

@@ -53,6 +53,19 @@ class TourTest {
     }
 
     @Test
+    fun theCommsStopSaysThereIsNoCloudBackupAndWhereTheRecoveryFileIs() {
+        for (fullAccess in listOf(true, false)) {
+            val how = tourStops(fullAccess = fullAccess).single { it.id == "comms" }.how
+            assertTrue(how, how.contains(NO_CLOUD_BACKUP))
+            assertTrue(how, how.contains("Comms settings → Save a recovery file"))
+        }
+        assertEquals(
+            "There is no cloud backup. If this phone is lost, this number and these contacts are lost unless you save a recovery file.",
+            NO_CLOUD_BACKUP
+        )
+    }
+
+    @Test
     fun theSafetyMenuIsInBothEditionsAndTheMeshOnlyInTheFullOne() {
         assertEquals(CommsAction.entries, commsActionsFor(fullAccess = true))
         val comms = commsActionsFor(fullAccess = false)

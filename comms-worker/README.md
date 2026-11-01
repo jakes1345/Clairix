@@ -772,7 +772,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/pass` | `{key}` (32 bytes, base64; or `null`): the key contacts' passes are made with. 20 an hour |
 | DELETE | `/v1/me` | Wipe the mailbox |
 | PUT | `/v1/transport` | `{key}` (or `null` to remove): the phone's transport key, a second Ed25519 key. Requests signed with it carry `X-Clairix-Key: transport` and may only `GET /v1/inbox`, `POST /v1/ack` and `GET /v1/ws`, so a locked phone collects envelopes it cannot yet open; the key reads and sends nothing |
-| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old) |
+| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old). `replace: true` makes the one-time keys given the whole pool and retires keys out on a claim instead of returning them: a phone restored from a recovery file sends it, because the keys held were made by the phone it replaces |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
 | POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6, refused with 426 from `LEGACY_CUTOFF` (see "Old versions") |
