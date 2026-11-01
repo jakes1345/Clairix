@@ -65,6 +65,8 @@ fun LockScreen() {
     var countdown   by remember { mutableLongStateOf(0L) }
     val maxLen = AppLock.MAX_LENGTH
     val biometricEnabled by AppLock.biometricEnabled.collectAsStateWithLifecycle()
+    // Read from disk by MainActivity before this screen is first drawn (DiscreetMode.reconcile).
+    val discreet = DiscreetMode.state.collectAsStateWithLifecycle().value.on
 
     // Countdown ticker for the lockout display, on the same monotonic clock as the lock itself.
     LaunchedEffect(lockoutMs) {
@@ -188,20 +190,30 @@ fun LockScreen() {
             verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
         ) {
             // ── The mark and what this screen is ───────────────────────────
+            // In discreet mode only the keypad and a plain prompt: no logo, no LOCKED.
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                LogoMark(size = 56.dp)
-                StencilText(
-                    "LOCKED",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = c.text,
-                    ground = c.base,
-                    modifier = Modifier.semantics { heading(); contentDescription = "Clairix is locked" }
-                )
-                Text(
-                    "Enter your passcode to continue",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = c.textSubtle
-                )
+                if (DiscreetText.lockShowsBrand(discreet)) {
+                    LogoMark(size = 56.dp)
+                    StencilText(
+                        "LOCKED",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = c.text,
+                        ground = c.base,
+                        modifier = Modifier.semantics { heading(); contentDescription = DiscreetText.lockHeading(discreet) }
+                    )
+                    Text(
+                        DiscreetText.lockPrompt(discreet),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                } else {
+                    Text(
+                        DiscreetText.lockPrompt(discreet),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = c.text,
+                        modifier = Modifier.semantics { heading(); contentDescription = DiscreetText.lockHeading(discreet) }
+                    )
+                }
             }
 
             // ── Entered digits ───────────────────────────────────────────────

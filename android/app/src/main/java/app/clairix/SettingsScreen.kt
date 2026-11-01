@@ -67,13 +67,16 @@ object AppSettings {
 
     /**
      * What a duress wipe's decoy keeps of these settings (security/Wiper.kt):
-     * the look and how the scanner runs, so the lock screen and the app behind
-     * it look and behave as they did. None of them is a record of anything.
+     * the look, discreet mode and how the scanner runs, so the lock screen and
+     * the app behind it look and behave as they did. None of them is a record
+     * of anything.
      */
     internal val DECOY_KEYS: Set<String> = setOf(
         KEY_AGGRESSIVE_SCAN, KEY_FOLLOW_THRESHOLD, KEY_PERSISTENCE_THRESHOLD, KEY_SCAN_ENABLED,
         KEY_RESUME_AFTER_REBOOT, KEY_THEME, KEY_INFRASTRUCTURE_ALERTS, KEY_SHOW_ALERT_DETAILS,
         app.clairix.analysis.LowPowerMode.KEY_SWITCH,
+        // Discreet mode: the decoy shows the same launcher entry, notifications and lock screen.
+        app.clairix.security.DiscreetMode.KEY_ON, app.clairix.security.DiscreetMode.KEY_DISGUISE,
     )
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
@@ -876,6 +879,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     )
                 }
             }
+
+            // ── Discreet mode ────────────────────────────────────────────────
+            //
+            // Both editions: a plain launcher entry where the edition allows it,
+            // neutral notifications and lock screen, and quick exit (DiscreetModeSettings.kt).
+
+            discreetModeItems()
 
             // ── Data management ──────────────────────────────────────────────
             //

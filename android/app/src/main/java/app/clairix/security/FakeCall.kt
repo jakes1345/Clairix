@@ -439,9 +439,12 @@ object FakeCall {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return
         runCatching { nm.deleteNotificationChannel(OLD_CHANNEL) }
         val cadence = longArrayOf(0, 800, 1200, 800, 1200)
+        // Named by ChannelNames; in discreet mode the descriptions do not name the app.
+        val discreet = DiscreetMode.on(app)
+        val screen = ChannelNames.of(CHANNEL, discreet)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Call screen", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Shows a ringing call over the lock screen"
+            NotificationChannel(CHANNEL, screen.name, NotificationManager.IMPORTANCE_HIGH).apply {
+                description = screen.description
                 // Clairix plays the phone's own ringtone; the channel adds vibration
                 // that survives Android muting the app's own.
                 setSound(null, null)
@@ -450,9 +453,10 @@ object FakeCall {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
         )
+        val ringtone = ChannelNames.of(CHANNEL_RINGTONE, discreet)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_RINGTONE, "Call ringtone", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Rings with the phone's ringtone when Clairix cannot play it itself"
+            NotificationChannel(CHANNEL_RINGTONE, ringtone.name, NotificationManager.IMPORTANCE_HIGH).apply {
+                description = ringtone.description
                 // The phone's default ringtone, whichever it is when the call rings.
                 setSound(
                     RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),

@@ -324,9 +324,9 @@ object UnlockLedger {
             .putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 // Shown on Android's own screen, which anyone looking at the phone can read: it
-                // says what the grant does, not what it is for.
-                "Lets Clairix record lock-screen events: unlocks, failed unlocks and PIN changes. It can also " +
-                    "lock the screen when you ask it to. It never wipes the phone or sets a password policy."
+                // says what the grant does, not what it is for, and in discreet mode not even
+                // the app's name (Android still shows the package's label above it).
+                DiscreetText.adminExplanation(DiscreetMode.on(context))
             )
 
     // ── Usage access ────────────────────────────────────────────────────────

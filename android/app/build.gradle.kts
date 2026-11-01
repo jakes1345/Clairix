@@ -442,19 +442,24 @@ android {
     // needs; the scanner's permissions and components are added by
     // src/suite/AndroidManifest.xml, and the card-emulation service only by
     // src/fullSuite/AndroidManifest.xml. The code reads FULL_ACCESS to decide
-    // which screens exist, CARD_VAULT for the vault and card emulation, and
-    // CLAIRIX_COIN for the coin balance, payments and their relay requests.
+    // which screens exist, CARD_VAULT for the vault and card emulation,
+    // CLAIRIX_COIN for the coin balance, payments and their relay requests, and
+    // LAUNCHER_DISGUISE for discreet mode's neutral launcher entries ("Compass",
+    // "Notes"), which Google Play's policy does not allow: the Play edition keeps
+    // the Clairix entry and src/play/AndroidManifest.xml removes the other two.
     flavorDimensions += listOf("edition", "tier")
     productFlavors {
         create("play") {
             dimension = "edition"
             buildConfigField("boolean", "CARD_VAULT", "false")
             buildConfigField("boolean", "CLAIRIX_COIN", "false")
+            buildConfigField("boolean", "LAUNCHER_DISGUISE", "false")
         }
         create("full") {
             dimension = "edition"
             buildConfigField("boolean", "CARD_VAULT", "true")
             buildConfigField("boolean", "CLAIRIX_COIN", "true")
+            buildConfigField("boolean", "LAUNCHER_DISGUISE", "true")
         }
         create("suite") {
             dimension = "tier"

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Discreet mode's "Compass" launcher entry, foreground layer: a white ring and
+    a two-tone needle turned to the north-east, over
+    @color/ic_launcher_compass_background. Nothing of the Clairix mark. 108dp
+    adaptive canvas; the ring is 52dp across, inside the 66dp safe circle.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Ring: a 26-radius circle with a 22-radius hole. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M28,54a26,26 0,1 0,52 0a26,26 0,1 0,-52 0zM32,54a22,22 0,1 1,44 0a22,22 0,1 1,-44 0z" />
+
+    <!-- Cardinal ticks inside the ring. -->
+    <path
+        android:fillColor="#B3FFFFFF"
+        android:pathData="M53,34h2v4h-2zM53,70h2v4h-2zM34,53h4v2h-4zM70,53h4v2h-4z" />
+
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:rotation="45">
+
+        <!-- North half of the needle. -->
+        <path
+            android:fillColor="#FFE5533D"
+            android:pathData="M54,36L59,54L49,54Z" />
+
+        <!-- South half of the needle. -->
+        <path
+            android:fillColor="#FFE8EEF2"
+            android:pathData="M54,72L59,54L49,54Z" />
+    </group>
+
+    <!-- Pivot. -->
+    <path
+        android:fillColor="#FF1F5C8F"
+        android:pathData="M51.5,54a2.5,2.5 0,1 0,5 0a2.5,2.5 0,1 0,-5 0z" />
+
+</vector>

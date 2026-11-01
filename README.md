@@ -482,6 +482,12 @@ What there is to see:
 - **Running in the background.** The scanner, and Comms when it stays
   online, run as foreground services, each with its notification while it
   runs.
+- **Its name and icon.** Settings → Apps and every other list Android keeps
+  name Clairix in every edition. With Discreet mode on (Settings), Clairix
+  Full and the Comms edition show "Compass" or "Notes" on the home screen
+  instead, through a second launcher entry for the same app; the Play edition
+  keeps the Clairix icon, as Google Play requires. There is always exactly
+  one launcher entry, so the app never counts as hidden.
 - **What it does not hold.** No accessibility service, notification access,
   keyboard, VPN or permission to draw over other apps.
 

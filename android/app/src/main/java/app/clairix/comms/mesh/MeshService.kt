@@ -12,8 +12,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import app.clairix.MainActivity
-import app.clairix.R
+import app.clairix.security.ChannelNames
+import app.clairix.security.DiscreetMode
 import app.clairix.security.NotificationPresentation
+import app.clairix.security.NotificationText
 import app.clairix.security.PlatformAlerts
 
 /**
@@ -47,18 +49,23 @@ class MeshService : Service() {
 
     private fun notification(): Notification {
         val nm = getSystemService(NotificationManager::class.java)
+        val discreet = DiscreetMode.on(this)
+        val channel = ChannelNames.of(CHANNEL, discreet)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Offline mesh", NotificationManager.IMPORTANCE_LOW)
-                .apply { description = "Shown while this phone carries messages over Bluetooth" }
+            NotificationChannel(CHANNEL, channel.name, NotificationManager.IMPORTANCE_LOW)
+                .apply { description = channel.description }
         )
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val shown = NotificationPresentation.service(
+            NotificationText("Offline mesh on", "Carrying messages phone to phone over Bluetooth"), discreet
+        )
         return NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Offline mesh on")
-            .setContentText("Carrying messages phone to phone over Bluetooth")
-            .setSmallIcon(R.drawable.ic_stat_clairix)
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
+            .setSmallIcon(DiscreetMode.smallIcon(this))
             .setOngoing(true).setContentIntent(open)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             // On the lock screen: the app's name and that it runs, nothing of what.

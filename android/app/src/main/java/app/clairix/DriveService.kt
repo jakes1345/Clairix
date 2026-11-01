@@ -14,6 +14,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import app.clairix.security.ChannelNames
+import app.clairix.security.DiscreetMode
 import app.clairix.security.NotificationPresentation
 import app.clairix.security.NotificationText
 import app.clairix.security.PlatformAlerts
@@ -60,8 +62,10 @@ class DriveService : Service() {
 
     private fun enterForeground(): Boolean {
         val manager = getSystemService(NotificationManager::class.java)
+        val channel = ChannelNames.of(CHANNEL_ID, DiscreetMode.on(this))
         manager?.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Drive mode", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, channel.name, NotificationManager.IMPORTANCE_LOW)
+                .apply { description = channel.description }
         )
         // The location type is only allowed once location access is granted; without it the
         // whole startForeground call would be refused, so add it only when it will be accepted.
@@ -116,7 +120,9 @@ class DriveService : Service() {
             }
         }
 
-        private fun buildNotification(context: Context, shown: NotificationText): Notification {
+        private fun buildNotification(context: Context, wording: NotificationText): Notification {
+            // Discreet mode: only "Running"; what the radio and OBD-II are doing stays in the app.
+            val shown = NotificationPresentation.service(wording, DiscreetMode.on(context))
             val open = PendingIntent.getActivity(
                 context,
                 0,
@@ -130,7 +136,7 @@ class DriveService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
             return NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_stat_clairix)
+                .setSmallIcon(DiscreetMode.smallIcon(context))
                 .setContentTitle(shown.title)
                 .setContentText(shown.text)
                 .setContentIntent(open)

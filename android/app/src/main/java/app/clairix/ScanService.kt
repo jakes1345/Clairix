@@ -82,6 +82,8 @@ import app.clairix.nav.CameraFeed
 import app.clairix.nav.KnownCamera
 import app.clairix.security.AppLock
 import app.clairix.security.BluetoothExposure
+import app.clairix.security.ChannelNames
+import app.clairix.security.DiscreetMode
 import app.clairix.security.HistoryRetention
 import app.clairix.security.NotificationPresentation
 import app.clairix.security.NotificationText
@@ -1503,6 +1505,8 @@ class ScanService : LifecycleService() {
         GnssMonitor.clear()
         runCatching { app.clairix.analysis.CellularExposure.clear(this) }
         runCatching { StalkwareWatch.clear(this) }
+        // Phone check → Accounts: which "who else can see this phone" rows were ticked.
+        runCatching { app.clairix.analysis.AccountChecklist.clear(this) }
         // The camera sweep's findings, checklist and self-test, kept in their own store.
         runCatching { app.clairix.analysis.HiddenCameraScanner.forget(this) }
         // When each paired accessory was first seen connected (the owner's marks stay).
@@ -1637,21 +1641,26 @@ class ScanService : LifecycleService() {
         // visibility is fixed once it exists, so these are new channels; the old
         // ones are deleted, and their notifications with them.
         for (old in LEGACY_CHANNELS) runCatching { manager.deleteNotificationChannel(old) }
+        // Named by ChannelNames: generic names while discreet mode is on.
+        val discreet = DiscreetMode.on(this)
+        val ongoing = ChannelNames.of(CHANNEL_ONGOING, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ONGOING, "Scanning", NotificationManager.IMPORTANCE_LOW)
-                .apply { description = "Shown while the detector is running" }
+            NotificationChannel(CHANNEL_ONGOING, ongoing.name, NotificationManager.IMPORTANCE_LOW)
+                .apply { description = ongoing.description }
         )
+        val alert = ChannelNames.of(CHANNEL_ALERT, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ALERT, "Tracker alerts", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_ALERT, alert.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "A device has been confirmed as following you"
+                    description = alert.description
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
+        val cell = ChannelNames.of(CHANNEL_CELL, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_CELL, "Phone network alerts", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_CELL, cell.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "A fake cell tower may be nearby, or your phone was pushed onto an older, weaker network"
+                    description = cell.description
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
@@ -1674,7 +1683,7 @@ class ScanService : LifecycleService() {
      * following are on the Scan hub, behind the lock. See [NotificationPresentation.ongoing].
      */
     private fun ongoing(): NotificationText =
-        NotificationPresentation.ongoing(paused = running && !scanActive, lowPower = LowPowerMode.active)
+        NotificationPresentation.ongoing(paused = running && !scanActive, lowPower = LowPowerMode.active, discreet = DiscreetMode.on(this))
 
     /** Whether the ongoing notification offers "Stop scanning": only with no app passcode set. */
     private fun ongoingStop(): Boolean = NotificationPresentation.ongoingStopAction(lockArmed = AppLock.isEnabled(this))
@@ -1683,7 +1692,7 @@ class ScanService : LifecycleService() {
         val shown = ongoing()
         return NotificationCompat.Builder(this, CHANNEL_ONGOING)
             .setContentTitle(shown.title).setContentText(shown.text)
-            .setSmallIcon(R.drawable.ic_stat_clairix)
+            .setSmallIcon(DiscreetMode.smallIcon(this))
             .setOngoing(true).setContentIntent(contentIntent())
             .apply {
                 // With a passcode set, switching the scanner off takes it: the button would do it from
@@ -1745,7 +1754,7 @@ class ScanService : LifecycleService() {
             .setContentTitle(shown.title)
             .setContentText(shown.text)
             .apply { shown.bigText?.let { setStyle(NotificationCompat.BigTextStyle().bigText(it)) } }
-            .setSmallIcon(if (shown.detailed) android.R.drawable.stat_notify_error else R.drawable.ic_stat_clairix)
+            .setSmallIcon(if (shown.detailed) android.R.drawable.stat_notify_error else DiscreetMode.smallIcon(this))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(if (tracker) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true).setContentIntent(contentIntent())
@@ -1759,7 +1768,8 @@ class ScanService : LifecycleService() {
     private fun alertText(title: String, text: String, bigText: String? = null): NotificationText? =
         NotificationPresentation.alert(
             title = title, text = text, bigText = bigText,
-            locked = AppLock.isLocked(this), showDetails = AppSettings.showAlertDetails
+            locked = AppLock.isLocked(this), showDetails = AppSettings.showAlertDetails,
+            discreet = DiscreetMode.on(this)
         )
 
     private fun notifyCatcher(title: String) {
@@ -1768,7 +1778,7 @@ class ScanService : LifecycleService() {
         val n = NotificationCompat.Builder(this, CHANNEL_CELL)
             .setContentTitle(shown.title)
             .setContentText(shown.text)
-            .setSmallIcon(if (shown.detailed) android.R.drawable.stat_sys_warning else R.drawable.ic_stat_clairix)
+            .setSmallIcon(if (shown.detailed) android.R.drawable.stat_sys_warning else DiscreetMode.smallIcon(this))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true).setContentIntent(contentIntent())

@@ -19,6 +19,8 @@ import androidx.core.content.ContextCompat
 import app.clairix.CallActivity
 import app.clairix.MainActivity
 import app.clairix.security.AppLock
+import app.clairix.security.ChannelNames
+import app.clairix.security.DiscreetMode
 import app.clairix.security.NotificationPresentation
 
 /**
@@ -87,25 +89,30 @@ object CommsNotifications {
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         for (old in listOf("messages", "group_sos", "comms_link")) runCatching { manager.deleteNotificationChannel(old) }
+        // Named by ChannelNames: generic names while discreet mode is on.
+        val discreet = DiscreetMode.on(context)
+        val messages = ChannelNames.of(CHANNEL_MESSAGES, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_MESSAGES, messages.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Encrypted messages to your Clairix number"
+                    description = messages.description
                     lockscreenVisibility = Notification.VISIBILITY_PRIVATE
                 }
         )
+        val link = ChannelNames.of(CHANNEL_LINK, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_LINK, "Comms connection", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_LINK, link.name, NotificationManager.IMPORTANCE_LOW)
                 .apply {
-                    description = "Shown while Clairix keeps its connection to your relay open, and when Android stops it"
+                    description = link.description
                     setShowBadge(false)
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
+        val ringing = ChannelNames.of(CHANNEL_RINGING, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_RINGING, "Incoming calls", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_RINGING, ringing.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Encrypted calls ringing on this phone"
+                    description = ringing.description
                     // The app plays the phone's own ringtone; the channel adds a
                     // vibration that still works when Android mutes the app's own.
                     setSound(null, null)
@@ -114,19 +121,21 @@ object CommsNotifications {
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 }
         )
+        val calls = ChannelNames.of(CHANNEL_CALLS, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_CALLS, "Calls", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_CALLS, calls.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Incoming and ongoing encrypted calls"
+                    description = calls.description
                     // The app rings with the phone's own ringtone; the channel stays quiet.
                     setSound(null, null)
                     enableVibration(false)
                 }
         )
+        val sos = ChannelNames.of(CHANNEL_SOS, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_SOS, "Group SOS", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_SOS, sos.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "An SOS sent by a member of one of your groups"
+                    description = sos.description
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 500, 300, 500, 300, 500)
                     lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -172,7 +181,8 @@ object CommsNotifications {
         // The ringing card shows on the lock screen so the call can be answered;
         // with previews hidden it does not say who is calling until unlocked.
         val hidden = previewsHidden(context)
-        val caller = if (hidden) Person.Builder().setName("Clairix call").setImportant(true).build() else person(call.peer)
+        val callName = NotificationPresentation.unbranded("Clairix call", DiscreetMode.on(context))
+        val caller = if (hidden) Person.Builder().setName(callName).setImportant(true).build() else person(call.peer)
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Incoming encrypted call")
@@ -215,8 +225,11 @@ object CommsNotifications {
         )
         // CallStyle titles the notification with the caller's name, so this
         // Person is the title: it names no one. The full-screen ring
-        // (LockedRingActivity) says "Incoming Clairix call".
-        val caller = Person.Builder().setName("Clairix call").setImportant(true).build()
+        // (LockedRingActivity) says "Incoming Clairix call", or "Incoming call" in discreet mode.
+        val caller = Person.Builder()
+            .setName(NotificationPresentation.unbranded("Clairix call", DiscreetMode.on(context)))
+            .setImportant(true)
+            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentText("Unlock to answer")
@@ -241,7 +254,7 @@ object CommsNotifications {
         val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("SOS from a group member")
-            .setContentText("Unlock Clairix to see who and where")
+            .setContentText(NotificationPresentation.unbranded("Unlock Clairix to see who and where", DiscreetMode.on(context)))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setAutoCancel(true)
@@ -426,13 +439,18 @@ object CommsNotifications {
 
     /**
      * Whether a notification posted now must name no one and quote nothing: the
-     * owner's setting, or the app being locked. One that arrives while Clairix is
-     * locked is redacted from the start, not only those showing when it locked.
+     * owner's setting, the app being locked, or discreet mode. One that arrives while
+     * Clairix is locked is redacted from the start, not only those showing when it locked.
      */
-    private fun previewsHidden(context: Context): Boolean = hidePreviews(context) || AppLock.locked.value
+    private fun previewsHidden(context: Context): Boolean =
+        hidePreviews(context) || AppLock.locked.value || DiscreetMode.on(context)
 
     /** The one message notification shown while previews are hidden or the app is locked: it says only that there is something. */
-    private fun unlockToRead(context: Context, title: String, text: String, requestCode: Int): Notification {
+    private fun unlockToRead(context: Context, givenTitle: String, givenText: String, requestCode: Int): Notification {
+        // Discreet mode: the same words without the app's name.
+        val discreet = DiscreetMode.on(context)
+        val title = NotificationPresentation.unbranded(givenTitle, discreet)
+        val text = NotificationPresentation.unbranded(givenText, discreet)
         val open = Intent(context, MainActivity::class.java)
             .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -541,7 +559,7 @@ object CommsNotifications {
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Someone new wrote to you")
-            .setContentText("Open Clairix to see the request")
+            .setContentText(NotificationPresentation.unbranded("Open Clairix to see the request", DiscreetMode.on(context)))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setOnlyAlertOnce(true)
@@ -551,7 +569,7 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_MESSAGES)
                     .setSmallIcon(android.R.drawable.stat_notify_chat)
-                    .setContentTitle("New Clairix message")
+                    .setContentTitle(NotificationPresentation.unbranded("New Clairix message", DiscreetMode.on(context)))
                     .setContentText("Unlock to read")
                     .build()
             )
@@ -788,8 +806,9 @@ object CommsNotifications {
             Intent(context, CommsService::class.java).setAction(CommsService.ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val shown = NotificationPresentation.link(connected, previewsHidden = hidePreviews(context))
-        val lockScreen = NotificationPresentation.link(connected, previewsHidden = true)
+        val discreet = DiscreetMode.on(context)
+        val shown = NotificationPresentation.link(connected, previewsHidden = hidePreviews(context), discreet = discreet)
+        val lockScreen = NotificationPresentation.link(connected, previewsHidden = true, discreet = discreet)
         return NotificationCompat.Builder(context, CHANNEL_LINK)
             .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
             .setContentTitle(shown.title)
@@ -837,8 +856,9 @@ object CommsNotifications {
             context, LINK_STOPPED_NOTIFICATION_ID, target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val shown = NotificationPresentation.linkStopped(previewsHidden = previewsHidden(context))
-        val lockScreen = NotificationPresentation.linkStopped(previewsHidden = true)
+        val discreet = DiscreetMode.on(context)
+        val shown = NotificationPresentation.linkStopped(previewsHidden = previewsHidden(context), discreet = discreet)
+        val lockScreen = NotificationPresentation.linkStopped(previewsHidden = true, discreet = discreet)
         val notification = NotificationCompat.Builder(context, CHANNEL_LINK)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle(shown.title)

@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.CameraFinding
 import app.clairix.analysis.HiddenCameraScanner
 import app.clairix.analysis.ScannerHealth
+import app.clairix.security.QuickExit
 import app.clairix.ui.BatteryExemptionCard
 import app.clairix.ui.components.BottomBarItem
 import app.clairix.ui.components.ClairixBottomBar
@@ -118,7 +119,7 @@ internal enum class ScanCategory(val title: String, val description: String, val
     ULTRASOUND("Ultrasound", "Inaudible beacons that link your devices", emptyList()),
     WIFI("Wi-Fi", "Rogue hotspots and unsafe networks", emptyList()),
     NFC("NFC", "Tags, cards and skimmers", emptyList()),
-    PHONE("Phone check", "Spyware, risky settings and certificates", listOf("Health", "Stalkerware", "Certificates"));
+    PHONE("Phone check", "Spyware, risky settings and certificates", listOf("Health", "Stalkerware", "Certificates", "Accounts"));
 
     val icon: ImageVector
         get() = when (this) {
@@ -356,7 +357,9 @@ internal fun ShellTopBar(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val c = ClairixTheme.colors
-    ClairixTopBar(title = title, onBack = onBack) {
+    val context = LocalContext.current
+    // Quick exit: a long press on the mark leaves Clairix and, with a passcode set, locks it.
+    ClairixTopBar(title = title, onBack = onBack, onMarkLongClick = { QuickExit.leave(context) }) {
         if (menu.isNotEmpty()) {
             Box {
                 IconButton(onClick = { menuOpen = true }) {

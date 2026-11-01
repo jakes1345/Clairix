@@ -81,10 +81,10 @@
             android:launchMode="singleTop"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Clairix">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            <!--
+                The launcher entry is not here but on the aliases below, so discreet
+                mode can show a neutral one instead (security/DiscreetMode.kt).
+            -->
             <!--
                 COMMS invites: https://clairix.app/i#<invite>. The domain names this
                 app and its signing key (/.well-known/assetlinks.json), so Android
@@ -108,6 +108,52 @@
                 <data android:scheme="clairix" android:host="invite" />
             </intent-filter>
         </activity>
+
+        <!--
+            Launcher entries for MainActivity, exactly one enabled at a time
+            (security/DiscreetMode.kt). LauncherClairix is the app as it is. The
+            other two are discreet mode's neutral entries, off until the owner
+            picks one in Settings; Google Play's policy does not allow disguising
+            the launcher icon, so the Play edition's manifest removes them
+            (src/play/AndroidManifest.xml). Declared after MainActivity, as an
+            alias must be. Android's own lists (Settings, Apps) still show the
+            package's label, Clairix.
+        -->
+        <activity-alias
+            android:name=".LauncherClairix"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherCompass"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_compass"
+            android:label="@string/launcher_compass">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherNotes"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_notes"
+            android:label="@string/launcher_notes">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!--
             The call screen incoming-call and ongoing-call notifications open. It

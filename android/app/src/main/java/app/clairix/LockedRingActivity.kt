@@ -26,6 +26,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.comms.CallManager
 import app.clairix.comms.CommsNotifications
 import app.clairix.comms.Vault
+import app.clairix.security.DiscreetMode
+import app.clairix.security.NotificationPresentation
 import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.components.SecondaryButton
 import app.clairix.ui.components.Tone
@@ -58,7 +60,9 @@ class LockedRingActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Incoming Clairix call", style = MaterialTheme.typography.headlineMedium, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
+                        // Over the lock screen, where anyone can read it: without the app's name in discreet mode.
+                        val heading = NotificationPresentation.unbranded("Incoming Clairix call", DiscreetMode.on(this@LockedRingActivity))
+                        Text(heading, style = MaterialTheme.typography.headlineMedium, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
                         Text(
                             "Unlock to answer. Who is calling shows once the phone is unlocked: until then nothing on it can be read.",
                             style = MaterialTheme.typography.bodyMedium,

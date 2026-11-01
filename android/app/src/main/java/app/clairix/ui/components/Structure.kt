@@ -2,6 +2,7 @@ package app.clairix.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,9 +41,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
@@ -56,7 +59,8 @@ import java.util.Locale
 /**
  * The app bar. A top-level screen shows the logo mark and its title in the
  * display face; a nested screen swaps the mark for a back arrow. [actions] sit
- * at the end, each at least 48 dp.
+ * at the end, each at least 48 dp. With [onMarkLongClick] a long press on the
+ * mark (or the accessibility long-click action, "Quick exit") calls it.
  */
 @Composable
 fun ClairixTopBar(
@@ -64,6 +68,7 @@ fun ClairixTopBar(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     subtitle: String? = null,
+    onMarkLongClick: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {}
 ) {
     val c = ClairixTheme.colors
@@ -77,7 +82,10 @@ fun ClairixTopBar(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = c.text)
                 }
             } else {
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                val longPress = if (onMarkLongClick == null) Modifier else Modifier
+                    .pointerInput(onMarkLongClick) { detectTapGestures(onLongPress = { onMarkLongClick() }) }
+                    .semantics { onLongClick(label = "Quick exit") { onMarkLongClick(); true } }
+                Box(Modifier.size(48.dp).then(longPress), contentAlignment = Alignment.Center) {
                     LogoMark(size = 28.dp, contentDescription = null)
                 }
             }

@@ -115,7 +115,10 @@ internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
     ScanCategory.PHONE -> "This phone's own security, and spyware on it." to
         "Health is a checklist: patch level, USB debugging, screen lock, Advanced Protection, the Bluetooth name, 2G, VPN " +
         "leaks and more, each with a tap to the setting that fixes it. Stalkerware checks every app for what spyware needs. " +
-        "Certificates lists the ones that could read your encrypted traffic, and the relay's key pin."
+        "Certificates lists the ones that could read your encrypted traffic, and the relay's key pin. Accounts is a " +
+        "checklist of who else can see this phone without any app: Google accounts and their devices, recovery options, " +
+        "2-Step Verification and passkeys, Find My Device, Maps location sharing, Family Link, Play Protect, Quick Share, " +
+        "Samsung's own on a Samsung, and call forwarding at the carrier, each with a tap to the page that shows it."
 }
 
 internal fun trackerToolTour(a: TrackerAction): Pair<String, String> = when (a) {
@@ -253,7 +256,7 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     out += TourStop(
         "settings", "Gear, top right", "Settings",
         "Get help (helplines where you are), the app passcode (with biometrics, wipe after wrong passcodes and a " +
-            "duress passcode), how long history is kept, theme, where positions come from (Satellite-only positioning)" +
+            "duress passcode), Discreet mode (plain notifications and lock screen, and quick exit), how long history is kept, theme, where positions come from (Satellite-only positioning)" +
             (if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.") +
             " Wipe Clairix and Delete identity and number are near the bottom.",
         passcodeFollowUp(passcodeSet, lockOffered) +

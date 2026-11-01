@@ -14,7 +14,6 @@ import app.clairix.Alert
 import app.clairix.AppSettings
 import app.clairix.EventKind
 import app.clairix.MainActivity
-import app.clairix.R
 import app.clairix.ScanService
 import app.clairix.Severity
 
@@ -109,21 +108,21 @@ object PlatformAlerts {
     fun ensureChannel(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         for (old in RETIRED_CHANNELS) runCatching { manager.deleteNotificationChannel(old) }
+        // Named by ChannelNames: generic names while discreet mode is on.
+        val discreet = DiscreetMode.on(context)
+        val security = ChannelNames.of(CHANNEL_SECURITY, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_SECURITY, "Someone at your phone", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_SECURITY, security.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "A fingerprint or face was added, the phone was unlocked while you slept, the " +
-                        "screen lock was changed or unlock recording was switched off, and other findings that " +
-                        "need you now: stalkerware, an intercepted connection, a device travelling with you, a " +
-                        "microphone that became the call audio with the screen off"
+                    description = security.description
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
+        val settings = ChannelNames.of(CHANNEL_SETTINGS, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_SETTINGS, "Phone settings to check", NotificationManager.IMPORTANCE_DEFAULT)
+            NotificationChannel(CHANNEL_SETTINGS, settings.name, NotificationManager.IMPORTANCE_DEFAULT)
                 .apply {
-                    description = "Bluetooth left discoverable, a proxy on your network, the screen being recorded, " +
-                        "or a scanner that cannot hear"
+                    description = settings.description
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
@@ -143,9 +142,9 @@ object PlatformAlerts {
      * nothing. Every alert and every service's ongoing notification carries one.
      */
     fun publicVersion(context: Context, channel: String, text: String = NotificationPresentation.UNLOCK_TO_READ): Notification {
-        val shown = NotificationPresentation.neutral(text)
+        val shown = NotificationPresentation.publicText(text, DiscreetMode.on(context))
         return NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.drawable.ic_stat_clairix)
+            .setSmallIcon(DiscreetMode.smallIcon(context))
             .setContentTitle(shown.title)
             .setContentText(shown.text)
             .build()
@@ -162,14 +161,15 @@ object PlatformAlerts {
         if (!canPost(context)) return
         val shown = NotificationPresentation.alert(
             title = alert.title, text = alert.detail, bigText = alert.detail,
-            locked = AppLock.isLocked(context), showDetails = AppSettings.showAlertDetails, silent = alert.silent
+            locked = AppLock.isLocked(context), showDetails = AppSettings.showAlertDetails, silent = alert.silent,
+            discreet = DiscreetMode.on(context)
         ) ?: return
         ensureChannel(context)
         val channel = channelFor(alert.kind, alert.severity)
         val channelId = channelId(channel)
         val atPhone = channel == AlertChannel.SOMEONE_AT_PHONE
         val icon = when {
-            !shown.detailed -> R.drawable.ic_stat_clairix
+            !shown.detailed -> DiscreetMode.smallIcon(context)
             alert.severity == Severity.CRITICAL || alert.severity == Severity.HIGH -> android.R.drawable.stat_notify_error
             else -> android.R.drawable.stat_sys_warning
         }
@@ -211,12 +211,12 @@ object PlatformAlerts {
         }
         if (!any || !canPost(context)) return
         ensureChannel(context)
-        val shown = NotificationPresentation.neutral(NotificationPresentation.UNLOCK_TO_SEE_ALERTS)
+        val shown = NotificationPresentation.neutral(NotificationPresentation.UNLOCK_TO_SEE_ALERTS, DiscreetMode.on(context))
         // On the alarm channel, which is the one least likely to be switched off; silent below.
         val n = NotificationCompat.Builder(context, CHANNEL_SECURITY)
             .setContentTitle(shown.title)
             .setContentText(shown.text)
-            .setSmallIcon(R.drawable.ic_stat_clairix)
+            .setSmallIcon(DiscreetMode.smallIcon(context))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             // Posted as the screen goes off or the app is left: nothing to sound about.

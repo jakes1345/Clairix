@@ -82,6 +82,7 @@ import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.WifiScanner
 import app.clairix.security.AppLock
 import app.clairix.security.LockScreen
+import app.clairix.security.QuickExit
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.analysis.StalkwareWatch
 import app.clairix.security.BiometricTripwire
@@ -316,6 +317,9 @@ class MainActivity : AppCompatActivity() {
         // The alert channel is secret on the lock screen; made now so an existing
         // install drops the old channel at once, not at its next alert.
         app.clairix.security.PlatformAlerts.ensureChannel(this)
+        // Discreet mode: the launcher entry and the channel names follow the stored choice
+        // (back to Clairix's after "Wipe Clairix"; kept by the duress decoy).
+        app.clairix.security.DiscreetMode.reconcile(this)
 
         handleOpenThreadIntent(intent)
 
@@ -1606,6 +1610,9 @@ private fun MainApp(
         HomeTab.DRIVE, HomeTab.ACTIVITY -> null
     }
     BackHandler(enabled = popUp != null) { popUp?.invoke() }
+    // Quick exit: Back on the first screen (the Scan hub; Comms in the comms-only build)
+    // sends Clairix to the background and locks it at once when a passcode is set.
+    BackHandler(enabled = popUp == null && tab == tabs.first()) { QuickExit.leave(context) }
 
     val title = when (tab) {
         HomeTab.SCAN -> trackerAction?.title ?: category?.title ?: HomeTab.SCAN.label
@@ -1728,9 +1735,10 @@ private fun MainApp(
                     onAcknowledgeOwnership = onAcknowledgeOwnership
                 )
                 category == ScanCategory.PHONE -> when (phoneSub) {
-                    0 -> DeviceScreen(onShown = onRefreshDeviceHealth)
+                    0 -> DeviceScreen(onShown = onRefreshDeviceHealth, onOpenAccounts = { phoneSub = ACCOUNTS_SUB_TAB })
                     1 -> StalkerwarePage()
-                    else -> CertificatesPage()
+                    2 -> CertificatesPage()
+                    else -> AccountChecklistPage()
                 }
             }
             HomeTab.COMMS -> {
@@ -3768,7 +3776,7 @@ private fun NfcTagRow(
 // ── Device health screen ────────────────────────────────────────────────
 
 @Composable
-internal fun DeviceScreen(onShown: () -> Unit) {
+internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     // Live microphone and camera monitoring only runs inside the scanner service. With
@@ -3858,6 +3866,9 @@ internal fun DeviceScreen(onShown: () -> Unit) {
 
         // ── Microphones that attached themselves, and the owner's own headsets ──
         audioInputItems(audioInputs)
+
+        // ── Who else can see this phone: when the accounts checklist was last done ──
+        accountChecklistSummaryItems(onOpenAccounts)
 
         // ── Checklist ───────────────────────────────────────────────────────
         if (health.facts.isNotEmpty()) {
