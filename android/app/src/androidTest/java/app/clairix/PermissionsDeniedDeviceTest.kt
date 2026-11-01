@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Point
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -50,6 +51,8 @@ class PermissionsDeniedDeviceTest {
 
     private companion object {
         const val BACK_PATIENCE_MS = 10_000L
+        /** How long a prompt the app has just asked for is given to come up. */
+        const val PROMPT_SETTLE_MS = 800L
         /**
          * System apps that show a dialog over Clairix on its behalf; Android 12 shows the
          * Wi-Fi suggestion prompt itself ("android"). Images with Google APIs ship the
@@ -96,8 +99,13 @@ class PermissionsDeniedDeviceTest {
     private fun alive(step: String) {
         device.waitForIdle(2_000)
         // Several prompts can come one after another (location, then nearby devices, then notifications).
+        // A prompt the app has just asked for can still be on its way when Clairix
+        // is seen in front (Android 31: the location prompt came up between this
+        // look and the last one), so Clairix counts as in front only when a
+        // second look, a moment later, still finds it there.
         var prompts = 0
-        while (prompts++ < 6) {
+        var looks = 0
+        while (prompts < 8 && looks++ < 20) {
             if (ui.has(By.textContains("keeps stopping")) || ui.has(By.textContains("has stopped"))) {
                 shot("CRASH-$step"); fail("Clairix crashed at: $step")
             }
@@ -105,7 +113,14 @@ class PermissionsDeniedDeviceTest {
                 shot("ANR-$step"); fail("Clairix stopped responding at: $step")
             }
             val current = device.currentPackageName
-            if (current == pkg || current !in SYSTEM_PROMPTS) break
+            if (current == pkg) {
+                SystemClock.sleep(PROMPT_SETTLE_MS)
+                device.waitForIdle(1_000)
+                if (device.currentPackageName == pkg) break
+                continue
+            }
+            if (current !in SYSTEM_PROMPTS) break
+            prompts++
             shot("prompt-refused-$step")
             val deny = DENY_IDS.firstNotNullOfOrNull { ui.find(By.res(it)) } ?: ui.find(By.pkg(current).text(DENY))
             if (deny != null) deny.click() else device.pressBack()
