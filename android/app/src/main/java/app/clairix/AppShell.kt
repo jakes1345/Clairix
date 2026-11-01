@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
@@ -148,6 +149,7 @@ internal enum class TrackerAction(val title: String) {
 
 /** The safety pages reached from the Comms menu, each opened as its own screen. */
 internal enum class CommsAction(val title: String) {
+    GET_HELP("Get help"),
     FAKE_CALL("Fake call"),
     DURESS("Duress phrase"),
     MESH("Offline mesh"),
@@ -155,6 +157,7 @@ internal enum class CommsAction(val title: String) {
 
     val icon: ImageVector
         get() = when (this) {
+            GET_HELP -> Icons.Filled.Call
             FAKE_CALL -> ClairixIcons.PhoneInTalk
             DURESS -> ClairixIcons.Shield
             MESH -> ClairixIcons.Bluetooth

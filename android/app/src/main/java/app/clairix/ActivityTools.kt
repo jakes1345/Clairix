@@ -50,6 +50,8 @@ import app.clairix.ui.components.SecondaryButton
 import app.clairix.ui.components.SectionHeader
 import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
+import app.clairix.ui.SafetyFirst
+import app.clairix.ui.SafetyFirstCard
 
 // The Activity tab's analysis pages: pattern of life and the unlock ledger.
 // Both are a watcher's brief, so with a passcode set each asks for it every time
@@ -404,6 +406,13 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
                     else -> Unit
                 }
             }
+        }
+
+        // An added fingerprint or an unlock while you slept means someone has the phone's
+        // way in. Changing the PIN or removing the fingerprint can tell them it was seen.
+        val sleepUnlocks = events?.count { it.kind.isUnlock && UnlockLedger.inSleepWindow(it.ts) } ?: 0
+        if (SafetyFirst.forLedger(tripwire is BiometricTripwireResult.TRIGGERED, sleepUnlocks)) {
+            item(key = "§safety-first") { SafetyFirstCard(title = SafetyFirst.TITLE_PHONE) }
         }
 
         item(key = "§sleep-hdr") { SectionHeader("Sleep window") }

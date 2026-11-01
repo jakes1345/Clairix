@@ -237,6 +237,16 @@ object Registry {
     fun requestInvite(text: String) { _inviteRequest.value = text }
     fun takeInviteRequest(): String? = _inviteRequest.getAndUpdate { null }
 
+    /**
+     * The Get help page, asked for from inside a screen that cannot reach the
+     * shell: a safety card, the sheet shown before a flagged app's settings.
+     * The shell opens the page over whatever is showing and consumes the request.
+     */
+    private val _helpRequest = MutableStateFlow(false)
+    val helpRequest: StateFlow<Boolean> = _helpRequest.asStateFlow()
+    fun requestHelp() { _helpRequest.value = true }
+    fun takeHelpRequest(): Boolean = _helpRequest.getAndUpdate { false }
+
     // --- Organisation / community -------------------------------------------
 
     /** Shared community threats received from org members; expired ones are dropped on publish. */

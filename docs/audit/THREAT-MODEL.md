@@ -19,6 +19,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | **A** | Other apps on the same phone | Claim the invite link scheme, connect to local ports, read what accessibility services and the clipboard expose |
 | **S** | The software supply chain: whoever can change a release, a map file, the relay list or a workflow | Ship a modified APK, map or relay list |
 | **B** | Someone nearby with a Bluetooth radio, while the offline mesh is on | Join the mesh, carry and inspect bundles, flood it |
+| **P** | An intimate partner or family member with household access: knows or has watched the phone's PIN, handles the phone unlocked, may have installed a monitoring app or placed a tracker, and may make the owner unlock it | Read the lock screen and the notification shade; open any app on the unlocked phone and see which apps are installed; read the call log, messages, browser history and clipboard; add a fingerprint or face; change the PIN; demand the phone and the app be unlocked in front of them; notice when a tracker or a monitoring app stops reporting |
 
 ## What Clairix protects, and against whom
 
@@ -34,6 +35,11 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | The phone's network address | Hidden from relays and the network when the owner chooses | R, F, N | Tor (Arti) in the app, onion addresses for relays that have one; relay-only calls via TURN |
 | Contacts, messages and keys at rest | Ciphertext to anyone who copies the files; unreadable while the phone is locked | L | SQLCipher under a Keystore-wrapped key; identity and database keys under an unlock-bound Keystore key; a locked inbox for what arrives meanwhile |
 | The phone under duress | Everything gone fast, without signs | L | Wrong-passcode limit and duress passcode start a wipe that deletes Keystore keys first |
+| What a notification says, on the lock screen and in the shade | Nothing about a finding or a message on the lock screen; nothing about a finding in the shade unless the owner asked for it and Clairix is unlocked | P, L | Alert and connection channels secret on the lock screen; a message notification there shows only that something came; an alert reads "Unlock to read" unless "Show alert details" is on (off by default) and Clairix is unlocked; ongoing notifications say only that something runs; locking Clairix collapses alerts into "Unlock to see alerts" and messages into "Unlock to read" (security/NotificationPresentation.kt). An incoming call shows on the lock screen, so that it can be answered |
+| What Clairix holds, on a phone someone else can unlock | Not readable without the app's own passcode, when one is set | P | App lock with its own passcode, separate from the phone's PIN, locking when the screen goes off or after the chosen time in the background; biometric unlock through a key Android destroys when a fingerprint or face is added; every screen kept out of screenshots and the Recents thumbnail |
+| Knowing the phone was handled | The owner is told | P | Unlock ledger: unlocks in the owner's sleep window, wrong passcodes, PIN changes and the ledger's admin being switched off; biometric tripwire: a fingerprint or face added or removed |
+| The owner's safety when acting on a finding | Not steered into removing a tracker or a monitoring app before saving the evidence and thinking about who will notice | P | A safety card on the tracker and travelling-with-you explainers, the stalkerware findings, unlock and enrolment alerts and the Wipe page: removing it can tell whoever placed it, with export of the evidence first and a way to Get help; before a flagged app's settings open, a sheet offers to save its evidence (installer, install date, access, reasons, signing-certificate SHA-256, time) to the timeline and clipboard, to talk to someone first, or to open the settings anyway |
+| A way to help that fits the phone | Helplines for the owner's country, with a text or chat option where calling is not safe | P | Get help page (Settings and the Comms menu) from a bundled list, every entry checked against the service's own site or an official government page, with that page and the date stored; tap-to-call through the dialler, which needs no permission; the page says what a call, a text and a chat leave on the phone, and Clairix records nothing about it; the page and the sheet close when Clairix locks, so an unlock the owner is made to do does not open on them |
 | Releases, map files, the relay list | Only the project's signed artifacts are accepted | S, N | Ed25519 signatures checked by the app; pinned workflow actions; reproducible builds |
 | Being reachable | Messages keep moving when a relay is blocked | N, R | Alternate relay addresses; onion addresses; moving to another relay with contacts told; the offline mesh |
 | A mailbox's room for contacts | One sender cannot fill it against the people the owner writes to | U, F | Contacts' passes: envelopes without one share a small part of the queue and an hourly allowance |
@@ -77,6 +83,19 @@ These are stated to users in the README and are not findings:
   each, which ties the old number to the new one for whoever can read both.
 - That ClairixCoin is anything more than a relay-local ledger.
 - That detection (trackers, cameras, IMSI catchers, spyware) is complete.
+- Hiding that Clairix is installed from someone who handles the phone
+  unlocked (P): its name and icon are in the launcher and in Android's app
+  list, its device admin, once enabled, is listed by name in Android's
+  settings, and the scanner shows that it runs in the shade.
+- Protecting what Clairix shows from someone who knows the app passcode, or
+  who makes the owner unlock Clairix in front of them. The duress passcode
+  wipes instead of opening, and a wipe can itself be noticed.
+- That removing a tracker or a monitoring app is safe. Clairix cannot tell
+  whether the person who placed it will notice; it says so before anything is
+  removed and offers to save the evidence first.
+- That a call, text or chat to a helpline leaves no trace. The phone's call
+  log, messaging app and browser keep their own records, and the Get help page
+  says so.
 
 ## Known open issues
 

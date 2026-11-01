@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import app.clairix.ui.theme.ClairixThemeName
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.Icons
@@ -192,7 +193,7 @@ object AppSettings {
 // ── SettingsScreen composable ──────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}) {
+fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}, onGetHelp: () -> Unit = {}) {
     val context = LocalContext.current
     val trusted by Registry.trusted.collectAsStateWithLifecycle()
 
@@ -342,6 +343,22 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     Column(Modifier.fillMaxSize().background(c.base)) {
         ClairixTopBar(title = "Settings", onBack = onBack)
         ScreenList(Modifier.weight(1f).navigationBarsPadding(), bottomPadding = 32) {
+
+            // ── Get help ─────────────────────────────────────────────────────
+            //
+            // First, so it is found without scrolling, in both editions.
+            item(key = "§help") {
+                ListGroup {
+                    ListRow(
+                        title = "Get help",
+                        subtitle = "Helplines for abuse and stalking where you are, to call, text or chat",
+                        icon = Icons.Filled.Call,
+                        iconTone = Tone.Accent,
+                        onClick = onGetHelp,
+                        onClickLabel = "Open Get help"
+                    )
+                }
+            }
 
             // ── Appearance ───────────────────────────────────────────────────
             item(key = "§look-hdr") { SectionHeader("Appearance") }

@@ -38,6 +38,9 @@ import app.clairix.ui.components.ToggleRow
 import app.clairix.ui.components.SectionHeader
 import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
+import app.clairix.ui.SafetyFirst
+import app.clairix.ui.SafetyFirstCard
+import app.clairix.ui.shareEvidenceReport
 
 // The Phone check category's on-demand pages: the stalkerware scan and the
 // certificate and TLS audit.
@@ -123,6 +126,22 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                     }
                 }
             }
+            // Removing any of these can tell whoever installed it that it was found, so
+            // the safety card leads the findings; its export saves each app's evidence
+            // to the timeline first, so the report carries them.
+            if (SafetyFirst.forStalkerware(r)) {
+                item(key = "§safety-first") {
+                    SafetyFirstCard(
+                        title = SafetyFirst.TITLE_APP,
+                        onExport = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { saveFlaggedEvidence(context, r) }
+                                shareEvidenceReport(context)
+                            }
+                        }
+                    )
+                }
+            }
             if (r.high.isNotEmpty()) {
                 item(key = "§high-hdr") { SectionHeader("High") }
                 items(r.high, key = { "high|${it.packageName}" }) { SuspiciousAppCard(it, context) }
@@ -199,7 +218,9 @@ private fun GrantCard(
             if (flagged != null) StatusPill("${flagged.severity.name} · ${flagged.score}", flagged.severity.tone())
             else if (known) StatusPill("Known app", Tone.Safe)
         }
-        SecondaryButton(actionLabel, onClick = { openExternal(context, action) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+        FlaggedAppButton(actionLabel, packageName, flagged, gated = SafetyFirst.gatesSettings(flagged != null, known)) {
+            openExternal(context, action)
+        }
     }
 }
 
@@ -224,7 +245,9 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
                 }
             }
         }
-        SecondaryButton("Open in settings", onClick = { openExternal(context, StalkwareScanner.appDetailsIntent(app.packageName)) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+        FlaggedAppButton("Open in settings", app.packageName, flagged = app) {
+            openExternal(context, StalkwareScanner.appDetailsIntent(app.packageName))
+        }
     }
 }
 

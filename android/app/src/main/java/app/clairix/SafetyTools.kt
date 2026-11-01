@@ -42,6 +42,8 @@ import app.clairix.ui.components.SecondaryButton
 import app.clairix.ui.components.SectionHeader
 import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
+import app.clairix.ui.SafetyFirst
+import app.clairix.ui.SafetyFirstCard
 import app.clairix.security.Wiper
 
 // The personal-safety pages reached from the Comms tab: fake call and the
@@ -507,6 +509,9 @@ internal fun WipePage(onBack: (() -> Unit)? = null) {
     val ready = typed.trim().equals(WIPE_WORD, ignoreCase = false)
 
     ToolPageList(title = "Wipe Clairix", onBack = onBack) {
+        // A wipe takes the evidence with it, and a phone that changes can tell whoever
+        // watches it: the safety card comes before anything else on this page.
+        item(key = "§safety-first") { SafetyFirstCard(title = SafetyFirst.TITLE_WIPE) }
         item(key = "§what") {
             ClairixCard(spacing = 6.dp) {
                 Text("What is erased", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)

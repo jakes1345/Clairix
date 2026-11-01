@@ -129,6 +129,10 @@ internal fun trackerToolTour(a: TrackerAction): Pair<String, String> = when (a) 
 }
 
 internal fun commsPageTour(a: CommsAction): Pair<String, String> = when (a) {
+    CommsAction.GET_HELP -> "Helplines for abuse and stalking, where you are." to
+        "The country comes from your SIM card, or the phone's region, and you can pick another. Each line has a call " +
+        "button and, where the service offers one, a text or chat for when calling is not safe. The page says what a " +
+        "call, a text and a chat leave on the phone. It is in Settings too."
     CommsAction.FAKE_CALL -> "A pretend incoming call, as a reason to leave." to
         "Set a time and a caller name. With notifications and full-screen calls allowed, the phone rings with its own " +
         "ringtone and shows a call screen over the lock screen; unlocked in another app, it shows a call banner instead."
@@ -208,7 +212,7 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
         "Add someone with an invite link or by scanning their QR code. If a contact's security key changes, their messages wait " +
             "in a review box until you check. In any conversation or group, Disappearing sets how long after they are read " +
             "messages are deleted, on both phones. Screenshots are blocked on these screens." +
-            if (fullAccess) " The menu (⋮) at the top holds Fake call, Duress phrase, Offline mesh and Wipe Clairix." else "",
+            if (fullAccess) " The menu (⋮) at the top holds Get help, Fake call, Duress phrase, Offline mesh and Wipe Clairix." else "",
         ClairixIcons.Forum, TourTarget.Tab(HomeTab.COMMS)
     )
     if (fullAccess) {
@@ -232,7 +236,8 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     }
     out += TourStop(
         "settings", "Gear, top right", "Settings",
-        "App passcode (with biometrics, wipe after wrong passcodes and a duress passcode), how long history is kept, theme" +
+        "Get help (helplines where you are), the app passcode (with biometrics, wipe after wrong passcodes and a " +
+            "duress passcode), how long history is kept, theme" +
             if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.",
         passcodeFollowUp(passcodeSet, lockOffered) +
             (if (fullAccess) "With a passcode set, Patterns, Unlocks, the tracker map and Export ask for it each time they open. " else "") +

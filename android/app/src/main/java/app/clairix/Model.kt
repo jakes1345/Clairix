@@ -258,6 +258,8 @@ enum class EventKind {
     GNSS,
     /** An inaudible beacon tone heard on the ultrasound page. */
     ULTRASOUND,
+    /** Evidence the owner saved: a flagged app's details, from the sheet before its settings open or before the report is exported. */
+    EVIDENCE,
     /** Any other platform-hardening alert. */
     PLATFORM
 }

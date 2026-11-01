@@ -265,7 +265,7 @@ class SmokeTest {
             if (tab == "Comms") {
                 // Several rounds: going in and back out of these pages has failed
                 // now and then, and one round seldom shows it.
-                for (round in 1..5) for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
+                for (round in 1..5) for (page in listOf("Get help", "Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
                     val more = ui.waitFor(By.desc("More options"), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
                     more.click(); alive("comms menu")
                     tap(page, "comms $page"); device.waitForIdle(2_000)

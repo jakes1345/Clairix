@@ -143,6 +143,8 @@ import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
 import app.clairix.ui.components.setSensitiveText
+import app.clairix.ui.SafetyFirst
+import app.clairix.ui.SafetyFirstCard
 
 // ── Permissions ─────────────────────────────────────────────────────────
 
@@ -1344,6 +1346,9 @@ private fun MainApp(
     var phoneSub by rememberSaveable { mutableIntStateOf(0) }
     var activitySub by rememberSaveable { mutableIntStateOf(0) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    // The Get help page, drawn over everything else when Settings, a safety card
+    // or the sheet before a flagged app's settings opens it.
+    var showHelp by rememberSaveable { mutableStateOf(false) }
 
     val tab = enumByName<HomeTab>(tabName)?.takeIf { it in tabs } ?: tabs.first()
     val category = enumByName<ScanCategory>(categoryName)
@@ -1393,7 +1398,7 @@ private fun MainApp(
     }
 
     // A call ringing or in progress takes the Comms tab regardless of where the
-    // user was. Settings, the Comms safety pages and the explainer sheet are drawn
+    // user was. Settings, Get help, the Comms safety pages and the explainer sheet are drawn
     // over or instead of it, so they close too; otherwise the call's ACCEPT button
     // sat hidden behind them.
     LaunchedEffect(activeCall?.id, activeCall?.phase) {
@@ -1401,6 +1406,7 @@ private fun MainApp(
             tabName = HomeTab.COMMS.name
             commsActionName = null
             showSettings = false
+            showHelp = false
             showTour = false
             explainerTarget = null
         }
@@ -1423,6 +1429,23 @@ private fun MainApp(
                 showSettings = false
             }
             else -> Unit
+        }
+    }
+    // A safety card, or the sheet before a flagged app's settings, asks for the
+    // Get help page: it opens over whatever is showing, the explainer sheet included.
+    val helpRequest by Registry.helpRequest.collectAsStateWithLifecycle()
+    LaunchedEffect(helpRequest) {
+        if (helpRequest && Registry.takeHelpRequest()) {
+            explainerTarget = null
+            showHelp = true
+        }
+    }
+    // Locking closes Get help, so an unlock someone else makes the owner do does
+    // not open on a page of helplines.
+    LaunchedEffect(locked) {
+        if (locked) {
+            showHelp = false
+            if (commsActionName == CommsAction.GET_HELP.name) commsActionName = null
         }
     }
     val threadRequest by Registry.threadRequest.collectAsStateWithLifecycle()
@@ -1471,11 +1494,18 @@ private fun MainApp(
         return
     }
 
+    // Over Settings when opened from there, so its back arrow returns to Settings.
+    if (showHelp) {
+        GetHelpPage(onBack = { showHelp = false })
+        return
+    }
+
     if (showSettings) {
         SettingsScreen(
             onBack = { showSettings = false },
             onClearData = onClearData,
-            onTour = { showSettings = false; showTour = true }
+            onTour = { showSettings = false; showTour = true },
+            onGetHelp = { showHelp = true }
         )
         return
     }
@@ -1623,6 +1653,7 @@ private fun MainApp(
                 // Every comms screen keeps the window out of screenshots while it is up.
                 KeepOffScreen()
                 when (commsAction) {
+                    CommsAction.GET_HELP -> GetHelpPage()
                     CommsAction.FAKE_CALL -> FakeCallPage()
                     CommsAction.DURESS -> DuressPage()
                     CommsAction.MESH -> MeshPage()
@@ -2605,6 +2636,9 @@ private fun TimelineRow(e: TimelineEvent, status: ScanStatus, onResume: (() -> U
             Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         }
         if (open) {
+            // An unlock while you slept, a changed PIN or an added fingerprint: what
+            // the alert tells you to do next can also tell whoever did it.
+            if (SafetyFirst.forEvent(e.kind)) SafetyFirstCard(title = SafetyFirst.TITLE_PHONE)
             Hairline(Modifier.padding(vertical = 4.dp))
             KeyValueRow("Time", fmtTime(e.ts))
             KeyValueRow("Kind", e.kind.name.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }, mono = false)
@@ -4221,6 +4255,10 @@ private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit)
 
         // Most useful first: what to do, then what it is, then how sure.
         ExplainerSection("What to do", content.whatToDo, Tone.Accent)
+        // A tracker on you, a device travelling with you or a known tracker that
+        // stays: removing it can tell whoever placed it, so that is said next.
+        val detection = (target as? ExplainerTarget.BleDevice)?.detection
+        if (detection != null && SafetyFirst.forDetection(detection)) SafetyFirstCard()
         ExplainerSection("What this is", content.whatIsThis, Tone.Neutral)
         ExplainerSection("How sure we are", content.howCertain, Tone.Neutral)
 

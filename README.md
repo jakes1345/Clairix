@@ -170,6 +170,17 @@ Read this part twice.
   them.
 - **Detection is best-effort.** No app finds every camera, tracker or piece
   of spyware. A finding is a reason to look, not proof.
+- **Someone who shares your home.** A partner or relative who handles the
+  phone unlocked can see that Clairix is there: its name and icon are in the
+  launcher and the app list, its device admin, once enabled, is listed by
+  name in Android's settings, and the shade shows when the scanner runs.
+  Anyone who knows the app passcode, or makes you unlock Clairix, sees what
+  it shows; the duress passcode wipes instead of opening, and a wipe can
+  itself be noticed. Removing a tracker or a monitoring app can tell whoever
+  placed it that it was found, and Clairix cannot know whether they will
+  notice; it says so before you remove anything and offers to save the
+  evidence first. A call, text or chat to a helpline stays in the phone's
+  call log, messages or browser history.
 - **The scanner's keys work while the phone is locked.** The scanner has
   to write while the keyguard is up, so the keys that seal its records work
   while the phone is locked. Comms is different: since Beta 7 what reads
@@ -230,6 +241,16 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   soon as you set the passcode. Once you are in, it tells you when a wrong
   passcode was entered while you were away. The passcode is never stored;
   only a verifier made with a hardware key is.
+- **Get help.** In Settings and the Comms menu: helplines for abuse and
+  stalking in the country of your SIM card, or the phone's region, or any
+  other on the list, with a button that opens the dialler and, where the
+  service offers one, a text or chat for when calling is not safe. Every
+  number was checked against the service's own website or an official
+  government page on the date the page shows; the list is not exhaustive.
+  Before Clairix opens the settings of an app it flagged, it offers to save
+  the app's details (installer, install date, access, why it was flagged,
+  its signing certificate's SHA-256) to the timeline and the clipboard, or
+  to talk to someone first.
 
 ---
 
