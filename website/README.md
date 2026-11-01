@@ -51,7 +51,7 @@ styles into files under `/_astro/`.
 |---|---|
 | `src/config/release.ts` | Clairix Full version, APK URL, SHA-256, release notes, Open Collective URL |
 | `src/config/site.ts` | Navigation, footer, per-page titles, descriptions and Open Graph lines |
-| `src/content/docs/*.md` | Security, Support, Press, Privacy, Terms and Delete-account copy |
+| `src/content/docs/*.md` | Security, Support, Press, Privacy, Terms, Legal-process and Delete-account copy |
 | `src/content/features/*.md` | One file per feature section on /features |
 | `src/pages/` | One file per page; `index.astro` holds the home page copy |
 | `src/lib/icons.ts` | The Clairix icon set (24 px grid, chamfered) |

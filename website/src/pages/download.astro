@@ -8,6 +8,12 @@ import { release, fullReleaseReady, releaseNotesUrl, sumsUrl, sigUrl, releaseSig
 
 // The public half of the key that signs each release's checksum list (tools/signing in the repository).
 const PUBLIC_KEY_URL = `${GITHUB_URL}/blob/main/android/asset-signing.pem`;
+
+// Obtainium (https://obtainium.imranr.dev) adds an app from a link of the form obtainium://add/<source URL>.
+const OBTAINIUM_INFO_URL = 'https://obtainium.imranr.dev';
+const OBTAINIUM_ADD_URL = `obtainium://add/${GITHUB_URL}`;
+// Matches clairix-v3.0.0-beta.8.apk (Clairix Full), not clairix-comms-v….apk or the Play bundle.
+const OBTAINIUM_APK_FILTER = 'clairix-v[^/]*\\.apk$';
 import { softwareApplication } from '../lib/schema';
 
 // The file name the browser saves, taken from the published URL so the hash commands match the download.
@@ -26,7 +32,7 @@ const compare: { row: string; play: string; full: string }[] = [
     play: 'No',
     full: 'Yes, unless the operator of the relay switches it off. A non-monetary token that members of the same relay can pass to one another. The relay keeps each balance and the amount and hour of each transfer for 30 days, never who paid whom; the note attached to a transfer is end-to-end encrypted. It cannot be bought or cashed out.',
   },
-  { row: 'Distribution and updates', play: 'Google Play, automatic', full: 'This page, manual' },
+  { row: 'Distribution and updates', play: 'Google Play, automatic', full: 'This page or GitHub Releases, by hand or through Obtainium' },
   { row: 'Price', play: 'Free', full: 'Free' },
 ];
 
@@ -291,6 +297,30 @@ openssl pkeyutl -verify -pubin -inkey asset-signing.pem -rawin -in SHA256SUMS.tx
             security flaw says so on the Scan and Comms screens and sends nothing but SOS alerts until it is updated. Versions up
             to 3.0.0 Beta 8 do not read the note.
           </p>
+          <h4 class="obtainium-title" id="obtainium">Or let Obtainium check for you</h4>
+          <p class="muted">
+            <a class="text-link" href={OBTAINIUM_INFO_URL} rel="noopener">Obtainium</a> is a free, open-source Android app that
+            watches a project's GitHub releases and offers each new APK as an update. It downloads from GitHub Releases, the same
+            place this page's button does. With Obtainium installed, open this link on your phone:
+          </p>
+          <a class="btn cham cham--oct btn--ghost" href={OBTAINIUM_ADD_URL}>Add Clairix to Obtainium</a>
+          <ol class="numbered">
+            <li>
+              Before you tap Add, turn on <strong>Include prereleases</strong>: every Clairix release so far is a beta, and
+              without it Obtainium finds none.
+            </li>
+            <li>
+              Set <strong>Filter links by regex</strong> to <code>{OBTAINIUM_APK_FILTER}</code>, so it picks Clairix Full and not
+              Clairix Comms, the messaging-only APK in the same release.
+            </li>
+            <li>Tap Add, then install. Later releases show up in Obtainium's list as updates.</li>
+          </ol>
+          <p class="muted small">
+            Obtainium does not check the SHA-256 or the signed checksum list. Android refuses an update signed with a different
+            key from the installed app's, so if you install the first copy from this page and check it as above, every update
+            Obtainium brings has to come from the same signer. Clairix is not listed in F-Droid, IzzyOnDroid or any other app
+            store yet.
+          </p>
         </div>
       </div>
 
@@ -545,6 +575,15 @@ openssl pkeyutl -verify -pubin -inkey asset-signing.pem -rawin -in SHA256SUMS.tx
   }
   .small {
     font-size: 0.9375rem;
+  }
+  .obtainium-title {
+    margin: 32px 0 12px;
+    font-size: 1.0625rem;
+    font-weight: 700;
+    color: var(--clx-text);
+  }
+  .steps-grid .btn {
+    margin: 16px 0 20px;
   }
   @media (max-width: 860px) {
     .steps-grid {

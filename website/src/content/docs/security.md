@@ -107,6 +107,8 @@ What the relay can observe: the recipient of each envelope, its size, the time, 
 
 We say the rest plainly too. A relay operator, or the platform under it, who captured live requests could see the network address each one came from. Apps from before Beta 6 fetch tokens the relay hands out, which it could tie to the account; current tokens are blind and that link is gone, and from 1 January 2027 the relay refuses the old kind. That is possible only while a request is in flight; none of it is written down. If your IP address matters to you, turn on Tor in Comms settings (it is built into the app, and relays with an onion address are reached without leaving Tor), or use a VPN. If you use a VPN or a Tor app outside Clairix, also turn on "Refuse the relay if its key changes" (Phone check → Certificates): a Tor exit relay sits between you and our relay, and in October 2026 more than 300 hijacked exits swapped in fake keys to steal SSH passwords. Messages stay end-to-end encrypted either way, and a forged web certificate would have to fool the normal certificate checks first; with the key pinned, even one that did is refused.
 
+What of this could be handed over under a court order, what could not, and how many requests have arrived is on the [legal process page](/legal-process).
+
 You delete your relay account from inside the app with Wipe Clairix or Delete identity and number (both in Settings, under Wipe and delete), or by email. [How to delete your account.](/delete-account)
 
 ## No analytics, by design

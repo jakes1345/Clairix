@@ -47,6 +47,7 @@ against `android/asset-signing.pub` before they publish:
 | `ioc.json.gz`, the stalkerware list | `ioc` | `ioc.yml` | the app, before it uses a downloaded list (`analysis/StalkwareIoc.kt`) |
 | `SHA256SUMS.txt`, the checksums of each release's files | every `v*` release | `release.yml` | you, by hand; the app does not check it |
 | `KEYS.md`, this file | `keys` | `keys.yml` | you, by hand |
+| `legal-process.md`, the text of [clairix.app/legal-process](https://clairix.app/legal-process) with its dated transparency statement | `keys` | `keys.yml` | you, by hand |
 
 A `.sig` is one line: the 64-byte Ed25519 signature over the file's exact
 bytes, base64 without padding (`tools/signing/README.md`).
@@ -161,7 +162,9 @@ anyone. Publishing this file through `keys.yml`, which is started by hand,
 from `main` only, adds one statement that only the maintainer can make: these
 two keys, and no others, are the ones Clairix signs its downloads, its release
 checksums and its APKs with, so anything signed with another key did not come
-from the project.
+from the project. The same run signs and publishes the legal-process page, so
+its transparency section, which says how many requests for users' data have
+arrived as of the date it gives, is a statement by the same key.
 
 On every pull request that touches this file or the key files, and before
 every signing, `keys.yml` checks that this file names the key in

@@ -1,0 +1,27 @@
+Clairix is a security app for a stock Android phone: no root, no custom ROM, no unlocked bootloader. It looks for what may be watching you, and gives you encrypted messages and calls through a relay you or someone you trust can run.
+
+<b>What it checks</b>
+<ul>
+<li><b>Hidden cameras.</b> Point the phone around a room and it looks for the glint a lens throws back under the torch, and for infrared lights through the front camera. Nothing is saved unless you keep a photo of a finding.</li>
+<li><b>Trackers.</b> Listens for AirTags, Tiles and similar Bluetooth tags, and says one is following you only once it has been heard at places far apart that your own position shows you travelled between.</li>
+<li><b>Spyware.</b> Flags apps that can read your screen, passwords or microphone, matches every app against a public list of known stalkerware, and checks the phone itself: certificates, proxies, USB debugging, patch level.</li>
+<li><b>Fake Wi-Fi and cell towers.</b> Warns about hotspots set up to impersonate networks your phone trusts, and about towers that break the rules for the places you go.</li>
+<li><b>GPS.</b> Checks whether satellite signals look spoofed or jammed.</li>
+</ul>
+
+<b>Messages and calls</b>
+Messages, photos, voice notes and calls are end-to-end encrypted on the phone (the Olm double ratchet, from the audited vodozemac library) and sent as sealed envelopes the relay cannot open and is not told the sender of. Groups, disappearing messages, an SOS to your groups with your position, a duress phrase and a fake call are included. Messaging needs a Clairix number: an invite from someone already on Clairix, or a relay you run yourself. The project relay runs on Cloudflare; anyone can run their own, and relays reach each other.
+
+<b>Offline navigation</b>
+Turn-by-turn directions from signed offline maps, covering the United States only for now, with the licence-plate cameras mapped in OpenStreetMap shown and routed around.
+
+<b>What to know first</b>
+<ul>
+<li>This is the Full edition: the whole app, including the Card Vault with NFC card emulation and ClairixCoin, a non-monetary token passed between members of the same relay.</li>
+<li>Detection is best-effort. No app finds every camera, tracker or piece of spyware, and an app cannot see past a compromised operating system.</li>
+<li>Clairix includes Google's Play services location library. On a phone with Google Play services, position fixes come from Google's fused location provider unless Satellite-only positioning is on; on a phone without it, Clairix uses Android's own location service.</li>
+<li>There are no analytics, advertising or crash-reporting libraries, and nothing reports back to the project.</li>
+<li>Requires Android 12 or newer. Free software under the GNU GPL version 3.</li>
+</ul>
+
+What leaves the phone, what the relay keeps and for how long, and where the limits are: https://clairix.app/security

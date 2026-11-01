@@ -53,6 +53,7 @@ export const footerColumns: { title: string; links: NavLink[] }[] = [
       { label: 'What leaves your phone', href: '/security#egress' },
       { label: 'Privacy Policy', href: '/privacy' },
       { label: 'Terms of Service', href: '/terms' },
+      { label: 'Legal process', href: '/legal-process' },
       { label: 'Delete your account', href: '/delete-account' },
     ],
   },
@@ -133,6 +134,14 @@ export const pages = {
     ogTitle: 'Clairix Terms of Service',
     ogImage: '/og/terms.png',
     ogImageAlt: 'Clairix Terms of Service',
+  },
+  legalProcess: {
+    title: 'Legal process and transparency – Clairix',
+    description:
+      'Who would receive a demand for Clairix users’ data, what the relay could hand over and what it does not hold, how users are told, and how many requests have arrived.',
+    ogTitle: 'Clairix legal process and transparency',
+    ogImage: '/og/security.png',
+    ogImageAlt: 'Your data stays on your phone.',
   },
   deleteAccount: {
     title: 'Delete your account – Clairix',

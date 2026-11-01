@@ -1,0 +1,13 @@
+---
+import DocLayout from '../layouts/DocLayout.astro';
+import { Content, getHeadings } from '../content/docs/legal-process.md';
+import { pages } from '../config/site';
+---
+
+<DocLayout meta={pages.legalProcess} label="Legal" title="Legal process and transparency<em>.</em>" headings={getHeadings()} tags={['Updated 1 November 2026']}>
+  <p class="lede" slot="lede">
+    Who would receive a court order or other demand for Clairix users' data, what the relay could hand over, what it does not
+    hold, how a request is handled, and how many have arrived.
+  </p>
+  <article class="prose"><Content /></article>
+</DocLayout>

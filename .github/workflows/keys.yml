@@ -2,6 +2,9 @@ name: Signing keys
 
 # Publishes docs/KEYS.md, the record of the keys Clairix signs with, signed with
 # the asset key (tools/signing), as the `keys` release: KEYS.md and KEYS.md.sig.
+# The legal-process page (website/src/content/docs/legal-process.md, with its
+# dated transparency statement) is signed and published beside it the same way,
+# as legal-process.md and legal-process.md.sig.
 # Publishing is a statement by the maintainer (docs/KEYS.md, "What the maintainer
 # signs for"), so it happens only when someone starts this workflow by hand, from
 # main. Pull requests that touch the file or the key files only check that the
@@ -77,8 +80,9 @@ jobs:
         run: |
           mkdir -p dist
           cp docs/KEYS.md dist/KEYS.md
-          python tools/signing/sign.py dist/KEYS.md
-          python tools/signing/sign.py --verify android/asset-signing.pub dist/KEYS.md
+          cp website/src/content/docs/legal-process.md dist/legal-process.md
+          python tools/signing/sign.py dist/KEYS.md dist/legal-process.md
+          python tools/signing/sign.py --verify android/asset-signing.pub dist/KEYS.md dist/legal-process.md
 
       - name: Publish
         if: github.event_name == 'workflow_dispatch'
@@ -89,6 +93,8 @@ jobs:
           body: |
             docs/KEYS.md as of ${{ github.sha }}: the keys Clairix signs with, and how to check them.
             KEYS.md.sig is its Ed25519 signature by the asset key (android/asset-signing.pub).
+            legal-process.md is the text of https://clairix.app/legal-process as of the same commit, with its
+            dated transparency statement; legal-process.md.sig is its signature by the same key.
           prerelease: true
           make_latest: false
           overwrite_files: true
@@ -96,3 +102,5 @@ jobs:
           files: |
             dist/KEYS.md
             dist/KEYS.md.sig
+            dist/legal-process.md
+            dist/legal-process.md.sig
