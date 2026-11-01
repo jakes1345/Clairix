@@ -181,6 +181,7 @@ class HelplinesTest {
 
     @Test
     fun theBundledListParsesWithoutDroppingAnything() {
+        val today = LocalDate.now()
         val raw = bundled().readText()
         val parsed = Helplines.parse(raw)
         val countries = JSONObject(raw).getJSONObject("countries")
@@ -188,7 +189,33 @@ class HelplinesTest {
         for (key in countries.keys()) rawLines += countries.getJSONObject(key).getJSONArray("lines").length()
         assertEquals("every country in the file is shown", countries.length(), parsed.countries.size)
         assertEquals("every line in the file passed the checks", rawLines, parsed.countries.values.sumOf { it.lines.size })
-        val today = LocalDate.now()
+        // The ways to reach a line other than its number are dropped one by one when malformed: count each.
+        var rawTexts = 0
+        var rawChats = 0
+        var rawAlso = 0
+        var rawEmergencyTexts = 0
+        for (key in countries.keys()) {
+            val c = countries.getJSONObject(key)
+            if (c.optJSONObject("emergency")?.has("text") == true) rawEmergencyTexts++
+            val lines = c.getJSONArray("lines")
+            for (i in 0 until lines.length()) {
+                val l = lines.getJSONObject(i)
+                if (l.has("text")) rawTexts++
+                rawChats += l.optJSONArray("chat")?.length() ?: 0
+                rawAlso += l.optJSONArray("also")?.length() ?: 0
+            }
+        }
+        val parsedLines = parsed.countries.values.flatMap { it.lines }
+        assertEquals("every text option passed the checks", rawTexts, parsedLines.count { it.text != null })
+        assertEquals("every chat option passed the checks", rawChats, parsedLines.sumOf { it.chat.size })
+        assertEquals("every other number passed the checks", rawAlso, parsedLines.sumOf { it.also.size })
+        assertEquals(
+            "every emergency text passed the checks",
+            rawEmergencyTexts,
+            parsed.countries.values.count { it.emergency?.text != null }
+        )
+        assertNotNull("the directory for other countries passed the checks", parsed.directory)
+        assertFalse("the directory's check is not in the future", parsed.directory!!.verified.isAfter(today))
         for (c in parsed.countries.values) {
             assertEquals("${c.code} is keyed by its own code", c.code, Helplines.normalize(c.code))
             val e = c.emergency
@@ -230,5 +257,58 @@ class HelplinesTest {
         // 116 016 where the operator's own site says it answers, and nowhere it was not confirmed.
         for (code in listOf("DE", "CZ", "FI", "SE")) assertTrue("$code answers 116 016", "116 016" in phones(code))
         for (code in book.countries.keys - setOf("DE", "CZ", "FI", "SE")) assertFalse("$code: 116 016 not confirmed", "116 016" in phones(code))
+    }
+
+    @Test
+    fun aLineRunForWomenSaysSo() {
+        val book = Helplines.parse(bundled().readText())
+        val women = Regex("women|frauen|femmes", RegexOption.IGNORE_CASE)
+        for (c in book.countries.values) for (l in c.lines) {
+            if (!women.containsMatchIn(l.name)) continue
+            val says = l.area?.contains("women", ignoreCase = true) == true || l.note?.contains("women", ignoreCase = true) == true
+            assertTrue("${c.code}: ${l.name} says whom it serves", says)
+        }
+        val england = book.countries.getValue("GB").lines.single { it.phone == "0808 2000 247" }
+        assertTrue("the Refuge line, named for no one, says it is run for women", england.note?.contains("women") == true)
+    }
+
+    @Test
+    fun finlandsFormerNumberIsListedWhereNollalinjaSaysItStillWorks() {
+        val book = Helplines.parse(bundled().readText())
+        val nolla = book.countries.getValue("FI").lines.single { it.phone == "116 016" }
+        assertTrue(nolla.also.any { it.phone == "080 005 005" })
+    }
+
+    // ── A country the list does not have ──────────────────────────────────────
+
+    private fun directory(url: String = "https://example.org/", verified: String? = "2026-11-01") = JSONObject().apply {
+        put("label", "Directory")
+        put("url", url)
+        put("source", "https://example.org/")
+        verified?.let { put("verified", it) }
+    }
+
+    @Test
+    fun theDirectoryIsOfferedOnlyWhenNoListedCountryIsShown() {
+        val withDirectory = Helplines.parse(
+            JSONObject()
+                .put("directory", directory())
+                .put("countries", JSONObject().put("IE", country("Ireland", line("IE line"))))
+                .toString()
+        )
+        val d = withDirectory.directory
+        assertNotNull(d)
+        val none = Helplines.choose(withDirectory, simCountry = "in", regionCountry = "IN")
+        assertEquals("India is not listed: the directory is offered", d, Helplines.directoryFor(withDirectory, none.country))
+        val ireland = Helplines.choose(withDirectory, simCountry = "ie", regionCountry = null)
+        assertNull("a listed country shows its own lines instead", Helplines.directoryFor(withDirectory, ireland.country))
+    }
+
+    @Test
+    fun aDirectoryThatIsNotHttpsOrNotCheckedIsDropped() {
+        fun parsed(o: JSONObject) = Helplines.parse(JSONObject().put("directory", o).put("countries", JSONObject()).toString()).directory
+        assertNull(parsed(directory(url = "http://example.org/")))
+        assertNull(parsed(directory(verified = null)))
+        assertNotNull(parsed(directory()))
     }
 }

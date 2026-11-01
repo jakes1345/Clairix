@@ -8,6 +8,7 @@ import app.clairix.TrackerType
 import app.clairix.analysis.StalkwareScanner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -117,5 +118,70 @@ class SafetyFirstTest {
         )
         assertEquals(listOf("com.spy", "com.maybe", "com.keys", "com.admin"), SafetyFirst.evidencePackages(r))
         assertTrue(SafetyFirst.evidencePackages(result()).isEmpty())
+    }
+
+    private fun ownerResult(status: StalkwareScanner.GrantStatus) = StalkwareScanner.Result(
+        apps = emptyList(), notificationListeners = emptyList(), accessibilityServices = emptyList(), vpnApps = emptyList(),
+        suspiciousImes = emptyList(), activeDeviceAdmins = listOf("com.google.android.gms"),
+        vouchedAdmins = setOf("com.google.android.gms"), usageAccessGranted = true, scannedAt = 0L,
+        grants = mapOf(StalkwareScanner.grantKey(StalkwareScanner.GrantKind.PROFILE_OWNER, "com.google.android.gms") to status),
+        owners = listOf(StalkwareScanner.Owner("com.google.android.gms", deviceOwner = false))
+    )
+
+    @Test
+    fun anOwnerNobodyConfirmedLeadsWithTheCardAndIsInTheEvidence() {
+        // Family Link runs as Google Play services: a vouched admin, never scored.
+        val r = ownerResult(StalkwareScanner.GrantStatus.CONFIRM)
+        assertTrue(SafetyFirst.forStalkerware(r))
+        assertEquals(listOf("com.google.android.gms"), SafetyFirst.evidencePackages(r))
+    }
+
+    @Test
+    fun anOwnerTheOwnerConfirmedDoesNot() {
+        val r = ownerResult(StalkwareScanner.GrantStatus.YOURS)
+        assertFalse(SafetyFirst.forStalkerware(r))
+        assertTrue(SafetyFirst.evidencePackages(r).isEmpty())
+    }
+
+    private fun listResult(apps: List<StalkwareScanner.SuspiciousApp>, statuses: Map<String, StalkwareScanner.GrantStatus>) =
+        StalkwareScanner.Result(
+            apps = apps, notificationListeners = emptyList(), accessibilityServices = statuses.keys.toList(),
+            vpnApps = emptyList(), suspiciousImes = emptyList(), activeDeviceAdmins = emptyList(), vouchedAdmins = emptySet(),
+            usageAccessGranted = true, scannedAt = 0L,
+            grants = statuses.mapKeys { StalkwareScanner.grantKey(StalkwareScanner.GrantKind.ACCESSIBILITY, it.key) }
+        )
+
+    @Test
+    fun aSharedSettingsListAsksAboutTheAppOnItThatNeedsALook() {
+        val a11y = StalkwareScanner.GrantKind.ACCESSIBILITY
+        val known = StalkwareScanner.GrantStatus.KNOWN
+        val unknown = StalkwareScanner.GrantStatus.UNKNOWN
+        val clean = listResult(
+            emptyList(),
+            mapOf(
+                "com.passwords" to known,
+                "com.mine" to StalkwareScanner.GrantStatus.YOURS,
+                "com.oem" to StalkwareScanner.GrantStatus.PRELOADED
+            )
+        )
+        assertNull("every app on the page is known, marked as hers or preloaded", SafetyFirst.sharedPageSubject(clean, a11y, clean.accessibilityServices))
+
+        val unvouched = listResult(emptyList(), mapOf("com.passwords" to known, "com.helper" to unknown))
+        assertEquals(
+            "the password manager's button opens the page the unknown service is switched off on",
+            "com.helper",
+            SafetyFirst.sharedPageSubject(unvouched, a11y, unvouched.accessibilityServices)
+        )
+
+        val flagged = listResult(listOf(app("com.spy", 9)), mapOf("com.passwords" to known, "com.helper" to unknown, "com.spy" to unknown))
+        assertEquals(
+            "a flagged app comes before one that is merely unknown",
+            "com.spy",
+            SafetyFirst.sharedPageSubject(flagged, a11y, flagged.accessibilityServices)
+        )
+        assertNull(
+            "a flagged app on another list does not count",
+            SafetyFirst.sharedPageSubject(flagged, a11y, listOf("com.passwords"))
+        )
     }
 }

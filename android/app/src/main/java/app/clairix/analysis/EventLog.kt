@@ -15,7 +15,10 @@ import org.json.JSONObject
  * record you can actually act on or hand to someone.
  *
  * It is capped so the file cannot grow without bound, dropping the oldest
- * entries first.
+ * entries first. Evidence the owner saved on purpose ([KEPT]) is not aged out
+ * by the retention and is the last to go at the cap: an app's evidence saved
+ * before it was removed cannot be collected again. It leaves only with
+ * [clear] ("Clear all data", a wipe), or at the cap once nothing else is left.
  */
 class EventLog(
     private val store: Store,
@@ -63,7 +66,7 @@ class EventLog(
         val at = events.indexOfFirst { it.ts <= event.ts }
         events.add(if (at < 0) events.size else at, event)
         val overflow = ArrayList<TimelineEvent>()
-        while (events.size > cap) overflow.add(events.removeAt(events.size - 1))
+        while (events.size > cap) overflow.add(events.removeAt(overflowIndex()))
         persist()
         dropped(overflow)
         return true
@@ -83,12 +86,18 @@ class EventLog(
         dropped(gone)
     }
 
-    /** Deletes events before [cutoff]; returns how many. */
+    /** The oldest event that is not [KEPT], or the oldest of all when every one is. */
+    private fun overflowIndex(): Int {
+        val oldestOrdinary = events.indexOfLast { it.kind !in KEPT }
+        return if (oldestOrdinary >= 0) oldestOrdinary else events.size - 1
+    }
+
+    /** Deletes events before [cutoff], other than [KEPT] ones; returns how many. */
     @Synchronized
     fun pruneOlderThan(cutoff: Long): Int {
-        val gone = events.filter { it.ts < cutoff }
+        val gone = events.filter { it.ts < cutoff && it.kind !in KEPT }
         if (gone.isEmpty()) return 0
-        events.removeAll { it.ts < cutoff }
+        events.removeAll { it.ts < cutoff && it.kind !in KEPT }
         persist()
         dropped(gone)
         return gone.size
@@ -135,4 +144,9 @@ class EventLog(
         // Absent from every event stored before attachments existed.
         attachment = if (o.has("attachment")) o.optString("attachment").takeIf { it.isNotEmpty() } else null
     )
+
+    companion object {
+        /** Kinds the owner saved on purpose, which the retention does not delete. */
+        val KEPT: Set<EventKind> = setOf(EventKind.EVIDENCE)
+    }
 }

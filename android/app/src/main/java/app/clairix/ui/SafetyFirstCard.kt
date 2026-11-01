@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.clairix.BuildConfig
 import app.clairix.Detection
 import app.clairix.EventKind
 import app.clairix.EvidenceExport
@@ -46,6 +47,12 @@ internal object SafetyFirst {
     /** At the top of the Wipe page, where the evidence Clairix holds is about to go. */
     const val TITLE_WIPE = "If you found a tracker or spyware"
 
+    /** How the owner check finishes "Enter your Clairix passcode to ...", as on the other Export buttons. */
+
+    /** Owners of the phone or its profile the owner has not said she enrolled herself. */
+    private fun unconfirmedOwners(r: StalkwareScanner.Result): List<String> =
+        r.owners.filter { r.status(it.kind, it.packageName) != StalkwareScanner.GrantStatus.YOURS }.map { it.packageName }
+
     /**
      * Whether the explainer for [d] carries the card: a tracker on you or a
      * device that travelled with you (both [Detection.following]), or a
@@ -57,12 +64,14 @@ internal object SafetyFirst {
     /**
      * Whether the stalkerware findings lead with the card: any app scored high
      * or medium, any enabled keyboard the scan does not vouch for, or any
-     * active device admin it does not vouch for. Each of those comes with a way
-     * to its settings, where it can be removed.
+     * active device admin it does not vouch for, or a device or profile owner
+     * the owner has not confirmed (Family Link runs as Google Play services, a
+     * vouched admin). Each of those comes with a way to its settings, where it
+     * can be removed.
      */
     fun forStalkerware(r: StalkwareScanner.Result): Boolean =
         r.high.isNotEmpty() || r.medium.isNotEmpty() || r.suspiciousImes.isNotEmpty() ||
-            r.activeDeviceAdmins.any { it !in r.vouchedAdmins }
+            r.activeDeviceAdmins.any { it !in r.vouchedAdmins } || unconfirmedOwners(r).isNotEmpty()
 
     /** Whether a timeline entry's details carry the card: an unlock-ledger anomaly or a biometric enrolment. */
     fun forEvent(kind: EventKind): Boolean = kind == EventKind.UNLOCK_ANOMALY || kind == EventKind.BIOMETRIC_ENROLLED
@@ -78,24 +87,45 @@ internal object SafetyFirst {
     fun gatesSettings(flagged: Boolean, vouched: Boolean): Boolean = flagged || !vouched
 
     /**
+     * For a list page Settings shares between apps (accessibility, notification
+     * access, keyboards), the app the sheet should be about when any row's
+     * button is tapped: the first of [packages] the scan flagged, in the scan's
+     * order, else the first holding a [kind] grant that needs a look (not a
+     * known app, not one the owner marked as hers, not one preloaded on the
+     * phone); null when none does. A known app's button opens the same page
+     * the flagged one can be switched off on, so it asks first too.
+     */
+    fun sharedPageSubject(r: StalkwareScanner.Result, kind: StalkwareScanner.GrantKind, packages: List<String>): String? =
+        r.apps.firstOrNull { it.packageName in packages }?.packageName
+            ?: packages.firstOrNull { r.status(kind, it) !in SETTLED }
+
+    private val SETTLED = setOf(
+        StalkwareScanner.GrantStatus.KNOWN,
+        StalkwareScanner.GrantStatus.YOURS,
+        StalkwareScanner.GrantStatus.PRELOADED
+    )
+
+    /**
      * The apps whose evidence is saved before the stalkerware page exports the
      * report: every flagged app, highest score first as the scan ranks them,
-     * then every keyboard and device admin the scan does not vouch for, each once.
+     * then every keyboard and device admin the scan does not vouch for, then
+     * every device or profile owner not confirmed, each once.
      */
     fun evidencePackages(r: StalkwareScanner.Result): List<String> {
         val flagged = r.apps.map { it.packageName }
         val unvouched = r.suspiciousImes + r.activeDeviceAdmins.filter { it !in r.vouchedAdmins }
-        return (flagged + unvouched).distinct()
+        return (flagged + unvouched + unconfirmedOwners(r)).distinct()
     }
 }
 
 /**
  * The safety card. [title] says what is about to be removed; the two
  * sentences under it are the same on every screen. "Export the evidence first"
- * runs [onExport] when the screen has evidence of its own to add first, and
- * otherwise asks for the evidence report as it stands ([EvidenceExport], which
- * shows the period and the warning before the share sheet); "Get help" opens
- * the Get help page over whatever is showing.
+ * asks for the passcode when one is set (in [EvidenceExport]'s host), then runs
+ * [onExport] when the screen has evidence of its own to add first, and otherwise
+ * asks for the evidence report as it stands, which shows the period and the
+ * warning before the share sheet; the comms-only edition holds no evidence, so it
+ * has no such button there. "Get help" opens the Get help page over whatever is showing.
  */
 @Composable
 internal fun SafetyFirstCard(
@@ -110,12 +140,14 @@ internal fun SafetyFirstCard(
         title = title,
         action = {
             Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                SecondaryButton(
-                    SafetyFirst.EXPORT,
-                    onClick = { if (onExport != null) onExport() else EvidenceExport.request() },
-                    tone = Tone.Accent,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (BuildConfig.FULL_ACCESS) {
+                    SecondaryButton(
+                        SafetyFirst.EXPORT,
+                        onClick = { if (onExport != null) onExport() else EvidenceExport.request() },
+                        tone = Tone.Accent,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 GhostButton(SafetyFirst.GET_HELP, onClick = { Registry.requestHelp() }, modifier = Modifier.fillMaxWidth())
             }
         }

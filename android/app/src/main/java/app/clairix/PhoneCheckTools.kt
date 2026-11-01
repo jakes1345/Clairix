@@ -207,6 +207,8 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                         title = "Unknown keyboard"
                     )
                 }
+                // Every row opens the same keyboard settings page, so each asks first while any keyboard there needs a look.
+                val imeSubject = SafetyFirst.sharedPageSubject(r, StalkwareScanner.GrantKind.KEYBOARD, r.enabledImes)
                 items(r.enabledImes, key = { "ime|$it" }) { pkg ->
                     GrantRow(r, StalkwareScanner.GrantKind.KEYBOARD, pkg, onMine) {
                         GrantCard(
@@ -216,6 +218,8 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                             actionLabel = "Keyboard settings",
                             action = StalkwareScanner.keyboardSettingsIntent(),
                             known = r.status(StalkwareScanner.GrantKind.KEYBOARD, pkg) == StalkwareScanner.GrantStatus.KNOWN,
+                            sharedSubject = imeSubject,
+                            sharedFlagged = r.apps.firstOrNull { it.packageName == imeSubject },
                         )
                     }
                 }
@@ -330,6 +334,8 @@ private fun LazyListScope.accessSections(
         item(key = "§${kind.key}-note") {
             Text(note, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle, modifier = Modifier.padding(horizontal = 4.dp))
         }
+        // Every row opens the same Settings list, so each asks first while any app on it needs a look.
+        val subject = SafetyFirst.sharedPageSubject(r, kind, packages)
         items(packages, key = { "${kind.key}|$it" }) { pkg ->
             GrantRow(r, kind, pkg, onMine) {
                 GrantCard(
@@ -339,6 +345,8 @@ private fun LazyListScope.accessSections(
                     actionLabel = settingsLabel,
                     action = Intent(settings),
                     known = r.status(kind, pkg) == StalkwareScanner.GrantStatus.KNOWN,
+                    sharedSubject = subject,
+                    sharedFlagged = r.apps.firstOrNull { it.packageName == subject },
                 )
             }
         }
@@ -464,7 +472,12 @@ private fun MarkAsMineDialog(
     )
 }
 
-/** One app holding a grant (an enabled keyboard or an active device admin), with its score when it was flagged. */
+/**
+ * One app holding a grant (an enabled keyboard or an active device admin), with its score when it was flagged.
+ * When [action] opens a Settings list shared with other apps, [sharedSubject] is the app on that list that
+ * needs a look ([SafetyFirst.sharedPageSubject]) and [sharedFlagged] the scan's record of it: a row that
+ * would open straight away asks first about that app instead.
+ */
 @Composable
 private fun GrantCard(
     packageName: String,
@@ -473,6 +486,8 @@ private fun GrantCard(
     actionLabel: String,
     action: Intent,
     known: Boolean = false,
+    sharedSubject: String? = null,
+    sharedFlagged: StalkwareScanner.SuspiciousApp? = null,
 ) {
     val label = remember(packageName) { StalkwareScanner.appLabel(context, packageName) }
     ClairixCard {
@@ -484,7 +499,14 @@ private fun GrantCard(
             if (flagged != null) StatusPill("${flagged.severity.name} · ${flagged.score}", flagged.severity.tone())
             else if (known) StatusPill("Known app", Tone.Safe)
         }
-        FlaggedAppButton(actionLabel, packageName, flagged, gated = SafetyFirst.gatesSettings(flagged != null, known)) {
+        val ownGate = SafetyFirst.gatesSettings(flagged != null, known)
+        val subject = if (ownGate) packageName else sharedSubject
+        FlaggedAppButton(
+            actionLabel,
+            subject ?: packageName,
+            if (subject == packageName) flagged else sharedFlagged,
+            gated = subject != null
+        ) {
             openExternal(context, action)
         }
     }

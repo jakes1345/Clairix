@@ -117,8 +117,9 @@ private fun LazyListScope.helpContent(
 
     item(key = "§intro") {
         Text(
-            "These services are for anyone dealing with abuse or stalking, including from someone they live with. " +
-                "You can talk through what you found and what to do about it before you remove anything.",
+            "These services help people dealing with abuse or stalking, including from someone they live with. " +
+                "Some are run for women, and say so. You can talk through what you found and what to do about it " +
+                "before you remove anything.",
             style = MaterialTheme.typography.bodyLarge,
             color = ClairixTheme.colors.textMuted
         )
@@ -160,6 +161,9 @@ private fun LazyListScope.helpContent(
             )
         }
     }
+    Helplines.directoryFor(book, shown)?.let { directory ->
+        item(key = "§directory") { DirectoryCard(directory, context) }
+    }
     if (shown == null || picking) {
         item(key = "§picker") {
             ChoiceChips(
@@ -195,6 +199,38 @@ private fun LazyListScope.helpContent(
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle,
             modifier = Modifier.padding(vertical = 8.dp)
+        )
+    }
+}
+
+/**
+ * For a country the list does not have: what to do in danger now, without a
+ * number Clairix cannot vouch for there, and the outside directory.
+ */
+@Composable
+private fun DirectoryCard(d: Helplines.Directory, context: Context) {
+    val c = ClairixTheme.colors
+    ClairixCard(spacing = 8.dp) {
+        Text("In danger now", style = MaterialTheme.typography.titleSmall, color = Tone.Danger.color())
+        Text(
+            "Call the local emergency number. From a mobile, 112 reaches the emergency services in many countries, " +
+                "but not in all of them.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = c.text
+        )
+        Hairline(Modifier.padding(vertical = 4.dp))
+        Text(d.label, style = MaterialTheme.typography.titleSmall, color = c.text)
+        d.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle) }
+        Text(
+            "Checked ${Helplines.formatDate(d.verified)}. Clairix has not checked the lines it lists.",
+            style = MaterialTheme.typography.bodySmall,
+            color = c.textSubtle
+        )
+        SecondaryButton(
+            "Open ${d.label}",
+            onClick = { open(context, Intent(Intent.ACTION_VIEW, Uri.parse(d.url)), "No app on this phone can open ${d.url}") },
+            tone = Tone.Accent,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }

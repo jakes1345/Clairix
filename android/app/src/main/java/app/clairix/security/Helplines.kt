@@ -34,10 +34,17 @@ object Helplines {
      */
     data class Choice(val country: Country?, val match: Match, val unmatched: String? = null)
 
-    data class Book(val countries: Map<String, Country>) {
+    /**
+     * The list, and [directory]: a directory of helplines beyond it, for a phone
+     * in a country the list does not have, checked like every line.
+     */
+    data class Book(val countries: Map<String, Country>, val directory: Directory? = null) {
         /** Every country, by name, for the page's picker. */
         val byName: List<Country> get() = countries.values.sortedBy { it.name }
     }
+
+    /** An outside directory of helplines: [url] opens in the browser. */
+    data class Directory(val label: String, val url: String, val note: String?, val source: String, val verified: LocalDate)
 
     data class Country(val code: String, val name: String, val emergency: Emergency?, val lines: List<Line>)
 
@@ -89,11 +96,13 @@ object Helplines {
      * Parses the list. A line without a name, a number, its hours, an https
      * source or a verified date is dropped, and so is a text or chat option
      * that is malformed; a country left with no line and no emergency number
-     * is dropped with it.
+     * is dropped with it. The directory needs a label, an https link, an https
+     * source and a verified date, or it is dropped.
      */
     fun parse(json: String): Book {
         val root = JSONObject(json)
-        val countries = root.optJSONObject("countries") ?: return Book(emptyMap())
+        val directory = root.optJSONObject("directory")?.let(::directory)
+        val countries = root.optJSONObject("countries") ?: return Book(emptyMap(), directory)
         val out = LinkedHashMap<String, Country>()
         for (key in countries.keys()) {
             val code = normalize(key) ?: continue
@@ -104,8 +113,11 @@ object Helplines {
             if (lines.isEmpty() && emergency == null) continue
             out[code] = Country(code, name, emergency, lines)
         }
-        return Book(out)
+        return Book(out, directory)
     }
+
+    /** The outside directory, offered only when no country from the list is shown. */
+    fun directoryFor(book: Book, shown: Country?): Directory? = if (shown == null) book.directory else null
 
     /**
      * A country code as the list keys it: two letters, upper case. The United
@@ -144,6 +156,14 @@ object Helplines {
         val source = o.str("source")?.takeIf(::isHttps) ?: return null
         val verified = o.date("verified") ?: return null
         return Emergency(number, o.str("note"), o.optJSONObject("text")?.let(::text), source, verified)
+    }
+
+    private fun directory(o: JSONObject): Directory? {
+        val label = o.str("label") ?: return null
+        val url = o.str("url")?.takeIf(::isHttps) ?: return null
+        val source = o.str("source")?.takeIf(::isHttps) ?: return null
+        val verified = o.date("verified") ?: return null
+        return Directory(label, url, o.str("note"), source, verified)
     }
 
     private fun line(o: JSONObject): Line? {

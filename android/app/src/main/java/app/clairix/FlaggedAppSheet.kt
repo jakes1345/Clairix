@@ -1,5 +1,6 @@
 package app.clairix
 
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -107,6 +109,41 @@ internal fun saveFlaggedEvidence(context: Context, r: StalkwareScanner.Result): 
         }.getOrDefault(false)
     }
 
+/**
+ * The sheet's copy of the evidence on the clipboard. Copying is a button of its
+ * own, never part of saving: whatever is on the clipboard can be read by anyone
+ * who pastes on this phone and by the keyboard in use, which may be the app the
+ * evidence is about. The copy is cleared when the sheet closes.
+ */
+internal object EvidenceClip {
+    const val LABEL = "Clairix evidence"
+
+    /**
+     * Whether the sheet offers the copy for [packageName]: not when it is an
+     * enabled keyboard ([flagged] says so, or the last scan's [enabledImes]),
+     * which would be handed a clip that names it.
+     */
+    fun offersCopy(packageName: String, flagged: StalkwareScanner.SuspiciousApp?, enabledImes: Collection<String>): Boolean =
+        flagged?.imeEnabled != true && packageName !in enabledImes
+
+    /**
+     * Whether to clear the clipboard as the sheet closes, given that it [copied]
+     * and the label of what the clipboard holds now. [label] is null when Android
+     * will not say (Clairix is not in front, or the clipboard is empty): it is
+     * cleared then, at the cost of anything copied since. A clip with another
+     * label is something the owner copied after, and stays.
+     */
+    fun shouldClear(copied: Boolean, label: CharSequence?): Boolean =
+        copied && (label == null || label.toString() == LABEL)
+}
+
+/** Clears the clipboard when [EvidenceClip.shouldClear] says to. */
+private fun clearEvidenceClip(context: Context) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    val label = runCatching { clipboard.primaryClipDescription?.label }.getOrNull()
+    if (EvidenceClip.shouldClear(copied = true, label = label)) runCatching { clipboard.clearPrimaryClip() }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BeforeYouOpenSheet(
@@ -122,9 +159,18 @@ private fun BeforeYouOpenSheet(
     val saveFocus = remember { FocusRequester() }
     val label = remember(packageName, flagged) { flagged?.appLabel ?: StalkwareScanner.appLabel(context, packageName) }
     var saving by remember { mutableStateOf(false) }
-    var savedAt by remember { mutableStateOf<Long?>(null) }
+    var saved by remember { mutableStateOf<AppEvidence?>(null) }
+    var copied by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
+    val offersCopy = remember(packageName, flagged) {
+        EvidenceClip.offersCopy(packageName, flagged, StalkwareScanner.results.value?.enabledImes.orEmpty())
+    }
     val c = ClairixTheme.colors
+
+    // The copy does not outlive the sheet; locking closes the sheet, so it goes then too.
+    DisposableEffect(Unit) {
+        onDispose { if (copied) clearEvidenceClip(context.applicationContext) }
+    }
 
     // The safe choice is the default one: focus starts on saving the evidence,
     // once the sheet's window is up to take it.
@@ -146,10 +192,7 @@ private fun BeforeYouOpenSheet(
                 }
             }
             result
-                .onSuccess { evidence ->
-                    clipboard.setSensitiveText("Clairix evidence", evidence.text())
-                    savedAt = evidence.savedAt
-                }
+                .onSuccess { evidence -> saved = evidence }
                 .onFailure { failure = "Could not save it: ${it.message ?: it.javaClass.simpleName}" }
             saving = false
         }
@@ -178,6 +221,7 @@ private fun BeforeYouOpenSheet(
             Text(SafetyFirst.NOTICE, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
             Text(SafetyFirst.ADVOCATE, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
 
+            val savedAt = saved?.savedAt
             PrimaryButton(
                 if (savedAt == null) "Save evidence now" else "Save evidence again",
                 onClick = { save() },
@@ -188,11 +232,31 @@ private fun BeforeYouOpenSheet(
             Text(
                 "Its package name, who installed it and when, the access it holds, why it was flagged and the " +
                     "fingerprint of its signing certificate go on the timeline with the time, and so into the " +
-                    "evidence report. A copy goes to the clipboard: paste it somewhere only you can reach.",
+                    "evidence report. It stays there, whatever Keep history for is set to, until you clear all data " +
+                    "or wipe Clairix.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = c.textSubtle
             )
-            savedAt?.let { Notice(Tone.Safe, "Saved at ${tTime(it)}, on the timeline and on the clipboard.") }
+            saved?.let { evidence ->
+                Notice(Tone.Safe, "Saved at ${tTime(evidence.savedAt)}, on the timeline.")
+                if (offersCopy) {
+                    GhostButton(
+                        if (copied) "Copied" else "Copy to clipboard",
+                        onClick = {
+                            clipboard.setSensitiveText(EvidenceClip.LABEL, evidence.text())
+                            copied = true
+                        },
+                        tone = Tone.Neutral,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        "Anyone who pastes on this phone can see what is on the clipboard, and so can the keyboard " +
+                            "you type with. Paste it somewhere only you can reach; Clairix clears it when this closes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = c.textSubtle
+                    )
+                }
+            }
             failure?.let { Notice(Tone.Danger, it) }
 
             SecondaryButton(

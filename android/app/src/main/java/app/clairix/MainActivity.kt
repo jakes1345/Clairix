@@ -1530,10 +1530,13 @@ private fun MainApp(
         }
     }
     // Locking closes Get help, so an unlock someone else makes the owner do does
-    // not open on a page of helplines.
+    // not open on a page of helplines. It closes the explainer sheet too: a sheet
+    // is a window of its own, above the lock screen Clairix draws, and it carries
+    // the safety card's export.
     LaunchedEffect(locked) {
         if (locked) {
             showHelp = false
+            explainerTarget = null
             if (commsActionName == CommsAction.GET_HELP.name) commsActionName = null
         }
     }
@@ -3863,6 +3866,8 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
             item(key = "findings_head") {
                 SectionHeader("Apps with spy-level access", supporting = "${health.findings.size}", tone = Tone.Danger)
             }
+            // These say how to revoke or uninstall, so the safety card comes first, as on the Stalkerware page.
+            item(key = "findings_safety_first") { SafetyFirstCard(title = SafetyFirst.TITLE_APP) }
             items(health.findings, key = { it.id }) { f -> HealthFindingRow(f) }
         }
 

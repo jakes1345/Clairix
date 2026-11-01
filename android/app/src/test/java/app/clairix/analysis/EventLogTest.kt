@@ -161,4 +161,32 @@ class EventLogTest {
         assertFalse(log.record(event("k@2", 10_999L), dedupeKey = "k", dedupeWindowMs = 10_000L))
         assertTrue(log.record(event("k@3", 11_000L), dedupeKey = "k", dedupeWindowMs = 10_000L))
     }
+
+    @Test
+    fun savedEvidenceOutlivesTheRetentionAndIsTheLastToGoAtTheCap() {
+        val dropped = ArrayList<String>()
+        val log = EventLog(store(), cap = 3) { gone -> gone.forEach { dropped += it.id } }
+        log.record(event("evidence", 1_000L, EventKind.EVIDENCE))
+        log.record(event("e2", 2_000L))
+        log.record(event("e3", 3_000L))
+        log.record(event("e4", 4_000L))
+        // Over the cap: the oldest ordinary event goes, not the older evidence.
+        assertEquals(listOf("e2"), dropped)
+        // The retention leaves the evidence however old it is.
+        assertEquals(1, log.pruneOlderThan(3_500L))
+        assertEquals(listOf("e4", "evidence"), log.snapshot().map { it.id })
+        // "Clear all data" takes it.
+        log.clear()
+        assertTrue(log.snapshot().isEmpty())
+        assertTrue("evidence" in dropped)
+    }
+
+    @Test
+    fun aLogOfNothingButEvidenceStillKeepsToTheCap() {
+        val log = EventLog(store(), cap = 2)
+        log.record(event("a", 1_000L, EventKind.EVIDENCE))
+        log.record(event("b", 2_000L, EventKind.EVIDENCE))
+        log.record(event("c", 3_000L, EventKind.EVIDENCE))
+        assertEquals(listOf("c", "b"), log.snapshot().map { it.id })
+    }
 }

@@ -40,6 +40,9 @@ import java.util.concurrent.TimeUnit
  * seen for three retention periods is forgotten (see
  * [app.clairix.analysis.IMSICatcher.applyRetention]). An exported evidence
  * report is kept a day for the app it was shared to, whatever the retention.
+ * Evidence the owner saved about an app ([app.clairix.analysis.EventLog.KEPT])
+ * stays on the timeline whatever the retention, until "Clear all data" or a
+ * wipe: the app may be gone by the time it is needed.
  *
  * It runs when the setting changes, at each start of the app, every quarter
  * hour while the scanner runs, and once a day on an alarm the system keeps

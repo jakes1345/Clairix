@@ -349,11 +349,15 @@ maintainer on the live service, not in this repository.
   other on the list, with a button that opens the dialler and, where the
   service offers one, a text or chat for when calling is not safe. Every
   number was checked against the service's own website or an official
-  government page on the date the page shows; the list is not exhaustive.
+  government page on the date the page shows; the list is not exhaustive,
+  and for a country not on it the page points to Find A Helpline's
+  international directory. Some lines are run for women, and say so.
   Before Clairix opens the settings of an app it flagged, it offers to save
   the app's details (installer, install date, access, why it was flagged,
-  its signing certificate's SHA-256) to the timeline and the clipboard, or
-  to talk to someone first.
+  its signing certificate's SHA-256) to the timeline, where they stay
+  whatever the history setting until you clear all data, or to talk to
+  someone first. A copy to the clipboard is a separate button, not offered
+  for a keyboard, and is cleared when the sheet closes.
 
 ---
 

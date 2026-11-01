@@ -1,6 +1,13 @@
 {
   "version": 1,
   "about": "The Get help page's helplines, keyed by ISO 3166 country code. Every number, text number and link was checked against the page in its source on the date in verified; an entry without both is not shown. The list is not exhaustive. Re-check each entry against its source before changing its verified date.",
+  "directory": {
+    "label": "Find A Helpline",
+    "url": "https://findahelpline.com/",
+    "note": "A free directory of helplines in many more countries, run by ThroughLine. Pick your country, then the abuse and domestic violence topic.",
+    "source": "https://findahelpline.com/",
+    "verified": "2026-11-01"
+  },
   "countries": {
     "US": {
       "name": "United States",
@@ -37,6 +44,7 @@
           "area": "England",
           "phone": "0808 2000 247",
           "hours": "Free, 24 hours",
+          "note": "Run for women. For men, the Men's Advice Line below.",
           "chat": [
             {
               "label": "Live chat at nationaldahelpline.org.uk",
@@ -108,12 +116,22 @@
       "lines": [
         {
           "name": "Women's Aid National Freephone Helpline",
+          "area": "For women",
           "phone": "1800 341 900",
           "hours": "Free, 24 hours",
           "chat": [
             { "label": "Instant message at womensaid.ie", "url": "https://www.womensaid.ie/", "hours": "Mornings and evenings, 7 days a week" }
           ],
           "source": "https://www.womensaid.ie/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Men's Aid National Confidential Helpline",
+          "area": "For men",
+          "phone": "01 554 3811",
+          "hours": "Monday to Friday 9am to 5pm",
+          "note": "For men experiencing domestic violence and coercive control, and their families.",
+          "source": "https://www.mensaid.ie/",
           "verified": "2026-11-01"
         }
       ]
@@ -159,6 +177,7 @@
         },
         {
           "name": "Women's Refuge Crisisline",
+          "area": "For women",
           "phone": "0800 733 843",
           "hours": "Free, 24 hours",
           "note": "Also written 0800 REFUGE.",
@@ -180,6 +199,7 @@
           "area": "Ontario only",
           "phone": "1-866-863-0511",
           "hours": "Free, 24 hours",
+          "note": "Run for women.",
           "also": [
             { "label": "TTY", "phone": "1-866-863-7868" },
             { "label": "#SAFE on a Bell, Rogers, Fido or Telus mobile", "phone": "#7233" }
@@ -220,6 +240,7 @@
       "lines": [
         {
           "name": "Hilfetelefon Gewalt gegen Frauen",
+          "area": "For women",
           "phone": "116 016",
           "hours": "Free, 24 hours, in 18 languages besides German",
           "chat": [
@@ -261,6 +282,9 @@
           "phone": "116 016",
           "hours": "Free, 24 hours, in Finnish, Swedish and English",
           "note": "The call does not show on the phone bill.",
+          "also": [
+            { "label": "Nollalinja's former number, which still reaches it", "phone": "080 005 005" }
+          ],
           "chat": [
             { "label": "Chat at nollalinja.fi", "url": "https://www.nollalinja.fi/en/", "hours": "Monday to Wednesday 9:00 to 15:00, Thursday and Friday 14:00 to 20:00" }
           ],
@@ -302,6 +326,7 @@
       "lines": [
         {
           "name": "3919 Violences Femmes Info",
+          "area": "For women",
           "phone": "3919",
           "hours": "Free, anonymous, 24 hours",
           "note": "Not an emergency line.",
@@ -364,6 +389,7 @@
       "lines": [
         {
           "name": "Frauenhelpline gegen Gewalt",
+          "area": "For women",
           "phone": "0800 222 555",
           "hours": "Free, anonymous, 24 hours",
           "chat": [
