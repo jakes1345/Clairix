@@ -217,6 +217,18 @@ jobs:
       # avdmanager and the emulator do not agree on where AVDs live by default
       # (the emulator looked only in $HOME/.android/avd and found nothing), so
       # both are told, and the step fails here if the emulator cannot see it.
+      # The runner's disk can be too full for the emulator even with the smaller
+      # data partition below (API 33 on 1153fd6: "Not enough space to create
+      # userdata partition. Available: 3227.32 MB ..., need 7372.80 MB"), so
+      # toolchains this job never uses are removed first.
+      - name: Free disk space for the emulator
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules/@angular /usr/share/swift || true
+          sudo docker image prune --all --force > /dev/null 2>&1 || true
+          df -h / | tail -1
+
       - name: Install the emulator and system image
         run: |
           export ANDROID_AVD_HOME="$HOME/.android/avd"
