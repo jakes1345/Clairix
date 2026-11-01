@@ -140,9 +140,27 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
+      # The action needs the repository's dependency graph (Settings → Code security);
+      # until the maintainer turns it on, GitHub answers 404 and the review cannot run.
+      # Say so plainly rather than fail every pull request on a setting (docs/PROCESS.md).
+      - name: Check that the dependency graph is on
+        id: graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/sbom" --silent 2>/dev/null; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Dependency review skipped: the dependency graph is off for this repository. Turn it on under Settings → Code security (docs/PROCESS.md)."
+          fi
+
       # Development dependencies count too, for the relay's sake (see npm-audit).
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      - if: steps.graph.outputs.on == 'true'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           fail-on-scopes: runtime, development, unknown

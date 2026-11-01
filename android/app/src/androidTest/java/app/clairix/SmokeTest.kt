@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
@@ -135,34 +136,41 @@ class SmokeTest {
     /**
      * Scrolls the main list until [t] is on screen, then taps it. Settings is a
      * long list (its About section, with "Take the tour", is near the bottom).
-     * Each swipe is a drag of a third of the screen that holds still before it
-     * lets go, so the list stops where the finger stops: a quick swipe flings,
-     * and a fling carried the About card past between two looks once Settings
-     * grew (run 41267307169). It goes down until a swipe no longer moves the
-     * list, then back up the same way.
+     * A quick swipe flings, and a fling carried the About card past between two
+     * looks once Settings grew (run 41267307169); a drag judged the end of the
+     * list from one unchanged look and stopped halfway (run 41269300153). So it
+     * scrolls the list node itself a third at a time, down to the end (two looks
+     * with nothing new), then back up, and drags without a fling only where no
+     * node reports itself scrollable.
      */
     private fun tapScrolling(t: String) {
+        fun tapIfShown(): Boolean {
+            val found = ui.find(By.text(t)) ?: return false
+            return try { found.click(); alive(t); true } catch (_: StaleObjectException) { device.waitForIdle(1_000); false }
+        }
         val x = device.displayWidth / 2
         val upper = device.displayHeight / 3
         val lower = device.displayHeight * 2 / 3
-        for (down in listOf(true, false)) {
-            var before = onScreen()
-            for (swipe in 0 until 60) {
-                ui.find(By.text(t))?.let {
-                    try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
+        for (direction in listOf(Direction.DOWN, Direction.UP)) {
+            var still = 0
+            for (swipe in 0 until 80) {
+                if (tapIfShown()) return
+                val before = onScreen()
+                // UiAutomator's own scroll on the list itself, which says when the end is
+                // reached; the slow drag (no fling) only where no node reports itself scrollable.
+                val list = runCatching { ui.find(By.scrollable(true)) }.getOrNull()
+                val moved = list?.let { runCatching { it.scroll(direction, 0.3f) }.getOrNull() }
+                if (moved == null) {
+                    val (from, to) = if (direction == Direction.DOWN) lower to upper else upper to lower
+                    device.swipe(arrayOf(Point(x, from), Point(x, to), Point(x, to)), 40)
                 }
-                val (from, to) = if (down) lower to upper else upper to lower
-                // 40 steps of about 5 ms to move, then 40 in place: no speed left to fling with.
-                device.swipe(arrayOf(Point(x, from), Point(x, to), Point(x, to)), 40)
                 device.waitForIdle(1_000)
-                val now = onScreen()
-                if (now == before) break
-                before = now
+                // Two looks in a row with nothing new is the end of the list; one can be a
+                // frame that had not redrawn yet.
+                if (onScreen() == before) { if (++still >= 2) break } else still = 0
             }
         }
-        ui.find(By.text(t))?.let {
-            try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
-        }
+        if (tapIfShown()) return
         shot("MISSING-$t"); fail("Could not find \"$t\" by scrolling")
     }
 

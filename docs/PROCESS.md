@@ -51,7 +51,8 @@ The maintainer does this once, as a repository administrator:
    signed again before their pull request can merge: on the branch,
    `git rebase --force-rebase --gpg-sign origin/main`, then
    `git push --force-with-lease`. Only main refuses a force push.
-5. Settings → Code security: turn on Dependabot alerts and Dependabot
+5. Settings → Code security: turn on the dependency graph (until it is on,
+   `dependency-review` warns and skips), Dependabot alerts and Dependabot
    security updates, and automatic dependency submission. GitHub reads no
    Gradle build file by itself, so without submission the app's libraries are
    missing from the dependency graph that alerts and `dependency-review` read.
