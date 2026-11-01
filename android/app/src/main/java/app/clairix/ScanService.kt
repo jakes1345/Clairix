@@ -38,6 +38,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import app.clairix.analysis.AudioRouteMonitor
 import app.clairix.analysis.CellMonitor
+import app.clairix.analysis.DebugPace
 import app.clairix.analysis.EventLog
 import app.clairix.analysis.Fingerprint
 import app.clairix.analysis.FollowAlertPolicy
@@ -49,11 +50,14 @@ import app.clairix.analysis.LocationClient
 import app.clairix.analysis.LocationHistory
 import app.clairix.analysis.LocationPolicy
 import app.clairix.analysis.LocationTrack
+import app.clairix.analysis.LowPower
+import app.clairix.analysis.LowPowerMode
 import app.clairix.analysis.MockFixes
 import app.clairix.analysis.MotionPolicy
 import app.clairix.analysis.Tracker
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.analysis.ScanPacing
+import app.clairix.analysis.ScanPower
 import app.clairix.analysis.ScanRecord
 import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.StalkwareWatch
@@ -90,6 +94,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -588,6 +594,31 @@ class ScanService : LifecycleService() {
         return START_STICKY
     }
 
+    /**
+     * Settings > Battery counts from the scan's start ([ScanPower]): the battery now and
+     * the scanner's own counters. Low power ([LowPower]) coming on or going off: the
+     * settle threshold, the Bluetooth scan and the ongoing notification follow at once;
+     * the cell and Wi-Fi loops read it on their next cycle. Debug builds also listen for
+     * [DebugPace]'s request to settle now, for the emulator's power checks.
+     */
+    private fun watchPower() {
+        val now = System.currentTimeMillis()
+        ScanPower.start(now, LowPowerMode.sample(this, now))
+        lifecycleScope.launch {
+            LowPowerMode.state.map { it.active }.distinctUntilChanged().collect { low ->
+                motion.stillAfterMs = LowPower.pacing(low).stillAfterMs
+                if (running && scanActive && blePlan(getSystemService(BluetoothManager::class.java)?.adapter) != activeBleScan) {
+                    restartScan()
+                }
+                updateOngoing()
+                publishKick.trySend(Unit)
+            }
+        }
+        if (BuildConfig.DEBUG) lifecycleScope.launch {
+            DebugPace.requests.collect { motion.forceStill()?.let { applyPace(it) } }
+        }
+    }
+
     private fun registerSystemReceiver() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -603,6 +634,8 @@ class ScanService : LifecycleService() {
         ContextCompat.registerReceiver(
             this, systemReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED
         )
+        // The battery and Android's battery saver, which come by broadcast too (LowPowerMode).
+        watchPower()
     }
 
     private fun restartScan() {
@@ -620,6 +653,7 @@ class ScanService : LifecycleService() {
             // Adapter turned off underneath us; nothing left to stop.
         }
         scanActive = false
+        ScanPower.effort?.ble(null, batched = false, System.currentTimeMillis())
     }
 
     private fun startScanning() {
@@ -661,6 +695,7 @@ class ScanService : LifecycleService() {
             scanActive = true
             activeBleScan = plan
             scanStartedAt = System.currentTimeMillis()
+            ScanPower.effort?.ble(plan.mode, batched = plan.reportDelayMs > 0L, scanStartedAt)
             Registry.update { it.copy(scanning = true, bluetoothOn = true, error = null, stoppedBySystem = false, stoppedAt = 0L) }
         } catch (e: SecurityException) {
             Registry.update { it.copy(scanning = false, error = "Scan denied: ${e.message}") }
@@ -676,7 +711,8 @@ class ScanService : LifecycleService() {
         screenOn = screenOn,
         still = motion.pace == MotionPolicy.Pace.STILL,
         inTrip = vehicleTrips.inTrip,
-        batchingSupported = adapter != null && runCatching { adapter.isOffloadedScanBatchingSupported }.getOrDefault(false)
+        batchingSupported = adapter != null && runCatching { adapter.isOffloadedScanBatchingSupported }.getOrDefault(false),
+        lowPower = LowPowerMode.active
     )
 
     private fun startLocation() {
@@ -707,6 +743,11 @@ class ScanService : LifecycleService() {
     private fun applyPace(pace: MotionPolicy.Pace) {
         // The phone settling ends a journey; see [summariseRiders].
         if (pace == MotionPolicy.Pace.STILL) summariseRiders(System.currentTimeMillis())
+        // Settings > Battery: how long the phone was moving (precise fixes) and settled.
+        ScanPower.effort?.pace(
+            if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) pace == MotionPolicy.Pace.MOVING else null,
+            System.currentTimeMillis()
+        )
         // The Bluetooth scan follows the pace while the screen is off: settled, it drops
         // to low power with a batch a minute, and moving brings the usual scan back.
         // Registered afresh only when its settings change; see [ScanPacing.bleScan].
@@ -749,6 +790,7 @@ class ScanService : LifecycleService() {
                     Registry.publishCell(CellStatus(available = false, reason = reason))
                 } else {
                     val snapshot = cellMonitor.sampleFull()
+                    ScanPower.effort?.cellReading()
                     if (snapshot == null) {
                         Registry.publishCell(
                             CellStatus(
@@ -798,12 +840,13 @@ class ScanService : LifecycleService() {
                 }
                 // The modem is asked for a fresh reading each time. While the phone is
                 // in use or on the move cells change quickly; screen off, every thirty
-                // seconds; settled with a recent fix to show it, once a minute. See
-                // [ScanPacing.cellPollMs].
+                // seconds; settled with a recent fix to show it, once a minute; in low
+                // power every two minutes at most. See [ScanPacing.cellPollMs].
                 delay(
                     ScanPacing.cellPollMs(
                         screenOn = screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING,
-                        confirmedStill = motion.confirmedStill(System.currentTimeMillis())
+                        confirmedStill = motion.confirmedStill(System.currentTimeMillis()),
+                        lowPower = LowPowerMode.active
                     )
                 )
             }
@@ -947,12 +990,15 @@ class ScanService : LifecycleService() {
 
                 // Wi-Fi anomaly scan: at once, then every two minutes while the screen is
                 // on or the phone moves, and every ten settled with the screen off, where
-                // the networks around do not change. The Wi-Fi tab shows these results
-                // while the scanner runs and asks for no scans of its own; see
-                // [ScanPacing.wifiScanEveryMs].
-                val wifiEvery = ScanPacing.wifiScanEveryMs(screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING)
+                // the networks around do not change; in low power every fifteen at most.
+                // The Wi-Fi tab shows these results while the scanner runs and asks for no
+                // scans of its own; see [ScanPacing.wifiScanEveryMs].
+                val wifiEvery = ScanPacing.wifiScanEveryMs(
+                    screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING, lowPower = LowPowerMode.active
+                )
                 if (publishCycle == 1 || now - lastWifiAt >= wifiEvery) {
                     lastWifiAt = now
+                    ScanPower.effort?.wifiScan()
                     // A new canary name every few hours, before the scan below asks for it,
                     // and another try at one Android refused; see [KarmaCanary.rotationDue].
                     runCatching { KarmaCanary.rotateIfDue(this@ScanService, now) }
@@ -1659,7 +1705,8 @@ class ScanService : LifecycleService() {
      * never what it has heard: how many devices are watched and whether one is
      * following are on the Scan hub, behind the lock. See [NotificationPresentation.ongoing].
      */
-    private fun ongoing(): NotificationText = NotificationPresentation.ongoing(paused = running && !scanActive)
+    private fun ongoing(): NotificationText =
+        NotificationPresentation.ongoing(paused = running && !scanActive, lowPower = LowPowerMode.active)
 
     /** Whether the ongoing notification offers "Stop scanning": only with no app passcode set. */
     private fun ongoingStop(): Boolean = NotificationPresentation.ongoingStopAction(lockArmed = AppLock.isEnabled(this))
@@ -1689,8 +1736,8 @@ class ScanService : LifecycleService() {
     /**
      * The publish loop runs every 1.5 s; re-posting the notification that often gets
      * the app rate-limited by the system and costs battery for no visible change. Post
-     * only when the text actually differs, which it does only as the scan pauses and resumes,
-     * or when the Stop button comes or goes with the app passcode.
+     * only when the text actually differs, which it does only as the scan pauses and resumes
+     * or low power comes and goes, or when the Stop button comes or goes with the app passcode.
      */
     private fun updateOngoing() {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
@@ -1767,6 +1814,7 @@ class ScanService : LifecycleService() {
         liveTrips = null
         liveImsi = null
         stopScanning()
+        ScanPower.stop()
         StalkwareWatch.stopWatchingPackages(this)
         val now = System.currentTimeMillis()
         // Stopping from the app (the toggle, the notification's button) turns scanning

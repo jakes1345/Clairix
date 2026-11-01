@@ -24,7 +24,7 @@ just as plainly, what it cannot do.
 | Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
-| Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online. United States only for now: the 50 states, DC and Puerto Rico |
+| Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online. United States only for now: the 50 states, DC and Puerto Rico. A route takes a position every second; below 15 % with no charger, traffic and reports slow to every 5 minutes |
 | Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default (on the US maps above); a Flock camera battery, Raven gunshot detector or Flock hotspot heard over radio is reported too, matched against the map or flagged as unmapped |
 | Know if your GPS is lying | Checks that the satellite signals are from satellites: strengths too even or too strong, satellite time against network time, the GPS position against Wi-Fi and cell towers, impossible jumps, mock-location apps, and jamming; navigation warns on the map |
 | Hear the inaudible | Listens for the ultrasonic beacons ad-tracking kits play from TVs, shops and web pages to tie your phone to them, after a self-test that proves the microphone can hear that band |
@@ -383,6 +383,16 @@ maintainer on the live service, not in this repository.
   while the phone sits still. **Cross-check GPS against Wi-Fi/cell position**
   (Settings → Location, with the scanner): on by default; off, the GPS check
   asks for no Wi-Fi/cell position and its comparison does not run.
+- **Low power** (Settings → Battery): off by default, and on by itself below
+  20 % with no charger (until the phone charges or reaches 25 %) and while
+  Android's battery saver is on. The scanner counts the phone as settled after
+  two minutes still instead of four, scans Bluetooth at low power, reads the
+  cell every two minutes and the Wi-Fi every fifteen; cover traffic pauses and
+  the mesh stays at its quiet pace unless it carries something. An SOS, the
+  duress passcode and incoming calls are never slowed. The same page shows what
+  the whole phone has used since the scan started and what each feature runs,
+  from Clairix's own counts; the scan is designed to run all day, and measured
+  figures are pending ([docs/audit/POWER.md](docs/audit/POWER.md)).
 - **Record transmissions** (Drive → Radio → Scanner): off by default, and
   off again whenever drive mode ends. On, each transmission that opens the
   squelch is kept, sealed like the scanner's other records, for at most ten

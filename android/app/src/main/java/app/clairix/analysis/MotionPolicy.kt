@@ -16,9 +16,16 @@ import kotlin.math.max
  *
  * Thread-safe: fixes arrive on the main thread, the clock ticks on the service's loop.
  */
-class MotionPolicy(private val stillAfterMs: Long = STILL_AFTER_MS) {
+class MotionPolicy(stillAfterMs: Long = STILL_AFTER_MS) {
 
     enum class Pace { MOVING, STILL }
+
+    /**
+     * How long without movement before the phone counts as settled. Low power halves it
+     * ([LowPower.Pacing.stillAfterMs]); a change applies from the next [tick].
+     */
+    @Volatile
+    var stillAfterMs: Long = stillAfterMs
 
     @Volatile
     var pace: Pace = Pace.MOVING
@@ -77,6 +84,13 @@ class MotionPolicy(private val stillAfterMs: Long = STILL_AFTER_MS) {
     @Synchronized
     fun tick(now: Long): Pace? =
         if (pace == Pace.MOVING && now - lastMovedAt >= stillAfterMs) switchTo(Pace.STILL) else null
+
+    /**
+     * Settles the phone now, whatever the fixes say; returns [Pace.STILL] if it was moving.
+     * For debug builds' power checks only ([DebugPace]): the next movement ends it as usual.
+     */
+    @Synchronized
+    fun forceStill(): Pace? = switchTo(Pace.STILL)
 
     private fun switchTo(p: Pace): Pace? {
         if (pace == p) return null

@@ -39,6 +39,8 @@ object NotificationPresentation {
     const val UNLOCK_TO_SEE_ALERTS = "Unlock to see alerts"
     const val SCANNING = "Scanning"
     const val SCAN_PAUSED = "Scan paused — retrying"
+    /** The scanner runs in low power (Settings > Battery); it says nothing of what was heard. */
+    const val SCANNING_LOW_POWER = "Scanning · low power"
     /** What an ongoing service's notification says on the lock screen. */
     const val RUNNING = "Running"
 
@@ -66,8 +68,17 @@ object NotificationPresentation {
         else -> neutral()
     }
 
-    /** The scanner's ongoing notification: that it runs, or that it is retrying; the counts are in the app. */
-    fun ongoing(paused: Boolean): NotificationText = neutral(if (paused) SCAN_PAUSED else SCANNING)
+    /**
+     * The scanner's ongoing notification: that it runs, in low power or not, or that it
+     * is retrying; the counts are in the app.
+     */
+    fun ongoing(paused: Boolean, lowPower: Boolean = false): NotificationText = neutral(
+        when {
+            paused -> SCAN_PAUSED
+            lowPower -> SCANNING_LOW_POWER
+            else -> SCANNING
+        }
+    )
 
     /**
      * Whether the scanner's ongoing notification carries its "Stop scanning" button. Not while the

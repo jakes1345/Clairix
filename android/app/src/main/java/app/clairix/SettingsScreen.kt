@@ -74,6 +74,7 @@ object AppSettings {
     internal val DECOY_KEYS: Set<String> = setOf(
         KEY_AGGRESSIVE_SCAN, KEY_FOLLOW_THRESHOLD, KEY_PERSISTENCE_THRESHOLD, KEY_SCAN_ENABLED,
         KEY_RESUME_AFTER_REBOOT, KEY_THEME, KEY_INFRASTRUCTURE_ALERTS, KEY_SHOW_ALERT_DETAILS,
+        app.clairix.analysis.LowPowerMode.KEY_SWITCH,
     )
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
@@ -627,6 +628,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     }
                 }
             }
+
+            // ── Battery ──────────────────────────────────────────────────────
+            //
+            // Low power and what each feature runs, in both editions; see BatterySettings.kt.
+            batterySection()
 
             // ── Location ─────────────────────────────────────────────────────
             //

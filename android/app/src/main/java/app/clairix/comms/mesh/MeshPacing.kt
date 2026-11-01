@@ -35,9 +35,15 @@ internal object MeshPacing {
     /** What the radio runs: the scan mode, the ordinary advertisement's mode, and whether the long-range set is on. */
     data class Plan(val scanMode: Int, val advertiseMode: Int, val longRange: Boolean)
 
-    /** Whether the mesh has work: something to carry, a conversation open on screen, or a meeting in the last ten minutes. */
-    fun busy(carrying: Int, conversationOpen: Boolean, lastMeetingAt: Long, now: Long): Boolean =
-        carrying > 0 || conversationOpen || (lastMeetingAt > 0L && now - lastMeetingAt < AFTER_MEETING_MS)
+    /**
+     * Whether the mesh has work: something to carry, a conversation open on screen, or a
+     * meeting in the last ten minutes. In low power ([lowPower], see
+     * [LowPower][app.clairix.analysis.LowPower]) only something to carry counts: a
+     * message or an SOS waiting to go still gets the full pace, an open conversation or a
+     * recent meeting does not.
+     */
+    fun busy(carrying: Int, conversationOpen: Boolean, lastMeetingAt: Long, now: Long, lowPower: Boolean = false): Boolean =
+        carrying > 0 || (!lowPower && (conversationOpen || (lastMeetingAt > 0L && now - lastMeetingAt < AFTER_MEETING_MS)))
 
     /**
      * The radio for a mesh that is [busy] or not, on a phone that is [still]

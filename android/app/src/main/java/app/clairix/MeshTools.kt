@@ -96,8 +96,8 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                 text = "While it is on, the mesh uses Bluetooth all day, and Android shows that it runs. With nothing to carry, " +
                     "no conversation open and no phone met in the last ${MeshPacing.AFTER_MEETING_MS / 60_000} minutes, it listens " +
                     "and advertises at low power, and other phones still find it, a little more slowly; otherwise it runs at full pace. " +
-                    "The long-range advertisement, the costliest part, pauses while the phone is still. Turn the mesh off when " +
-                    "you no longer need it."
+                    "The long-range advertisement, the costliest part, pauses while the phone is still. With Low power on " +
+                    "(Settings > Battery) only something to carry brings the full pace. Turn the mesh off when you no longer need it."
             )
         }
         item(key = "§limits") {

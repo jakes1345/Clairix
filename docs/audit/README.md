@@ -9,6 +9,7 @@ protect, how it is built, what to look at first, and how to build and test it.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The components and how a message, a token, a lookup and a move travel between them |
 | [SCOPE.md](SCOPE.md) | What to audit, in order, with file paths and sizes; the questions we most want answered; what is out of scope |
 | [BUILD-AND-TEST.md](BUILD-AND-TEST.md) | Building every part, running every test suite, standing up two relays locally, and checking a release against the source |
+| [POWER.md](POWER.md) | How battery use is measured on real phones, the targets, the results per release (none recorded yet), and the power budgets the emulator checks |
 | [OTF-SECURITY-LAB-APPLICATION.md](OTF-SECURITY-LAB-APPLICATION.md) | A draft application to the Open Technology Fund's Security Lab |
 
 Also read:

@@ -19,6 +19,7 @@ import app.clairix.Registry
 import app.clairix.Severity
 import app.clairix.TimelineEvent
 import app.clairix.TimelineLog
+import app.clairix.analysis.LowPowerMode
 import app.clairix.analysis.TlsCanary
 import app.clairix.security.AppLock
 import app.clairix.security.DuressPhrase
@@ -378,7 +379,7 @@ object CommsRepository {
         // Messages whose time came while no process ran go now; with nothing
         // counting down (or no identity) no sweep runs at all.
         wakeExpiry()
-        syncCoverTraffic()
+        watchCoverTraffic()
         refreshAlternates()
         // Every entry point that initialises comms also arms the duress phrase.
         DuressPhrase.install(appContext)
@@ -1170,12 +1171,12 @@ object CommsRepository {
      * anything to say, so the real messages are not the only traffic there is.
      * What it does not buy: each envelope's recipient is still visible to the
      * relay, one among many, and a contact with no session yet gets no cover
-     * (starting one would be a lookup the relay could see).
+     * (starting one would be a lookup the relay could see). Low power pauses it
+     * ([LowPowerMode]); it is the one sender that carries nothing.
      */
     @Synchronized
     private fun syncCoverTraffic() {
-        val wanted = initialised && config.isRegistered && config.online && config.coverTraffic
-        if (!wanted) {
+        if (!coverWanted()) {
             coverJob?.cancel()
             coverJob = null
             return
@@ -1184,11 +1185,24 @@ object CommsRepository {
         coverJob = scope.launch {
             while (isActive) {
                 delay(nextCoverDelay())
-                if (!(config.online && config.coverTraffic && config.isRegistered)) break
+                if (!coverWanted()) break
                 runCatching { sendCover() }.onFailure { CommsLog.add("Cover envelope not sent: ${it.message}") }
             }
         }
     }
+
+    /**
+     * Starts cover traffic if it is wanted, and follows low power from then on: it
+     * pauses cover traffic, and its end brings it back ([LowPowerMode]). The state
+     * flow hands over its current value at once, which is the first sync.
+     */
+    private fun watchCoverTraffic() {
+        scope.launch { LowPowerMode.state.map { it.active }.distinctUntilChanged().collect { syncCoverTraffic() } }
+    }
+
+    /** The owner wants cover traffic, the phone is registered and online, and low power is off. */
+    private fun coverWanted(): Boolean =
+        initialised && config.isRegistered && config.online && config.coverTraffic && LowPowerMode.pacing.coverTraffic
 
     private fun nextCoverDelay(): Long {
         val u = SecureRandom().nextDouble().coerceIn(1e-9, 1.0)

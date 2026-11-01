@@ -42,7 +42,10 @@ object ScanPacing {
      * a roadside camera hundreds of metres from where it was heard. Settled with the
      * screen off ([idle]), the balanced default drops to low power with a minute's
      * batch. An owner who switched on Aggressive scan asked for faster detection at
-     * the cost of battery, and keeps it.
+     * the cost of battery, and keeps it, until low power ([lowPower], see [LowPower])
+     * comes on: then the scan is low power with a minute's batch whatever the screen
+     * or the pace, Aggressive scan or not. The first minutes of a drive still scan at
+     * low latency: a camera passed at speed is in range for seconds.
      */
     fun bleScan(
         configuredMode: Int,
@@ -50,12 +53,14 @@ object ScanPacing {
         screenOn: Boolean,
         still: Boolean,
         inTrip: Boolean,
-        batchingSupported: Boolean
+        batchingSupported: Boolean,
+        lowPower: Boolean = false
     ): BleScan {
         val batch = !screenOn && !inTrip && batchingSupported
         val backOff = !intensive && idle(screenOn, still, inTrip) && configuredMode == ScanSettings.SCAN_MODE_BALANCED
         return when {
             intensive -> BleScan(ScanSettings.SCAN_MODE_LOW_LATENCY, if (batch) SCREEN_OFF_BATCH_MS else 0L)
+            lowPower -> BleScan(LowPower.LOW.bleMode ?: ScanSettings.SCAN_MODE_LOW_POWER, if (batch) LowPower.BLE_BATCH_MS else 0L)
             backOff -> BleScan(ScanSettings.SCAN_MODE_LOW_POWER, if (batch) IDLE_BATCH_MS else 0L)
             else -> BleScan(configuredMode, if (batch) SCREEN_OFF_BATCH_MS else 0L)
         }
@@ -126,11 +131,18 @@ object ScanPacing {
      */
     const val CELL_SETTLED_MS = 60_000L
 
-    /** How long the cell loop waits before asking the modem again; see [MotionPolicy.confirmedStill]. */
-    fun cellPollMs(screenOn: Boolean, moving: Boolean, confirmedStill: Boolean): Long = when {
-        screenOn || moving -> CELL_ACTIVE_MS
-        confirmedStill -> CELL_SETTLED_MS
-        else -> CELL_SCREEN_OFF_MS
+    /**
+     * How long the cell loop waits before asking the modem again; see
+     * [MotionPolicy.confirmedStill]. In low power ([lowPower]) never less than
+     * [LowPower.CELL_POLL_MS].
+     */
+    fun cellPollMs(screenOn: Boolean, moving: Boolean, confirmedStill: Boolean, lowPower: Boolean = false): Long {
+        val usual = when {
+            screenOn || moving -> CELL_ACTIVE_MS
+            confirmedStill -> CELL_SETTLED_MS
+            else -> CELL_SCREEN_OFF_MS
+        }
+        return maxOf(usual, LowPower.pacing(lowPower).cellPollFloorMs)
     }
 
     // ── Wi-Fi ───────────────────────────────────────────────────────────────
@@ -141,9 +153,12 @@ object ScanPacing {
     /** Settled with the screen off, where the networks around do not change. */
     const val WIFI_SETTLED_MS = 10 * 60_000L
 
-    /** How often the scanner asks Android for a Wi-Fi scan and judges what is in range. */
-    fun wifiScanEveryMs(screenOn: Boolean, moving: Boolean): Long =
-        if (screenOn || moving) WIFI_ACTIVE_MS else WIFI_SETTLED_MS
+    /**
+     * How often the scanner asks Android for a Wi-Fi scan and judges what is in range;
+     * in low power ([lowPower]) never more often than every [LowPower.WIFI_SCAN_MS].
+     */
+    fun wifiScanEveryMs(screenOn: Boolean, moving: Boolean, lowPower: Boolean = false): Long =
+        maxOf(if (screenOn || moving) WIFI_ACTIVE_MS else WIFI_SETTLED_MS, LowPower.pacing(lowPower).wifiScanFloorMs)
 
     // ── Scan tabs ───────────────────────────────────────────────────────────
 

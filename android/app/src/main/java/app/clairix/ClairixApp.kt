@@ -1,6 +1,7 @@
 package app.clairix
 
 import android.app.Application
+import app.clairix.analysis.LowPowerMode
 import app.clairix.security.RelayFarewell
 import app.clairix.security.Wiper
 
@@ -32,5 +33,9 @@ class ClairixApp : Application() {
         // and the version note, so a version found unsafe stops sending at once.
         app.clairix.nav.AssetKeys.init(this)
         app.clairix.comms.AppUpdate.init(this)
+        // Low power (Settings > Battery): the owner's switch, Android's battery
+        // saver and the battery level, which the scanner, the mesh and cover
+        // traffic read.
+        LowPowerMode.start(this)
     }
 }

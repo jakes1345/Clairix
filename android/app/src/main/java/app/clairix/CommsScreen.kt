@@ -2635,7 +2635,7 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 title = "Cover traffic",
                 checked = coverTraffic,
                 onCheckedChange = { on -> coverTraffic = on; CommsRepository.setCoverTraffic(on) },
-                subtitle = "While the background connection is on, sends a sealed envelope of random size to a random contact every twenty minutes or so; their phone drops it unread. To the relay and to anyone watching the network, this phone then messages its contacts at a steady rate whether or not it has anything to say. Uses a little data and battery; off by default."
+                subtitle = "While the background connection is on, sends a sealed envelope of random size to a random contact every twenty minutes or so; their phone drops it unread. To the relay and to anyone watching the network, this phone then messages its contacts at a steady rate whether or not it has anything to say. Uses a little data and battery; pauses while Low power is on (Settings > Battery); off by default."
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

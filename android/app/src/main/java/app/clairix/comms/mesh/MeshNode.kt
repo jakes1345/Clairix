@@ -29,6 +29,7 @@ import android.hardware.TriggerEventListener
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
+import app.clairix.analysis.LowPowerMode
 import app.clairix.analysis.MotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -215,6 +216,10 @@ class MeshNode(
     private fun review() {
         if (!_status.value.running) return
         val now = System.currentTimeMillis()
+        // Low power halves the quiet spell before the phone counts as still, and keeps the
+        // radio at its quiet pace unless something waits to be carried ([MeshPacing.busy]).
+        val pacing = LowPowerMode.pacing
+        motion.stillAfterMs = pacing.meshStillAfterMs
         motion.tick(now)
         val sensor = motionSensor
         // Without the sensor nothing would ever say the phone moved again: never still.
@@ -225,7 +230,10 @@ class MeshNode(
             else false.also { runCatching { sensors?.cancelTriggerSensor(motionTrigger, sensor) } }
         }
         val carrying = store.carrying(now)
-        val busy = MeshPacing.busy(carrying, runCatching { conversationOpen() }.getOrDefault(false), _status.value.lastMeetingAt, now)
+        val busy = MeshPacing.busy(
+            carrying, runCatching { conversationOpen() }.getOrDefault(false), _status.value.lastMeetingAt, now,
+            lowPower = pacing.meshIdle
+        )
         val next = MeshPacing.plan(busy, still, longRange)
         val current = plan
         if (next != current) {

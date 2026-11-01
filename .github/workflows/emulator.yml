@@ -15,6 +15,14 @@ name: Emulator smoke test
 # asks) that goes once it is back. Every envelope spends a blind token, and all but
 # calls, SOS alerts and group changes go through the relay's mixing.
 #
+# Power budgets (.github/scripts/power_budget.py, docs/audit/POWER.md): after the smoke
+# test, ten minutes with the scanner running, the screen off and the emulator's battery
+# unplugged, then the scanner settled by a debug broadcast; after the soak, ten minutes
+# with comms online. Android's own counters (batterystats, alarm, power, location) must
+# show at most 60 s of wake locks and one wake-up alarm per ten minutes, no wake lock
+# held without a timeout, no Bluetooth scan once the scanner has stopped and no
+# satellite measurement request holding the receiver on while the scanner is settled.
+#
 # Then, on the same emulator: an eight-minute soak (SoakTest), moving between the two
 # relays (RelayMoveTest), the app over the real Tor network (TorDeviceTest), and last,
 # since they move the app's vault keys, the lock screen tests (VaultLockScreenTest).
@@ -108,7 +116,7 @@ jobs:
     name: smoke (${{ matrix.api }}${{ matrix.image == 'default' && ', AOSP' || '' }})
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -308,6 +316,43 @@ jobs:
           fi
           grep -q "^OK (" ../instrument.txt || { echo "::error::The smoke test failed; see instrument.txt"; exit 1; }
 
+      # The smoke test leaves the scanner running. Ten minutes of it with the screen off
+      # and the battery unplugged (the emulator counts nothing on the charger), then the
+      # platform's counters against the budgets; then the scanner is settled by the debug
+      # build's broadcast (analysis/DebugPace.kt) and its satellite measurement requests
+      # read again. Every dump is kept, pass or fail.
+      - name: Power budget with the scanner running
+        timeout-minutes: 16
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          BUDGET="$GITHUB_WORKSPACE/.github/scripts/power_budget.py"
+          mkdir -p power
+          APP_UID="$("$ADB" shell pm list packages -U app.clairix | tr -d '\r' | sed -n 's/^package:app\.clairix uid:\([0-9]*\).*/\1/p' | head -1)"
+          [ -n "$APP_UID" ] || { echo "::error::Could not read Clairix's uid"; exit 1; }
+          echo "$APP_UID" > power/uid.txt
+          "$ADB" shell dumpsys activity services app.clairix/.ScanService > power/scanner-service.txt 2>&1 || true
+          grep -q "ServiceRecord" power/scanner-service.txt || echo "::warning::The scanner was not running when the power window began; see power/scanner-service.txt"
+          "$ADB" shell dumpsys battery unplug
+          "$ADB" shell dumpsys batterystats --reset
+          "$ADB" shell input keyevent KEYCODE_SLEEP
+          sleep 600
+          "$ADB" shell dumpsys batterystats --charged app.clairix > power/scanner-batterystats.txt 2>&1
+          "$ADB" shell dumpsys alarm > power/scanner-alarm.txt 2>&1
+          "$ADB" shell dumpsys power > power/scanner-power.txt 2>&1
+          "$ADB" shell dumpsys location > power/scanner-location.txt 2>&1
+          failed=0
+          python3 "$BUDGET" --uid "$APP_UID" --label scanner --report power/scanner.json \
+            --batterystats power/scanner-batterystats.txt --power power/scanner-power.txt \
+            --alarm power/scanner-alarm.txt --location power/scanner-location.txt || failed=1
+          "$ADB" shell am broadcast -a app.clairix.debug.FORCE_STILL -p app.clairix
+          sleep 30
+          "$ADB" shell dumpsys location > power/settled-location.txt 2>&1
+          python3 "$BUDGET" --uid "$APP_UID" --label settled --report power/settled.json \
+            --location power/settled-location.txt --settled || failed=1
+          "$ADB" shell input keyevent KEYCODE_WAKEUP
+          "$ADB" shell dumpsys battery reset
+          exit $failed
+
       # The smoke test leaves the scanner running, and with it the GPS check's
       # raw-measurement listener (GnssMonitor). The emulator's GNSS HAL
       # (gnss@2.0-service.ranchu) deadlocks when Android stops and restarts
@@ -398,6 +443,31 @@ jobs:
           fi
           grep -q "^OK (1 test)" ../soak.txt || { echo "::error::The soak test failed; see soak.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../soak.txt; then echo "::error::The soak test was skipped"; exit 1; fi
+
+      # Ten minutes with comms online after the soak, the screen off and the battery
+      # unplugged: the relay connection's wake locks and alarms against the budgets, and
+      # no Bluetooth scan, since the scanner was stopped before the messaging tests.
+      - name: Power budget with comms online
+        timeout-minutes: 14
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          BUDGET="$GITHUB_WORKSPACE/.github/scripts/power_budget.py"
+          mkdir -p power
+          APP_UID="$(cat power/uid.txt)"
+          "$ADB" shell dumpsys battery unplug
+          "$ADB" shell dumpsys batterystats --reset
+          "$ADB" shell input keyevent KEYCODE_SLEEP
+          sleep 600
+          "$ADB" shell dumpsys batterystats --charged app.clairix > power/comms-batterystats.txt 2>&1
+          "$ADB" shell dumpsys alarm > power/comms-alarm.txt 2>&1
+          "$ADB" shell dumpsys power > power/comms-power.txt 2>&1
+          failed=0
+          python3 "$BUDGET" --uid "$APP_UID" --label comms --report power/comms.json --no-ble \
+            --batterystats power/comms-batterystats.txt --power power/comms-power.txt \
+            --alarm power/comms-alarm.txt || failed=1
+          "$ADB" shell input keyevent KEYCODE_WAKEUP
+          "$ADB" shell dumpsys battery reset
+          exit $failed
 
       # Moving between the same two relays: the app moves from A to B and its
       # contacts (one on each) are told and reach it there, while what still
@@ -575,5 +645,6 @@ jobs:
             relay-b.log
             tor-onion.log
             location-after-smoke.txt
+            power/
             emulator.log
           if-no-files-found: warn

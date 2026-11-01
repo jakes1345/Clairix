@@ -113,6 +113,9 @@ class NotificationPresentationTest {
     fun theOngoingNotificationSaysOnlyThatItScans() {
         assertEquals(NotificationText("Clairix", "Scanning"), NotificationPresentation.ongoing(paused = false))
         assertEquals(NotificationText("Clairix", "Scan paused — retrying"), NotificationPresentation.ongoing(paused = true))
+        // Low power is said, and still nothing of what was heard; a pause says it is retrying either way.
+        assertEquals(NotificationText("Clairix", "Scanning · low power"), NotificationPresentation.ongoing(paused = false, lowPower = true))
+        assertEquals(NotificationText("Clairix", "Scan paused — retrying"), NotificationPresentation.ongoing(paused = true, lowPower = true))
     }
 
     @Test
