@@ -2369,8 +2369,9 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
             Text(
                 if (rotating) {
                     "Marking it as yours removes it from the threat level. This device changes its Bluetooth address: " +
-                        "Clairix recognises it across the changes it can link for the next 24 hours, then asks you " +
-                        "again. You can undo this here or in Settings."
+                        "Clairix keeps it as yours across a change only when it can prove it is the same device, which " +
+                        "it cannot for a tracker tag (two of one make look alike), and asks you again after 24 hours. " +
+                        "You can undo this here or in Settings."
                 } else {
                     "Marking it as yours removes it from the threat level. You can undo this here or in Settings."
                 },

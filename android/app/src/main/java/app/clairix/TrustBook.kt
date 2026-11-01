@@ -7,16 +7,18 @@ import org.json.JSONObject
 /**
  * The devices the owner has marked as theirs ("Mark as mine").
  *
- * A device is a set of addresses rather than one. A tag or a pair of earbuds that
- * changes its Bluetooth address is still the same device, and the scanner, which
- * links those changes to one logical device ([app.clairix.analysis.TrustedIdentities]),
- * adds each new address to the device it belongs to ([extend]). Taking trust back
- * removes the device with every address it was known by ([untrust]).
+ * A device is a set of addresses rather than one. A pair of earbuds that changes its
+ * Bluetooth address is still the same device, and when the scanner can prove a new
+ * address is the same unit (a certain cadence stitch; see
+ * [app.clairix.analysis.TrustedIdentities]) it adds that address to the device
+ * ([extend]). Two units of one product, two AirTags above all, cannot be told apart
+ * that way, so a tracker's new address is not added and the owner is asked again.
+ * Taking trust back removes the device with every address it was known by ([untrust]).
  *
  * A device whose address rotates by design is trusted for [ROTATING_TRUST_MS] at a
- * time and then asked about again ([expire]): the link between two of its addresses
- * rests on timing and radio cadence, and two units of one product look alike, so
- * trust that ran on for ever could end up on somebody else's tag. A device with a
+ * time and then asked about again ([expire]): even a certain stitch rests on timing
+ * and radio cadence, so trust that ran on for ever could end up on somebody else's
+ * device. A device with a
  * fixed address (a car, headphones, a watch) stays trusted until the owner takes it back.
  *
  * Immutable: every change returns a new book, which [Registry] publishes and saves.

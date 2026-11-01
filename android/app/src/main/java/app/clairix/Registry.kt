@@ -94,9 +94,10 @@ object Registry {
     // Kept as devices, each a set of Bluetooth addresses ([TrustBook]); [trusted] is
     // every address of every device, which is what the screens and the scanner check.
     // An address is what the owner sees when marking a device, and the scanner carries
-    // that trust on to the addresses it links to the same device ([extendTrust]), so a
-    // tracker or earbuds that rotate their address stay the owner's for the day the
-    // trust lasts. (It used to be keyed on the identity id instead, a counter handed
+    // that trust on to a new address only when it can prove it is the same unit
+    // ([extendTrust], [app.clairix.analysis.TrustedIdentities]), so earbuds that rotate
+    // their address stay the owner's for the day the trust lasts, while a tracker's new
+    // address, which another unit of the product could share, is asked about again. (It used to be keyed on the identity id instead, a counter handed
     // out fresh on every service start, so marking something safe silenced nothing.)
 
     private const val TRUSTED_KEY = "trusted_addresses"
