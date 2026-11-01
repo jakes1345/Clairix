@@ -109,6 +109,16 @@ adb shell am instrument -w -r -e class app.clairix.comms.EndToEndTest \
 | `TorDeviceTest` (4, `-e tor true`) | Requests leave through Tor; a listed relay answers through Tor; a relay is reached at its onion address; nothing goes out directly when Tor is down |
 | `VaultLockScreenTest` (2, `-e lockScreen true`) | The vault across a lock screen being set and removed |
 | `VaultDeviceTest`, `CommsStoreUpgradeTest`, `DisappearingMessagesTest` | The vault keys, database upgrades and timer deletion on a device |
+| `CardVaultLockTest` (`-e lockScreen true`) | A synthetic ISO-DEP card saved through the card vault under a set lock screen, and the armed card disarming when the app locks |
+
+## Hardware: SDR, scanner, ADS-B, OBD
+
+The Drive tab's radio and vehicle features need a USB SDR dongle and a Bluetooth
+OBD-II adapter, which the emulator cannot attach. Only their offline decode logic
+is covered by unit tests (`AdsbDecoderTest`, `FmDemodulatorTest`, `ObdParserTest`,
+`UsbDeviceFilterTest`); no run against real hardware is recorded in this
+repository. See [HARDWARE-RUNS.md](HARDWARE-RUNS.md) for exactly what is and is
+not validated, and the device run to add.
 
 ## Checking a release against the source
 

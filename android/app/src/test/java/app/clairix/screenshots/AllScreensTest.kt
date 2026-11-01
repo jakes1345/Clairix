@@ -118,7 +118,7 @@ class AllScreensTest {
     @Test
     fun nfc() = shot("nfc") {
         Frame(ScanCategory.NFC.title, HomeTab.SCAN, onBack = {}) {
-            NfcScreen(onAddToVault = { _, _, _ -> }, onRemoveVault = {}, onEmulate = {}, onUnlockVault = {}, onLockVault = {}, onEraseVault = {})
+            NfcScreen(onAddToVault = { _, _, _ -> }, onRemoveVault = {}, onEmulate = {}, onUnlockVault = {}, onLockVault = {}, onEraseVault = {}, onAcknowledgeOwnership = {})
         }
     }
 

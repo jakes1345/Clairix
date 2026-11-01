@@ -31,7 +31,7 @@ just as plainly, what it cannot do.
 | Know where everything is | A guided tour of every screen and tool on first launch, from Settings any time after |
 | Know what your Bluetooth gives away | Shows what a roadside or in-store sensor can log: the phone's name (renamed to the model in one tap if it is yours), whether it is discoverable, and which paired accessories keep one address for life and were connected on your drives |
 | See your car's health | Connects to the car over Bluetooth OBD and shows live engine data and trip history |
-| Track aircraft nearby | Plug in an SDR stick and see real aircraft on the map from their ADS-B broadcasts |
+| Track aircraft nearby | Plug in an SDR stick and list nearby aircraft from their ADS-B broadcasts, with callsign, altitude, speed and heading (a list, not map markers) |
 
 ---
 

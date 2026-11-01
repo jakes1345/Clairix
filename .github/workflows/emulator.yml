@@ -435,6 +435,35 @@ jobs:
           grep -q "^OK (2 tests)" ../lockscreen.txt || { echo "::error::The lock screen tests failed; see lockscreen.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../lockscreen.txt; then echo "::error::Lock screen tests were skipped"; exit 1; fi
 
+      - name: Run the card-vault lock test
+        working-directory: android
+        timeout-minutes: 10
+        run: |
+          # Also last, and for the same reason: it sets a device PIN so the card
+          # vault's key can exist, saves a synthetic ISO-DEP card through it, and
+          # checks that an armed card stops answering readers when the app locks.
+          # The vault's auth-bound key may refuse to save without a fresh
+          # device-credential authentication in this harness; the save step then
+          # skips (reported, not failed) while the disarm-on-lock check still runs,
+          # so this step tolerates a skipped assumption and only fails on a real one.
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" logcat -c
+          set +e
+          timeout 300 "$ADB" shell am instrument -w -r \
+            -e class app.clairix.security.CardVaultLockTest -e lockScreen true \
+            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../cardvault.txt
+          set -e
+          "$ADB" logcat -d > ../logcat-cardvault.txt
+          # Whatever happened, the emulator is left with no PIN.
+          "$ADB" shell locksettings clear --old 1590 >/dev/null 2>&1 || true
+          grep "CardVaultLockTest" ../logcat-cardvault.txt || true
+          if grep -A1 "FATAL EXCEPTION" ../logcat-cardvault.txt | grep -q "Process: app.clairix"; then
+            echo "::error::Clairix crashed during the card-vault lock test; see logcat-cardvault.txt"
+            grep -A 30 "FATAL EXCEPTION" ../logcat-cardvault.txt | head -80
+            exit 1
+          fi
+          grep -q "^OK (" ../cardvault.txt || { echo "::error::The card-vault lock test failed; see cardvault.txt"; exit 1; }
+
       - name: Run the duress passcode test
         working-directory: android
         timeout-minutes: 10
@@ -471,6 +500,8 @@ jobs:
             logcat-e2e.txt
             lockscreen.txt
             logcat-lockscreen.txt
+            cardvault.txt
+            logcat-cardvault.txt
             duress.txt
             logcat-duress.txt
             tor.txt

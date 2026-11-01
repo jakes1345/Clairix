@@ -228,6 +228,30 @@ jobs:
           done
           echo "No card emulation in the Play edition."
 
+      # The Comms edition's manifest declares none of the scanner/tool components or
+      # permissions, so the toolkit is unreachable — but the dex still carries the
+      # code (MainActivity references the Drive/NFC/vault entry points unconditionally,
+      # so R8 keeps them). Until that is fixed by moving the entry points into
+      # edition/tier source sets behind a TierShell interface (so R8 drops them),
+      # count the classes that must not be reachable and warn. This is informational,
+      # not a gate: it does not fail the release.
+      - name: Count unreachable toolkit classes in the Comms APK (warning)
+        run: |
+          COMMS=android/app/build/outputs/apk/fullComms/release/app-full-comms-release.apk
+          if [ ! -f "$COMMS" ]; then echo "::warning::Comms APK not found at $COMMS; skipping the dex class count"; exit 0; fi
+          DEX=$(unzip -p "$COMMS" 'classes*.dex' 2>/dev/null)
+          total=0
+          for cls in SdrUsbDriver ScannerMonitor AdsbDecoder ObdBluetoothManager NfcScanner CardVault CardEmulationService; do
+            n=$(printf '%s' "$DEX" | grep -ao "$cls" | wc -l | tr -d ' ')
+            echo "  $cls: $n"
+            total=$((total + n))
+          done
+          if [ "$total" -gt 0 ]; then
+            echo "::warning::The Comms APK's dex still carries scanner/NFC/vault classes ($total name occurrences). They are unreachable (no components, no permissions) but not yet removed; move the entry points into edition/tier source sets behind TierShell so R8 drops them, then make this a gate (grep -c … must be 0)."
+          else
+            echo "No scanner/NFC/vault class names found in the Comms APK's dex."
+          fi
+
       - name: Collect and verify artifacts
         env:
           TAG: ${{ steps.tag.outputs.name }}
@@ -500,7 +524,7 @@ jobs:
             echo "| File | What it is |"
             echo "|---|---|"
             echo "| \`clairix-${TAG}.apk\` | **The Full edition.** The whole app, including the Card Vault and ClairixCoin. Most people want this one. |"
-            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: no scanner, no tools and none of their permissions. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
+            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: the scanner and tools are not reachable and none of their permissions are requested. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
             echo "| \`clairix-play-${TAG}.aab\` | The Google Play bundle. Phones can't install this file directly; it is here for the Play Console. |"
             echo "| \`SHA256SUMS.txt\` | Checksums to confirm your download is intact. |"
             echo "| \`SHA256SUMS.txt.sig\` | Signature over the checksums by the Clairix asset signing key, so a swapped release cannot come with matching checksums. |"

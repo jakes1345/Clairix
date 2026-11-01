@@ -286,6 +286,11 @@ class MainActivity : AppCompatActivity() {
             // reboots — and would keep routing readers to the service. Drop them.
             if (Registry.emulating.value == null) clearHceAids()
 
+            // Seed whether the vault-ownership notice has been acknowledged, so the
+            // NFC tab can gate the first save without reading preferences on the main
+            // thread. Only the editions with the vault (CARD_VAULT) ever ask.
+            if (BuildConfig.CARD_VAULT) Registry.setOwnershipAck(cardVault.hasOwnershipAck())
+
             // Show the stored timeline even before the scanner has run this session.
             lifecycleScope.launch(Dispatchers.IO) { runCatching { TimelineLog.publish(applicationContext) } }
         }
@@ -412,6 +417,10 @@ class MainActivity : AppCompatActivity() {
                                     onUnlockVault = { unlockVault() },
                                     onLockVault = { Registry.lockVault() },
                                     onEraseVault = { eraseVault() },
+                                    onAcknowledgeOwnership = {
+                                        cardVault.setOwnershipAck()
+                                        Registry.setOwnershipAck(true)
+                                    },
                                     onRefreshDeviceHealth = { refreshDeviceHealth() },
                                     onRefreshCell = { refreshCell() },
                                     onRefreshWifi = { refreshWifi() }
@@ -583,10 +592,31 @@ class MainActivity : AppCompatActivity() {
         intent.action = null
         Registry.requestTab(ROUTE_NFC)
         // Parsing talks to the tag over the air and must not block the main thread.
-        lifecycleScope.launch(Dispatchers.IO) {
+        lifecycleScope.launch(Dispatchers.IO) { scanTag(tag) }
+    }
+
+    /**
+     * Reads a tapped tag. An ordinary scan only identifies the card and keeps no APDU
+     * pairs; a tap while a "Record for vault" re-tap is armed (full edition only)
+     * records the ISO 14443-4 conversation and stages it as a pending vault capture,
+     * whose pairs never enter the scanned-tag list.
+     */
+    private fun scanTag(tag: Tag) {
+        val mifare = NfcScanner.readsMifareClassic(this@MainActivity)
+        if (BuildConfig.CARD_VAULT && Registry.vaultCaptureArm.value != null) {
+            val capture = try {
+                NfcScanner.capture(tag, mifare)
+            } catch (_: Exception) { Registry.cancelVaultCapture(); return }
+            Registry.cancelVaultCapture()
+            Registry.addNfc(capture.tag)
+            runCatching { recordNfc(capture.tag) }
+            Registry.setPendingVaultCapture(
+                PendingVaultCapture(capture.tag.uid, capture.tag.profile, capture.tag.type, capture.apduPairs)
+            )
+        } else {
             val parsed = try {
-                NfcScanner.parse(tag, NfcScanner.readsMifareClassic(this@MainActivity))
-            } catch (_: Exception) { return@launch }
+                NfcScanner.parse(tag, mifare)
+            } catch (_: Exception) { return }
             Registry.addNfc(parsed)
             runCatching { recordNfc(parsed) }
         }
@@ -711,13 +741,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Runs on an NFC binder thread, so the timeline's disk write is fine here. */
-    private val readerCallback = NfcAdapter.ReaderCallback { tag ->
-        val parsed = try {
-            NfcScanner.parse(tag, NfcScanner.readsMifareClassic(this@MainActivity))
-        } catch (_: Exception) { return@ReaderCallback }
-        Registry.addNfc(parsed)
-        runCatching { recordNfc(parsed) }
-    }
+    private val readerCallback = NfcAdapter.ReaderCallback { tag -> scanTag(tag) }
 
     private fun recordNfc(t: NfcTag) {
         val now = System.currentTimeMillis()
@@ -847,13 +871,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun addToVault(tag: NfcTag, label: String, replace: Boolean) {
         if (!BuildConfig.CARD_VAULT) return
+        // Emulation pairs come only from a matching "Record for vault" re-tap, held in
+        // the pending capture; a card saved without one (e.g. MIFARE Classic, kept for
+        // identification) stores none.
+        val pending = Registry.pendingVaultCapture.value?.takeIf { it.uid == tag.uid }
         val card = VaultCard(
             id        = UUID.randomUUID().toString(),
             uid       = tag.uid,
             label     = label,
             profile   = tag.profile,
             addedTs   = System.currentTimeMillis(),
-            apduPairs = tag.apduPairs
+            apduPairs = pending?.apduPairs ?: emptyList()
         )
         Registry.setReplacePrompt(null)
         writeVault(VaultOp.Add(card, replace))
@@ -888,7 +916,11 @@ class MainActivity : AppCompatActivity() {
                     // state comes from this list, so it has to be current.
                     publishUnlocked(result.cards)
                     when (op) {
-                        is VaultOp.Add -> toast("Saved \"${op.card.label}\" to the vault")
+                        is VaultOp.Add -> {
+                            // The capture (if any) is now in the encrypted card; drop the copy.
+                            Registry.setPendingVaultCapture(null)
+                            toast("Saved \"${op.card.label}\" to the vault")
+                        }
                         is VaultOp.Remove -> if (Registry.emulating.value?.id == op.id) stopEmulation()
                     }
                 }
@@ -1336,6 +1368,7 @@ private fun MainApp(
     onUnlockVault: () -> Unit,
     onLockVault: () -> Unit,
     onEraseVault: () -> Unit,
+    onAcknowledgeOwnership: () -> Unit,
     onRefreshDeviceHealth: () -> Unit,
     onRefreshCell: () -> Unit,
     onRefreshWifi: () -> Unit
@@ -1649,7 +1682,8 @@ private fun MainApp(
                     onEmulate = onEmulate,
                     onUnlockVault = onUnlockVault,
                     onLockVault = onLockVault,
-                    onEraseVault = onEraseVault
+                    onEraseVault = onEraseVault,
+                    onAcknowledgeOwnership = onAcknowledgeOwnership
                 )
                 category == ScanCategory.PHONE -> when (phoneSub) {
                     0 -> DeviceScreen(onShown = onRefreshDeviceHealth)
@@ -3122,6 +3156,14 @@ private val CardProfile.hceLimited: Boolean
 private const val HCE_LIMITED_CAVEAT = "Static replay only — readers that challenge the card will reject it"
 
 /**
+ * The line shown on the tag row and in the one-time acknowledgement before the first
+ * save: the vault is for the owner's own cards, and replaying someone else's
+ * credential may be a crime.
+ */
+private const val VAULT_OWNERSHIP_NOTICE =
+    "Only cards issued to you. Recording and replaying someone else's card or credential may be a crime."
+
+/**
  * The NFC tab: the tags read this session and, in the full edition, the card
  * vault and card emulation. The Play edition is built with CARD_VAULT off, so
  * the tab there is the tag reader and skimmer check alone: no vault section, no
@@ -3134,12 +3176,16 @@ internal fun NfcScreen(
     onEmulate: (VaultCard?) -> Unit,
     onUnlockVault: () -> Unit,
     onLockVault: () -> Unit,
-    onEraseVault: () -> Unit
+    onEraseVault: () -> Unit,
+    onAcknowledgeOwnership: () -> Unit
 ) {
     val tags       by Registry.nfc.collectAsStateWithLifecycle()
     val vaultState by Registry.vault.collectAsStateWithLifecycle()
     val armed      by Registry.emulating.collectAsStateWithLifecycle()
     val replace    by Registry.replacePrompt.collectAsStateWithLifecycle()
+    val ownershipAck   by Registry.ownershipAck.collectAsStateWithLifecycle()
+    val captureArm     by Registry.vaultCaptureArm.collectAsStateWithLifecycle()
+    val pendingCapture by Registry.pendingVaultCapture.collectAsStateWithLifecycle()
     val emulId = armed?.id
     // Cards exist here only while the vault is unlocked.
     val vault = (vaultState as? VaultState.Unlocked)?.cards.orEmpty()
@@ -3147,6 +3193,27 @@ internal fun NfcScreen(
     var confirmErase by remember { mutableStateOf(false) }
 
     val vaultEnabled = BuildConfig.CARD_VAULT
+
+    // The one-time ownership acknowledgement, shown before the first save. The action
+    // the owner was about to take is held and run once they confirm.
+    var ackAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val pendingAck = ackAction
+    if (vaultEnabled && pendingAck != null) {
+        ClairixDialog(
+            title = "Only cards issued to you",
+            text = VAULT_OWNERSHIP_NOTICE,
+            confirmLabel = "I understand",
+            confirmTone = Tone.Caution,
+            onConfirm = { ackAction = null; onAcknowledgeOwnership(); pendingAck() },
+            dismissLabel = "Cancel",
+            onDismiss = { ackAction = null }
+        )
+    }
+    // Runs [action] straight away once the owner has acknowledged ownership, or shows
+    // the acknowledgement first and runs it on confirm.
+    val guardOwnership: (() -> Unit) -> Unit = { action ->
+        if (ownershipAck) action() else ackAction = action
+    }
 
     // The vault refused to overwrite a stored card with this UID; ask.
     val pendingReplace = replace
@@ -3240,8 +3307,11 @@ internal fun NfcScreen(
                     vaultEnabled = vaultEnabled,
                     inVault = vault.any { it.uid == tag.uid },
                     vaultOpen = vaultOpen,
+                    armedForCapture = captureArm == tag.uid,
+                    captureReady = pendingCapture?.uid == tag.uid,
                     onAddToVault = { label -> onAddToVault(tag, label, false) },
-                    onUnlockVault = onUnlockVault
+                    onUnlockVault = onUnlockVault,
+                    guardOwnership = guardOwnership
                 )
             }
         }
@@ -3383,14 +3453,24 @@ private fun NfcTagRow(
     vaultEnabled: Boolean,
     inVault: Boolean,
     vaultOpen: Boolean,
+    armedForCapture: Boolean,
+    captureReady: Boolean,
     onAddToVault: (String) -> Unit,
-    onUnlockVault: () -> Unit
+    onUnlockVault: () -> Unit,
+    guardOwnership: (() -> Unit) -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(t.uid) { mutableStateOf(false) }
     var addingLabel by remember(t.uid) { mutableStateOf(false) }
     var labelText by remember(t.uid) { mutableStateOf("") }
     LaunchedEffect(copied) { if (copied) { delay(1500L); copied = false } }
+    // A re-tap has recorded this card: open the label field with a sensible default.
+    LaunchedEffect(captureReady) {
+        if (captureReady && labelText.isBlank()) labelText = t.profile.label
+    }
+    // The label field is shown either for a recorded ISO-DEP card (captureReady) or
+    // for a card saved for identification only (addingLabel).
+    val namingCard = captureReady || addingLabel
     val c = ClairixTheme.colors
 
     val isPayment = t.profile in setOf(CardProfile.EMV_VISA, CardProfile.EMV_MASTERCARD,
@@ -3443,14 +3523,29 @@ private fun NfcTagRow(
         // Play edition reads and checks tags but does not store or emulate them.
         if (vaultEnabled && !isPayment) {
             if (t.profile.hceLimited) {
-                Text("Replay only: $HCE_LIMITED_CAVEAT. Save it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
+                Text("Replay only: $HCE_LIMITED_CAVEAT. Record it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
             } else if (t.profile.hceCapable) {
-                Text("Your phone can stand in for this card. Save it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+                Text("Your phone can stand in for this card. Record it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
             }
         }
 
-        // Add-to-vault inline input
-        if (vaultEnabled && addingLabel) {
+        // The ownership line, wherever the row offers a way into the vault.
+        if (vaultEnabled && !isPayment && !inVault) {
+            WarningLine(VAULT_OWNERSHIP_NOTICE, Tone.Caution)
+        }
+
+        // Waiting for the re-tap that records the card for the vault.
+        if (vaultEnabled && armedForCapture && !captureReady) {
+            Notice(
+                Tone.Info,
+                "Hold the card to the back of the phone again to record it for the vault.",
+                title = "Ready to record",
+                action = { GhostButton("Cancel", onClick = { Registry.cancelVaultCapture() }, tone = Tone.Neutral) }
+            )
+        }
+
+        // Name-and-save inline input, for a recorded card or an identification-only save.
+        if (vaultEnabled && namingCard) {
             ClairixTextField(
                 value = labelText,
                 onValueChange = { labelText = it },
@@ -3469,7 +3564,14 @@ private fun NfcTagRow(
                     enabled = labelText.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
-                GhostButton("Cancel", onClick = { addingLabel = false; labelText = "" }, tone = Tone.Neutral)
+                GhostButton(
+                    "Cancel",
+                    onClick = {
+                        if (captureReady) Registry.setPendingVaultCapture(null)
+                        addingLabel = false; labelText = ""
+                    },
+                    tone = Tone.Neutral
+                )
             }
         }
 
@@ -3480,13 +3582,18 @@ private fun NfcTagRow(
             // the key's auth window still warm, a save from here used to go
             // through without a prompt and replace the stored card unseen.
             // Without a vault (the Play edition) the row offers only Copy UID.
+            // An ISO-DEP card the phone can emulate is recorded by an explicit
+            // re-tap (so the APDU capture never runs on an ordinary scan); a card
+            // kept for identification only is saved straight away. Both pass the
+            // one-time ownership acknowledgement first.
             if (vaultEnabled) {
-                if (!vaultOpen && !isPayment) {
-                    GhostButton("Unlock to save", onClick = onUnlockVault)
-                } else if (!inVault && !isPayment && !addingLabel) {
-                    GhostButton("Save to vault", onClick = { addingLabel = true; labelText = t.profile.label })
-                } else if (inVault) {
-                    StatusPill("In vault", Tone.Safe)
+                when {
+                    !vaultOpen && !isPayment -> GhostButton("Unlock to save", onClick = onUnlockVault)
+                    isPayment || inVault || namingCard || armedForCapture -> if (inVault) StatusPill("In vault", Tone.Safe)
+                    t.profile.hceCapable ->
+                        GhostButton("Record for vault", onClick = { guardOwnership { Registry.armVaultCapture(t.uid) } })
+                    else ->
+                        GhostButton("Save to vault", onClick = { guardOwnership { addingLabel = true; labelText = t.profile.label } })
                 }
             }
             Spacer(Modifier.weight(1f))

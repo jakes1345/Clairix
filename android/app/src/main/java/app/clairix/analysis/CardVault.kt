@@ -84,9 +84,25 @@ class CardVault(private val context: Context) {
         const val PREFS_KEY_V1 = "cards_enc"
         /** Blob encrypted under the v2 (auth-bound) key. */
         const val PREFS_KEY_V2 = "cards_enc_v2"
+        /** Set once the owner has acknowledged the ownership notice (see [hasOwnershipAck]). */
+        const val PREFS_KEY_OWNERSHIP_ACK = "ownership_ack"
         const val GCM_TAG_LEN = 128
         const val IV_LEN = 12
         const val AUTH_VALIDITY_SECONDS = 30
+    }
+
+    /**
+     * Whether the owner has acknowledged, once, that the vault is for cards issued
+     * to them. The UI asks before the first save and shows the same line on the tag
+     * row; this is a plain preference flag, not a secret, so it is read and written
+     * without the Keystore or the [mutex].
+     */
+    fun hasOwnershipAck(): Boolean =
+        runCatching { prefs().getBoolean(PREFS_KEY_OWNERSHIP_ACK, false) }.getOrDefault(false)
+
+    /** Records the one-time ownership acknowledgement. */
+    fun setOwnershipAck() {
+        runCatching { prefs().edit().putBoolean(PREFS_KEY_OWNERSHIP_ACK, true).commit() }
     }
 
     /** Serialises every read, write and erase. */

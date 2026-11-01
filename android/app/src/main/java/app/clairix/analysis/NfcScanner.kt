@@ -9,6 +9,7 @@ import android.nfc.tech.Ndef
 import android.nfc.tech.NfcA
 import android.nfc.tech.NfcB
 import android.nfc.tech.NfcF
+import app.clairix.BuildConfig
 import app.clairix.CardProfile
 import app.clairix.NfcTag
 
@@ -39,11 +40,33 @@ object NfcScanner {
     fun readsMifareClassic(context: Context): Boolean =
         runCatching { context.packageManager.hasSystemFeature(FEATURE_NXP_MIFARE) }.getOrDefault(false)
 
+    /** A captured card: its identity, and the APDU pairs recorded for emulation. */
+    data class VaultCapture(val tag: NfcTag, val apduPairs: List<Pair<String, String>>)
+
     /**
-     * Reads [tag]. [mifareClassicSupported] is [readsMifareClassic] for this phone;
-     * the emulator heuristic depends on it.
+     * Reads [tag] to identify it. [mifareClassicSupported] is [readsMifareClassic]
+     * for this phone; the emulator heuristic depends on it.
+     *
+     * This is the ordinary scan every tap takes. For an ISO-DEP card it sends only
+     * SELECT PPSE and the AID SELECTs needed to name a payment network — never GET
+     * PROCESSING OPTIONS, READ RECORD or the access-control AID probes, which read
+     * or record card contents and run only in [capture]. The returned [NfcTag] holds
+     * no APDU pairs.
      */
-    fun parse(tag: Tag, mifareClassicSupported: Boolean): NfcTag {
+    fun parse(tag: Tag, mifareClassicSupported: Boolean): NfcTag =
+        read(tag, mifareClassicSupported, captureForVault = false).tag
+
+    /**
+     * Reads [tag] for the explicit "Record for vault" re-tap: in addition to
+     * identifying the card, it records the ISO 14443-4 conversation (AID SELECTs
+     * and their EMV follow-ups for a non-payment card, or the access-control AID
+     * probes when PPSE is refused) so the card can be emulated. Only ever called
+     * under [BuildConfig.CARD_VAULT]; a payment card still records no card data.
+     */
+    fun capture(tag: Tag, mifareClassicSupported: Boolean): VaultCapture =
+        read(tag, mifareClassicSupported, captureForVault = true)
+
+    private fun read(tag: Tag, mifareClassicSupported: Boolean, captureForVault: Boolean): VaultCapture {
         val uid = tag.id.hex()
         val techs = tag.techList.map { it.substringAfterLast('.') }
 
@@ -59,12 +82,12 @@ object NfcScanner {
 
         val profile = resolveProfile(techs, atqa, sak)
 
-        // ISO-DEP: try PPSE, capture APDU pairs, check for payment card
+        // ISO-DEP: identify, and record APDU pairs only on a vault re-tap
         var isPayment = false
         var paymentNetwork: String? = null
         var apduPairs = emptyList<Pair<String, String>>()
         if (techs.contains("IsoDep")) {
-            val iso = scanIsoDep(tag)
+            val iso = scanIsoDep(tag, captureForVault)
             isPayment      = iso.isPayment
             paymentNetwork = iso.network
             apduPairs      = iso.pairs
@@ -102,7 +125,7 @@ object NfcScanner {
 
         val note = buildNote(resolvedProfile, isPayment, paymentNetwork, techs, payload)
 
-        return NfcTag(
+        val tagInfo = NfcTag(
             uid           = uid,
             techs         = techs,
             type          = type,
@@ -114,9 +137,10 @@ object NfcScanner {
             sak           = sak,
             profile       = resolvedProfile,
             paymentNetwork = paymentNetwork,
-            skimmerFlags  = flags,
-            apduPairs     = apduPairs
+            skimmerFlags  = flags
         )
+        // Pairs are returned to [capture] only; the tag kept in the UI carries none.
+        return VaultCapture(tagInfo, if (captureForVault) apduPairs else emptyList())
     }
 
     /**
@@ -195,108 +219,136 @@ object NfcScanner {
 
     // ── ISO-DEP / EMV scan ──────────────────────────────────────────────────
 
-    private data class IsoResult(
+    internal data class IsoResult(
         val isPayment: Boolean,
         val network: String?,
         val pairs: List<Pair<String, String>>
     )
 
-    private fun scanIsoDep(tag: Tag): IsoResult {
+    /** SELECT PPSE — the first command any POS terminal sends. */
+    private const val PPSE_CMD = "00A4040E" + "32504159" + "2E535953" + "2E444446" + "303100"
+
+    /** SW1 SW2 == 90 00. */
+    private fun isOk(sw: List<Byte>): Boolean =
+        sw.size == 2 && sw[0] == 0x90.toByte() && sw[1] == 0x00.toByte()
+
+    private fun scanIsoDep(tag: Tag, captureForVault: Boolean): IsoResult {
         val iso = IsoDep.get(tag) ?: return IsoResult(false, null, emptyList())
         return try {
             iso.connect()
             iso.timeout = 3000
-            val pairs = mutableListOf<Pair<String, String>>()
-
-            // SELECT PPSE — standard first command any POS terminal sends
-            val ppseCmd = "00A4040E" + "32504159" + "2E535953" + "2E444446" + "303100"
-            val ppseResp = iso.transceive(ppseCmd.hexToBytes())
-            pairs += ppseCmd to ppseResp.hex()
-
-            val sw = ppseResp.takeLast(2)
-            if (sw.size < 2 || sw[0] != 0x90.toByte() || sw[1] != 0x00.toByte()) {
-                // PPSE rejected — probe common access-control AIDs so the vault has
-                // something useful to replay when the user tries to emulate.
-                probeAccessAids(iso, pairs)
-                iso.close()
-                return IsoResult(false, null, pairs)
-            }
-
-            // Parse PPSE FCI for AIDs and identify payment network
-            val aids = parsePpseAids(ppseResp)
-            val network = aids.firstNotNullOfOrNull { aid ->
-                PAYMENT_AIDS.firstOrNull { (prefix, _) ->
-                    aid.uppercase().startsWith(prefix.take(10))
-                }?.second
-            }
-
-            // SELECT each discovered AID (cap at 3) and capture follow-up exchanges
-            for (aid in aids.take(3)) {
-                val aidBytes = aid.hexToBytes()
-                val selCmd = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00,
-                    aidBytes.size.toByte()) + aidBytes + byteArrayOf(0x00)
-                runCatching {
-                    val selResp = iso.transceive(selCmd)
-                    pairs += selCmd.hex() to selResp.hex()
-                    // If SELECT returned SW 9000, try standard EMV follow-ups
-                    val selSw = selResp.takeLast(2)
-                    if (selSw.size == 2 && selSw[0] == 0x90.toByte() && selSw[1] == 0x00.toByte()) {
-                        captureEMVFollowUp(iso, pairs)
-                    }
-                }
-            }
-
-            // isPayment is only true when we found a recognised payment network.
-            // An access-control card that answers PPSE but has no payment AID must
-            // not be marked as a payment card — that blocks the user from saving it.
+            val result = runIsoDep({ cmd -> iso.transceive(cmd) }, captureForVault, BuildConfig.CARD_VAULT)
             iso.close()
-            IsoResult(network != null, network, pairs)
+            result
         } catch (_: Exception) {
             runCatching { iso.close() }
             IsoResult(false, null, emptyList())
         }
     }
 
-    // After a successful AID SELECT, try the standard EMV follow-ups so we record as
-    // much of the real conversation as possible for later replay during emulation.
-    private fun captureEMVFollowUp(iso: IsoDep, pairs: MutableList<Pair<String, String>>) {
+    /**
+     * The ISO-DEP exchange, over a [transceive] function so it can be driven without
+     * a tag in a JVM test. It always identifies the card (SELECT PPSE, then the AID
+     * SELECTs that name a payment network). It records the rest of the conversation —
+     * the EMV follow-ups after a non-payment AID SELECT, or the access-control AID
+     * probes when PPSE is refused — only when [fullCapture] holds, i.e. the build has
+     * [BuildConfig.CARD_VAULT] on ([cardVaultBuild]) and this is an explicit
+     * [captureForVault] re-tap. A recognised payment network is never followed up:
+     * its records (PAN, expiry) are of no use here and reading them is the liability
+     * this gate removes.
+     */
+    internal fun runIsoDep(
+        transceive: (ByteArray) -> ByteArray,
+        captureForVault: Boolean,
+        cardVaultBuild: Boolean
+    ): IsoResult {
+        val fullCapture = cardVaultBuild && captureForVault
+        val pairs = mutableListOf<Pair<String, String>>()
+
+        val ppseResp = transceive(PPSE_CMD.hexToBytes())
+        pairs += PPSE_CMD to ppseResp.hex()
+
+        if (!isOk(ppseResp.takeLast(2))) {
+            // PPSE refused. The card may still be an access-control card with a
+            // well-known AID; probe for one only when recording for the vault.
+            if (fullCapture) probeAccessAids(transceive, pairs)
+            return IsoResult(false, null, pairs)
+        }
+
+        // Parse PPSE FCI for AIDs and identify a payment network.
+        val aids = parsePpseAids(ppseResp)
+        val network = aids.firstNotNullOfOrNull { aid ->
+            PAYMENT_AIDS.firstOrNull { (prefix, _) ->
+                aid.uppercase().startsWith(prefix.take(10))
+            }?.second
+        }
+
+        // SELECT each discovered AID (cap at 3) to confirm the card answers. The EMV
+        // follow-ups (GPO/READ RECORD) run only on a vault re-tap of a non-payment
+        // card — stop after PPSE+SELECT when a payment network is recognised.
+        for (aid in aids.take(3)) {
+            val aidBytes = aid.hexToBytes()
+            val selCmd = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00,
+                aidBytes.size.toByte()) + aidBytes + byteArrayOf(0x00)
+            runCatching {
+                val selResp = transceive(selCmd)
+                pairs += selCmd.hex() to selResp.hex()
+                if (isOk(selResp.takeLast(2)) && fullCapture && network == null) {
+                    captureEMVFollowUp(transceive, pairs)
+                }
+            }
+        }
+
+        // isPayment is only true when a recognised payment network was found. An
+        // access-control card that answers PPSE but has no payment AID is not a
+        // payment card — marking it one would block the user from saving it.
+        return IsoResult(network != null, network, pairs)
+    }
+
+    // After a non-payment AID SELECT, record the standard follow-ups so the card can
+    // later be emulated. Reached only under [fullCapture] in [runIsoDep].
+    private fun captureEMVFollowUp(transceive: (ByteArray) -> ByteArray, pairs: MutableList<Pair<String, String>>) {
         // GET PROCESSING OPTIONS with empty PDOL
         val gpoCmd = byteArrayOf(0x80.toByte(), 0xA8.toByte(), 0x00, 0x00, 0x02, 0x83.toByte(), 0x00, 0x00)
         runCatching {
-            val resp = iso.transceive(gpoCmd)
+            val resp = transceive(gpoCmd)
             pairs += gpoCmd.hex() to resp.hex()
         }
         // READ RECORD — SFI 1, record 1 (standard first EMV record location)
         val readCmd = byteArrayOf(0x00, 0xB2.toByte(), 0x01, 0x0C, 0x00)
         runCatching {
-            val resp = iso.transceive(readCmd)
+            val resp = transceive(readCmd)
             pairs += readCmd.hex() to resp.hex()
         }
     }
 
-    // When PPSE is rejected the card might still be an access-control card with a
-    // well-known AID.  Probing these gives the vault usable pairs for emulation.
-    private fun probeAccessAids(iso: IsoDep, pairs: MutableList<Pair<String, String>>) {
-        // PIV (U.S. federal / gov contractor badge): NIST SP 800-73
-        // CEPAS (Singapore transit/ID)
-        // ISO 7816 basic card-management AID
+    // When PPSE is refused the card might still be an access-control card with a
+    // well-known AID; selecting one gives the vault pairs it can replay. Reached only
+    // under [fullCapture] in [runIsoDep].
+    //
+    // PIV — the U.S. federal / government-contractor badge (NIST SP 800-73, AIDs
+    // A0000003080000100001 and A0000000620001) — was deliberately removed from this
+    // list. No Clairix feature needs to emulate a federal badge; its PKI
+    // challenge-response cannot be satisfied by static APDU replay in any case; and
+    // probing government badge applications is a legal and policy liability with no
+    // product benefit. See the "Card Vault and card emulation" section of
+    // docs/audit/THREAT-MODEL.md. What remains are ordinary access and transit
+    // application IDs a person may hold on a card of their own.
+    private fun probeAccessAids(transceive: (ByteArray) -> ByteArray, pairs: MutableList<Pair<String, String>>) {
         val probes = listOf(
-            "A0000003080000100001" ,  // PIV card application
-            "A00000000101",            // MIFARE Application
-            "A0000000620001",          // NIST PIV
-            "D2760000850100"           // CIPURSE
+            "A00000000101",   // generic MIFARE / ISO 7816 card-management application
+            "D2760000850100"  // CIPURSE (transit / access)
         )
         for (aidHex in probes) {
             runCatching {
                 val aidBytes = aidHex.hexToBytes()
                 val selCmd = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00,
                     aidBytes.size.toByte()) + aidBytes + byteArrayOf(0x00)
-                val resp = iso.transceive(selCmd)
+                val resp = transceive(selCmd)
                 pairs += selCmd.hex() to resp.hex()
-                val sw = resp.takeLast(2)
-                if (sw.size == 2 && sw[0] == 0x90.toByte() && sw[1] == 0x00.toByte()) {
-                    // Found a responding AID — capture follow-up and stop probing
-                    captureEMVFollowUp(iso, pairs)
+                if (isOk(resp.takeLast(2))) {
+                    // Found a responding AID — record the follow-up and stop probing
+                    captureEMVFollowUp(transceive, pairs)
                     return
                 }
             }

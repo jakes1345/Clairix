@@ -188,7 +188,42 @@ object Registry {
     private val _vault = MutableStateFlow<VaultState>(VaultState.Locked)
     val vault: StateFlow<VaultState> = _vault.asStateFlow()
     fun publishVault(state: VaultState) { _vault.value = state }
-    fun lockVault() { _vault.value = VaultState.Locked }
+    fun lockVault() {
+        _vault.value = VaultState.Locked
+        // A re-tap in progress and any pairs captured but not yet saved do not
+        // outlive the vault closing: locking happens when the app leaves the
+        // screen or the app lock engages.
+        _vaultCaptureArm.value = null
+        _pendingVaultCapture.value = null
+    }
+
+    /**
+     * Whether the owner has acknowledged the vault-ownership notice. Seeded from
+     * [app.clairix.analysis.CardVault.hasOwnershipAck] at launch so the NFC tab can
+     * gate the first save on it without reading preferences on the main thread.
+     */
+    private val _ownershipAck = MutableStateFlow(false)
+    val ownershipAck: StateFlow<Boolean> = _ownershipAck.asStateFlow()
+    fun setOwnershipAck(acknowledged: Boolean) { _ownershipAck.value = acknowledged }
+
+    /**
+     * The UID of the tag the owner asked to record for the vault, or null. While it
+     * is set the NFC read path runs a full [app.clairix.analysis.NfcScanner.capture]
+     * on the next tap instead of an ordinary identify-only scan.
+     */
+    private val _vaultCaptureArm = MutableStateFlow<String?>(null)
+    val vaultCaptureArm: StateFlow<String?> = _vaultCaptureArm.asStateFlow()
+    fun armVaultCapture(uid: String) { _vaultCaptureArm.value = uid }
+    fun cancelVaultCapture() { _vaultCaptureArm.value = null }
+
+    /**
+     * A card recorded by a re-tap, waiting for the owner to name and save it. The
+     * recorded APDU pairs live only here (and, once saved, in the encrypted card),
+     * never in the scanned-tag list.
+     */
+    private val _pendingVaultCapture = MutableStateFlow<PendingVaultCapture?>(null)
+    val pendingVaultCapture: StateFlow<PendingVaultCapture?> = _pendingVaultCapture.asStateFlow()
+    fun setPendingVaultCapture(capture: PendingVaultCapture?) { _pendingVaultCapture.value = capture }
 
     /**
      * The vault card currently being emulated via HCE, or null. Holds the label as

@@ -409,6 +409,12 @@ enum class CardProfile(val label: String, val hceCapable: Boolean) {
     UNKNOWN("Unknown", false)
 }
 
+/**
+ * A tag read this session. It never carries the recorded APDU conversation: an
+ * ordinary scan does not record one (it stops at identifying the card), and the
+ * pairs captured by an explicit "Record for vault" re-tap live only in the
+ * pending [PendingVaultCapture] and, once saved, in the encrypted [VaultCard].
+ */
 data class NfcTag(
     val uid: String,
     val techs: List<String>,
@@ -421,8 +427,20 @@ data class NfcTag(
     val sak: String? = null,
     val profile: CardProfile = CardProfile.UNKNOWN,
     val paymentNetwork: String? = null,
-    val skimmerFlags: List<String> = emptyList(),
-    val apduPairs: List<Pair<String, String>> = emptyList()
+    val skimmerFlags: List<String> = emptyList()
+)
+
+/**
+ * A card recorded by an explicit "Record for vault" re-tap, held only between the
+ * capture and the moment the owner names it and saves it (or cancels). The recorded
+ * ISO 14443-4 APDU pairs live here and, once saved, in the encrypted [VaultCard];
+ * they are never kept in the scanned-tag list. Cleared when the vault locks.
+ */
+data class PendingVaultCapture(
+    val uid: String,
+    val profile: CardProfile,
+    val type: String,
+    val apduPairs: List<Pair<String, String>>
 )
 
 // --- Card vault -------------------------------------------------------------

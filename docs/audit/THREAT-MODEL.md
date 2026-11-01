@@ -97,6 +97,64 @@ These are stated to users in the README and are not findings:
   log, messaging app and browser keep their own records, and the Get help page
   says so.
 
+## Card Vault and card emulation
+
+A full-edition feature (sideload only; built with `CARD_VAULT` on). It is not part
+of the messaging security model and is called out here because it stores card
+credentials and can replay them.
+
+- **Who it is for.** The owner's own contactless cards — an office or building
+  badge, a transit card, a gym or hotel key — recorded so the phone can stand in
+  for one the owner carries. It is not for cloning a card issued to someone else.
+  The app asks the owner to acknowledge this once before the first save
+  ("Only cards issued to you. Recording and replaying someone else's card or
+  credential may be a crime."), stores that acknowledgement, and shows the same
+  line on every tag row that offers a way into the vault.
+- **What is stored.** For a saved card: its UID, its resolved type, a label the
+  owner gives it, and — only for an ISO 14443-4 card recorded by an explicit
+  "Record for vault" re-tap — the recorded APDU command/response pairs. An
+  ordinary tap identifies a card (SELECT PPSE and the AID SELECTs that name a
+  payment network) and records nothing; it never sends GET PROCESSING OPTIONS,
+  READ RECORD or the access-control AID probes, and the scanned-tag list in
+  memory holds no pairs. The capture runs only in the full edition and only on
+  the deliberate re-tap. A recognised **payment card is never recorded or
+  emulable**: no follow-up is sent to it, and it cannot be saved.
+- **Where the key lives.** The stored cards are encrypted with AES-256-GCM under
+  an Android Keystore key that never leaves secure hardware (StrongBox where the
+  phone has it, the TEE otherwise). The key is authentication-bound: it decrypts
+  only within 30 seconds of the owner confirming identity with a strong biometric
+  or the device PIN/pattern/password, enforced by the Keystore, not by the screen.
+  A phone with no secure lock screen cannot make the key, so the vault refuses.
+- **What replay can and cannot do.** Emulation (`HostApduService`) replays the
+  recorded exchange to a reader, matched exactly or on the CLA/INS/P1/P2 prefix.
+  It works only for static exchanges a reader does not challenge. It **cannot**
+  defeat challenge-response: DESFire EV2 and MIFARE Plus SL3 authenticate with
+  keys the phone does not hold, EMV cryptograms are per-transaction, and a card's
+  own protocol (MIFARE Classic/Ultralight, FeliCa, ISO 15693) is a different RF
+  layer HCE cannot speak at all. Those cards are kept for identification only.
+- **Why there is no PIV probe.** The access-control probe list deliberately does
+  **not** include PIV (the U.S. federal / government-contractor badge, NIST
+  SP 800-73, AIDs `A0000003080000100001` and `A0000000620001`). No Clairix feature
+  needs a federal badge; PIV authenticates with on-card PKI that static replay
+  cannot satisfy in any case; and probing government badge applications is a legal
+  and policy liability with no product benefit. The probes that remain are
+  ordinary access and transit application IDs a person may hold on a card of
+  their own.
+- **Disarming.** An armed card stops answering readers when the screen goes off,
+  after five minutes in any case, and immediately when the app lock engages or a
+  wipe runs — the loaded pairs are forgotten and the dynamically registered AIDs
+  withdrawn.
+- **Not in the Play edition.** The Play build is compiled with `CARD_VAULT` off:
+  no vault, no capture, no `HostApduService`, its manifest entry or AID resource.
+  The release workflow fails a Play bundle whose merged manifest declares card
+  emulation.
+- **What this does not defend.** A card the owner does not own but can tap can be
+  recorded; the acknowledgement is a warning, not an enforced check, because the
+  phone cannot tell whose card it is. The owner-handling adversary (**P**) with
+  the device unlocked within the auth window could open the vault; the
+  acknowledgement, the app lock and the 30-second window narrow but do not close
+  this.
+
 ## Known open issues
 
 See the "Still open" items in [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md):
