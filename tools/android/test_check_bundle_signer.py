@@ -181,3 +181,19 @@ def test_signers_named_by_platform_range_are_read(tmp_path):
     r = run("--apksigner", tool, aab, touch(tmp_path, "ranged.apk"))
     assert r.returncode == 0, r.stdout + r.stderr
     assert f"Release certificate SHA-256: {digest}" in r.stdout
+
+
+def test_signers_named_by_scheme_are_read(tmp_path):
+    """What CI's build-tools print: the scheme before "Signer", a colon after it, one line per scheme."""
+    ks, digest = keystore(tmp_path, "release")
+    aab = bundle(tmp_path, "clairix-play.aab", ks)
+    tool = tmp_path / "apksigner"
+    tool.write_text("#!/bin/sh\n"
+                    "echo 'V3.0 Signer: certificate DN: CN=release'\n"
+                    f"echo 'V3.0 Signer: certificate SHA-256 digest: {digest}'\n"
+                    "echo 'V3.0 Signer: certificate SHA-1 digest: 67d414cc4b5cf776e5962110001d294d13dede10'\n"
+                    f"echo 'V3.1 Signer: certificate SHA-256 digest: {digest}'\n")
+    tool.chmod(0o755)
+    r = run("--apksigner", tool, aab, touch(tmp_path, "scheme.apk"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"Release certificate SHA-256: {digest}" in r.stdout

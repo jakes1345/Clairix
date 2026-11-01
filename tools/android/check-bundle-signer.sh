@@ -76,11 +76,12 @@ for apk in "$@"; do
     failed=1
     continue
   fi
-  # "Signer #1 certificate SHA-256 digest: …" from older build-tools; newer ones can
-  # name a signer by the platform versions it covers instead ("Signer (minSdkVersion=31,
-  # maxSdkVersion=2147483647) certificate …"), the same certificate on more than one
-  # line. Every form is read; one certificate is one signer however often it is named.
-  digests=$(printf '%s\n' "$out" | sed -nE 's/^Signer[^:]* certificate SHA-256 digest: *([0-9A-Fa-f]{64}).*$/\1/p' | tr 'A-F' 'a-f' | sort -u)
+  # "Signer #1 certificate SHA-256 digest: …" from older build-tools; newer ones name
+  # the scheme ("V3.0 Signer: certificate …", what CI's build-tools print) or the
+  # platform versions a signer covers ("Signer (minSdkVersion=31, …) certificate …"),
+  # the same certificate on more than one line. Every form is read; one certificate
+  # is one signer however often it is named.
+  digests=$(printf '%s\n' "$out" | sed -nE 's/^(V[0-9.]+ )?Signer[^:]*:? *certificate SHA-256 digest: *([0-9A-Fa-f]{64}).*$/\2/p' | tr 'A-F' 'a-f' | sort -u)
   n=$(printf '%s' "$digests" | grep -c . || true)
   if [ "$n" -ne 1 ]; then
     echo "::error file=$apk::expected exactly one signer, found $n"
