@@ -29,6 +29,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -156,6 +157,8 @@ class ScanService : LifecycleService() {
     /** When a confirmed follower wakes the shade: a recognised tracker at once, anything unidentified once per journey. */
     private val followAlerts = FollowAlertPolicy()
     private val gpsTrail = ArrayList<LatLon>(500)
+    /** [SystemClock.elapsedRealtime] of the latest real (not mock) fix, or 0 before the first; see [onFix]. Main thread. */
+    private var lastRealFixAt = 0L
     private var publishCycle = 0
     private lateinit var phoneHealthMonitor: PhoneHealthMonitor
 
@@ -332,8 +335,10 @@ class ScanService : LifecycleService() {
      * A fix Android marks as mock is an app's invention ([MockFixes]): it places no
      * sighting, moves no odometer, sets no pace and goes into no history, trail or trip,
      * and the phone's position is unknown until a real fix comes. The status says there
-     * is no fix and keeps the last real position, which an SOS still sends; the Trackers
-     * screen says positions are being faked ([Registry.positioning]).
+     * is no fix; it keeps the last real position, which an SOS sends as where the phone
+     * is, only while that is recent enough to be ([MockFixes.keepLastReal]), and then
+     * drops it, so an SOS looks for a position and says it found only faked ones. The
+     * Trackers screen says positions are being faked ([Registry.positioning]).
      */
     private fun onFix(loc: Location) {
         val fix = loc.toFix()
@@ -341,9 +346,11 @@ class ScanService : LifecycleService() {
         val real = MockFixes.take(track, fix, mock = loc.isMock)
         Registry.updatePositioning { it.copy(mockFixAt = if (real) 0L else now) }
         if (!real) {
-            Registry.update { it.copy(hasFix = false) }
+            val keep = MockFixes.keepLastReal(lastRealFixAt, SystemClock.elapsedRealtime())
+            Registry.update { if (keep) it.copy(hasFix = false) else it.copy(hasFix = false, lat = null, lon = null) }
             return
         }
+        lastRealFixAt = SystemClock.elapsedRealtime()
         motion.onFix(fix)?.let { applyPace(it) }
         LocationHistory.record(this, fix)
         updateVehicle(fix)
