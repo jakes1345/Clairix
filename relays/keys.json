@@ -1,0 +1,12 @@
+{
+  "type": "clairix-asset-keys",
+  "version": 1,
+  "issued": 1793503400,
+  "keys": [
+    {
+      "key": "uUUqtheaiRkKRdzuhW2Nf1MmlH3ucHTT81DI038pX7U",
+      "role": "current",
+      "revoked": false
+    }
+  ]
+}

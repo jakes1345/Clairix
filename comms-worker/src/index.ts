@@ -36,7 +36,7 @@ import {
 } from "./comms-logic";
 import { HttpError, base64ToBytes, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
 import { KNOWN_REGIONS } from "./regions";
-import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, type CoinTx, type Profile, type SignedKey } from "./mailbox";
+import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, SUSPENDED, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
 import {
   FED_CLAIMS_BURST,
@@ -171,6 +171,15 @@ export { IncidentCache, Mailbox, Traffic };
  *   DELETE /v1/admin/accounts/:number                      → {ok, number}: deletes the account as DELETE /v1/me
  *                                                            does, for a deletion requested by email
  *                                                            (scripts/delete-account.mjs)
+ * The operator, signed by an operator identity (a registered identity whose key OPERATOR_KEYS lists) and with
+ * X-Admin-Secret; off unless both are set; a few tries a minute per address (scripts/operator.mjs, docs/ABUSE.md):
+ *   POST   /v1/admin/suspend   {number}                    → {ok, number, suspended, since, already}: the number
+ *                                                            cannot sign in, its sockets close, its push endpoint
+ *                                                            goes, and to everyone else it reads as a number that
+ *                                                            does not exist (adminSuspend)
+ *   POST   /v1/admin/unsuspend {number}                    → {ok, number, suspended: false, wasSuspended}
+ * From LEGACY_CUTOFF (default 2027-01-01) the paths kept for apps before Beta 7 answer 426 and say to update
+ * Clairix: the old kind of token ({count} at /v1/tokens, and spending one) and envelopes in format 2.
  * Federation (federation.ts): /v1/send and /v1/lookup take an optional "relay", the https address of the
  * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
  * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
@@ -301,6 +310,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const allowed = await other.rateOk("fed-send", FED_SENDS_PER_MINUTE, FED_SENDS_BURST);
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
       const body = parseSendBody(bodyText, isLoopbackDev(request));
+      refuseLegacyEnvelope(env, body.envelope);
       if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
         // The bucket refills one envelope this often.
         throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", Math.ceil(60 / FED_SENDS_PER_TARGET_PER_MINUTE));
@@ -333,6 +343,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     throw new HttpError(403, "The transport key only fetches, acknowledges and streams envelopes");
   }
   const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts, transport);
+  // Told to the number's own key holder only: the signature checked first.
+  if (profile === SUSPENDED) throw new HttpError(403, suspendedMessage(env));
   if (!profile) throw new HttpError(401, "Signature rejected");
   // An account from before keys were recorded as their owner's records them now.
   if (!profile.keysClaimed) {
@@ -440,6 +452,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!issued) throw new HttpError(400, "blinded must hold valid ristretto255 elements");
       return json({ kind, ...issued, expiresAt: epochExpiry(issued.epoch) });
     }
+    // The old kind of token, which apps before Beta 6 ask for: the relay makes
+    // it and could match it to this account. Refused from LEGACY_CUTOFF on.
+    refuseLegacy(env);
     const want = body.count;
     if (typeof want !== "number" || !Number.isInteger(want) || want < 1 || want > DELIVERY_TOKEN_BATCH_MAX) {
       throw new HttpError(400, `count must be a whole number from 1 to ${DELIVERY_TOKEN_BATCH_MAX}`);
@@ -539,6 +554,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     // never to whoever was given the number since.
     const payee = await them.profile();
     if (!payee || !timingSafeEqual(await fingerprint(payee.ed25519), pin)) throw new HttpError(400, "Payment refused");
+    // A suspended payee is refused the same way, before any coin moves.
+    if (await them.suspension()) throw new HttpError(400, "Payment refused");
     const debited = await me.debit(amount, txid);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
     let credited: number | null;
@@ -581,8 +598,141 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, balance });
   }
 
+  // ── The operator: a signed operator identity and the admin secret ─────
+  if ((path === "/v1/admin/suspend" || path === "/v1/admin/unsuspend") && request.method === "POST") {
+    return adminSuspend(env, request, profile, bodyText, path === "/v1/admin/suspend");
+  }
+
   throw new HttpError(404, "Not found");
 }
+
+/**
+ * POST /v1/admin/suspend and POST /v1/admin/unsuspend {number}: the operator
+ * stops a number that abuses this relay, or lets it back (the runbook is
+ * docs/ABUSE.md; scripts/operator.mjs makes the requests). Three things must
+ * hold, so neither the secret nor the operator's key is enough alone: the
+ * request is signed by an identity registered here, as every request in this
+ * section is (route() has checked it, nonce and all); that identity's key is
+ * one OPERATOR_KEYS lists; and X-Admin-Secret matches ADMIN_SECRET, compared in
+ * constant time, as the coin mint compares it. Off while either setting is
+ * unset, and a few tries a minute per address, as the other admin routes.
+ *
+ * What suspension does is Mailbox.suspend: the number cannot sign in, its
+ * sockets close, its push endpoint goes, and to everyone else it reads as a
+ * number that does not exist. Lifting it lets the phone back in with what was
+ * queued meanwhile, less what expired.
+ */
+async function adminSuspend(env: Env, request: Request, caller: Profile, bodyText: string, suspend: boolean): Promise<Response> {
+  const guard = env.MAILBOX.get(env.MAILBOX.idFromName(`admin-guard:${request.headers.get("cf-connecting-ip") ?? "unknown"}`));
+  const allowed = await guard.rateOk("admin", Mailbox.REGISTER_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many admin requests; try again in a minute", allowed.retryAfter);
+  const secret = requireSecret(env, "ADMIN_SECRET");
+  if (!(await secretEquals(request.headers.get("x-admin-secret") ?? "", secret))) throw new HttpError(403, "Admin secret rejected");
+  const operators = operatorKeys(env);
+  if (operators.length === 0) throw new HttpError(503, "Relay setting OPERATOR_KEYS is not configured");
+  if (!operators.some((spellings) => spellings.includes(caller.ed25519))) {
+    throw new HttpError(403, "This identity is not one of this relay's operators (OPERATOR_KEYS)");
+  }
+  const body = parseJson<{ number?: unknown }>(bodyText);
+  const number = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+  if (!number) throw new HttpError(400, "number must be a Clairix number");
+  // Suspended, the operator's identity could not sign the request that lifts it.
+  if (suspend && number === caller.number) throw new HttpError(400, "An operator identity cannot suspend itself");
+  const them = env.MAILBOX.get(env.MAILBOX.idFromName(number));
+  if (!(await them.profile())) throw new HttpError(404, "No such Clairix number on this relay");
+  if (suspend) {
+    const done = await them.suspend();
+    return json({ ok: true, number, suspended: true, since: done.since, already: done.already });
+  }
+  const was = await them.unsuspend();
+  return json({ ok: true, number, suspended: false, wasSuspended: was });
+}
+
+/**
+ * The operator identities OPERATOR_KEYS lists: Ed25519 public keys in
+ * standard base64, separated by commas or spaces, each as both of its
+ * spellings (with and without padding) so it matches however the identity
+ * registered it. Anything that is not such a key is left out.
+ */
+function operatorKeys(env: Pick<Env, "OPERATOR_KEYS">): [string, string][] {
+  return (env.OPERATOR_KEYS ?? "")
+    .split(/[\s,]+/)
+    .map((k) => keySpellings(k.trim()))
+    .filter((s): s is [string, string] => s !== null);
+}
+
+/**
+ * What a suspended number's own phone is told, on every signed request: that
+ * the relay's operator suspended it, what that stops, and where to appeal
+ * (OPERATOR_CONTACT, when the operator set one).
+ */
+function suspendedMessage(env: Pick<Env, "OPERATOR_CONTACT">): string {
+  const contact = operatorContact(env);
+  return "This Clairix number is suspended on this relay by its operator: it cannot sign in, collect messages or get " +
+    "new tokens here, and nothing sent to it is delivered. " +
+    (contact ? `To appeal, write to ${contact}.` : "To appeal, write to whoever runs this relay.");
+}
+
+/** OPERATOR_CONTACT: one line of at most 120 printable characters, or null. */
+function operatorContact(env: Pick<Env, "OPERATOR_CONTACT">): string | null {
+  const value = (env.OPERATOR_CONTACT ?? "").trim();
+  return value.length > 0 && value.length <= 120 && /^[\x20-\x7e]+$/.test(value) ? value : null;
+}
+
+/**
+ * The legacy paths kept for apps before 3.0.0 Beta 7 end at the start of this
+ * UTC day unless LEGACY_CUTOFF names another (YYYY-MM-DD): the old kind of
+ * token, which the relay makes and so could match to the account it went to
+ * (apps before Beta 6 ask for it), and envelopes in format 2, sealed to the
+ * recipient's long-term key with a sender signature anyone can check (apps
+ * before Beta 7 send them, and newer apps send them only to such apps).
+ * Supported versions (SECURITY.md) use blind tokens and format 3 between
+ * themselves; the date is two months after Beta 7 and Beta 8 came out, time
+ * for the users of older ones to update.
+ */
+const LEGACY_CUTOFF_DEFAULT = "2027-01-01";
+
+/** When the legacy paths end, in epoch millis: LEGACY_CUTOFF when it is a date, else the default. */
+function legacyCutoffMs(env: Pick<Env, "LEGACY_CUTOFF">): number {
+  const parse = (s: string): number | null => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+    if (!m) return null;
+    const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    // Date.UTC rolls 2027-02-30 into March; a day that does not exist is not a date.
+    return new Date(t).toISOString().slice(0, 10) === s.trim() ? t : null;
+  };
+  return parse(env.LEGACY_CUTOFF ?? "") ?? (parse(LEGACY_CUTOFF_DEFAULT) as number);
+}
+
+/** What a legacy request is told from the cutoff on: 426, and to update. */
+const LEGACY_MESSAGE =
+  "Relays stopped carrying the old tokens and envelopes of Clairix versions before 3.0.0 Beta 7. Update Clairix from " +
+  "clairix.app/download. If this phone is up to date, the person you are writing to needs to update theirs before " +
+  "they can receive your messages.";
+
+/** Refuses a legacy request once the cutoff has passed (426 Upgrade Required). */
+function refuseLegacy(env: Pick<Env, "LEGACY_CUTOFF">): void {
+  if (Date.now() >= legacyCutoffMs(env)) throw new HttpError(426, LEGACY_MESSAGE);
+}
+
+/**
+ * Refuses an envelope in format 2 (its first byte, the format, is 2) once the
+ * cutoff has passed. Checked on the envelope alone, before a token is spent or
+ * a mailbox is asked, so the answer is the same for every number.
+ */
+function refuseLegacyEnvelope(env: Pick<Env, "LEGACY_CUTOFF">, envelope: string): void {
+  if (envelope.length < 4 || Date.now() < legacyCutoffMs(env)) return;
+  let first: number | undefined;
+  try {
+    first = base64ToBytes(envelope.slice(0, 4))[0];
+  } catch {
+    return; // not base64 after all: the mailbox stores it as the bytes it is
+  }
+  if (first === ENVELOPE_FORMAT_2) throw new HttpError(426, LEGACY_MESSAGE);
+}
+
+/** The first byte of an envelope in format 2 (comms-crypto ENVELOPE_V2). */
+const ENVELOPE_FORMAT_2 = 2;
 
 /**
  * DELETE /v1/admin/accounts/:number: the operator deletes an account on a
@@ -721,6 +871,8 @@ async function spendToken(env: Env, request: Request, kind: TokenKind): Promise<
     return;
   }
   if (!DELIVERY_TOKEN_RE.test(token)) throw new HttpError(403, "Token rejected");
+  // The old kind, from apps before Beta 6: no longer spent from LEGACY_CUTOFF on.
+  refuseLegacy(env);
   const hash = await tokenHash(token);
   if (!(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(hash, kind))).redeemToken(hash))) {
     throw new HttpError(403, `Token rejected: unknown, expired, already used, or not a ${kind} token`);
@@ -1298,6 +1450,7 @@ export function keySpellings(key: string): [string, string] | null {
  */
 async function send(env: Env, request: Request, bodyText: string): Promise<Response> {
   const body = parseSendBody(bodyText, isLoopbackDev(request));
+  refuseLegacyEnvelope(env, body.envelope);
   const foreign = body.relay !== null && !isOwnOrigin(env, request, body.relay);
   // Checked before the token is spent, so a phone on a relay that cannot
   // forward keeps its token.

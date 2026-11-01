@@ -41,7 +41,8 @@ giving them your real number or your identity key.
   phone fetches tokens and sends, so use Tor or a VPN if that matters). Apps
   from before 3.0.0 Beta 6 still fetch the old kind of token, random values the
   relay makes, which a relay that recorded its own answers could match to the
-  account they went to. The first envelope
+  account they went to; from 1 January 2027 the relay refuses that kind (see
+  "Old versions"). The first envelope
   of a new session also carries the claim ticket of the one-time key it was
   built on, which the relay handed to the sender's account with the key; that
   envelope is linkable to that lookup, as the lookup itself already showed who
@@ -63,6 +64,8 @@ giving them your real number or your identity key.
 - What phones report about a number (see "Abuse reports"): the number, a
   reason, an envelope's hash and the day. Never who reported it, and never
   anything that was said.
+- Whether its operator suspended a number, and the day the suspension began
+  (see "Suspending a number"). Nothing about why.
 - Where its operator has turned ClairixCoin on (see "ClairixCoin"), each
   account's balance and its own record of the transfers it made and received:
   the id, the amount, the hour and which way it went, for 30 days and a
@@ -139,7 +142,36 @@ with the wasm32 target), and CI fails if the committed file is not exactly
 what the source builds. Issuing 50 tokens costs the relay about 14 ms of CPU, checking one about 0.3 ms.
 
 Tokens from apps before Beta 6 (32 random bytes the relay made and stored by
-hash) are still accepted.
+hash) are still issued and accepted until 1 January 2027 (see "Old versions").
+
+## Old versions
+
+Three things were kept for apps older than the oldest version Clairix still
+supports (3.0.0 Beta 7; see SECURITY.md), each weaker than what replaced it:
+
+- the old kind of token (`POST /v1/tokens {count}`, and spending one), which
+  the relay makes itself and so could match to the account it went to; apps
+  before Beta 6 use it;
+- envelopes in format 2, whose first byte is 2: sealed to the recipient's
+  long-term key, so whoever logs them and later seizes the phone learns who
+  sent each one, and carrying a sender signature anyone can check. Apps
+  before Beta 7 send nothing else, and newer apps send it only to them;
+- lookups by URL, which went with API version 5.
+
+From **1 January 2027** (00:00 UTC), two months after Beta 7 and Beta 8 came
+out, the relay answers the first two with `426 Upgrade Required` and a message
+that says to update Clairix from clairix.app/download, or, for someone whose
+phone is up to date, that the person they are writing to needs to update
+theirs. A format-2 envelope is refused on its first byte alone, before a token
+is spent or a mailbox is asked, so the answer says nothing about the number it
+was for. Blind tokens and format-3 envelopes, which every supported version
+uses, are untouched.
+
+`LEGACY_CUTOFF` (a UTC day, `YYYY-MM-DD`) moves the date for a relay of your
+own; anything that is not a real day keeps 1 January 2027. The app itself
+learns of newer versions, and of a version too old to be safe, from the
+signed `latest.json` on the `relays` release (relays/README.md), not from the
+relay.
 
 ## One-time setup
 
@@ -429,20 +461,85 @@ number exists or was reported before.
 With `ADMIN_SECRET` set, the operator reads them:
 
 ```sh
+ADMIN_SECRET=… node scripts/operator.mjs reports https://relay.example.org
+ADMIN_SECRET=… node scripts/operator.mjs close https://relay.example.org "482 913 605"
+# or by hand:
 curl -H "X-Admin-Secret: $ADMIN_SECRET" https://relay.example.org/v1/admin/reports
 curl -X DELETE -H "X-Admin-Secret: $ADMIN_SECRET" -d '{"number":"482913605"}' https://relay.example.org/v1/admin/reports
 ```
 
-The first lists every reported number with how many reports there are, their
-reasons, the envelope hashes and the first and last day; the second closes
-the reports about one number (add `"relay"` for a number on another relay)
-once it has been dealt with. A report is someone's word: the relay never sees
-the messages, and an envelope's hash only lets a report be matched with a
-message the person who reported it chooses to show you. A number on another
-relay is that relay's operator's to act on; this relay's operator can pass the
-report on, or stop taking that relay's envelopes with `FEDERATION`. A few
-attempts a minute per address are allowed, so the secret cannot be guessed;
-without `ADMIN_SECRET` the endpoint is off.
+`reports`, or the first `curl`, lists every reported number with how many
+reports there are, their reasons, the envelope hashes and the first and last
+day; `close`, or the second, closes the reports about one number (add
+`"relay"`, or the script's last argument, for a number on another relay) once
+it has been dealt with. A report is
+someone's word: the relay never sees the messages, and an envelope's hash only
+lets a report be matched with a message the person who reported it chooses to
+show you. A number on another relay is that relay's operator's to act on; this
+relay's operator can pass the report on, or stop taking that relay's envelopes
+with `FEDERATION`. A few attempts a minute per address are allowed, so the
+secret cannot be guessed; without `ADMIN_SECRET` the endpoint is off. What to
+do with a report, start to finish, is [docs/ABUSE.md](../docs/ABUSE.md).
+
+### Suspending a number
+
+A number that abuses the relay can be suspended, and the suspension lifted
+again. Suspended, the number cannot sign in: it collects nothing, renews
+nothing and is issued no tokens, and every signed request from its phone is
+answered 403 with a sentence saying it is suspended and where to appeal
+(`OPERATOR_CONTACT`, when set). Its live connections are closed and its push
+endpoint is deleted. To everyone else it reads as a number that does not
+exist: envelopes to it are answered exactly as a send to a number nobody holds
+is, and dropped; lookups find nothing; a payment is "Payment refused". So
+nobody learns from the relay that the number was suspended, or that it exists.
+What was queued for it stays, and reaches the phone if the suspension is
+lifted before it expires after 30 days. The relay keeps that the number is
+suspended and the day it began: nothing about why.
+
+Two limits. Sending needs no sign-in, only a token, and the relay cannot tell
+whose tokens are whose (that is what blind tokens are for), so a suspended
+phone can still spend the tokens it already holds, a hundred or so at most,
+over the four weeks they last. And a suspension stops a number, not a person:
+someone suspended can come back with a new number if someone on the relay
+invites them, or while registration is open.
+
+Suspending takes two things together: a request signed by an **operator
+identity**, an account on this relay whose key is in `OPERATOR_KEYS`, and
+`X-Admin-Secret`. A leaked secret alone, or a stolen operator key alone, does
+nothing. To set it up once:
+
+```sh
+ENROLL_SECRET=… node scripts/operator.mjs register https://relay.example.org
+```
+
+It makes an Ed25519 key on your computer (in
+`~/.clairix-operator/<relay host>.json`, readable by you alone, or wherever
+`OPERATOR_IDENTITY` says), registers it on the relay as an unlisted account
+that sends and receives nothing, and prints the key. Add the key to the
+relay's settings (comma-separated, for several operators), and set where
+people appeal:
+
+```toml
+# wrangler.toml
+[vars]
+OPERATOR_KEYS = "<the key register printed>"
+OPERATOR_CONTACT = "abuse@relay.example.org"
+```
+
+On your own server the same go in `/etc/clairix-relay/relay.env`, and in the
+container they are environment variables. Then:
+
+```sh
+ADMIN_SECRET=… node scripts/operator.mjs suspend   https://relay.example.org "482 913 605"
+ADMIN_SECRET=… node scripts/operator.mjs unsuspend https://relay.example.org "482 913 605"
+```
+
+The script signs `POST /v1/admin/suspend` or `POST /v1/admin/unsuspend` with
+`{"number": "…"}` as the app signs a request, with the secret alongside. An
+operator identity cannot suspend itself. Keep the identity file as you keep
+the secret: with both, anyone can suspend anyone on the relay. Deleting an
+account is "Deleting an account on request" below; when the project's own
+relay suspends and when it deletes is set out in docs/ABUSE.md.
 
 ### Deleting an account on request
 
@@ -454,7 +551,8 @@ nothing that could confirm who is asking, so a request that names a Clairix
 number on your relay is acted on as it stands. To do it:
 
 1. Set the admin secret once, if it is not set yet (16 characters at least; it
-   also guards coin minting and the abuse-report listing):
+   also guards coin minting, the abuse-report listing and, with
+   `OPERATOR_KEYS`, suspending a number):
 
    ```sh
    npx wrangler secret put ADMIN_SECRET
@@ -673,9 +771,9 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old) |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
-| POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |
+| POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6, refused with 426 from `LEGACY_CUTOFF` (see "Old versions") |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
-| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
+| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope. An envelope in format 2 is refused with 426 from `LEGACY_CUTOFF`, whatever the number |
 | POST | `/v1/report` | `{number, relay?, envelope?, reason}` with a report token → 202: an abuse report kept for the operator (see "Abuse reports"); the same answer whatever the number |
 | GET, DELETE | `/v1/admin/reports` | With `X-Admin-Secret` and no identity: every reported number, or (`DELETE {number, relay?}`) close the reports about one; off unless `ADMIN_SECRET` is set |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
@@ -688,6 +786,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | GET | `/v1/coin/history` | `{txs: [{id, amount, ts, direction, note?}]}`: the last transfers, newest first (`?limit=`, up to 100), each dated to the hour; `note` only on a mint |
 | POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `COIN` is on and `ADMIN_SECRET` is set |
 | DELETE | `/v1/admin/accounts/:number` | With `X-Admin-Secret` and no signature → `{ok, number}`: deletes the account as `DELETE /v1/me` does, for a deletion requested by email (`scripts/delete-account.mjs`, see above); 404 for no such account; off unless `ADMIN_SECRET` is set; a few tries a minute per address |
+| POST | `/v1/admin/suspend`, `/v1/admin/unsuspend` | `{number}`, signed by an operator identity (its key in `OPERATOR_KEYS`) and with `X-Admin-Secret` → `{ok, number, suspended, since, already}` or `{ok, number, suspended: false, wasSuspended}` (see "Suspending a number"; `scripts/operator.mjs`); 404 for no such account; off unless both settings are set; a few tries a minute per address |
 | POST | `/v1/traffic/probe` | `{region, trip, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; a traffic token, no identity |
 | GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}`; a traffic token |
 | GET | `/v1/traffic/typical?region=&segs=a,b` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments; a traffic token |

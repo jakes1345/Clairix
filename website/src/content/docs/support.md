@@ -111,6 +111,8 @@ A first message from a number that is not in your contacts waits under **Request
 
 To stop a contact reaching you, open their page (their name at the top of the conversation) and choose **Block** to keep the conversation as a record, or **Block and delete** to remove it too. Nothing they send reaches your phone afterwards, and they are not told. **Report** on the same page tells your relay's operator; do it before **Block and delete**, because a report names the last envelope they sent. Blocked numbers are listed in Comms settings, where you can unblock them.
 
+A report in the app does not say who sent it, so we cannot answer it. To report a number on our relay and hear back, write to support@clairix.app with the number, what happened and when, and screenshots of the conversation that show the number; this is the one time we ask for screenshots. We reply within five business days, the same day for threats of violence, and we may suspend the number: it then cannot sign in on our relay, and nothing sent to it is delivered. A suspended number can appeal at the same address. How we weigh reports and appeals is our [abuse policy](https://github.com/jakes1345/Clairix/blob/main/docs/ABUSE.md).
+
 While your phone is locked it cannot open anything, so a message from a blocked number or a request can still show as "New Clairix message", and a call as "Clairix call", until you unlock it. Then a blocked number's is dropped, and a request's call is noted as missed.
 
 ### I lost my phone, or wiped Clairix. Can you restore my Clairix number?
@@ -131,6 +133,6 @@ Write to support@clairix.app with:
 4. For Comms problems, the **diagnostics log**: in Comms settings, open Diagnostics and tap **Copy**. The log records connections and delivery events. It never contains message text.
 5. For scanner problems, an **evidence report export** is helpful if you are comfortable sharing it. It contains device identifiers and positions, so send it only if you are. You can delete lines before sending.
 
-Please do not send screenshots of conversations or anyone else's personal information. We will reply by email. We have no telemetry, so your report is the only way we learn about a problem.
+Please do not send screenshots of conversations or anyone else's personal information. We reply by email within five business days. We have no telemetry, so your report is the only way we learn about a problem.
 
 For security vulnerabilities, use security@clairix.app instead, and read the [disclosure policy](/security#disclosure).

@@ -516,6 +516,10 @@ class MainActivity : AppCompatActivity() {
         CommsRepository.onAppVisible(true)
         CommsRepository.registerPushIfPossible()
         CommsRepository.syncInBackground()
+        // At most once a day, in both editions: the relay list, the asset key
+        // list and the note of the newest and oldest safe version (Settings >
+        // About, the Scan and Comms banners, the brake on sending).
+        lifecycleScope.launch { runCatching { app.clairix.comms.RelayDirectory.refreshIfStale(applicationContext) } }
     }
 
     override fun onPause() {

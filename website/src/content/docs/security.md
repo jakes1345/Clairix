@@ -32,7 +32,7 @@ This is the complete list of destinations the app connects to, taken from the co
 | **Cloudflare TURN/STUN** | During every call while "Relay-only calls" is on, which it is by default when your relay offers TURN; otherwise during a call that cannot connect directly | Call audio, encrypted end to end with DTLS-SRTP | Your IP address. Not the audio. |
 | **OpenStreetMap Nominatim** | Only when you choose "Search online instead". Road names on the offline map are searched on the phone, and a dropped pin is named after the nearest road on it, with nothing sent | The search text | Approximate location, your IP address |
 | **OpenStreetMap tile servers** | When you open the map | The coordinates of the map tiles you view | The area you are looking at, your IP address |
-| **GitHub Releases** | When you download an offline map region (United States only), or the work-zone or plate-reader list for it; before a map downloads, and at most once a week for each map on the phone when you open Drive, to read the map file's first few kilobytes and last four bytes for its size and build date; and, about once a day while you use Clairix, for a newer copy of the stalkerware list the spyware check matches apps against | The name of the region, or of the list | Your IP address. The files are signed, and the app refuses one whose signature does not verify. Nothing about the apps on your phone is sent. |
+| **GitHub Releases** | When you download an offline map region (United States only), or the work-zone or plate-reader list for it; before a map downloads, and at most once a week for each map on the phone when you open Drive, to read the map file's first few kilobytes and last four bytes for its size and build date; and, about once a day while you use Clairix, for a newer copy of the stalkerware list the spyware check matches apps against, of the relay list, of the keys our files are signed with, and of the note that says which Clairix version is newest and which is the oldest still safe | The name of the region, or of the list | Your IP address. The files are signed, and the app refuses one whose signature does not verify. Nothing about the apps on your phone, or which version it runs, is sent. |
 | **Google Play services**, on your phone, where it is installed | Every position fix the tracker scanner, navigation and SOS ask for, unless Satellite-only positioning is on (Settings, Location). The GPS check also asks Android for a Wi-Fi/cell position to compare the satellites with, unless that cross-check is off | Clairix sends Google nothing itself. To work out a position from Wi-Fi and cell towers, Google Play services sends Google the identifiers of the networks and towers around you, under Google's privacy policy, unless Google Location Accuracy is off in Android's location settings | Where you are, from those identifiers and your IP address. With Satellite-only positioning on, Clairix asks only the satellite receiver and asks for no Wi-Fi/cell position at all. On a phone without Google Play services, Clairix uses Android's own location service instead, and a Wi-Fi/cell position goes to whatever location provider that phone has, if any. |
 | **Your phone's text-to-speech engine** | While spoken directions are on during navigation | What is read out: turns with street names, "plate reader ahead", incidents | Clairix picks a voice that works offline when one is installed for the phone's language, and asks the engine not to use the network. With no such voice the route options say so, and the engine may send the words to its maker under its own policy. Muting directions sends nothing. |
 | **An app you pick** (Android share sheet) | When you export a report or share an invite | Whatever you chose to share | Up to that app |
@@ -86,10 +86,11 @@ The relay is a small store-and-forward service. It is built to know as little as
 | Your UnifiedPush endpoint, if you set one | Until you change or remove it, or delete your account |
 | The key your contacts' passes are checked with (your phone gives contacts the passes inside your encrypted messages; envelopes without one share a small part of your mailbox) | Until your phone replaces it, which it does when you delete a contact, or you delete your account |
 | Unused invite codes you created | 7 days |
-| Hashes of the old kind of single-use token, which apps from before Beta 6 fetch and have not spent | 14 days, plus up to twelve hours |
+| Hashes of the old kind of single-use token, which apps from before Beta 6 fetch and have not spent | 14 days, plus up to twelve hours; none are issued or spent from 1 January 2027 |
 | Hashes of blind tokens already spent, so none is spent twice; nothing is kept when they are issued | Until the key they were made with is retired, 14 to 28 days |
 | A note that each of your keys belongs to your number | Until you delete your account |
 | ClairixCoin, in Clairix Full on a relay that offers it: your balance, and for each transfer you make or receive its id, the amount, the hour and whether it came in or went out (never who paid whom; any note travels end-to-end encrypted between the two phones) | The balance until you delete your account; each transfer for 30 days at most, the 100 most recent |
+| That your number is suspended, and the day it began, only if the relay's operator suspended it under the terms ([abuse policy](https://github.com/jakes1345/Clairix/blob/main/docs/ABUSE.md)). Suspended, a number cannot sign in, and the relay answers everyone else as if it did not exist | Until the suspension is lifted or the account is deleted |
 | Rate-limit allowances, as a count and the hour | Deleted once they have refilled |
 | The nonce of each signed request | 5 minutes |
 | Anonymous traffic samples (navigation only) | 2 hours |
@@ -102,7 +103,7 @@ The relay never holds message content, a name, a phone number, an email address 
 
 What the relay can observe: the recipient of each envelope, its size, the time, and whether it carried a pass from someone the recipient has written to (never whose). Each envelope is held a random few seconds (about four on average, never more than twenty) and released with whatever else is due, in shuffled order; calls being set up, SOS alerts and group membership changes are not held, and are marked so the relay can tell. A send is not signed and names no account, and a lookup names its target in the signed body, never in the URL, so a request log holds neither senders nor who looked up whom. A ClairixCoin payment is signed by the payer and names the payee, so the relay sees who pays whom while it moves the coins; it writes down only the amount and the hour, on each side. The relay's own logging is off. Nothing a mailbox stores says when its owner was last here: limits are kept to the hour, nonces to the minute, registrations to the day, ClairixCoin transfers to the hour.
 
-We say the rest plainly too. A relay operator, or the platform under it, who captured live requests could see the network address each one came from. Apps from before Beta 6 fetch tokens the relay hands out, which it could tie to the account; current tokens are blind and that link is gone. That is possible only while a request is in flight; none of it is written down. If your IP address matters to you, turn on Tor in Comms settings (it is built into the app, and relays with an onion address are reached without leaving Tor), or use a VPN. If you use a VPN or a Tor app outside Clairix, also turn on "Refuse the relay if its key changes" (Phone check → Certificates): a Tor exit relay sits between you and our relay, and in October 2026 more than 300 hijacked exits swapped in fake keys to steal SSH passwords. Messages stay end-to-end encrypted either way, and a forged web certificate would have to fool the normal certificate checks first; with the key pinned, even one that did is refused.
+We say the rest plainly too. A relay operator, or the platform under it, who captured live requests could see the network address each one came from. Apps from before Beta 6 fetch tokens the relay hands out, which it could tie to the account; current tokens are blind and that link is gone, and from 1 January 2027 the relay refuses the old kind. That is possible only while a request is in flight; none of it is written down. If your IP address matters to you, turn on Tor in Comms settings (it is built into the app, and relays with an onion address are reached without leaving Tor), or use a VPN. If you use a VPN or a Tor app outside Clairix, also turn on "Refuse the relay if its key changes" (Phone check → Certificates): a Tor exit relay sits between you and our relay, and in October 2026 more than 300 hijacked exits swapped in fake keys to steal SSH passwords. Messages stay end-to-end encrypted either way, and a forged web certificate would have to fool the normal certificate checks first; with the key pinned, even one that did is refused.
 
 You delete your relay account from inside the app with Wipe Clairix or Delete identity and number (both in Settings, under Wipe and delete), or by email. [How to delete your account.](/delete-account)
 
@@ -112,16 +113,29 @@ There is nothing in Clairix that reports back to us. No usage events, no device 
 
 ## Responsible disclosure {#disclosure}
 
-If you find a vulnerability in the app, the relay, this website or anything else [SECURITY.md lists as in scope](https://github.com/jakes1345/Clairix/blob/main/SECURITY.md#in-scope), please tell us first.
+If you find a vulnerability in the app, the relay, this website or anything else [SECURITY.md lists as in scope](https://github.com/jakes1345/Clairix/blob/main/SECURITY.md#in-scope), please tell us first. This is the same policy as SECURITY.md in the repository.
 
-- Email **security@clairix.app**.
-- Give us enough to reproduce the issue. A proof of concept is welcome; stolen data is not.
-- We will acknowledge your report, keep you informed, and credit you when the fix ships if you want to be credited.
-- Please give us a reasonable window to fix the issue before publishing it.
+- Email **security@clairix.app**. Please do not open a public issue for anything that could put people at risk before it is fixed.
+- Tell us the version (Settings → About), the edition, the Android version, and the steps or a proof of concept. A proof of concept is welcome; other people's data is not.
 
-We ask that you do not test against other people's accounts or disrupt the relay for other users. We will not pursue anyone who reports in good faith under these terms.
+**Sending it encrypted.** There is no published key for security@clairix.app yet. To send a report encrypted today, write first without the details and include your own OpenPGP or age public key, or your Clairix number and relay. Within three business days we answer encrypted to your key with a key of ours for your reply, or write to you in Clairix, whose messages are end-to-end encrypted; send the details that way. A published key, and a signed security.txt naming it, are still to come.
 
-There is no bug bounty at present. If you would like to encrypt your report, ask at security@clairix.app and we will arrange a key with you.
+**What we do, and by when.**
+
+- We acknowledge your report within 3 business days.
+- We triage it within 10 business days: whether we can reproduce it, how serious we think it is and what we plan to do.
+- We fix it, or agree a plan with you, within 90 days of the report.
+- We keep you informed while we work on it, and tell you before the fix ships.
+
+Business days are Monday to Friday, leaving out public holidays.
+
+**Disclosure.** We agree a disclosure date with you, normally the day the fixed version is published; after 90 days from the report you may publish whether or not a fix is out, unless we have agreed a later date. When the fix ships, we describe the problem in the release notes and in the project's security findings. If a flaw is being used against people, we may tell users sooner, and we tell you first.
+
+**Safe harbour.** We will not take or support legal action against anyone who, in good faith, reports a vulnerability to us first and keeps to this policy: tests only phones, accounts and relays they own or run, does not access, keep or share anyone else's data, does not disrupt our relay or anyone's use of it, and gives us the agreed time before publishing. If you are unsure whether something is covered, ask us first.
+
+**Credit.** With your permission we credit you, by name or handle, in the release notes and in the project's security findings. There is no bug bounty.
+
+**How fixes reach people.** Once a day the app reads a signed note of the newest version and of the oldest one still safe to use. Settings → About then offers the update; below the oldest safe version the Scan and Comms screens say why, and the app stops sending messages, SOS alerts excepted, until it is updated. Only versions after 3.0.0 Beta 8 read the note. For older versions our relay ends what it kept only for them: from 1 January 2027 it refuses the old kind of token (apps before Beta 6) and envelopes in format 2 (apps before Beta 7), with a message to update Clairix.
 
 ## Where the limits are
 

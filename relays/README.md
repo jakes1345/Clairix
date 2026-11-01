@@ -42,3 +42,73 @@ with an unlisted key is what a taken-over address looks like.
 
 Delete its entry and bump `issued`. Phones that fetch the new list stop
 offering it; phones already registered there are not moved.
+
+## The version note: latest.json
+
+`latest.json` tells phones which Clairix version is the newest and which is
+the oldest still safe to use. The workflow signs it with the asset key and
+publishes it on the same release; once a day, with the relay list, the app
+fetches it, refuses it unless the signature checks under the key list below,
+refuses one issued earlier than the note it has, and compares it with its own
+version on the phone. Nothing about the phone is sent: it is the same request
+for everyone.
+
+| Field | What |
+|---|---|
+| `type`, `version` | `"clairix-latest"` and `1` |
+| `issued` | When it was written, in seconds (`date +%s`); later than the published note's |
+| `versionCode`, `versionName` | The newest release, exactly as `android/app/build.gradle.kts` builds it |
+| `minSafeVersionCode` | The oldest version still safe to use, at most `versionCode` |
+| `notes` | One line, at most 200 characters, shown with the update: what the newest version fixes |
+
+Below `versionCode` the app offers the update in Settings → About, and the
+owner can dismiss it until a newer one is published. Below
+`minSafeVersionCode` the Scan and Comms screens carry a banner that says the
+version has a security flaw fixed in a later one, and the app sends no
+messages, SOS alerts excepted, until it is updated. That is an emergency
+brake: raise `minSafeVersionCode` only for a flaw that makes using the old
+version unsafe, and only once the fixed version can be had everywhere people
+get Clairix (the release page, and Google Play once the Play edition is
+there). It stands at 27, Beta 7, the oldest supported version (SECURITY.md):
+versions before it let a crafted link take over a verified contact. The brake
+is also a power: whoever holds a key the key list accepts can stop every phone
+that reads the note from sending anything but SOS alerts until it is updated.
+They cannot make a phone send or read anything; it is one more reason the
+asset key is kept as tools/signing/README.md describes.
+
+With each release, change `versionCode`, `versionName`, `notes` and
+`issued` here in the same commit that changes the version in
+`android/app/build.gradle.kts`; the checks fail when the two differ. The
+workflow publishes the note only once that version's release, with its APK,
+is out; merged before, it fails and says so, and running it again from the
+Actions tab after the release publishes the note.
+
+    python3 tools/relays/check_latest.py relays/latest.json --gradle android/app/build.gradle.kts
+
+## The key list: keys.json
+
+`keys.json` lists the keys the files phones download may be signed with: the
+relay list, the version note, the maps, the work zones and the stalkerware
+list. Each entry is a key (32 bytes of Ed25519, base64, as
+`android/asset-signing.pub` holds it), a `role`, `"current"` or `"next"`, and
+`revoked`, true or false. The list itself is signed with one key only, the
+one built into the app (`android/asset-signing.pub`): phones take a list with
+no other signature, refuse one issued earlier than the list they have, and
+then accept a file signed by any listed key that is not revoked. A phone with
+no list yet accepts the built-in key alone; the app also carries the list
+that was in this file when it was built.
+
+This is what makes the asset key replaceable without a new app. To move to a
+new key, add it as `"next"` and publish; phones learn it in their daily fetch.
+Once they have had time to, sign with it, list it as `"current"`, and mark
+the old one revoked, or take it off. A key that leaked is marked revoked at
+once, with a new one listed. At most one key of each role may be unrevoked,
+and at least one key must be.
+
+The workflow signs the list with the asset signing key, which today is the
+built-in key. Once that key is kept offline (docs/KEYS.md), sign the list
+there and commit the signature as `relays/keys.json.sig`; the workflow then
+publishes that signature instead of making one, and checks either against
+the built-in key before publishing.
+
+    python3 tools/relays/check_keys.py relays/keys.json

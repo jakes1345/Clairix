@@ -386,6 +386,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
         )
     }
 
+    // A newer version, from the signed note the app reads once a day: offered under About.
+    val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+
     // This screen replaces the whole tab tree, so it does not inherit the insets
     // applied around the tabs and keeps clear of the system bars itself.
     Column(Modifier.fillMaxSize().background(c.base)) {
@@ -926,6 +929,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
             item(key = "§about-hdr") { SectionHeader("About") }
 
+            if (update.offer) item(key = "§update") { app.clairix.ui.UpdateOffer(update) }
+
             item(key = "§about") {
                 ClairixCard(spacing = 8.dp) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -984,7 +989,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "uploaded. The map downloads tiles from OpenStreetMap, which sees your IP address and the " +
                                 "area you're looking at; a place search runs on the phone over the offline map's road names " +
                                 "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
-                                "work zones and the stalkerware list come signed from GitHub. Messages, calls and live traffic go through the " +
+                                "work zones and the stalkerware list come signed from GitHub, and so, once a day, do the relay list, " +
+                                "the keys those files are signed with and a note of the newest Clairix version. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
                                 "phone only when you export it. Positions for the scanner, navigation and SOS come from " +
                                 "Google Play services where the phone has it, otherwise from Android's own location " +
@@ -997,7 +1003,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "read at the moment you press SOS, to attach to that alert, and at no other time. That " +
                                 "position comes from Google Play services where the phone has it, otherwise from Android's " +
                                 "own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
-                                "to that service. Satellite-only positioning, under Location above, asks the satellites alone.",
+                                "to that service. Satellite-only positioning, under Location above, asks the satellites alone. " +
+                                "Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the " +
+                                "newest version from GitHub; nothing about you goes with the request.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )

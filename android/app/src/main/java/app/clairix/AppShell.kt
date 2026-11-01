@@ -525,6 +525,8 @@ internal fun ScanHub(
     // Asked only while the scanner is meant to run: a phone that never scans has
     // nothing for the battery manager to stop.
     val batteryFree by if (scanEnabled) rememberBatteryUnrestricted() else remember { mutableStateOf(true) }
+    // Below the oldest safe version (the signed note read once a day), said here until it is updated.
+    val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
     ScreenList {
         item(key = "§hero") {
             StatusHero(
@@ -569,6 +571,9 @@ internal fun ScanHub(
                     else -> null
                 }
             )
+        }
+        if (update.unsafe) {
+            item(key = "§update") { app.clairix.ui.UnsafeVersionBanner(update, Modifier.padding(top = 8.dp)) }
         }
         if (scanEnabled && !batteryFree) {
             item(key = "§battery") {

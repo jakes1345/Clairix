@@ -60,6 +60,9 @@ export type { SignedKey } from "./comms-logic";
  * envelope or an ack last went over it, which sets the heartbeat's pace
  * ([SocketPace]); it goes with the socket.
  *
+ * If the relay's operator suspended the number (docs/ABUSE.md), it also knows
+ * that, and the day the suspension began: nothing about why.
+ *
  * The same class also serves a few objects that are not mailboxes, each named
  * after what it holds: "invite:<code>", "register-guard:<address>" and the
  * token shards "dtok:<xx>" (delivery), "ttok:<xx>" (traffic) and "rtok:<xx>"
@@ -166,6 +169,21 @@ const STRANGER_PER_HOUR = 300;
 const STRANGER_BURST = 300;
 /** What a pass is made over, before the recipient's number and the envelope. */
 const PASS_CONTEXT = "clairix-pass-v1";
+
+/**
+ * What [Mailbox.authenticate] answers a good signature from a number its
+ * operator suspended: the request is refused with a reason its owner can act
+ * on (an appeal), where a bad signature is only "rejected".
+ */
+export const SUSPENDED = "suspended" as const;
+
+/**
+ * A suspension (see [Mailbox.suspend]): the day it began, as every date here
+ * is kept. Why is not kept on the relay: the operator's case notes are theirs.
+ */
+interface Suspension {
+  since: number;
+}
 
 /** The answer to a send for a number that does not exist; the caller accepts and drops it. */
 const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
@@ -528,13 +546,17 @@ export class Mailbox extends DurableObject<Env> {
 
   /**
    * Checks a request signature against the owner's key and enforces the
-   * single-use nonce. Returns the profile on success, null otherwise.
+   * single-use nonce. Returns the profile on success, [SUSPENDED] for a good
+   * signature from a suspended number, null otherwise.
    */
-  async authenticate(payload: string, signature: string, nonce: string, ts: number, transport = false): Promise<Profile | null> {
+  async authenticate(payload: string, signature: string, nonce: string, ts: number, transport = false): Promise<Profile | typeof SUSPENDED | null> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     const key = transport ? profile.transportKey : profile.ed25519;
     if (!key || !(await verifyEd25519(key, payload, signature))) return null;
+    // Said only once the signature has checked, so only whoever holds the
+    // number's key learns that it is suspended; nothing is written for it.
+    if (await this.isSuspended()) return SUSPENDED;
     const nonces = (await this.ctx.storage.get<NonceRecord>("nonces")) ?? {};
     const now = Date.now();
     for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS) delete nonces[n];
@@ -620,6 +642,8 @@ export class Mailbox extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     if (requireListed && !profile.listed) return null;
+    // A suspended number is found by nobody, as if it did not exist.
+    if (await this.isSuspended()) return null;
     const now = Date.now();
     const otks = await this.releaseExpiredClaims(now);
     let oneTimeKey: SignedKey | null = null;
@@ -679,6 +703,7 @@ export class Mailbox extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     if (requireListed && !profile.listed) return null;
+    if (await this.isSuspended()) return null;
     return {
       number: profile.number,
       ed25519: profile.ed25519,
@@ -731,6 +756,53 @@ export class Mailbox extends DurableObject<Env> {
   /** The endpoint in use (null when none); for tests and the owner's own view. */
   async pushEndpoint(): Promise<string | null> {
     return (await this.ctx.storage.get<string>("push")) ?? null;
+  }
+
+  // ── Suspension (the operator's; docs/ABUSE.md) ───────────────────────
+
+  /**
+   * Suspends this number. From now on it cannot sign in ([authenticate]), so
+   * it collects nothing, renews nothing and is issued no tokens; its live
+   * sockets are closed and its push endpoint is deleted, so nothing wakes the
+   * phone; and to everyone else it reads as a number that does not exist:
+   * envelopes to it are dropped and answered as such ([enqueue]), lookups find
+   * nothing ([bundle], [identity]) and payments to it are refused ([credit]).
+   * What is already queued stays, to expire as usual, or to reach the phone
+   * if the suspension is lifted. Returns the day the suspension began, and
+   * whether the number was suspended already (then nothing changes but the
+   * sockets and the push endpoint, which go again).
+   */
+  async suspend(): Promise<{ since: number; already: boolean }> {
+    const held = await this.ctx.storage.get<Suspension>("suspended");
+    const since = held?.since ?? dayFloor(Date.now());
+    if (!held) await this.ctx.storage.put<Suspension>("suspended", { since });
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.close(4003, "suspended");
+      } catch {
+        // already gone
+      }
+    }
+    await this.ctx.storage.delete(["push", "pushPending", "wakeCheck"]);
+    return { since, already: held !== undefined };
+  }
+
+  /**
+   * Lifts a suspension; false when the number was not suspended. Sockets and
+   * the push endpoint are the phone's to set up again, which it does on its
+   * next sync.
+   */
+  async unsuspend(): Promise<boolean> {
+    return this.ctx.storage.delete("suspended");
+  }
+
+  /** The suspension in force, or null; for the operator's routes and tests. */
+  async suspension(): Promise<Suspension | null> {
+    return (await this.ctx.storage.get<Suspension>("suspended")) ?? null;
+  }
+
+  private async isSuspended(): Promise<boolean> {
+    return (await this.ctx.storage.get<Suspension>("suspended")) !== undefined;
   }
 
   // ── Delivery tokens (in shard objects of their own, named "dtok:<xx>") ──
@@ -926,13 +998,14 @@ export class Mailbox extends DurableObject<Env> {
    * minted it) and returns the balance afterwards, or null when this number
    * has no account: a mailbox deleted between the payer's debit and this
    * credit must not keep coins for whoever is given the number next, and the
-   * caller refunds the payer. A credit already made under [txid] is not made
-   * again, so a payment the relay had to repeat lands once. The record says
-   * how much and in which hour, not from whom.
+   * caller refunds the payer. A suspended number is answered the same way, so
+   * a payment to it is refused like one to a number nobody holds. A credit
+   * already made under [txid] is not made again, so a payment the relay had to
+   * repeat lands once. The record says how much and in which hour, not from whom.
    */
   async credit(amount: number, txid: string, minted = false): Promise<number | null> {
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) throw new Error("Invalid amount");
-    if (!(await this.ctx.storage.get<Profile>("profile"))) return null;
+    if (!(await this.ctx.storage.get<Profile>("profile")) || (await this.isSuspended())) return null;
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
     const now = Date.now();
     const history = await this.ledger(now);
@@ -1185,6 +1258,10 @@ export class Mailbox extends DurableObject<Env> {
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return NO_SUCH_NUMBER;
+    // A suspended number takes nothing in, and says so exactly as a number
+    // nobody holds would: a sender, or anyone probing, learns from the relay
+    // neither that the number exists nor that it was suspended.
+    if (await this.isSuspended()) return NO_SUCH_NUMBER;
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
     // Checked before any allowance is drawn on, so envelopes past the
     // strangers' share never use up what contacts' envelopes rely on.

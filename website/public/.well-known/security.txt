@@ -1,0 +1,8 @@
+# Clairix: how to report a vulnerability (RFC 9116).
+# There is no Encryption field and this file is not signed yet: no key has been
+# published. The policy says how to send a report encrypted today.
+Contact: mailto:security@clairix.app
+Expires: 2027-10-31T23:59:59.000Z
+Preferred-Languages: en
+Canonical: https://clairix.app/.well-known/security.txt
+Policy: https://clairix.app/security#disclosure

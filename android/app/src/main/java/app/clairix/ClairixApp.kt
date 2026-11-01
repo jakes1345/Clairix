@@ -26,5 +26,9 @@ class ClairixApp : Application() {
         // A wipe's request to the relay to delete the account, still waiting
         // because the relay could not be reached: sent now, off this thread.
         RelayFarewell.resume(this)
+        // The keys published files are checked against (read when first needed),
+        // and the version note, so a version found unsafe stops sending at once.
+        app.clairix.nav.AssetKeys.init(this)
+        app.clairix.comms.AppUpdate.init(this)
     }
 }

@@ -2,6 +2,8 @@ package app.clairix.comms
 
 import android.content.Context
 import android.util.Log
+import app.clairix.nav.AssetKeyList
+import app.clairix.nav.AssetKeys
 import app.clairix.nav.AssetSignature
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -134,16 +136,30 @@ class RelayList(val issued: Long, val relays: List<ListedRelay>) {
  * at registration: a relay on the list must publish the key the list gives
  * it, so a relay address someone has taken over is refused (see
  * [CommsRepository.register]).
+ *
+ * The same daily fetch brings the two other files of the `relays` release:
+ * the asset key list ([AssetKeys]), which says which keys the list and every
+ * other published file may be signed with, and the version note
+ * ([AppUpdate]), the newest version and the oldest still safe. All three are
+ * the same anonymous request for everyone, from GitHub; nothing about the
+ * phone goes with them, and the comparison with this build happens here.
  */
 object RelayDirectory {
 
     private const val TAG = "RelayDirectory"
-    private const val RELEASE = "https://github.com/jakes1345/Clairix/releases/download/relays/relays.json"
+    private const val RELEASE_BASE = "https://github.com/jakes1345/Clairix/releases/download/relays"
+    private const val RELEASE = "$RELEASE_BASE/relays.json"
+    private const val KEYS_RELEASE = "$RELEASE_BASE/${AssetKeys.ASSET}"
+    private const val LATEST_RELEASE = "$RELEASE_BASE/${AppUpdate.ASSET}"
     private const val ASSET = "relays.json"
     private const val MAX_BYTES = 256L * 1024
     private const val SIGNATURE_MAX_BYTES = 1024L
-    /** How often the release is asked for a newer list. */
+    private const val PREFS = "relay_directory"
+    private const val KEY_NEXT_TRY = "next_try"
+    /** How often the release is asked for newer files. */
     const val REFRESH_INTERVAL_MS = 24 * 3600_000L
+    /** How soon a refresh that failed (offline, the release down) is tried again. */
+    private const val RETRY_INTERVAL_MS = 3600_000L
 
     private val _list = MutableStateFlow<RelayList?>(null)
     val list: StateFlow<RelayList?> = _list.asStateFlow()
@@ -184,37 +200,94 @@ object RelayDirectory {
         }
     }
 
-    /** Asks the release for a newer list when the last try was over [maxAgeMs] ago. */
+    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /**
+     * Asks the release for newer files unless it was asked lately: in this
+     * process within [maxAgeMs], or by any process within a day of a refresh
+     * that worked or an hour of one that failed. Called whenever the app comes
+     * to the screen (MainActivity) and from the Comms setup screens.
+     */
     suspend fun refreshIfStale(context: Context, maxAgeMs: Long = REFRESH_INTERVAL_MS): Boolean {
-        if (System.currentTimeMillis() - lastAttemptMs < maxAgeMs) return true
+        val now = System.currentTimeMillis()
+        if (now - lastAttemptMs < maxAgeMs) return true
+        val nextTry = withContext(Dispatchers.IO) { runCatching { prefs(context).getLong(KEY_NEXT_TRY, 0L) }.getOrDefault(0L) }
+        if (!refreshDue(nextTry, now)) return true
         return refresh(context)
     }
 
-    /** Downloads the list and its signature and keeps it when it is newer. False when that failed. */
+    /**
+     * Whether a refresh is due at [now] when the last one set [nextTry]: once
+     * that has passed, or when it lies further ahead than any refresh sets it
+     * (the clock was wrong when it was written).
+     */
+    internal fun refreshDue(nextTry: Long, now: Long): Boolean = now >= nextTry || nextTry - now > REFRESH_INTERVAL_MS
+
+    /**
+     * Downloads, in this order, the asset key list, the relay list and the
+     * version note, each with its signature, and keeps each one that checks and
+     * is newer than the one held. The keys come first, so a list or a note
+     * signed with a key published since is checked against it. False when any
+     * of them could not be fetched or was refused; a file the release does not
+     * have yet is not a failure.
+     */
     suspend fun refresh(context: Context): Boolean = withContext(Dispatchers.IO) {
         lock.withLock {
             lastAttemptMs = System.currentTimeMillis()
-            val current = current(context)
-            try {
-                val raw = fetch(RELEASE, MAX_BYTES)
-                val sig = String(fetch("$RELEASE.sig", SIGNATURE_MAX_BYTES), Charsets.US_ASCII).trim()
-                val newer = RelayList.accept(current, raw, sig, nowSec(), AssetSignature::verify) ?: return@withLock true
-                val file = cacheFile(context)
-                file.parentFile?.mkdirs()
-                val tmp = File(file.parentFile, file.name + ".tmp")
-                tmp.writeBytes(raw)
-                if (!tmp.renameTo(file)) { file.delete(); tmp.renameTo(file) }
-                _list.value = newer
-                CommsLog.add("Relay list updated: ${newer.relays.size} relay(s)")
-                true
-            } catch (e: IOException) {
-                Log.i(TAG, "Relay list unavailable: ${e.message}")
-                false
-            } catch (e: IllegalArgumentException) {
-                Log.w(TAG, "Relay list refused: ${e.message}")
-                false
-            }
+            val app = context.applicationContext
+            AssetKeys.init(app)
+            AppUpdate.init(app)
+            val keys = attempt("Key list") { refreshKeys(app) }
+            val list = attempt("Relay list") { refreshList(app) }
+            val latest = attempt("Version note") { refreshLatest(app) }
+            val ok = keys && list && latest
+            val next = System.currentTimeMillis() + if (ok) REFRESH_INTERVAL_MS else RETRY_INTERVAL_MS
+            runCatching { prefs(app).edit().putLong(KEY_NEXT_TRY, next).apply() }
+            ok
         }
+    }
+
+    /** The key list, checked against the built-in key alone: a list cannot vouch for itself. */
+    private fun refreshKeys(context: Context) {
+        val raw = fetchIfPublished(KEYS_RELEASE, AssetKeys.MAX_BYTES) ?: return
+        val sig = String(fetch("$KEYS_RELEASE.sig", SIGNATURE_MAX_BYTES), Charsets.US_ASCII).trim()
+        val newer = AssetKeyList.accept(AssetKeys.current(), raw, sig, nowSec(), AssetSignature::verifyRoot) ?: return
+        AssetKeys.store(context, newer, raw, sig)
+        CommsLog.add("Signing keys updated: ${newer.accepted.size} key(s) accepted")
+    }
+
+    private fun refreshList(context: Context) {
+        val current = current(context)
+        val raw = fetch(RELEASE, MAX_BYTES)
+        val sig = String(fetch("$RELEASE.sig", SIGNATURE_MAX_BYTES), Charsets.US_ASCII).trim()
+        val newer = RelayList.accept(current, raw, sig, nowSec(), AssetSignature::verify) ?: return
+        val file = cacheFile(context)
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        tmp.writeBytes(raw)
+        if (!tmp.renameTo(file)) { file.delete(); tmp.renameTo(file) }
+        _list.value = newer
+        CommsLog.add("Relay list updated: ${newer.relays.size} relay(s)")
+    }
+
+    private fun refreshLatest(context: Context) {
+        val raw = fetchIfPublished(LATEST_RELEASE, AppUpdate.MAX_BYTES) ?: return
+        val sig = String(fetch("$LATEST_RELEASE.sig", SIGNATURE_MAX_BYTES), Charsets.US_ASCII).trim()
+        val newer = LatestRelease.accept(AppUpdate.current(), raw, sig, nowSec(), AssetSignature::verify) ?: return
+        AppUpdate.store(context, newer, raw)
+        CommsLog.add("Newest Clairix version: ${newer.versionName}")
+    }
+
+    /** Runs one download; false, logged, when it failed or what came was refused. */
+    private inline fun attempt(what: String, block: () -> Unit): Boolean = try {
+        block()
+        true
+    } catch (e: IOException) {
+        Log.i(TAG, "$what unavailable: ${e.message}")
+        false
+    } catch (e: IllegalArgumentException) {
+        Log.w(TAG, "$what refused: ${e.message}")
+        false
     }
 
     /**
@@ -233,12 +306,18 @@ object RelayDirectory {
     }
 
     private fun fetch(url: String, max: Long): ByteArray =
+        fetchIfPublished(url, max) ?: throw IOException("HTTP 404 for $url")
+
+    /** The bytes at [url], or null when the release has no such file (yet): a 404. */
+    private fun fetchIfPublished(url: String, max: Long): ByteArray? {
         http.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+            if (resp.code == 404) return null
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} for $url")
             val body = resp.body ?: throw IOException("Empty response")
             if (body.contentLength() > max) throw IOException("$url is larger than $max bytes")
-            body.byteStream().use { readCapped(it, max) }
+            return body.byteStream().use { readCapped(it, max) }
         }
+    }
 
     private fun readCapped(input: InputStream, max: Long): ByteArray {
         val out = java.io.ByteArrayOutputStream()

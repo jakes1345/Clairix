@@ -6,8 +6,9 @@
 #   TURN_KEY_ID          Optional, for calls: Cloudflare Realtime TURN key id
 #   TURN_KEY_API_TOKEN   Optional, for calls: its API token
 #   ADMIN_SECRET         Optional: lets the operator delete an account on an emailed request
-#                        (DELETE /v1/admin/accounts/:number, scripts/delete-account.mjs) and, for
-#                        ClairixCoin, mint coins (POST /v1/admin/coin/mint)
+#                        (DELETE /v1/admin/accounts/:number, scripts/delete-account.mjs), read the
+#                        abuse reports, suspend a number (with OPERATOR_KEYS below; docs/ABUSE.md) and,
+#                        for ClairixCoin, mint coins (POST /v1/admin/coin/mint)
 #   HERE_API_KEY         Optional, for navigation: HERE Traffic API v7 key; GET /v1/traffic/incidents
 #                        reports HERE as "off" without it
 #   TOMTOM_API_KEY       Optional, for navigation: TomTom Traffic API key; likewise "off" without it
@@ -22,6 +23,14 @@
 #                        relay switches it off is set on the live Worker by its maintainer
 #   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with while the coin is on, e.g. "100";
 #                        unset: none
+#   OPERATOR_KEYS        Optional: comma-separated Ed25519 public keys of the operator identities
+#                        (`node scripts/operator.mjs register` makes one and prints its key). Suspending
+#                        a number (POST /v1/admin/suspend) needs a request signed by one of them as well
+#                        as ADMIN_SECRET; unset, nobody can suspend
+#   OPERATOR_CONTACT     Optional: where a suspended number can appeal (an email address), told to its phone
+#   LEGACY_CUTOFF        Optional: the UTC day (YYYY-MM-DD) from which the old kind of token and envelopes
+#                        in format 2, kept for apps before 3.0.0 Beta 7, are refused with 426 and a message
+#                        to update Clairix; unset: 2027-01-01
 #   RELAY_ALTERNATES     Optional: comma-separated https addresses this same relay also answers at
 #                        (a second domain, its workers.dev name). Phones keep them and fall back
 #                        to them when the address they registered at stops answering; a phone that

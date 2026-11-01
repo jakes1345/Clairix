@@ -81,8 +81,18 @@ says so in logcat.
 | `ioc.json.gz` (the `ioc` release, `.github/workflows/ioc.yml`) | `ioc.json.gz.sig` | the gzip bytes of the stalkerware list (`tools/ioc/convert.py`); the app refuses one issued earlier than the list it has |
 | `SHA256SUMS.txt` | `SHA256SUMS.txt.sig` | the exact bytes of the checksum file |
 | `KEYS.md` (the `keys` release, `.github/workflows/keys.yml`, started by hand from `main`) | `KEYS.md.sig` | the exact bytes of `docs/KEYS.md` |
+| `latest.json` (the `relays` release) | `latest.json.sig` | the exact bytes of the version note: the newest version and the oldest still safe (relays/README.md) |
+| `keys.json` (the `relays` release) | `keys.json.sig` | the exact bytes of the key list, signed by the key built into the app and by no other |
 
 A `.sig` is one line: the 64-byte Ed25519 signature, base64 without padding.
+
+The public key the app is built with is also the root of `keys.json`, the
+list of keys published files may be signed with (relays/README.md). A build
+that holds the list accepts a file signed by any listed key that is not
+revoked, so the signing key can be replaced, or a leaked one revoked, by
+publishing a new list rather than a new app; the root itself can only be
+replaced by an app release. Builds from before the list existed (3.0.0 Beta 8
+and earlier) accept the built-in key alone.
 
 ## Checking a release by hand
 

@@ -3,9 +3,10 @@
 // Run with `npm test`.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { advance, makePhone, makeRelay, mockFetch, resetClock } from "./harness/fake-env.mjs";
+import { ENROLL_SECRET, advance, makePhone, makeRelay, mockFetch, network, resetClock } from "./harness/fake-env.mjs";
 import { DAY_MS, HOUR_MS, dayFloor, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
 import { sha256Hex } from "../src/env.ts";
+import { closeReports, listReports, registerOperator, setSuspended } from "../scripts/operator.mjs";
 
 afterEach(() => resetClock());
 
@@ -766,6 +767,183 @@ test("without ADMIN_SECRET the operator's delete is off, and guesses at the secr
   }
   assert.deepEqual(statuses.slice(0, 10), Array(10).fill(403));
   assert.deepEqual(statuses.slice(10), [429, 429]);
+});
+
+// ── Suspension (docs/ABUSE.md) ─────────────────────────────────────────────
+
+const OPERATOR_SECRET = "operator-secret-0123456789";
+
+/** A request signed by [phone] (an operator identity, or not) to an admin route, with [secret] in X-Admin-Secret. */
+async function adminAs(relay, phone, secret, path, body, ip = "203.0.113.30") {
+  const text = JSON.stringify(body);
+  const ts = Date.now();
+  const nonce = `admin-${ts}-${Math.random().toString(36).slice(2)}`;
+  const payload = `${phone.number}\n${ts}\n${nonce}\nPOST\n${path}\n${await sha256Hex(text)}`;
+  const headers = {
+    "x-clairix-number": phone.number,
+    "x-clairix-ts": String(ts),
+    "x-clairix-nonce": nonce,
+    "x-clairix-sig": await phone.sign(payload),
+    "cf-connecting-ip": ip,
+  };
+  if (secret !== null) headers["x-admin-secret"] = secret;
+  return relay.call("POST", path, { body: text, headers });
+}
+
+/** Gives the mailbox of [number] live sockets that record how they were closed (the harness simulates none). */
+function fakeSockets(relay, number) {
+  const closed = [];
+  relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(number)); // the object exists from here on
+  relay.env.MAILBOX.objects.get(number).state.getWebSockets = () => [{ close: (code, reason) => closed.push([code, reason]), send() {} }];
+  return closed;
+}
+
+test("a suspended number cannot sign in, loses its sockets and push endpoint, and reads to everyone else as a number nobody holds; lifting it restores it", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: OPERATOR_SECRET, OPERATOR_CONTACT: "support@clairix.app", COIN: "on", COIN_INITIAL_BALANCE: "10" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const op = await makePhone(relay, { listed: false });
+  relay.env.OPERATOR_KEYS = op.ed25519;
+  const pushes = mockFetch(() => new Response("ok"));
+  try {
+    assert.equal((await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAlice" })).status, 200);
+    assert.equal((await alice.signed("PUT", "/v1/transport", { key: alice.transportKey })).status, 200);
+    // Something waits for Alice before the suspension.
+    const [t1] = await bob.tokens(1);
+    assert.equal((await bob.send(t1, alice.number, "YmVmb3Jl")).status, 202);
+    await relay.env.MAILBOX.settle();
+    const sockets = fakeSockets(relay, alice.number);
+
+    const res = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: alice.number });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { ok: true, number: alice.number, suspended: true, since: dayFloor(Date.now()), already: false });
+    // Her sockets are closed and nothing is left to wake her phone.
+    assert.deepEqual(sockets, [[4003, "suspended"]]);
+    const box = relay.env.MAILBOX.storageOf(alice.number);
+    assert.equal(box.get("push"), undefined);
+    assert.deepEqual(box.get("suspended"), { since: dayFloor(Date.now()) });
+
+    // Her own phone is told, on every signed request, with where to appeal; the transport key too.
+    const me = await alice.signed("GET", "/v1/me");
+    assert.equal(me.status, 403);
+    assert.match(me.json.error, /suspended on this relay/);
+    assert.match(me.json.error, /support@clairix\.app/);
+    assert.equal((await alice.signedTransport("GET", "/v1/inbox")).status, 403);
+    assert.equal((await alice.signed("POST", "/v1/tokens", { count: 5 })).status, 403);
+    assert.equal((await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAgain" })).status, 403);
+    // Someone without her key learns nothing: a forged request is only "rejected".
+    const forged = await relay.call("GET", "/v1/me", {
+      headers: { "x-clairix-number": alice.number, "x-clairix-ts": String(Date.now()), "x-clairix-nonce": "forged-nonce-0123456789", "x-clairix-sig": await bob.sign("anything") },
+    });
+    assert.deepEqual([forged.status, forged.json.error], [401, "Signature rejected"]);
+
+    // To everyone else she is a number nobody holds: a send is answered alike and dropped ...
+    const [t2, t3] = await bob.tokens(2);
+    const toHer = await bob.send(t2, alice.number, "YWZ0ZXI=");
+    const toNobody = await bob.send(t3, "987654321", "YWZ0ZXI=");
+    assert.deepEqual([toHer.status, Object.keys(toHer.json)], [toNobody.status, Object.keys(toNobody.json)]);
+    assert.equal(toHer.status, 202);
+    assert.equal(box.get("queueCount"), 1, "the envelope sent to a suspended number was kept");
+    // ... a lookup finds nothing, with or without the key's fingerprint ...
+    const lookedUp = await bob.lookup(alice.number);
+    const nobody = await bob.lookup("987654321");
+    assert.deepEqual([lookedUp.status, lookedUp.json], [nobody.status, nobody.json]);
+    assert.equal((await bob.lookup(alice.number, await fingerprint(alice.ed25519), false)).status, 404);
+    // ... and a payment is refused before any coin moves.
+    const paid = await bob.signed("POST", "/v1/coin/pay", { to: alice.number, pin: await fingerprint(alice.ed25519), amount: 3 });
+    assert.deepEqual([paid.status, paid.json], [400, { error: "Payment refused" }]);
+    assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 10);
+    assert.deepEqual((await bob.signed("GET", "/v1/coin/history")).json.txs, []);
+    // A second suspension changes nothing but says so.
+    const again = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: alice.number });
+    assert.equal(again.json.already, true);
+
+    // Lifted: she signs in again and collects what waited from before; what was sent meanwhile is gone.
+    const lift = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", { number: alice.number });
+    assert.deepEqual([lift.status, lift.json], [200, { ok: true, number: alice.number, suspended: false, wasSuspended: true }]);
+    assert.equal((await alice.signed("GET", "/v1/me")).status, 200);
+    assert.deepEqual((await alice.inbox()).map((e) => e.data), ["YmVmb3Jl"]);
+    const [t4] = await bob.tokens(1);
+    assert.equal((await bob.send(t4, alice.number, "YmFjaw==")).status, 202);
+    assert.deepEqual((await alice.inbox()).map((e) => e.data), ["YmVmb3Jl", "YmFjaw=="]);
+    assert.equal((await bob.lookup(alice.number)).status, 200);
+    assert.equal((await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAgain" })).status, 200);
+    // Lifting what is not suspended is not an error.
+    const twice = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", { number: alice.number });
+    assert.equal(twice.json.wasSuspended, false);
+  } finally {
+    pushes.restore();
+  }
+});
+
+test("suspending takes an operator identity's signature and the admin secret together", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: OPERATOR_SECRET });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const op = await makePhone(relay, { listed: false });
+  const target = { number: alice.number };
+  // No operator keys set: nobody can suspend, secret or not.
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", target)).status, 503);
+  // Listed without padding, the key is still the operator's.
+  relay.env.OPERATOR_KEYS = `not-a-key, ${op.ed25519.replace(/=+$/, "")}`;
+  // The secret alone, unsigned, is not enough ...
+  const unsigned = await relay.call("POST", "/v1/admin/suspend", { body: target, headers: { "x-admin-secret": OPERATOR_SECRET } });
+  assert.equal(unsigned.status, 401);
+  // ... nor is a signature by someone who is not an operator ...
+  const notOperator = await adminAs(relay, bob, OPERATOR_SECRET, "/v1/admin/suspend", target);
+  assert.equal(notOperator.status, 403);
+  assert.match(notOperator.json.error, /not one of this relay's operators/);
+  // ... nor the operator's signature without the secret, or with a wrong one.
+  assert.equal((await adminAs(relay, op, null, "/v1/admin/suspend", target)).status, 403);
+  assert.equal((await adminAs(relay, op, "not-the-secret-0123456789", "/v1/admin/suspend", target)).status, 403);
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).get("suspended"), undefined);
+  // The operator does not suspend itself, a number must be a number, and one nobody holds is said so.
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: op.number })).status, 400);
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: "12345" })).status, 400);
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: "987654321" })).status, 404);
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", { number: "987654321" })).status, 404);
+  // Both together suspend.
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", target)).status, 200);
+  assert.equal((await alice.signed("GET", "/v1/me")).status, 403);
+  // With ADMIN_SECRET unset nothing works, whatever the identity.
+  delete relay.env.ADMIN_SECRET;
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", target, "203.0.113.32")).status, 503);
+  assert.equal((await alice.signed("GET", "/v1/me")).status, 403);
+  // Guesses at the secret meet the same per-address limit as the other admin routes.
+  relay.env.ADMIN_SECRET = OPERATOR_SECRET;
+  const statuses = [];
+  for (let i = 0; i < 11; i++) statuses.push((await adminAs(relay, op, `guess-${i}-0123456789`, "/v1/admin/unsuspend", target, "203.0.113.31")).status);
+  assert.deepEqual([statuses.slice(0, 10).every((s) => s === 403), statuses[10]], [true, 429]);
+});
+
+test("the operator's script makes its identity, reads reports, suspends and lifts a suspension", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: OPERATOR_SECRET });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const net = network([relay]);
+  try {
+    const identity = await registerOperator(relay.origin, ENROLL_SECRET);
+    assert.match(identity.number, /^[1-9][0-9]{8}$/);
+    assert.match(identity.privateKey, /BEGIN PRIVATE KEY/);
+    // Registered unlisted: nobody finds the operator's identity by its number.
+    assert.equal((await bob.lookup(identity.number)).status, 404);
+    relay.env.OPERATOR_KEYS = identity.ed25519;
+    const [rt] = await bob.tokens(1, "report");
+    assert.equal((await relay.call("POST", "/v1/report", { body: { number: alice.number, reason: "harassment" }, headers: { "x-clairix-token": rt } })).status, 202);
+    const reports = await listReports(relay.origin, OPERATOR_SECRET);
+    assert.deepEqual([reports.status, reports.body.numbers.map((n) => n.number)], [200, [alice.number]]);
+    const suspended = await setSuspended(identity, OPERATOR_SECRET, alice.number, true);
+    assert.deepEqual([suspended.status, suspended.body.suspended], [200, true]);
+    assert.equal((await alice.signed("GET", "/v1/me")).status, 403);
+    assert.equal((await closeReports(relay.origin, OPERATOR_SECRET, alice.number)).body.closed, 1);
+    const lifted = await setSuspended(identity, OPERATOR_SECRET, alice.number, false);
+    assert.deepEqual([lifted.status, lifted.body.wasSuspended], [200, true]);
+    assert.equal((await alice.signed("GET", "/v1/me")).status, 200);
+    // Without the secret the script gets nowhere.
+    assert.equal((await setSuspended(identity, "wrong-secret-0123456789", alice.number, true)).status, 403);
+  } finally {
+    net.restore();
+  }
 });
 
 test("an account from before keys were recorded has them recorded on its next request", async () => {

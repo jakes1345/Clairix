@@ -488,6 +488,8 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             tone = if (invite != null) Tone.Accent else Tone.Neutral,
             trailing = { LogoMark(size = 48.dp, contentDescription = null) }
         )
+        val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+        app.clairix.ui.UnsafeVersionBanner(update)
 
         if (invite != null) {
             val listedRelay = relayList?.find(RelayClient.originOf(invite.relayUrl) ?: invite.relayUrl)
@@ -777,6 +779,9 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                 }
             )
         }
+        // Below the oldest safe version nothing but an SOS is sent; this says why, until the update.
+        val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+        app.clairix.ui.UnsafeVersionBanner(update, Modifier.padding(top = 6.dp))
         Spacer(Modifier.height(8.dp))
 
         if (threads.isEmpty() && groupThreads.isEmpty() && requests.isEmpty()) {

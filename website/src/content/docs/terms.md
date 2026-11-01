@@ -41,7 +41,7 @@ You must not use the Service to:
 - Resell, sublicense or offer the relay as a service to others without our written permission.
 - Interfere with other users' use of the Service.
 
-We may suspend or terminate accounts that violate these terms. Because the relay holds no content, our ability to detect abuse is limited, and we rely on reports to support@clairix.app.
+We may suspend a Clairix number on our relay that is used in breach of these terms, and delete its account. A suspended number cannot sign in, collect messages or get new tokens on the relay, and messages sent to it are not delivered. Because the relay holds no content, our ability to detect abuse is limited: we act on reports made with Report in the app and on reports to support@clairix.app, and a suspension can be appealed at the same address. How we handle reports and appeals is set out in our [abuse policy](https://github.com/jakes1345/Clairix/blob/main/docs/ABUSE.md).
 
 ## 6. Detection is best-effort
 
@@ -77,7 +77,7 @@ The Clairix name, logo, app and website are owned by Clairix or its licensors. T
 
 ## 11. Third-party services
 
-Clairix uses OpenStreetMap for map tiles and address search, GitHub for offline map downloads, Cloudflare for hosting the relay and call relays, and Google Play for distribution of the Play edition. Your use of those services is subject to their terms. We are not responsible for them.
+Clairix uses OpenStreetMap for map tiles and address search, GitHub for offline map downloads, the signed lists the app keeps up to date and its daily check for a newer version, Cloudflare for hosting the relay and call relays, and Google Play for distribution of the Play edition. Your use of those services is subject to their terms. We are not responsible for them.
 
 ## 12. Disclaimer of warranties
 
@@ -97,7 +97,7 @@ You agree to indemnify and hold Clairix harmless from claims, damages and expens
 
 ## 15. Termination
 
-You may stop using the Service at any time. Wipe Clairix, or Delete identity and number, deletes your relay account (see [how to delete your account](/delete-account)). We may suspend or terminate your access if you violate these terms, if required by law, or if we discontinue the Service. Sections 6, 9, 12, 13, 14 and 16 survive termination.
+You may stop using the Service at any time. Wipe Clairix, or Delete identity and number, deletes your relay account (see [how to delete your account](/delete-account)). We may suspend your Clairix number on our relay, or delete your relay account, if you violate these terms (see section 5) or if the law requires it, and we may discontinue the Service. Sections 6, 9, 12, 13, 14 and 16 survive termination.
 
 ## 16. Governing law and disputes
 

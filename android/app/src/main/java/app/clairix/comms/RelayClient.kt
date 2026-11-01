@@ -540,6 +540,9 @@ class RelayClient(
      * relay pair the two. With the pool empty this throws a [RelayException]
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
+     *
+     * Below the oldest safe version ([AppUpdate]) nothing but an SOS is sent:
+     * this throws [UNSAFE_VERSION], with the reason, before anything leaves.
      */
     fun send(
         to: String,
@@ -550,6 +553,7 @@ class RelayClient(
         alert: String? = null,
         passKey: ByteArray? = null,
     ): String {
+        AppUpdate.sendRefusal(alert)?.let { throw RelayException(it, UNSAFE_VERSION) }
         val data = Base64.getEncoder().encodeToString(envelope)
         val body = JSONObject().put("to", to).put("envelope", data)
         if (claim != null) body.put("claim", claim)
@@ -1161,6 +1165,8 @@ class RelayClient(
         const val TOKEN_KEY_MISMATCH = -5
         /** Tokens were issued for an epoch whose keys this phone has not pinned yet: look them up later, anonymously, and retry. */
         const val KEYS_PENDING = -6
+        /** This version is below the oldest safe one ([AppUpdate]): nothing but an SOS is sent until it is updated. */
+        const val UNSAFE_VERSION = -7
         /** A token epoch: 14 days, as the relay's (comms-worker/src/tokens.ts TOKEN_EPOCH_MS). */
         const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */

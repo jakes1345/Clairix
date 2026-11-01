@@ -512,10 +512,13 @@ reach main and how a release is checked before it is signed are in
 ## Reporting a vulnerability
 
 Write to **security@clairix.app** first. Give us enough to reproduce it; a
-proof of concept is welcome, other people's data is not. We will acknowledge
-the report, keep you informed and credit you if you want to be credited. See
-[SECURITY.md](SECURITY.md), and [docs/audit/](docs/audit/README.md) for
-auditors.
+proof of concept is welcome, other people's data is not. We acknowledge a
+report within 3 business days, triage it within 10 and fix it, or agree a plan
+with you, within 90 days; good-faith research is covered by a safe harbour,
+and we credit you if you want to be credited. [SECURITY.md](SECURITY.md) has
+the whole policy, including how to send a report encrypted;
+[docs/audit/](docs/audit/README.md) is for auditors. Abuse of the relay is
+handled as [docs/ABUSE.md](docs/ABUSE.md) describes.
 
 ## License
 

@@ -55,3 +55,7 @@ style:
   # plainly than the nesting the rule asks for instead.
   LoopWithTooManyJumpStatements:
     active: false
+  # The parsers of signed files (relay list, key list, version note, tiles)
+  # refuse each malformed field with its own message; two throws is too few.
+  ThrowsCount:
+    max: 4

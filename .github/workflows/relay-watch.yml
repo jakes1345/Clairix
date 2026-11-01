@@ -1,0 +1,68 @@
+name: Relay watch
+
+# Asks every relay on the relay list (relays/relays.json) for its GET / and
+# checks that it answers as a Clairix relay, with the key the list gives it (and
+# its onion address, when the list has one). A relay that does not answer after
+# three tries, or answers with another key (an address taken over, a relay that
+# lost its relay-identity object), fails the run, and the alert job opens one
+# issue or adds the run to the open one (.github/scripts/report-failure.sh).
+# Close the issue once a run succeeds again.
+#
+# GitHub runs schedules on a best-effort basis, often late and sometimes not at
+# all when it is busy: this notices an outage within the hour, not the minute.
+# It reads only what any phone may read; it holds no secret.
+on:
+  schedule:
+    - cron: '4,19,34,49 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-watch
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: |
+            relays
+            tools/relays
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Ask every listed relay for its key
+        run: python tools/relays/check.py relays/relays.json --watch
+
+  # A red scheduled run is otherwise seen by nobody: this opens one issue, or
+  # adds the run to the open one.
+  alert:
+    needs: watch
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_TITLE: A listed relay is down or answers with another key
+          FAILURE_MEANS: >-
+            A relay on the relay list did not answer GET / as a Clairix relay, or answered with a key the list
+            does not give it; the run's log names the relay and what it said. While a relay is down, phones on
+            it neither send nor receive. While it answers with another key, the app refuses to register on it,
+            because that is what an address someone has taken over looks like; if the relay's key changed for a
+            known reason, relist it with the new key (relays/README.md).
+        run: .github/scripts/report-failure.sh

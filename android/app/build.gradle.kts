@@ -136,9 +136,11 @@ tasks.named("preBuild") { dependsOn(uniffiBindgen) }
 // The relay list the app starts with: relays/relays.json at the repository's
 // root, the same file the Relay list workflow signs and publishes. Newer
 // copies come signed from the `relays` release (comms/RelayDirectory.kt).
+// So does the asset key list, relays/keys.json (nav/AssetKeys.kt): the copy
+// built in is the oldest list the app will take, whatever it is handed later.
 val relayListAssets = layout.buildDirectory.dir("generated/relayList")
 val copyRelayList by tasks.registering(Copy::class) {
-    from(rootProject.file("../relays/relays.json"))
+    from(rootProject.file("../relays/relays.json"), rootProject.file("../relays/keys.json"))
     into(relayListAssets)
 }
 tasks.named("preBuild") { dependsOn(copyRelayList) }
