@@ -70,6 +70,15 @@ object NotificationPresentation {
     fun ongoing(paused: Boolean): NotificationText = neutral(if (paused) SCAN_PAUSED else SCANNING)
 
     /**
+     * Whether the scanner's ongoing notification carries its "Stop scanning" button. Not while the
+     * app lock is armed (a passcode is set): the button works from the shade without the passcode,
+     * so it would let anyone holding the phone switch the scanner off; the switch inside the app,
+     * behind the lock, still does. Without a passcode it stays, asking for the phone's own unlock
+     * when pressed on the lock screen. The notification's text is the same either way.
+     */
+    fun ongoingStopAction(lockArmed: Boolean): Boolean = !lockArmed
+
+    /**
      * The relay connection's notification. It never carries the Clairix number;
      * with previews hidden it does not even say that it is comms.
      */

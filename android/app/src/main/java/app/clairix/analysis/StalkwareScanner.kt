@@ -17,11 +17,9 @@ import android.os.UserManager
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import app.clairix.Severity
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
 import java.security.MessageDigest
 
 /**
@@ -190,6 +188,9 @@ object StalkwareScanner {
 
     /** Installers that are stores, when genuine ([genuineStores]); anything else (or nothing) is a sideload. */
     private val STORES = VENDOR_STORES + OPEN_STORES
+
+    /** Whether [packageName] is one of the app stores above: installing apps is what it is for ([UnknownSources]). */
+    internal fun isAppStore(packageName: String): Boolean = packageName in STORES
 
     /** Package-name prefixes of the vendors whose names only a vendor store may vouch for. */
     private val VENDOR_PREFIXES = listOf(
@@ -885,9 +886,6 @@ object StalkwareScanner {
     /** Opens the system's own details page for [packageName], where Uninstall lives. */
     fun appDetailsIntent(packageName: String): Intent =
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))
-
-    /** Runs the scan as a flow; the single emission is the ranked list. */
-    fun scanFlow(context: Context): Flow<List<SuspiciousApp>> = flow { emit(scan(context).apps) }
 
     /**
      * Enumerates every installed package and scores it. Some hundreds of

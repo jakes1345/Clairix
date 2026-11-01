@@ -422,16 +422,12 @@ class PhoneHealthMonitor(private val context: Context) {
             "Exposes mock locations, process inspection and debugging interfaces. Turn off in Settings → Developer options unless you need it."
         ) else HealthFact("dev", "Access", "Developer options", "Off")
 
-        val unknownSources = runCatching {
-            Settings.Secure.getInt(cr, "install_non_market_apps", 0) != 0
-        }.getOrDefault(false)
-        if (unknownSources) out += HealthFact(
-            "sideload", "Access", "Unknown sources", "Allowed globally", Severity.LOW,
-            "Apps can be installed from outside an app store without a per-app prompt."
-        )
+        // Which apps may install others ("Install unknown apps"): the per-app access Android 8 put
+        // in place of the global "Unknown sources" switch, which no longer means anything.
+        out += UnknownSources.fact(runCatching { UnknownSources.read(context) }.getOrNull())
 
         // ── Protection ──────────────────────────────────────────────────────
-        out += advancedProtectionFact()
+        out += AdvancedProtection.fact(advancedProtection())
 
         // ── Software ────────────────────────────────────────────────────────
         out += HealthFact("android", "Software", "Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
@@ -507,52 +503,12 @@ class PhoneHealthMonitor(private val context: Context) {
 
     // ── Advanced Protection ─────────────────────────────────────────────────
 
-    /**
-     * Android 16's Advanced Protection mode: one switch that turns on the
-     * platform's whole hardened profile (no sideloading, no 2G, no insecure
-     * Wi-Fi, USB data off while locked, memory tagging, theft protection).
-     * `AdvancedProtectionManager` is API 36 and this app compiles against 35,
-     * so it is reached by reflection; a phone on an older release is told the
-     * row does not apply rather than shown a false "off".
-     */
-    /** Whether Advanced Protection is on; null below Android 16 or when the phone does not answer. */
-    private fun advancedProtectionEnabled(): Boolean? {
-        if (Build.VERSION.SDK_INT < 36) return null
-        return runCatching {
-            val cls = Class.forName("android.security.advancedprotection.AdvancedProtectionManager")
-            // Context.ADVANCED_PROTECTION_SERVICE; the class lookup is the type-safe route when the SDK has it.
-            val manager = context.getSystemService("advanced_protection")
-                ?: runCatching { context.getSystemService(cls) }.getOrNull()
-            manager?.let { cls.getMethod("isAdvancedProtectionEnabled").invoke(it) as? Boolean }
-        }.getOrNull()
-    }
+    /** What the phone says about Android 16's Advanced Protection mode ([AdvancedProtection]); never throws. */
+    private fun advancedProtection(): AdvancedProtection.State =
+        runCatching { AdvancedProtection.read(context) }.getOrElse { AdvancedProtection.State.NoAnswer(it.javaClass.simpleName) }
 
-    private fun advancedProtectionFact(): HealthFact {
-        val id = "adv_protection"
-        val category = "Protection"
-        val label = "Advanced Protection"
-        if (Build.VERSION.SDK_INT < 36) return HealthFact(
-            id, category, label, "Not available on Android ${Build.VERSION.RELEASE}",
-            detail = "Google's Advanced Protection mode arrived with Android 16. On this release the rows above are the individual checks it would enforce."
-        )
-        return when (advancedProtectionEnabled()) {
-            true -> HealthFact(
-                id, category, label, "On",
-                detail = "Sideloading, 2G, insecure Wi-Fi and USB data while locked are all blocked by the platform, and memory tagging is on."
-            )
-            false -> HealthFact(
-                id, category, label, "OFF", Severity.HIGH,
-                "Android 16's one-switch hardened mode is off. Turning it on blocks sideloaded apps, 2G connections " +
-                    "(the IMSI-catcher downgrade path), insecure Wi-Fi, USB data while the phone is locked, and enables " +
-                    "memory tagging against exploits. Settings → Security & privacy → Advanced Protection.",
-                fixAction = Settings.ACTION_SECURITY_SETTINGS
-            )
-            null -> HealthFact(
-                id, category, label, "Unknown",
-                detail = "The phone did not answer whether Advanced Protection is on. Check Settings → Security & privacy → Advanced Protection."
-            )
-        }
-    }
+    /** Whether Advanced Protection is on; null below Android 16 or when the phone does not say. */
+    private fun advancedProtectionEnabled(): Boolean? = AdvancedProtection.enabled(advancedProtection())
 
     // ── Identity leaks ──────────────────────────────────────────────────────
 

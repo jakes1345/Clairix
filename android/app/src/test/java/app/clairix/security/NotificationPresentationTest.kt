@@ -49,7 +49,7 @@ class NotificationPresentationTest {
 
     @Test
     fun aCellAlertFollowsTheSameRule() {
-        val title = "Cell anomaly detected"
+        val title = "Suspicious cell tower nearby"
         val text = "Serving cell changed to 2G with no handover"
         assertEquals(NotificationPresentation.neutral(), NotificationPresentation.alert(title, text, locked = false, showDetails = false))
         assertEquals(NotificationPresentation.neutral(), NotificationPresentation.alert(title, text, locked = true, showDetails = true))
@@ -113,6 +113,14 @@ class NotificationPresentationTest {
     fun theOngoingNotificationSaysOnlyThatItScans() {
         assertEquals(NotificationText("Clairix", "Scanning"), NotificationPresentation.ongoing(paused = false))
         assertEquals(NotificationText("Clairix", "Scan paused — retrying"), NotificationPresentation.ongoing(paused = true))
+    }
+
+    @Test
+    fun theStopButtonIsOfferedOnlyWhenNoAppPasscodeIsSet() {
+        // With a passcode set the shade must not switch the scanner off without it.
+        assertFalse(NotificationPresentation.ongoingStopAction(lockArmed = true))
+        // Without one the button stays, as before.
+        assertTrue(NotificationPresentation.ongoingStopAction(lockArmed = false))
     }
 
     @Test

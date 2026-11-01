@@ -44,7 +44,19 @@ Samsung's One UI adds its own layer of battery management on top of Android's, a
 
 ### The scan is running but nothing is listed
 
-That is normal. Clairix lists only devices worth your attention: confirmed followers, devices that have stayed with you, recognised trackers heard a few times, and anything heard many times. Headphones, cars, phones and TVs that are recognised as benign are filtered out. The notification tells you how many devices are being watched. The **Nearby** count at the top of the screen shows everything that is in range.
+That is normal. Clairix lists only devices worth your attention: confirmed followers, devices that have stayed with you, recognised trackers heard a few times, and anything heard many times. Headphones, cars, phones and TVs that are recognised as benign are filtered out. The scanner's notification says only that it is scanning; what it is watching is on the Scan screen. The **Nearby** count at the top of the screen shows everything that is in range.
+
+### The scanner's notification has no Stop button
+
+With an app passcode set, the scanner's notification leaves out **Stop scanning**, so nobody holding your phone can switch the scanner off from the notification shade without the passcode. Stop it in the app, under **Scan > Trackers**. Without a passcode the button is there, and pressed on the lock screen it waits for you to unlock the phone.
+
+### Clairix says a microphone connected while nothing was playing
+
+While the scanner runs, a Bluetooth or USB microphone that connects with nothing playing and no call up is listed on **Phone check** and written to the timeline. If it is your own headset, earbuds or car, tap **This is my headset** there and it is not reported again; a paired accessory that was already connected on an earlier day is left alone anyway, and whatever was connected when you switched scanning on is only listed. You get a notification only if the microphone becomes the phone's call audio while the screen is off. Then find it under **Settings > Connected devices** and use **Forget** on anything you do not recognise.
+
+### Which of Clairix's alerts can I silence?
+
+Android lets you set each kind of notification separately under **Settings > Apps > Clairix > Notifications**. The phone's own alerts come on two: **Someone at your phone** (a new fingerprint or face, an unlock while you slept, a changed screen lock, unlock recording switched off, stalkerware, an intercepted connection) rings as an alarm, and **Phone settings to check** (Bluetooth left discoverable, a proxy, a screen recording, a scanner that cannot hear) arrives as an ordinary notification. If the reminders bother you, turn down the second and keep the first. Neither shows anything on the lock screen.
 
 ### "Following" never confirms, even for my own tracker
 

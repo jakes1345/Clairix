@@ -151,6 +151,8 @@ class ScanService : LifecycleService() {
 
     /** Last ongoing-notification text, so it is only re-posted when it actually changes. */
     private var lastOngoingText: String? = null
+    /** Whether that notification carried the Stop button; it goes and comes back with the app lock. */
+    private var lastOngoingStop: Boolean? = null
 
     /**
      * The plate readers on the map lists this phone holds, so hardware heard over radio
@@ -1481,13 +1483,24 @@ class ScanService : LifecycleService() {
      */
     private fun ongoing(): NotificationText = NotificationPresentation.ongoing(paused = running && !scanActive)
 
-    private fun buildOngoing(): Notification {
+    /** Whether the ongoing notification offers "Stop scanning": only with no app passcode set. */
+    private fun ongoingStop(): Boolean = NotificationPresentation.ongoingStopAction(lockArmed = AppLock.isEnabled(this))
+
+    private fun buildOngoing(stop: Boolean = ongoingStop()): Notification {
         val shown = ongoing()
         return NotificationCompat.Builder(this, CHANNEL_ONGOING)
             .setContentTitle(shown.title).setContentText(shown.text)
             .setSmallIcon(R.drawable.ic_stat_clairix)
             .setOngoing(true).setContentIntent(contentIntent())
-            .addAction(0, "Stop scanning", stopIntent())
+            .apply {
+                // With a passcode set, switching the scanner off takes it: the button would do it from
+                // the shade without. Pressed on the lock screen, it waits for the phone to be unlocked.
+                if (stop) addAction(
+                    NotificationCompat.Action.Builder(0, "Stop scanning", stopIntent())
+                        .setAuthenticationRequired(true)
+                        .build()
+                )
+            }
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             // On the lock screen: the app's name and that it scans.
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -1498,14 +1511,17 @@ class ScanService : LifecycleService() {
     /**
      * The publish loop runs every 1.5 s; re-posting the notification that often gets
      * the app rate-limited by the system and costs battery for no visible change. Post
-     * only when the text actually differs, which it does only as the scan pauses and resumes.
+     * only when the text actually differs, which it does only as the scan pauses and resumes,
+     * or when the Stop button comes or goes with the app passcode.
      */
     private fun updateOngoing() {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
         val text = ongoing().text
-        if (text == lastOngoingText) return
+        val stop = ongoingStop()
+        if (text == lastOngoingText && stop == lastOngoingStop) return
         lastOngoingText = text
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildOngoing())
+        lastOngoingStop = stop
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildOngoing(stop))
     }
 
     /** A recognised tracker "is following you"; anything else is only known to be travelling with you. */
@@ -1555,7 +1571,7 @@ class ScanService : LifecycleService() {
 
     private fun notifyCatcher(title: String) {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
-        val shown = alertText("Cell anomaly detected", title) ?: return
+        val shown = alertText("Suspicious cell tower nearby", title) ?: return
         val n = NotificationCompat.Builder(this, CHANNEL_CELL)
             .setContentTitle(shown.title)
             .setContentText(shown.text)

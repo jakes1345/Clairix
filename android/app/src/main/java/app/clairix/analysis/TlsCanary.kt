@@ -465,7 +465,7 @@ object TlsCanary {
                 id = "tls_canary@${r.ts}",
                 ts = r.ts,
                 severity = Severity.CRITICAL,
-                title = "TLS interception indicator",
+                title = "Someone may be reading this phone's encrypted connections",
                 detail = detail,
                 kind = EventKind.PLATFORM,
                 dedupeKey = "tls_canary"

@@ -11,7 +11,7 @@ The following is created and stored only on your phone. We never upload it and c
 
 - Bluetooth, Wi-Fi, NFC and cellular scan results, including nearby device identifiers and your cell-tower history.
 - The event timeline, the location history used for pattern-of-life and following detection, and vehicle trip records.
-- The results of the spyware and phone-health checks, including the list of apps installed on your phone.
+- The results of the spyware and phone-health checks, including the list of apps installed on your phone, the headsets you mark as yours, and when each paired Bluetooth accessory was first seen connected, kept while it stays paired.
 - The unlock ledger, which records lock-screen unlock successes and failures.
 - Your Comms encryption keys, contacts and message history, in a database that is encrypted as a whole.
 - Who you have blocked, and the message requests waiting for you, in the same database (see section 2.9).

@@ -53,6 +53,11 @@
          the window manager tell Clairix when its own screen is inside a recording. -->
     <uses-permission android:name="android.permission.DETECT_SCREEN_RECORDING" />
 
+    <!-- Phone check's Advanced Protection row on Android 16+: a normal permission,
+         granted at install, without which the platform refuses to say whether the
+         mode is on. Older releases do not know it and ignore it. -->
+    <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 

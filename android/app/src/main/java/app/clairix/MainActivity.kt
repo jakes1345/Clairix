@@ -3657,6 +3657,7 @@ internal fun DeviceScreen(onShown: () -> Unit) {
             onShown()
         }
     }
+    val audioInputs = rememberAudioInputs()
 
     ScreenList {
         // ── Status first ───────────────────────────────────────────────────
@@ -3719,6 +3720,9 @@ internal fun DeviceScreen(onShown: () -> Unit) {
             }
             items(health.findings, key = { it.id }) { f -> HealthFindingRow(f) }
         }
+
+        // ── Microphones that attached themselves, and the owner's own headsets ──
+        audioInputItems(audioInputs)
 
         // ── Checklist ───────────────────────────────────────────────────────
         if (health.facts.isNotEmpty()) {

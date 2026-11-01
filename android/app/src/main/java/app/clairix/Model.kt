@@ -246,7 +246,10 @@ enum class EventKind {
     BIOMETRIC_ENROLLED,
     /** The screen was being recorded or cast while a Clairix screen was showing. */
     SCREEN_RECORDING,
-    /** The phone was unlocked inside the owner's sleep window. */
+    /**
+     * Someone got at the phone's lock: an unlock inside the owner's sleep window, the screen
+     * lock changed, or the unlock ledger's device admin switched off.
+     */
     UNLOCK_ANOMALY,
     /** A wireless or USB microphone appeared while nothing was playing or in a call. */
     AUDIO_ROUTE,
@@ -329,13 +332,26 @@ data class BiometricTripwireEvent(val timestamp: Long, val previousCheckTs: Long
  */
 data class ScreenRecordingEvent(val timestamp: Long, val packageName: String?)
 
-/** A capture-capable audio input appeared while nothing was playing and no call was up. */
+/**
+ * A wireless or USB microphone the audio-route monitor noticed (analysis/AudioRouteMonitor):
+ * one connected when scanning was switched on, listed and never alerted ([atStart]), or one
+ * that connected while nothing was playing and no call was up, with the alert raised for it
+ * ([alerted]: LOW on the timeline only, MEDIUM when it became the call audio with the screen off).
+ */
 data class AudioRouteEvent(
     val ts: Long,
     /** One of the [android.media.AudioDeviceInfo] TYPE_ constants. */
     val deviceType: Int,
     val deviceName: String,
-    val productName: String
+    val productName: String,
+    /** The Bluetooth address, or null for a USB microphone and one that reports none. */
+    val address: String? = null,
+    /** What "This is my headset" remembers it by: the Bluetooth address, or the kind and product name. */
+    val key: String = if (address != null) "bt:$address" else "name:$deviceType:$productName",
+    /** Connected already when scanning was switched on: listed, not alerted. */
+    val atStart: Boolean = false,
+    /** The alert raised for it, or null when it was only listed. */
+    val alerted: Severity? = null
 ) {
     val deviceTypeLabel: String get() = when (deviceType) {
         7 -> "Bluetooth headset (SCO)"

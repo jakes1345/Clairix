@@ -18,10 +18,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.clairix.analysis.AudioRouteMonitor
+import app.clairix.analysis.CaAudit
 import app.clairix.analysis.CaAuditScanner
+import app.clairix.analysis.CaPage
 import app.clairix.analysis.StalkwareScanner
 import app.clairix.analysis.StalkwareWatch
-import app.clairix.analysis.SuspiciousCa
 import app.clairix.analysis.TlsCanary
 import app.clairix.analysis.TlsCanaryResult
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +48,7 @@ import app.clairix.ui.SafetyFirstCard
 import app.clairix.ui.shareEvidenceReport
 
 // The Phone check category's on-demand pages: the stalkerware scan and the
-// certificate and TLS audit.
+// certificate and TLS audit, and the Device page's headsets and microphones.
 
 // ── 2. Stalkerware ─────────────────────────────────────────────────────────────
 
@@ -522,7 +524,7 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
 internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var cas by remember { mutableStateOf<List<SuspiciousCa>?>(null) }
+    var audit by remember { mutableStateOf<CaAudit?>(null) }
     var tls by remember { mutableStateOf<TlsCanaryResult?>(null) }
     var last by remember { mutableStateOf(TlsCanary.lastResult(context)) }
     var next by remember { mutableStateOf(TlsCanary.nextRun(context)) }
@@ -531,9 +533,13 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
     var checking by remember { mutableStateOf(false) }
     var confirmPin by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        cas = withContext(Dispatchers.IO) { runCatching { CaAuditScanner.scan(context) }.getOrDefault(emptyList()) }
+    /** Reads the trust store again; a read that failed is shown as failed, never as an empty store. */
+    fun readTrustStore() {
+        audit = null
+        scope.launch { audit = withContext(Dispatchers.IO) { CaAuditScanner.scan(context) } }
     }
+
+    LaunchedEffect(Unit) { readTrustStore() }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         // A scheduled run may have happened while this page was away.
         last = TlsCanary.lastResult(context)
@@ -682,10 +688,10 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
         }
 
         item(key = "§ca-hdr") { SectionHeader("Trust store audit") }
-        val list = cas
-        when {
-            list == null -> item(key = "§ca-progress") { LoadingBlock("Reading the trust store…") }
-            list.isEmpty() -> item(key = "§ca-clean") {
+        when (val state = CaAuditScanner.page(audit)) {
+            CaPage.Reading -> item(key = "§ca-progress") { LoadingBlock("Reading the trust store…") }
+            // Only when both sources were read: a read that failed is never shown as a clean store.
+            CaPage.Clean -> item(key = "§ca-clean") {
                 ClairixCard {
                     Text("No unexpected root certificates", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.safe)
                     Text(
@@ -697,27 +703,168 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     )
                 }
             }
-            else -> items(list, key = { "ca|${it.fingerprint}" }) { ca ->
-                ClairixCard(spacing = 4.dp) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            ca.subjectCn,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = ClairixTheme.colors.text,
-                            modifier = Modifier.weight(1f).padding(end = 8.dp),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        StatusPill(ca.source.uppercase(Locale.US), ca.severity.tone())
-                    }
-                    KeyValueRow("Issuer", CaAuditScanner.cn(ca.issuerDn) ?: ca.issuerDn)
-                    KeyValueRow("SHA-256", ca.fingerprint.take(23) + "…")
-                    KeyValueRow("Valid", "${tDay(ca.validFrom)} – ${tDay(ca.validTo)}")
-                    if (ca.reason.isNotBlank()) {
-                        Text(ca.reason, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            is CaPage.Findings -> {
+                val failure = state.failure
+                if (failure != null) item(key = "§ca-failed") {
+                    Notice(
+                        Tone.Caution,
+                        state.failureDetail.orEmpty(),
+                        title = failure,
+                        action = { GhostButton("Read it again", onClick = { readTrustStore() }, tone = Tone.Neutral) }
+                    )
+                }
+                if (state.unreadableUser > 0) item(key = "§ca-unreadable") {
+                    val n = state.unreadableUser
+                    Notice(
+                        Tone.Danger,
+                        "${if (n == 1) "A certificate was" else "$n certificates were"} installed by hand on this phone, and " +
+                            "${if (n == 1) "it" else "they"} would not open, so nothing more can be shown here. Unless you " +
+                            "installed ${if (n == 1) "it" else "them"} yourself, remove ${if (n == 1) "it" else "them"} under " +
+                            "Settings → Security → Encryption & credentials → User credentials.",
+                        title = if (n == 1) "1 certificate installed by hand" else "$n certificates installed by hand"
+                    )
+                }
+                items(state.roots, key = { "ca|${it.fingerprint}" }) { ca ->
+                    ClairixCard(spacing = 4.dp) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                ca.subjectCn,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = ClairixTheme.colors.text,
+                                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            StatusPill(ca.source.uppercase(Locale.US), ca.severity.tone())
+                        }
+                        KeyValueRow("Issuer", CaAuditScanner.cn(ca.issuerDn) ?: ca.issuerDn)
+                        KeyValueRow("SHA-256", ca.fingerprint.take(23) + "…")
+                        KeyValueRow("Valid", "${tDay(ca.validFrom)} – ${tDay(ca.validTo)}")
+                        if (ca.reason.isNotBlank()) {
+                            Text(ca.reason, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+// ── 4. Headsets and microphones (on the Device page) ──────────────────────────
+
+/**
+ * What the Device page's microphone section shows and what its buttons do: the wireless and USB
+ * microphones the scanner noticed this session (analysis/AudioRouteMonitor), and the ones marked
+ * as the owner's. See [rememberAudioInputs] and [audioInputItems].
+ */
+internal class AudioInputs(
+    val routes: List<AudioRouteEvent>,
+    val marks: List<AudioRouteMonitor.Mark>,
+    val onMine: (AudioRouteEvent) -> Unit,
+    val onNotMine: (String) -> Unit
+) {
+    /** The newest entry for each microphone not marked as the owner's, newest first. */
+    val noticed: List<AudioRouteEvent>
+        get() {
+            val mine = marks.mapTo(HashSet()) { it.key }
+            return routes.distinctBy { it.key }.filter { it.key !in mine }
+        }
+
+    val isEmpty: Boolean get() = noticed.isEmpty() && marks.isEmpty()
+}
+
+@Composable
+internal fun rememberAudioInputs(): AudioInputs {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val routes by Registry.audioRoutes.collectAsStateWithLifecycle()
+    val marks by AudioRouteMonitor.marks.collectAsStateWithLifecycle()
+    // The marks live in a sealed file: read once the page is up; a change reloads them.
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { AudioRouteMonitor.loadMarks(context) } }
+    return AudioInputs(
+        routes = routes,
+        marks = marks,
+        onMine = { e -> scope.launch(Dispatchers.IO) { AudioRouteMonitor.acknowledge(context, e) } },
+        onNotMine = { key -> scope.launch(Dispatchers.IO) { AudioRouteMonitor.unacknowledge(context, key) } }
+    )
+}
+
+/**
+ * The microphones on the Device page: each one noticed, with what was raised for it and "This is
+ * my headset", then the owner's own with an undo. Nothing at all when there is neither.
+ */
+internal fun LazyListScope.audioInputItems(inputs: AudioInputs) {
+    if (inputs.isEmpty) return
+    item(key = "audio_inputs_hdr") { SectionHeader("Headsets and microphones") }
+    item(key = "audio_inputs_note") {
+        Text(
+            "A Bluetooth or USB microphone that connects while nothing is playing is listed here and put on the " +
+                "timeline. It sends a notification only if it becomes the phone's call audio with the screen off. One " +
+                "you mark as yours is not reported again, and a paired one that was already connected on an earlier " +
+                "day is left alone.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = ClairixTheme.colors.textSubtle,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+    }
+    items(inputs.noticed, key = { "audio|${it.key}" }) { e -> AudioInputRow(e, onMine = { inputs.onMine(e) }) }
+    items(inputs.marks, key = { "audio_mine|${it.key}" }) { m -> MarkedAudioRow(m, onNotMine = { inputs.onNotMine(m.key) }) }
+}
+
+@Composable
+private fun AudioInputRow(e: AudioRouteEvent, onMine: () -> Unit) {
+    val c = ClairixTheme.colors
+    val alerted = e.alerted
+    val tone = alerted?.tone() ?: Tone.Neutral
+    val line = when {
+        alerted == Severity.MEDIUM ->
+            "Became the phone's call audio with the screen off and no call up, ${tFull(e.ts)}."
+        alerted != null ->
+            "Connected while nothing was playing and no call was up, ${tFull(e.ts)}. On the timeline, without a notification."
+        else -> "Already connected when scanning was switched on, so it was listed, not reported."
+    }
+    ClairixCard(tone = tone, spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                e.deviceName,
+                style = MaterialTheme.typography.titleSmall,
+                color = c.text,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            StatusPill(if (alerted != null) levelLabel(alerted.name) else "Listed", tone)
+        }
+        Text(
+            e.deviceTypeLabel + (e.address?.let { " · $it" } ?: ""),
+            style = MaterialTheme.typography.monoSmall,
+            color = c.textSubtle
+        )
+        Text(line, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+        GhostButton("This is my headset", onClick = onMine, tone = Tone.Neutral)
+    }
+}
+
+@Composable
+private fun MarkedAudioRow(m: AudioRouteMonitor.Mark, onNotMine: () -> Unit) {
+    val c = ClairixTheme.colors
+    ClairixCard(spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                m.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = c.text,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            StatusPill("Yours", Tone.Safe)
+        }
+        Text(
+            "Marked as your headset" + (if (m.at > 0L) " " + tFull(m.at) else "") + ": not reported again.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = c.textMuted
+        )
+        GhostButton("Not mine", onClick = onNotMine, tone = Tone.Neutral)
     }
 }

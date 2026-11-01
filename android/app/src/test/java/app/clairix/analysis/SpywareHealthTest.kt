@@ -129,19 +129,21 @@ class SpywareHealthTest {
     fun theCertificatesRowCountsRootsAddedByHand() {
         fun ca(cn: String, source: String, severity: Severity) =
             SuspiciousCa("CN=Issuer", "CN=$cn", "AA:BB", 0L, 1L, severity, source, "reason")
-        val clean = CaAuditScanner.fact(emptyList())
+        /** An audit that read both sources. */
+        fun read(roots: List<SuspiciousCa>) = CaAudit(roots, userStoreRead = true, trustManagerRead = true)
+        val clean = CaAuditScanner.fact(read(emptyList()))
         assertNull(clean.severity)
         assertEquals("None added by hand", clean.value)
         // A system root missing from the representative bundle list stays on the Certificates page.
-        assertNull(CaAuditScanner.fact(listOf(ca("Vendor Root", "system", Severity.MEDIUM))).severity)
+        assertNull(CaAuditScanner.fact(read(listOf(ca("Vendor Root", "system", Severity.MEDIUM)))).severity)
 
-        val user = CaAuditScanner.fact(listOf(ca("mitmproxy", "user", Severity.HIGH), ca("Vendor Root", "system", Severity.MEDIUM)))
+        val user = CaAuditScanner.fact(read(listOf(ca("mitmproxy", "user", Severity.HIGH), ca("Vendor Root", "system", Severity.MEDIUM))))
         assertEquals(Severity.HIGH, user.severity)
         assertEquals("1 added by hand", user.value)
         assertTrue(user.detail!!.contains("mitmproxy") && !user.detail!!.contains("Vendor Root"))
         assertEquals(android.provider.Settings.ACTION_SECURITY_SETTINGS, user.fixAction)
 
-        val both = CaAuditScanner.fact(listOf(ca("A", "user", Severity.HIGH), ca("B", "unknown", Severity.HIGH)))
+        val both = CaAuditScanner.fact(read(listOf(ca("A", "user", Severity.HIGH), ca("B", "unknown", Severity.HIGH))))
         assertEquals("1 added by hand, 1 from outside the stores", both.value)
         assertTrue(both.detail!!.contains("modified trust manager"))
         val health = PhoneHealth(facts = listOf(both, HealthFact("lock", "Access", "Screen lock", "PIN")), findingsScannedTs = 1L)

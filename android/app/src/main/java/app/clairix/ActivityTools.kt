@@ -1,5 +1,6 @@
 package app.clairix
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -18,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -41,7 +41,7 @@ import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.mono
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.ClairixCard
-import app.clairix.ui.components.ClairixTextField
+import app.clairix.ui.components.ClairixDialog
 import app.clairix.ui.components.GhostButton
 import app.clairix.ui.components.KeyValueRow
 import app.clairix.ui.components.LoadingBlock
@@ -257,6 +257,64 @@ private fun PatternOfLifeContent(onBack: (() -> Unit)?) {
 private const val LEDGER_WINDOW_MS = 7L * 24 * 3600_000L
 private const val LEDGER_MAX_ROWS = 200
 
+/** What the ledger asks as a source is switched on, before it judges anything. */
+private const val SLEEP_QUESTION = "When do you usually sleep?"
+
+/** The two times the sleep window is set with: asleep from, awake at. */
+@OptIn(ExperimentalMaterial3Api::class)
+private class SleepPickers(val start: TimePickerState, val end: TimePickerState) {
+    val startMinutes: Int get() = start.hour * 60 + start.minute
+    val endMinutes: Int get() = end.hour * 60 + end.minute
+}
+
+/** Pickers starting at [startMinutes] and [endMinutes] after midnight, in the phone's 12- or 24-hour style. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun rememberSleepPickers(startMinutes: Int, endMinutes: Int): SleepPickers {
+    val is24 = android.text.format.DateFormat.is24HourFormat(LocalContext.current)
+    return SleepPickers(
+        rememberTimePickerState(startMinutes / 60, startMinutes % 60, is24),
+        rememberTimePickerState(endMinutes / 60, endMinutes % 60, is24)
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepPickerFields(p: SleepPickers) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Asleep from", style = MaterialTheme.typography.labelMedium, color = ClairixTheme.colors.textMuted)
+        TimeInput(p.start)
+        Text("Awake at", style = MaterialTheme.typography.labelMedium, color = ClairixTheme.colors.textMuted)
+        TimeInput(p.end)
+    }
+}
+
+/**
+ * "When do you usually sleep?", asked as the device admin or usage access is about to be switched
+ * on, before the ledger judges anything; [onAnswer] gets the two times as minutes after midnight.
+ */
+@Composable
+private fun SleepQuestionDialog(
+    startMinutes: Int,
+    endMinutes: Int,
+    error: String?,
+    onAnswer: (Int, Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val pickers = rememberSleepPickers(startMinutes, endMinutes)
+    ClairixDialog(
+        title = SLEEP_QUESTION,
+        text = "An unlock between these times is reported as someone else using the phone. You can change " +
+            "them later on this page.",
+        confirmLabel = "Continue",
+        onConfirm = { onAnswer(pickers.startMinutes, pickers.endMinutes) },
+        onDismiss = onDismiss
+    ) {
+        SleepPickerFields(pickers)
+        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+    }
+}
+
 private fun unlockIcon(kind: UnlockKind): ImageVector = when (kind) {
     UnlockKind.PASSWORD_SUCCEEDED -> Icons.Filled.Done
     UnlockKind.PASSWORD_FAILED -> Icons.Filled.Close
@@ -297,8 +355,13 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
     var adminActive by remember { mutableStateOf(UnlockLedger.isAdminActive(context)) }
     var usageAccess by remember { mutableStateOf(UnlockLedger.hasUsageAccess(context)) }
     var events by remember { mutableStateOf<List<UnlockEvent>?>(null) }
-    var sleepStart by remember { mutableStateOf(UnlockLedger.sleepStartMinutes(context).toString()) }
-    var sleepEnd by remember { mutableStateOf(UnlockLedger.sleepEndMinutes(context).toString()) }
+    // The ledger judges nothing until the owner has said when they sleep; switching a source on asks first.
+    var sleepAnswered by remember { mutableStateOf(UnlockLedger.sleepWindowAnswered(context)) }
+    /** The grant page to open once "When do you usually sleep?" is answered. */
+    var askThen by remember { mutableStateOf<Intent?>(null) }
+    // Counts saves: the pickers below start again from what was saved (the dialog's answer, say).
+    var sleepSaves by remember { mutableIntStateOf(0) }
+    val sleep = key(sleepSaves) { rememberSleepPickers(UnlockLedger.sleepStartMinutes(context), UnlockLedger.sleepEndMinutes(context)) }
     var sleepError by remember { mutableStateOf<String?>(null) }
     var sleepSaved by remember { mutableStateOf(false) }
     var tripwire by remember { mutableStateOf<BiometricTripwireResult?>(null) }
@@ -316,6 +379,48 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
         }
     }
 
+    /**
+     * Saves the sleep window; the first answer also has the ledger judge the days it held back,
+     * now, with these hours. False, with the reason shown, for two equal times, which is no window.
+     */
+    fun saveSleep(startMinutes: Int, endMinutes: Int): Boolean {
+        if (startMinutes == endMinutes) {
+            sleepError = "Asleep from and awake at must be different times"
+            return false
+        }
+        val first = !sleepAnswered
+        UnlockLedger.setSleepWindow(context, startMinutes, endMinutes)
+        sleepAnswered = true
+        sleepError = null
+        sleepSaved = true
+        sleepSaves++
+        if (first) scope.launch {
+            withContext(Dispatchers.IO) { runCatching { UnlockLedger.checkSleepWindow(context) } }
+            reload()
+        }
+        return true
+    }
+
+    /** Opens a source's grant page, asking when the owner sleeps first if nobody has said. */
+    fun switchOn(grant: Intent) {
+        if (sleepAnswered) openExternal(context, grant) else askThen = grant
+    }
+
+    askThen?.let { grant ->
+        SleepQuestionDialog(
+            startMinutes = UnlockLedger.sleepStartMinutes(context),
+            endMinutes = UnlockLedger.sleepEndMinutes(context),
+            error = sleepError,
+            onAnswer = { start, end ->
+                if (saveSleep(start, end)) {
+                    askThen = null
+                    openExternal(context, grant)
+                }
+            },
+            onDismiss = { askThen = null; sleepError = null }
+        )
+    }
+
     LaunchedEffect(Unit) {
         reload()
         tripwire = withContext(Dispatchers.IO) {
@@ -330,9 +435,6 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
         adminActive = UnlockLedger.isAdminActive(context)
         usageAccess = UnlockLedger.hasUsageAccess(context)
     }
-
-    val startMin = sleepStart.toIntOrNull()
-    val endMin = sleepEnd.toIntOrNull()
 
     ToolPageList(title = "Unlock ledger", onBack = onBack) {
         if (!lockEnabled || settingPasscode) item(key = "§no-passcode") {
@@ -355,7 +457,7 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
                     StatusPill(if (adminActive) "Active" else "Off", if (adminActive) Tone.Safe else Tone.Caution)
                 }
                 if (!adminActive) {
-                    SecondaryButton("Enable device admin", onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton("Enable device admin", onClick = { switchOn(UnlockLedger.requestAdminIntent(context)) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 }
                 HorizontalDivider(color = ClairixTheme.colors.border, thickness = 0.5.dp)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -371,7 +473,7 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
                     StatusPill(if (usageAccess) "Granted" else "Off", if (usageAccess) Tone.Safe else Tone.Caution)
                 }
                 if (!usageAccess) {
-                    SecondaryButton("Grant usage access", onClick = { openExternal(context, UnlockLedger.usageAccessIntent()) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton("Grant usage access", onClick = { switchOn(UnlockLedger.usageAccessIntent()) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -415,49 +517,28 @@ private fun UnlockLedgerContent(onBack: (() -> Unit)?) {
             item(key = "§safety-first") { SafetyFirstCard(title = SafetyFirst.TITLE_PHONE) }
         }
 
-        item(key = "§sleep-hdr") { SectionHeader("Sleep window") }
+        item(key = "§sleep-hdr") { SectionHeader(if (sleepAnswered) "Sleep window" else SLEEP_QUESTION) }
         item(key = "§sleep") {
-            ClairixCard {
+            // Unanswered with a source on (usage access granted from another page, say): asked here.
+            ClairixCard(tone = if (!sleepAnswered && (adminActive || usageAccess)) Tone.Caution else null) {
                 Text(
-                    "An unlock inside this window is reported as an anomaly. Times are minutes after " +
-                    "midnight (23:00 is 1380, 07:00 is 420); the window may cross midnight.",
+                    if (sleepAnswered) "An unlock between these times is reported as someone else using the phone. " +
+                        "The window may cross midnight."
+                    else "An unlock between these times will be reported as someone else using the phone. Nothing " +
+                        "is judged until you answer.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ClairixTextField(
-                        value = sleepStart,
-                        onValueChange = { sleepStart = it.filter { c -> c.isDigit() }.take(4); sleepError = null; sleepSaved = false },
-                        label = "Start (min)",
-                        keyboardType = KeyboardType.Number,
-                        modifier = Modifier.weight(1f)
-                    )
-                    ClairixTextField(
-                        value = sleepEnd,
-                        onValueChange = { sleepEnd = it.filter { c -> c.isDigit() }.take(4); sleepError = null; sleepSaved = false },
-                        label = "End (min)",
-                        keyboardType = KeyboardType.Number,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                KeyValueRow(
-                    "Window",
-                    if (startMin != null && endMin != null && startMin in 0 until 1440 && endMin in 0 until 1440)
-                            "${clock(startMin)} – ${clock(endMin)}"
-                        else "—"
-                )
-                sleepError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
-                if (sleepSaved) Text("Saved", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.safe)
+                key(sleepSaves) { SleepPickerFields(sleep) }
+                KeyValueRow("Window", "${clock(sleep.startMinutes)} – ${clock(sleep.endMinutes)}")
+                if (askThen == null) sleepError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+                // "Saved" only while the pickers still show what was saved.
+                val unchanged = sleep.startMinutes == UnlockLedger.sleepStartMinutes(context) &&
+                    sleep.endMinutes == UnlockLedger.sleepEndMinutes(context)
+                if (sleepSaved && unchanged) Text("Saved", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.safe)
                 SecondaryButton(
-                    "Save sleep window",
-                    onClick = {
-                        if (startMin == null || endMin == null || startMin !in 0 until 1440 || endMin !in 0 until 1440) {
-                            sleepError = "Both values must be between 0 and 1439"
-                        } else {
-                            UnlockLedger.setSleepWindow(context, startMin, endMin)
-                            sleepSaved = true
-                        }
-                    },
+                    if (sleepAnswered) "Save sleep window" else "Save",
+                    onClick = { saveSleep(sleep.startMinutes, sleep.endMinutes) },
                     tone = Tone.Accent,
                     modifier = Modifier.fillMaxWidth()
                 )

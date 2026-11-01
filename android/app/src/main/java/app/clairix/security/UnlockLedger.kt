@@ -83,6 +83,8 @@ object UnlockLedger {
     private const val K_SLEEP_END = "sleep_end_min"
     private const val K_BACKFILL_TS = "backfill_ts"
     private const val K_SLEEP_CHECK_TS = "sleep_check_ts"
+    /** Set once the owner has answered "When do you usually sleep?"; see [sleepWindowAnswered]. */
+    private const val K_SLEEP_ASKED = "sleep_window_asked"
 
     /** Minutes after midnight: the sleep window, 23:00 to 07:00 unless the owner changes it. */
     const val DEFAULT_SLEEP_START_MIN = 23 * 60
@@ -371,15 +373,36 @@ object UnlockLedger {
     fun sleepStartMinutes(context: Context): Int = prefs(context).getInt(K_SLEEP_START, DEFAULT_SLEEP_START_MIN)
     fun sleepEndMinutes(context: Context): Int = prefs(context).getInt(K_SLEEP_END, DEFAULT_SLEEP_END_MIN)
 
-    /** Sets the window as minutes after midnight; it may cross midnight (23:00 to 07:00 is 1380 to 420). */
+    /**
+     * Sets the window as minutes after midnight; it may cross midnight (23:00 to 07:00 is 1380 to
+     * 420). Saving one answers "When do you usually sleep?" ([sleepWindowAnswered]).
+     */
     fun setSleepWindow(context: Context, startMinutes: Int, endMinutes: Int) {
         require(startMinutes in 0 until 24 * 60 && endMinutes in 0 until 24 * 60) { "minutes out of range" }
-        prefs(context).edit().putInt(K_SLEEP_START, startMinutes).putInt(K_SLEEP_END, endMinutes).apply()
+        prefs(context).edit()
+            .putInt(K_SLEEP_START, startMinutes).putInt(K_SLEEP_END, endMinutes).putBoolean(K_SLEEP_ASKED, true)
+            .apply()
     }
 
-    /** Whether [ts], in the phone's local time, falls inside the sleep window. */
+    /**
+     * Whether the owner has said when they sleep. The Unlock ledger page asks as a source is
+     * switched on, and nothing is judged until it has an answer: no unlock is "in the sleep
+     * window" and [checkSleepWindow] holds back, so the first judgement reaches back over the days
+     * held, with the owner's own hours rather than a guess.
+     */
+    fun sleepWindowAnswered(context: Context): Boolean = sleepWindowAnswered(prefs(context))
+
+    /**
+     * Answered: the question, or a window saved before the question existed, or a ledger that was
+     * already judging with the default window then (an install from before it: its judgement goes on).
+     */
+    internal fun sleepWindowAnswered(p: SharedPreferences): Boolean =
+        p.getBoolean(K_SLEEP_ASKED, false) || p.contains(K_SLEEP_START) || p.getLong(K_SLEEP_CHECK_TS, 0L) != 0L
+
+    /** Whether [ts], in the phone's local time, falls inside the sleep window; never before the owner has given one. */
     fun inSleepWindow(ts: Long): Boolean {
         val ctx = appContext ?: return false
+        if (!sleepWindowAnswered(ctx)) return false
         val start = sleepStartMinutes(ctx)
         val end = sleepEndMinutes(ctx)
         if (start == end) return false
@@ -390,12 +413,14 @@ object UnlockLedger {
 
     /**
      * Raises an alert for any unlock inside the sleep window that has not been
-     * judged yet. Blocking. Returns the anomalies found this time.
+     * judged yet. Blocking. Returns the anomalies found this time. Nothing, and
+     * nothing marked as judged, until the owner has said when they sleep.
      */
     fun checkSleepWindow(context: Context): List<UnlockEvent> {
         init(context)
         val app = context.applicationContext
         val p = prefs(app)
+        if (!sleepWindowAnswered(p)) return emptyList()
         val now = System.currentTimeMillis()
         val since = p.getLong(K_SLEEP_CHECK_TS, 0L).let { if (it == 0L) now - BACKFILL_HORIZON_MS else it }
         val found = sleepAnomalies(since)
@@ -477,8 +502,9 @@ class UnlockAdminReceiver : DeviceAdminReceiver() {
                 title = "Unlock recording was switched off",
                 detail = "Clairix's device admin was deactivated, so lock-screen events are no longer recorded " +
                     "in real time. If you did not do this, someone with access to the phone did. " +
-                    "Re-enable it from the Device tab.",
-                kind = EventKind.PLATFORM,
+                    "Re-enable it on the Unlock ledger page.",
+                // With the sleep unlocks and the changed lock: someone at the phone, not a setting.
+                kind = EventKind.UNLOCK_ANOMALY,
                 dedupeKey = "unlock_admin_off"
             ),
             dedupeWindowMs = 0L
