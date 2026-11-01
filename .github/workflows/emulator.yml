@@ -660,7 +660,20 @@ jobs:
                  android.permission.BLUETOOTH_CONNECT android.permission.BLUETOOTH_ADVERTISE
                  android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.POST_NOTIFICATIONS"
           "$ADB" uninstall app.clairix || true
-          "$ADB" install -r app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
+          # The package service can drop a streamed install just after the
+          # uninstall ("Failure calling service package: Broken pipe (32)", seen
+          # on the AOSP image): wait until it answers, install again, and count
+          # the install done only when the package manager lists the app.
+          installed=""
+          for try in 1 2 3 4; do
+            "$ADB" wait-for-device
+            for _ in $(seq 1 30); do "$ADB" shell pm path android > /dev/null 2>&1 && break; sleep 2; done
+            if "$ADB" install -r app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk \
+               && "$ADB" shell pm path app.clairix | grep -q '^package:'; then installed=1; break; fi
+            echo "install try $try did not go through; trying again"
+            sleep 10
+          done
+          [ -n "$installed" ] || { echo "::error::The app could not be installed again for the denied-permissions run"; exit 1; }
           : > ../denied.txt
           : > ../logcat-denied.txt
           mkdir -p ../screens/denied
