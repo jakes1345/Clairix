@@ -137,8 +137,11 @@ def type_duress(code):
     if not before:
         fail("Clairix is not running")
     type_code(code)
-    if wait_for(WRONG, 5) is None:
-        fail("the duress code did not read as a wrong passcode")
+    # The wipe behind the duress code and the new process take their time on a
+    # slow emulator (the AOSP image took more than five seconds on 023a525);
+    # the words stay on the lock screen once shown, as checked below.
+    if wait_for(WRONG, 30) is None:
+        fail("the duress code did not read as a wrong passcode within 30 seconds")
     # Ten seconds on, the holder still sees the lock screen and the words it ended on,
     # never a first run, and the process that showed the old data is gone.
     time.sleep(10)
