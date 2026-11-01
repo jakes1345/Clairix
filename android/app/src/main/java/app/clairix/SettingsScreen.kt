@@ -230,6 +230,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     var hasDuress by remember { mutableStateOf(AppLock.hasDuress(context)) }
     var wipeAfter by remember { mutableIntStateOf(AppLock.wipeAfter(context)) }
     var wipeChosen by remember { mutableStateOf(AppLock.wipeChoiceConfirmed(context)) }
+    val pausedWipe = remember(wipeChosen) { AppLock.pausedWipeAfter(context) }
+    // Answered in the question that follows an unlock (WipeLimitQuestion) while this page sat underneath.
+    val wipeChoiceDue by AppLock.wipeChoiceDue.collectAsStateWithLifecycle()
+    LaunchedEffect(wipeChoiceDue) {
+        wipeAfter = AppLock.wipeAfter(context)
+        wipeChosen = AppLock.wipeChoiceConfirmed(context)
+    }
     var relockAfterMs by remember { mutableLongStateOf(AppLock.relockAfterMs(context)) }
     var showPasscodeSetup by remember { mutableStateOf(false) }
     var showPasscodeDisable by remember { mutableStateOf(false) }
@@ -720,20 +727,21 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             )
                         }
                     }
-                    if (lockEnabled && wipeAfter == UNASKED_WIPE_AFTER && !wipeChosen) {
-                        // Earlier versions armed this limit with every new passcode and asked nothing.
+                    if (lockEnabled && pausedWipe > 0 && !wipeChosen) {
+                        // Earlier versions armed this limit with every new passcode and asked
+                        // nothing; AppLock holds it back until she answers.
                         Notice(
                             Tone.Caution,
-                            "$UNASKED_WIPE_AFTER wrong passcodes in a row wipe Clairix, with no backup and no undo. " +
-                                "Earlier versions set that limit whenever a passcode was made, without asking, so it " +
-                                "may not be one you chose. Keep it, or pick another under Wrong passcode limit.",
+                            pausedWipeNote(pausedWipe) + " Keep it, or pick another under Wrong passcode limit.",
                             title = "Check your wipe limit",
                             action = {
                                 GhostButton(
-                                    "Keep $UNASKED_WIPE_AFTER",
+                                    "Keep $pausedWipe",
                                     onClick = {
+                                        val keep = pausedWipe
+                                        wipeAfter = keep
                                         wipeChosen = true
-                                        scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, UNASKED_WIPE_AFTER) }
+                                        scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, keep) }
                                     }
                                 )
                             }
@@ -789,7 +797,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             }
                             Text(
                                 "A second code that quietly wipes Clairix. It looks like any wrong passcode, and Clairix " +
-                                    "stays on its lock screen; from then on this code is the passcode, and opens it empty.",
+                                    "stays on its lock screen; from then on this code is the passcode, and opens it empty. " +
+                                    "It works on the lock screen: where Clairix asks again inside the app, it is just a wrong passcode.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
@@ -1088,9 +1097,6 @@ private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
     else -> "$attempts attempts"
 }
 
-/** The limit earlier versions armed, unasked, with every new passcode. */
-private const val UNASKED_WIPE_AFTER = 3
-
 /**
  * What Settings, Clear all data removes, as [ScanService]'s clearAllData does it: keep the
  * two in step. What stays is said too, since a wipe is the control that takes everything.
@@ -1118,13 +1124,17 @@ internal fun wipeAfterOutcome(choice: Int?): String = when (choice) {
 }
 
 /**
- * What wrong passcodes should do, asked the moment a passcode is saved. It has
- * no Cancel and nothing is picked to begin with, so the owner makes the choice
- * herself: earlier versions armed a wipe after 3 without a word. Where there is
- * evidence to lose it offers to export it first.
+ * What wrong passcodes should do, asked the moment a passcode is saved, and
+ * after the next unlock on a phone whose limit an earlier version set
+ * ([WipeLimitQuestion], with a [note] that says so). It has no Cancel and
+ * nothing is picked to begin with, so the owner makes the choice herself:
+ * earlier versions armed a wipe after 3 without a word. Where there is
+ * evidence to lose it offers to export it first. It is a window of its own,
+ * above the lock screen Clairix draws, so callers show it only while Clairix
+ * is unlocked ([wipeQuestionShown]).
  */
 @Composable
-private fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, onChosen: (Int) -> Unit) {
+internal fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, note: String? = null, onChosen: (Int) -> Unit) {
     var picked by remember { mutableStateOf<Int?>(null) }
     ClairixDialog(
         title = "What should happen after wrong passcodes?",
@@ -1137,6 +1147,7 @@ private fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, onChosen: (Int) ->
     ) {
         // Scrolls when large text makes it taller than the dialog.
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (note != null) Text(note, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
             Text(WIPE_WARNING, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
             ChoiceChips<Int?>(
                 choices = AppLock.WIPE_AFTER_CHOICES,
@@ -1254,8 +1265,11 @@ internal fun PasscodeSetupPanel(
     var error by remember { mutableStateOf("") }
     var choosingWipe by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val locked by AppLock.locked.collectAsStateWithLifecycle()
 
-    if (choosingWipe) {
+    // Hidden while the lock is up, and back once it is passed: its Export and its
+    // limits are for the owner alone.
+    if (wipeQuestionShown(asking = choosingWipe, locked = locked)) {
         WipeChoiceDialog(
             onExportEvidence = onExportEvidence,
             onChosen = { choice ->

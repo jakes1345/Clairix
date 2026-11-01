@@ -9,7 +9,8 @@ import java.time.LocalTime
 import java.time.ZoneId
 
 /**
- * The Patterns page's suggestions give times to the quarter hour, so a glance
+ * The Patterns page's suggestions and its Places cards' usual departures give
+ * times to the quarter hour, so a glance
  * over the owner's shoulder does not take away "Mon 07:52"; the share of
  * weekdays they quote is counted for the window they show.
  */
@@ -92,6 +93,20 @@ class PatternOfLifeTest {
         for (t in times) {
             assertTrue("${t.value} is not on a quarter hour in ${report.suggestions}", t.groupValues[2].toInt() % 15 == 0)
         }
+
+        // The Places cards on the same page list the usual departures: quarter hours there too.
+        val labels = report.clusters.flatMap { c -> c.departures.map { it.label } }
+        assertTrue("no departures listed", labels.isNotEmpty())
+        for (label in labels) {
+            val t = Regex("\\b(\\d{2}):(\\d{2})\\b").find(label)
+            assertTrue("no time in $label", t != null)
+            assertTrue("$label is not on a quarter hour", t!!.groupValues[2].toInt() % 15 == 0)
+        }
+    }
+
+    @Test
+    fun aDepartureLabelNamesTheQuarterHour() {
+        assertEquals("Mon 07:45 ± 6 min", DepartureStats(java.time.DayOfWeek.MONDAY, 472, 6.4f, 10).label)
     }
 
     @Test

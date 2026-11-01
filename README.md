@@ -79,7 +79,9 @@ keys in the phone's secure hardware, so a copy of the app's files is
 ciphertext. (Recordings made by earlier versions were plain audio; the
 Scanner card offers to encrypt or delete any that are left.) The app lock
 can wipe after a run of wrong passcodes (a number you pick when you set it;
-until you do, none) and then closes. A separate duress passcode wipes at
+until you do, none; the limit of 3 that earlier versions set without asking
+is paused until you confirm it) and then closes. A separate duress passcode,
+typed on the lock screen, wipes at
 once and leaves a decoy: the lock screen says "Wrong passcode" as it does
 for any wrong guess, goes blank for a moment while Clairix restarts behind
 it and is back, and from then on that code opens Clairix, empty (no history,
@@ -227,7 +229,9 @@ Read this part twice.
   locked waits sealed until then. Code running as the app on an unlocked
   phone can read what the app can. The settings files (thresholds, the sleep
   window, the passcode's verifier, TLS pins) are not encrypted; they hold
-  settings, not records.
+  settings, not records, with one exception: the app lock's file keeps the
+  times of up to 50 wrong passcodes, in the clear, until an unlock tells you
+  about them.
 - **No independent audit.** vodozemac has been audited. Clairix has not.
   `docs/SECURITY-FINDINGS.md` is the running list of what has been found,
   what is fixed and what is still open.
@@ -330,9 +334,14 @@ maintainer on the live service, not in this repository.
   Clairix's name instead of the screen, which is why the page can also lock
   the phone as it schedules, once Clairix's device admin is on.
 - **App lock.** A passcode for Clairix itself, with optional biometrics,
-  offered on the first run. Wrong passcodes lock you out for longer each
-  time; they wipe Clairix only after a limit you pick, which it asks for as
-  soon as you set the passcode. Once you are in, it tells you when a wrong
+  offered on the first run. Wrong passcodes either lock you out for longer
+  each time (after five in a row) or, if you pick a limit, wipe Clairix at
+  that limit, with no lockout before it. Clairix asks which as soon as you
+  set the passcode; where an earlier version set a limit of 3 without asking,
+  that limit is paused, wrong passcodes bring the lockout, and Clairix asks
+  after your next unlock. Wrong passcodes count as a run, wherever Clairix
+  asks for the passcode, until the right passcode or biometric unlock proves
+  it is you. Once you are in, it tells you when a wrong
   passcode was entered while you were away. The passcode is never stored;
   only a verifier made with a hardware key is.
 - **Get help.** In Settings and the Comms menu: helplines for abuse and
@@ -367,7 +376,8 @@ maintainer on the live service, not in this repository.
   certificate; turn it on if you would rather lose the relay than trust a
   new certificate without checking.
 - **Wipe after N wrong passcodes** (Settings → App lock): 1, 3, 5, 10 or
-  never. Asked for when you set the passcode; never until you answer.
+  never. Asked for when you set the passcode, or after the next unlock where
+  an earlier version set 3 without asking; never until you answer.
 - **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
   or forever. 30 by default. The location log, the timeline, vehicle trips,
   the unlock ledger, the radio scanner's recordings and the map's tile and

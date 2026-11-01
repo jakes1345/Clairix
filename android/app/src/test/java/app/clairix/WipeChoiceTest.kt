@@ -2,6 +2,7 @@ package app.clairix
 
 import app.clairix.security.AppLock
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,5 +30,27 @@ class WipeChoiceTest {
         for (n in AppLock.WIPE_AFTER_CHOICES.filter { it > 1 }) {
             assertTrue(wipeAfterOutcome(n), wipeAfterOutcome(n).startsWith("$n wrong passcodes in a row wipe Clairix."))
         }
+    }
+
+    @Test
+    fun theQuestionIsNeverUpWhileTheLockIs() {
+        assertTrue(wipeQuestionShown(asking = true, locked = false))
+        assertFalse("left above the lock screen", wipeQuestionShown(asking = true, locked = true))
+        assertFalse(wipeQuestionShown(asking = false, locked = false))
+    }
+
+    @Test
+    fun theQuestionAfterAnUnlockWaitsForTheWrongPasscodeNotice() {
+        assertTrue(wipeLimitQuestionDue(due = true, locked = false, wrongAttemptsPending = false))
+        assertFalse("stacked on the wrong-passcode notice", wipeLimitQuestionDue(due = true, locked = false, wrongAttemptsPending = true))
+        assertFalse("above the lock screen", wipeLimitQuestionDue(due = true, locked = true, wrongAttemptsPending = false))
+        assertFalse(wipeLimitQuestionDue(due = false, locked = false, wrongAttemptsPending = false))
+    }
+
+    @Test
+    fun theUpgradedPhoneIsToldItsLimitIsPaused() {
+        val note = pausedWipeNote(3)
+        assertTrue(note, note.startsWith("Earlier versions set a wipe after 3 wrong passcodes in a row"))
+        assertTrue(note, "until you choose, wrong passcodes lock you out for longer instead" in note)
     }
 }

@@ -26,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -180,11 +182,12 @@ fun LockScreen() {
             .windowInsetsPadding(WindowInsets.systemBars),
         contentAlignment = Alignment.Center
     ) {
+        val windowHeight = maxHeight
         Column(
             Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .heightIn(min = maxHeight)
+                .heightIn(min = windowHeight)
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
@@ -248,7 +251,8 @@ fun LockScreen() {
                 else -> errorText
             }
             val msgAlpha by animateFloatAsState(if (msg.isNotEmpty()) 1f else 0f, label = "message")
-            Box(Modifier.height(20.dp).alpha(msgAlpha), contentAlignment = Alignment.Center) {
+            // At least one line high, and taller when large text needs it, so the message is never cut.
+            Box(Modifier.heightIn(min = 20.dp).alpha(msgAlpha), contentAlignment = Alignment.Center) {
                 Text(msg, style = MaterialTheme.typography.bodyMedium, color = c.danger, textAlign = TextAlign.Center)
             }
 
@@ -258,24 +262,26 @@ fun LockScreen() {
                 listOf('4', '5', '6'),
                 listOf('7', '8', '9'),
             )
+            // Smaller keys on a short window, so the whole screen fits without scrolling where it can.
+            val keySize = lockKeySize(windowHeight)
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 for (row in rows) {
                     Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         for (d in row) {
-                            NumKey(label = d.toString(), active = active) { tap(d) }
+                            NumKey(label = d.toString(), size = keySize, active = active) { tap(d) }
                         }
                     }
                 }
                 // Bottom row: biometrics (when on) · 0 · backspace
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    Box(Modifier.size(KEY_SIZE))
-                    NumKey(label = "0", active = active) { tap('0') }
-                    NumKey(label = KEY_BACKSPACE, active = active && code.isNotEmpty(), accent = false) { backspace() }
+                    Box(Modifier.size(keySize))
+                    NumKey(label = "0", size = keySize, active = active) { tap('0') }
+                    NumKey(label = KEY_BACKSPACE, size = keySize, active = active && code.isNotEmpty(), accent = false) { backspace() }
                 }
             }
 
             // ── Submit (for codes shorter than MAX_LENGTH), or biometrics ──
-            Box(Modifier.height(48.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
                 if (code.length in AppLock.MIN_LENGTH until maxLen) {
                     PrimaryButton("Unlock", onClick = { submit() }, enabled = active)
                 } else if (biometricEnabled && activity != null && code.isEmpty()) {
@@ -323,14 +329,28 @@ private const val KEY_BACKSPACE = "backspace"
 
 private val KEY_SIZE = 72.dp
 
+/** The smallest key: Android's minimum touch target. */
+private val KEY_SIZE_MIN = 48.dp
+
+/** Everything on the lock screen but the four rows of keys, at default text size: padding, mark, dots, message, gaps, button. */
+private val LOCK_CHROME = 380.dp
+
+/**
+ * The keypad's key size for a window [maxHeight] tall: 72 dp where there is
+ * room, smaller on a short window, and never below a 48 dp touch target. With
+ * the smallest keys the whole screen fits from 572 dp; a 640 dp phone (about
+ * 568 dp between its bars) scrolls by a few dp, as larger text does.
+ */
+internal fun lockKeySize(maxHeight: Dp): Dp = ((maxHeight - LOCK_CHROME) / 4).coerceIn(KEY_SIZE_MIN, KEY_SIZE)
+
 /** A keypad key: an octagon, the mark's own shape, with the digit in the display face. */
 @Composable
-private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
+private fun NumKey(label: String, size: Dp, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
     val c = ClairixTheme.colors
     val color = if (active) (if (accent) c.text else c.textMuted) else c.textSubtle
     Box(
         Modifier
-            .size(KEY_SIZE)
+            .size(size)
             .clip(ClairixShapes.Octagon)
             .background(if (active) c.surface else c.base)
             .border(1.dp, if (active) c.border else c.surface, ClairixShapes.Octagon)

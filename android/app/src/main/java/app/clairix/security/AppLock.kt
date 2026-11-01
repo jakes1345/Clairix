@@ -67,7 +67,8 @@ object AppLock {
      * Wipe after this many wrong passcodes in a row; 0 means never wipe (lock out
      * instead). Nothing wipes until the owner picks a limit: setting a passcode
      * asks her straight away ([wipeChoiceConfirmed]), and until she answers the
-     * escalating lockout is what slows a guesser down.
+     * escalating lockout is what slows a guesser down. A limit an earlier version
+     * wrote without asking is held back the same way ([pausedWipeAfter]).
      */
     const val DEFAULT_WIPE_AFTER = 0
     val WIPE_AFTER_CHOICES = listOf(1, 3, 5, 10, 0)
@@ -154,6 +155,14 @@ object AppLock {
      * Never shown on the lock screen, which says nothing about attempts.
      */
     val wrongAttempts: StateFlow<WrongAttempts?> = _wrongAttempts.asStateFlow()
+
+    private val _wipeChoiceDue = MutableStateFlow(false)
+    /**
+     * Set by an unlock on a phone whose wipe limit an earlier version armed
+     * without asking ([pausedWipeAfter]), so the app asks once it is open; the
+     * owner's answer ([setWipeAfter]) clears it.
+     */
+    val wipeChoiceDue: StateFlow<Boolean> = _wipeChoiceDue.asStateFlow()
 
     /**
      * When the lock screen now up, or last passed, came up (wall clock): the
@@ -310,25 +319,42 @@ object AppLock {
     /**
      * Unlocks the app after the BiometricPrompt authorised [cipher]: the proof is
      * that the operation the Keystore refused before now completes. A success
-     * callback without a usable cipher opens nothing. Does not touch the attempt
-     * counter; the sensor's own lockout paces biometric tries. Wrong passcodes
+     * callback without a usable cipher opens nothing. The sensor's own lockout
+     * paces biometric tries; a proven biometric is the owner, so like the right
+     * passcode it ends the run of wrong ones ([biometricProven]). Wrong passcodes
      * from before this lock screen are reported, as after a passcode unlock.
      */
     fun unlockWithBiometric(cipher: Cipher?): Boolean {
         if (!confirmWithBiometric(cipher)) return false
-        appContext?.let { app -> synchronized(attemptLock) { reportWrongAttempts(prefs(app)) } }
-        unlocked()
+        val app = appContext
+        if (app != null) synchronized(attemptLock) { reportWrongAttempts(prefs(app)) }
+        unlocked(app)
         return true
     }
 
     /**
      * The same proof as [unlockWithBiometric], for a page or an export inside the
      * unlocked app that asks again: true when the BiometricPrompt really
-     * authorised [cipher]. The lock state and the attempt counter are left alone.
+     * authorised [cipher]. The lock state is left alone; the run of wrong
+     * passcodes ends, as it does after the right passcode.
      */
     fun confirmWithBiometric(cipher: Cipher?): Boolean {
         if (Wiper.isActive || !_biometricEnabled.value || cipher == null) return false
-        return runCatching { cipher.doFinal(ByteArray(16)); true }.getOrDefault(false)
+        val proven = runCatching { cipher.doFinal(ByteArray(16)); true }.getOrDefault(false)
+        if (proven) appContext?.let { biometricProven(it) }
+        return proven
+    }
+
+    /**
+     * A strong biometric has just proved the owner. The wrong passcodes counted
+     * so far stop counting, as they do after the right passcode: "N wrong
+     * passcodes in a row" means in a row, not N slips weeks apart with her own
+     * fingerprint in between. Those not yet reported to her stay on record.
+     */
+    internal fun biometricProven(context: Context) {
+        synchronized(attemptLock) {
+            prefs(context).edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
+        }
     }
 
     private fun revokeBiometric(context: Context) {
@@ -339,7 +365,27 @@ object AppLock {
         }
     }
 
-    fun wipeAfter(context: Context): Int = prefs(context).getInt(K_WIPE_AFTER, DEFAULT_WIPE_AFTER)
+    /**
+     * What wrong passcodes do now: wipe at this many in a row, or 0 for the
+     * lockout. A limit nobody chose ([pausedWipeAfter]) reads as 0, because it
+     * is not applied.
+     */
+    fun wipeAfter(context: Context): Int = runCatching { effectiveWipeAfter(prefs(context)) }.getOrDefault(DEFAULT_WIPE_AFTER)
+
+    /**
+     * The wipe limit an earlier version wrote, unasked, with the passcode (every
+     * version before the choice existed wrote 3), while the owner has not yet
+     * said what she wants; 0 when there is none. It is held back: until she
+     * answers, wrong passcodes bring the lockout instead, and the app asks her
+     * after her next unlock ([wipeChoiceDue]).
+     */
+    fun pausedWipeAfter(context: Context): Int = runCatching {
+        val p = prefs(context)
+        heldBackWipeLimit(p.getInt(K_WIPE_AFTER, DEFAULT_WIPE_AFTER), p.getBoolean(K_WIPE_CHOSEN, false), p.contains(K_VERIFIER))
+    }.getOrDefault(0)
+
+    private fun effectiveWipeAfter(p: SharedPreferences): Int =
+        appliedWipeLimit(p.getInt(K_WIPE_AFTER, DEFAULT_WIPE_AFTER), p.getBoolean(K_WIPE_CHOSEN, false))
 
     /**
      * Whether the owner picked what wrong passcodes do herself, in the dialog
@@ -358,6 +404,7 @@ object AppLock {
             // it again so changing the setting cannot itself set off the wipe.
             prefs(context).edit().putInt(K_WIPE_AFTER, attempts).putBoolean(K_WIPE_CHOSEN, true)
                 .putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
+            _wipeChoiceDue.value = false
         }
     }
 
@@ -401,8 +448,9 @@ object AppLock {
      * alerts goes; the alerts themselves are not posted again (the owner is in
      * the app, and the timeline has them), just as Comms leaves what it collapsed.
      */
-    private fun unlocked() {
+    private fun unlocked(context: Context?) {
         _locked.value = false
+        if (context != null) _wipeChoiceDue.value = pausedWipeAfter(context) > 0
         appContext?.let { app -> runCatching { PlatformAlerts.unlocked(app) } }
     }
 
@@ -458,7 +506,8 @@ object AppLock {
      * write); call it off the main thread. With [unlockOnSuccess] false the
      * right passcode only confirms the owner (changing settings, or a page or
      * an export that asks again) and the lock state is left alone; a wrong one
-     * counts the same either way.
+     * counts the same either way, and so does the duress code, which wipes only
+     * from the lock screen.
      */
     fun attempt(context: Context, code: String, unlockOnSuccess: Boolean = true): Verdict =
         synchronized(attemptLock) { attemptLocked(context.applicationContext, code, unlockOnSuccess) }
@@ -477,7 +526,9 @@ object AppLock {
         // not a real guess. Reject it without spending an attempt, so it can never
         // count towards the wipe.
         if (code.length < MIN_LENGTH) return Verdict.Rejected(lockedOutForMs = 0L)
-        val wipeAfter = p.getInt(K_WIPE_AFTER, DEFAULT_WIPE_AFTER)
+        // A limit an earlier version armed without asking is not applied until the
+        // owner confirms it: until then her wrong passcodes meet the lockout.
+        val wipeAfter = effectiveWipeAfter(p)
         val failed = p.getInt(K_FAILED, 0)
         val lastFail = p.getLong(K_LAST_FAIL, 0L)
 
@@ -539,15 +590,20 @@ object AppLock {
                 p.edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
                 if (unlockOnSuccess) {
                     reportWrongAttempts(p)
-                    unlocked()
+                    unlocked(context)
                 }
                 Verdict.Accepted
             }
-            isDuress -> {
+            isDuress && unlockOnSuccess -> {
                 // The code goes with the wipe: the decoy it leaves opens to it.
                 seam.duressWipe(context, code)
                 Verdict.Wiping
             }
+            // At a passcode check inside the unlocked app the duress code is just a
+            // wrong passcode, counted like one: a wipe started there would end on
+            // the lock screen, which a wrong code at that check never does, and the
+            // person watching would see Clairix lock itself. It works on the lock
+            // screen, where the restart looks like any wrong guess.
             wipeAfter > 0 && failed + 1 >= wipeAfter -> {
                 seam.wipe(context)
                 Verdict.Wiping
@@ -675,8 +731,9 @@ object AppLock {
      * Sets the duress passcode: entered on the lock screen, it looks like any
      * wrong passcode and wipes Clairix as the failure limit would, but leaves a
      * decoy rather than a first run: the lock screen stays, and from then on
-     * this code opens an emptied Clairix ([Wiper]). Null removes it. Needs the
-     * lock to be on. Blocking.
+     * this code opens an emptied Clairix ([Wiper]). At a passcode check inside
+     * the unlocked app it is only a wrong passcode ([attempt]). Null removes it.
+     * Needs the lock to be on. Blocking.
      */
     fun setDuress(context: Context, code: String?): Result<Unit> = runCatching {
         synchronized(attemptLock) {
@@ -712,7 +769,9 @@ object AppLock {
     /** Turns the lock off: the verifiers, the settings and the Keystore key all go. */
     fun disable(context: Context) {
         synchronized(attemptLock) {
-            prefs(context).edit().clear().commit()
+            // Written before the key goes: a lock whose settings survive without its key
+            // would refuse every passcode. A failed write is left to the next disable.
+            if (!prefs(context).edit().clear().commit()) return
             runCatching {
                 val ks = keyStore()
                 if (ks.containsAlias(KEY_ALIAS)) ks.deleteEntry(KEY_ALIAS)
@@ -721,6 +780,7 @@ object AppLock {
             _enabled.value = false
             _locked.value = false
             _biometricEnabled.value = false
+            _wipeChoiceDue.value = false
             backgroundedAt = 0L
         }
     }

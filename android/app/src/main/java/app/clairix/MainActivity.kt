@@ -447,6 +447,8 @@ class MainActivity : AppCompatActivity() {
                         WrongPasscodeNotice()
                         // An evidence export asked for anywhere: its period, warning and share.
                         EvidenceExportHost()
+                        // Then, on a phone an earlier version armed a wipe on unasked: what wrong passcodes should do.
+                        WipeLimitQuestion()
                     }
                 }
             }

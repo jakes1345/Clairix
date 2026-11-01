@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -129,7 +128,8 @@ fun ClairixBottomBar(items: List<BottomBarItem>, modifier: Modifier = Modifier) 
     Column(modifier.fillMaxWidth().background(c.surface)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
         Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().height(68.dp).selectableGroup(),
+            // At least 68 dp, and taller when large text needs it, so a label is never cut off.
+            Modifier.fillMaxWidth().navigationBarsPadding().heightIn(min = 68.dp).selectableGroup(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             items.forEach { item ->
@@ -137,7 +137,7 @@ fun ClairixBottomBar(items: List<BottomBarItem>, modifier: Modifier = Modifier) 
                 Column(
                     Modifier
                         .weight(1f)
-                        .fillMaxHeight()
+                        .heightIn(min = 68.dp)
                         .selectable(selected = item.selected, role = Role.Tab, onClick = item.onClick)
                         .semantics {
                             contentDescription = item.label
@@ -166,7 +166,7 @@ fun ClairixBottomBar(items: List<BottomBarItem>, modifier: Modifier = Modifier) 
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(item.label, style = MaterialTheme.typography.labelMedium, color = fg, maxLines = 1)
+                    Text(item.label, style = MaterialTheme.typography.labelMedium, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }

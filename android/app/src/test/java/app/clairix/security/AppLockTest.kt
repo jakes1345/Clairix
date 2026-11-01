@@ -105,6 +105,71 @@ class AppLockTest {
         assertEquals("choosing a limit starts the count again", 0, failedOnDisk())
     }
 
+    /** The file every version before the choice left: a limit of 3, written with the passcode, never asked about. */
+    private fun seedUpgradedFile() {
+        context.prefs(AppLock.PREFS_NAME).edit().putInt("wipe_after", 3).remove("wipe_after_chosen").commit()
+    }
+
+    @Test
+    fun anUpgradedPhonesUnaskedLimitWipesNothingUntilTheOwnerConfirmsIt() {
+        seedUpgradedFile()
+        assertFalse(AppLock.wipeChoiceConfirmed(context))
+        assertEquals("the unasked limit is not applied", 0, AppLock.wipeAfter(context))
+        assertEquals("but it is remembered, to ask about", 3, AppLock.pausedWipeAfter(context))
+
+        // Three wrong passcodes, then more: the lockout, never the wipe.
+        repeat(4) { assertEquals("wrong passcode ${it + 1}", AppLock.Verdict.Rejected(0L), guess()) }
+        assertEquals(AppLock.Verdict.Rejected(30_000L), guess())
+        assertTrue("wiped on a limit nobody chose: ${platform.wipes}", platform.wipes.isEmpty())
+
+        // She keeps 3 when asked: from then on it is hers, and it wipes.
+        platform.elapsed += 60_000L
+        AppLock.setWipeAfter(context, 3)
+        assertEquals(0, AppLock.pausedWipeAfter(context))
+        guess(); guess()
+        assertTrue(platform.wipes.isEmpty())
+        assertEquals(AppLock.Verdict.Wiping, guess())
+        assertEquals(1, platform.wipes.size)
+    }
+
+    @Test
+    fun theUnlockOnAnUpgradedPhoneAsksAndTheAnswerClearsTheQuestion() {
+        seedUpgradedFile()
+        AppLock.lock()
+        assertFalse(AppLock.wipeChoiceDue.value)
+        assertEquals(AppLock.Verdict.Accepted, guess(passcode, unlock = false))
+        assertFalse("a check inside the app is not the unlock that asks", AppLock.wipeChoiceDue.value)
+
+        assertEquals(AppLock.Verdict.Accepted, guess(passcode))
+        assertTrue("the unlock did not ask", AppLock.wipeChoiceDue.value)
+
+        AppLock.setWipeAfter(context, 0)
+        assertFalse(AppLock.wipeChoiceDue.value)
+        AppLock.lock()
+        assertEquals(AppLock.Verdict.Accepted, guess(passcode))
+        assertFalse("asked again after an answer", AppLock.wipeChoiceDue.value)
+    }
+
+    @Test
+    fun aNewPasscodeIsAskedAboutWhereItIsSetNotAfterTheUnlock() {
+        // Nothing stored but the default: the dialog after saving asks; the unlock has nothing to bring back.
+        assertEquals(0, AppLock.pausedWipeAfter(context))
+        AppLock.lock()
+        assertEquals(AppLock.Verdict.Accepted, guess(passcode))
+        assertFalse(AppLock.wipeChoiceDue.value)
+    }
+
+    @Test
+    fun theLimitAppliedAndTheLimitHeldBack() {
+        assertEquals(3, appliedWipeLimit(stored = 3, chosen = true))
+        assertEquals(0, appliedWipeLimit(stored = 3, chosen = false))
+        assertEquals(0, appliedWipeLimit(stored = 0, chosen = true))
+        assertEquals(3, heldBackWipeLimit(stored = 3, chosen = false, hasPasscode = true))
+        assertEquals(0, heldBackWipeLimit(stored = 3, chosen = true, hasPasscode = true))
+        assertEquals(0, heldBackWipeLimit(stored = 0, chosen = false, hasPasscode = true))
+        assertEquals(0, heldBackWipeLimit(stored = 3, chosen = false, hasPasscode = false))
+    }
+
     // ── Counted before checked ─────────────────────────────────────────────
 
     @Test
@@ -196,6 +261,45 @@ class AppLockTest {
         AppLock.setWipeAfter(context, 3)
         guess(unlock = false); guess(unlock = false)
         assertEquals(AppLock.Verdict.Wiping, guess(unlock = false))
+        assertEquals(1, platform.wipes.size)
+    }
+
+    @Test
+    fun aProvenBiometricEndsTheRunOfWrongPasscodes() {
+        AppLock.setWipeAfter(context, 3)
+        guess(unlock = false); guess(unlock = false)     // two slips at a page that asks again
+        assertEquals(2, failedOnDisk())
+        AppLock.biometricProven(context)                 // ...then her fingerprint gets her in
+        assertEquals(0, failedOnDisk())
+        guess(); guess()                                 // two more, weeks later
+        assertTrue("slips with her own fingerprint between them added up to the wipe", platform.wipes.isEmpty())
+        assertEquals(AppLock.Verdict.Wiping, guess())    // three in a row still wipe
+    }
+
+    @Test
+    fun aProvenBiometricKeepsTheWrongPasscodesItHasNotReportedYet() {
+        guess()
+        AppLock.biometricProven(context)
+        assertTrue(context.prefs(AppLock.PREFS_NAME).contains("wrong_at"))
+    }
+
+    // ── The duress code inside the app ─────────────────────────────────────
+
+    @Test
+    fun theDuressCodeAtACheckInsideTheAppIsAnOrdinaryWrongPasscode() {
+        val duressCode = "48261937"
+        AppLock.setDuress(context, duressCode).getOrThrow()
+        assertTrue(AppLock.hasDuress(context))
+
+        assertEquals(AppLock.Verdict.Rejected(0L), guess(duressCode, unlock = false))
+        assertEquals("counted like any wrong passcode", 1, failedOnDisk())
+        assertTrue(platform.wipes.isEmpty())
+        assertFalse("no wipe started from inside the app", Wiper.isActive)
+        assertTrue("the duress code survives, for the lock screen", AppLock.hasDuress(context))
+
+        // Under a limit it counts towards it, as any wrong passcode there does.
+        AppLock.setWipeAfter(context, 1)
+        assertEquals(AppLock.Verdict.Wiping, guess(duressCode, unlock = false))
         assertEquals(1, platform.wipes.size)
     }
 
@@ -381,13 +485,12 @@ class AppLockTest {
 
     @Test
     fun theDuressDecoyOpensToTheDuressCodeAndLooksLikeALockSetUpToday() {
-        // What a duress wipe leaves (security/Wiper.kt): the owner had kept the
-        // old unasked limit of 3, which Settings asks her to check.
-        context.prefs(AppLock.PREFS_NAME).edit().putInt("wipe_after", 3).commit()
-        assertFalse(AppLock.wipeChoiceConfirmed(context))
+        // What a duress wipe leaves (security/Wiper.kt reads AppLock.wipeAfter):
+        // the owner had picked a limit of 3.
+        AppLock.setWipeAfter(context, 3)
         val duressCode = "48261937"
         val lock = AppLock.makeDecoyLock(duressCode)
-        assertTrue(AppLock.writeDecoy(context, lock, wipeAfter = 3, relockMs = AppLock.DEFAULT_RELOCK_MS, biometric = false))
+        assertTrue(AppLock.writeDecoy(context, lock, wipeAfter = AppLock.wipeAfter(context), relockMs = AppLock.DEFAULT_RELOCK_MS, biometric = false))
 
         assertTrue("the limit carried over counts as chosen, as on any new lock", AppLock.wipeChoiceConfirmed(context))
         assertEquals(3, AppLock.wipeAfter(context))
@@ -395,5 +498,14 @@ class AppLockTest {
         assertFalse("no duress passcode on the decoy", AppLock.hasDuress(context))
         assertEquals(AppLock.Verdict.Accepted, guess(duressCode))
         assertTrue("the old passcode opens nothing", guess(passcode) is AppLock.Verdict.Rejected)
+    }
+
+    @Test
+    fun theDecoyOfAnUpgradedPhoneDoesNotArmTheLimitNobodyChose() {
+        seedUpgradedFile()
+        val lock = AppLock.makeDecoyLock("48261937")
+        assertTrue(AppLock.writeDecoy(context, lock, wipeAfter = AppLock.wipeAfter(context), relockMs = AppLock.DEFAULT_RELOCK_MS, biometric = false))
+        assertEquals("the decoy behaves as the lock did: no wipe", 0, AppLock.wipeAfter(context))
+        assertEquals(0, AppLock.pausedWipeAfter(context))
     }
 }

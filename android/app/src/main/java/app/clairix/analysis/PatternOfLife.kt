@@ -140,7 +140,8 @@ data class DepartureStats(
     val stdMinutes: Float,
     val samples: Int
 ) {
-    val label: String get() = "%s %s ± %d min".format(Locale.US, weekday.name.take(3).lowercase().replaceFirstChar { it.uppercase() }, clock(meanMinuteOfDay), stdMinutes.toInt())
+    /** "Mon 07:45 ± 6 min": to the quarter hour, as the suggestions are, so a glance at the page does not take away the minute. */
+    val label: String get() = "%s %s ± %d min".format(Locale.US, weekday.name.take(3).lowercase().replaceFirstChar { it.uppercase() }, clock(nearestQuarter(meanMinuteOfDay)), stdMinutes.toInt())
 }
 
 /** A place the owner stops at, found from the fixes alone. */
