@@ -211,6 +211,11 @@ export function minuteFloor(nowMs: number): number {
   return Math.floor(nowMs / MINUTE_MS) * MINUTE_MS;
 }
 
+/** [nowMs] rounded down to the start of its hour. */
+export function hourFloor(nowMs: number): number {
+  return Math.floor(nowMs / HOUR_MS) * HOUR_MS;
+}
+
 /** Splits claims into those still waiting and those whose window has passed. */
 export function expireClaims(claims: OtkClaim[], now: number, windowMs = OTK_CLAIM_WINDOW_MS): { kept: OtkClaim[]; expired: OtkClaim[] } {
   const kept: OtkClaim[] = [];
@@ -503,4 +508,67 @@ export function openRegistrationCap(env: { OPEN_REGISTRATION?: string; OPEN_REGI
   if (!/^[0-9]{1,6}$/.test(raw)) return OPEN_REGISTRATION_DEFAULT_PER_DAY;
   const n = Number(raw);
   return n >= 1 && n <= 100_000 ? n : OPEN_REGISTRATION_DEFAULT_PER_DAY;
+}
+
+// ── ClairixCoin ─────────────────────────────────────────────────────────────
+//
+// Each relay is its own coin community: a balance lives in its owner's
+// mailbox, and so does the owner's record of the transfers they made and
+// received. That record names nobody. Who paid whom travels between the two
+// phones inside an end-to-end encrypted payment notice, and the payee's phone
+// checks the notice against its own record by id and amount.
+
+/** The most transfers a mailbox keeps, newest first. */
+export const COIN_TX_MAX = 100;
+/** How long a mailbox keeps a transfer. */
+export const COIN_TX_TTL_MS = 30 * DAY_MS;
+/** What the record of a mint says, the same for every mint: never who minted it. */
+export const COIN_MINT_NOTE = "Minted by the relay";
+
+/**
+ * One transfer as the mailbox that made or received it keeps it: the id the
+ * payer's phone chose (a refund is the payment's id with ":refund"), the
+ * amount, the hour it was made (the hour's first millisecond) and which way it
+ * went. A mint carries COIN_MINT_NOTE; nothing else carries a note.
+ */
+export interface CoinTx {
+  id: string;
+  amount: number;
+  ts: number;
+  direction: "in" | "out";
+  note?: typeof COIN_MINT_NOTE;
+}
+
+/** The record of a transfer of [amount] under [id] made at [now], dated to the hour. */
+export function coinTx(id: string, amount: number, direction: "in" | "out", now: number, minted = false): CoinTx {
+  const tx: CoinTx = { id, amount, ts: hourFloor(now), direction };
+  if (minted) tx.note = COIN_MINT_NOTE;
+  return tx;
+}
+
+/**
+ * What a mailbox may keep of [stored] at [now]: each entry cut down to a
+ * CoinTx, newest first, none older than COIN_TX_TTL_MS and at most
+ * COIN_TX_MAX. Entries written before the record was cut down also named the
+ * payer and the payee, kept the payer's note, the millisecond and, for a mint,
+ * the number of whoever minted it; all of that goes, and so does anything that
+ * is not a transfer at all.
+ */
+export function coinLedger(stored: unknown, now: number): CoinTx[] {
+  if (!Array.isArray(stored)) return [];
+  const kept: CoinTx[] = [];
+  for (const raw of stored) {
+    if (kept.length === COIN_TX_MAX) break;
+    if (typeof raw !== "object" || raw === null) continue;
+    const t = raw as { id?: unknown; amount?: unknown; ts?: unknown; direction?: unknown; from?: unknown; note?: unknown };
+    if (typeof t.id !== "string" || typeof t.amount !== "number" || !Number.isInteger(t.amount)) continue;
+    if (typeof t.ts !== "number" || !Number.isFinite(t.ts)) continue;
+    if (t.direction !== "in" && t.direction !== "out") continue;
+    const ts = hourFloor(t.ts);
+    if (now - ts >= COIN_TX_TTL_MS) continue;
+    // A mint was once recorded as a payment from "mint", with the operator's number in its note.
+    const minted = t.direction === "in" && (t.from === "mint" || t.note === COIN_MINT_NOTE);
+    kept.push(coinTx(t.id, t.amount, t.direction, ts, minted));
+  }
+  return kept;
 }

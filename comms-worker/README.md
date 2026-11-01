@@ -63,6 +63,12 @@ giving them your real number or your identity key.
 - What phones report about a number (see "Abuse reports"): the number, a
   reason, an envelope's hash and the day. Never who reported it, and never
   anything that was said.
+- Where its operator has turned ClairixCoin on (see "ClairixCoin"), each
+  account's balance and its own record of the transfers it made and received:
+  the id, the amount, the hour and which way it went, for 30 days and a
+  hundred deep. Never who paid whom. A payment is signed by the payer and
+  names the payee, so the relay sees the pair while it moves the coins, and
+  writes down neither.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
   "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
   up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
@@ -358,8 +364,8 @@ registration came in this way is the day's count: nothing says which
 accounts did, nor from where. Past the day's number a phone without an invite or the secret is told
 to try again the next day; invites and the secret keep working. One address
 can use up a day's open registrations, so choose a number you would accept
-going to one person. `COIN_INITIAL_BALANCE` is given to open registrations
-too. The project's own relay keeps open registration off.
+going to one person. While the coin is on, `COIN_INITIAL_BALANCE` is given
+to open registrations too. The project's own relay keeps open registration off.
 
 ### Abuse reports
 
@@ -448,32 +454,58 @@ The Worker then mints TURN credentials for every `GET /v1/turn` request: they
 are valid for two hours, go to that caller alone and are never cached or
 shared. A TURN server forwards encrypted packets it cannot decrypt.
 
-### ClairixCoin (optional)
+### ClairixCoin (off unless you turn it on)
 
 Every relay is its own small currency community. Each Clairix number holds a
 balance of ClairixCoin (`AC`) in its mailbox, and a phone pays another by a
-signed request; the relay moves the coins between the two mailboxes. The
-recipient then hears about the payment, with whatever note the payer wrote,
-inside an encrypted envelope: the relay records who paid whom how much, but
-never the note.
+signed request that names the payee's number and the fingerprint of the
+payee's identity key (the key the payer's phone pinned when it added the
+contact, as a lookup of an unlisted number asks); the relay moves the coins
+between the two mailboxes. A number that does not exist and a fingerprint
+that does not match get the same "Payment refused" before any coin moves, so
+paying tells nobody whether a number is real, and coins never go to whoever
+was given a number after the person the payer knew. The recipient hears
+about the payment, with whatever note the payer wrote, inside an end-to-end
+encrypted envelope, and its phone checks it against its own record by id and
+amount.
 
-Balances start at zero unless the relay mints. Two knobs, both optional:
+Each mailbox keeps a record of its own transfers: the id, the amount, the
+hour and whether it came in or went out, the 100 most recent and none older
+than 30 days. It names nobody: not the other party, not a note, and for a
+mint not who minted it (the record says "Minted by the relay"). A ledger
+written by an earlier version, which named both parties and the moment, is
+rewritten the first time the mailbox's coin is touched, or by the mailbox's
+daily cleanup, whichever comes first.
+
+The coin is on unless the operator switches it off:
 
 ```toml
 # wrangler.toml
 [vars]
-COIN_INITIAL_BALANCE = "100"    # coins every new registration starts with
+COIN = "off"                    # optional: no balances shown, no payments, no starting balance, no minting
+COIN_INITIAL_BALANCE = "100"    # optional: coins every account registered while the coin is on starts with
 ```
 
 ```sh
 npx wrangler secret put ADMIN_SECRET   # 16+ characters; lets the operator mint (and delete accounts on request)
 ```
 
-Minting is `POST /v1/admin/coin/mint` with `{"to": "<Clairix number>", "amount": 50}`,
+`GET /` says `"coin": true` while it is on, and the app shows the balance and
+the Pay button only then (a relay from before this setting says nothing, and
+offers the coin, as it always did). While it is off every coin route answers 404,
+nobody can mint and new accounts start with nothing; balances and ledgers
+already there are kept (the ledgers still forget each transfer after 30 days)
+and come back if it is switched on again. Minting is
+`POST /v1/admin/coin/mint` with `{"to": "<Clairix number>", "amount": 50}`,
 signed like any request by a registered identity (the operator's own phone,
-say) and carrying `X-Admin-Secret`. Without `ADMIN_SECRET` the endpoint is off.
-A single transfer moves at most 1,000,000 AC; each mailbox keeps its last 100
-transactions.
+say) and carrying `X-Admin-Secret`; it needs the coin on and
+`ADMIN_SECRET` set. `ADMIN_SECRET` guards the operator's other routes too (the
+abuse reports, for one), so while the coin is on, setting it for them makes
+minting possible as well. A single transfer moves at most 1,000,000 AC.
+
+The project's own relay is configured on the live Worker, not in this
+repository: whether the coin is on there, the starting balance and whether
+anyone can mint are its maintainer's settings.
 
 ### Traffic (navigation)
 
@@ -586,7 +618,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | --- | --- | --- |
 | POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite` (or neither, while `OPEN_REGISTRATION` is on and the day's number lasts); allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
-| GET | `/` | `{service, version, alternates, relayKey, federation, tokens}`: the relay's other addresses, the public key it signs forwarded requests with, which relays it accepts them from, and its blind-token keys for this epoch and the next |
+| GET | `/` | `{service, version, alternates, onion, relayKey, federation, tokens, coin}`: the relay's other addresses, its onion address, the public key it signs forwarded requests with, which relays it accepts them from, its blind-token keys for this epoch and the next, and whether ClairixCoin is on |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile, one-time-key count, and whether a pass key is set (`pass`) |
 | PUT | `/v1/pass` | `{key}` (32 bytes, base64; or `null`): the key contacts' passes are made with. 20 an hour |
@@ -597,7 +629,6 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
 | POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
-| GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
 | POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
 | POST | `/v1/report` | `{number, relay?, envelope?, reason}` with a report token → 202: an abuse report kept for the operator (see "Abuse reports"); the same answer whatever the number |
 | GET, DELETE | `/v1/admin/reports` | With `X-Admin-Secret` and no identity: every reported number, or (`DELETE {number, relay?}`) close the reports about one; off unless `ADMIN_SECRET` is set |
@@ -606,10 +637,10 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/ack` | Delete envelopes the app has stored |
 | GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat every two minutes, and `pong` for a client's `{"type":"ping"}` |
 | GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured |
-| GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin |
-| POST | `/v1/coin/pay` | `{to, amount, note?}` → `{txid, balance, ok}`: pays a contact; 30 a minute |
-| GET | `/v1/coin/history` | `{txs}`: the last transactions, newest first (`?limit=`, up to 100) |
-| POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `ADMIN_SECRET` is set |
+| GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin. Every coin route answers 404 while `COIN` is off |
+| POST | `/v1/coin/pay` | `{to, pin, amount, txid?}` → `{txid, balance, ok}`: pays a contact; `pin` is the payee's key fingerprint, and a number that does not exist or a pin that does not match is "Payment refused" before any coin moves; 30 a minute |
+| GET | `/v1/coin/history` | `{txs: [{id, amount, ts, direction, note?}]}`: the last transfers, newest first (`?limit=`, up to 100), each dated to the hour; `note` only on a mint |
+| POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `COIN` is on and `ADMIN_SECRET` is set |
 | DELETE | `/v1/admin/accounts/:number` | With `X-Admin-Secret` and no signature → `{ok, number}`: deletes the account as `DELETE /v1/me` does, for a deletion requested by email (`scripts/delete-account.mjs`, see above); 404 for no such account; off unless `ADMIN_SECRET` is set; a few tries a minute per address |
 | POST | `/v1/traffic/probe` | `{region, trip, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; a traffic token, no identity |
 | GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}`; a traffic token |

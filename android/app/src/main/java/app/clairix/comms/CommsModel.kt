@@ -298,7 +298,9 @@ data class CommsState(
     /** One-time keys the relay still holds for us. */
     val relayOneTimeKeys: Int = -1,
     /** ClairixCoin on this relay, or -1 until the relay has said. */
-    val balance: Long = -1L
+    val balance: Long = -1L,
+    /** Whether the relay offers ClairixCoin (its `GET /` says "coin": true); see [CoinRules.shown]. */
+    val coin: Boolean = false
 )
 
 /**

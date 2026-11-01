@@ -556,6 +556,7 @@ object CommsRepository {
                 displayName = config.displayName,
                 listed = config.listed,
                 online = config.online,
+                coin = config.relayCoin,
                 pushRegistered = config.pushEndpoint != null
             )
         }
@@ -1198,10 +1199,11 @@ object CommsRepository {
         }
     }
 
-    /** Keeps the other addresses the relay said it answers at, onion included. */
+    /** Keeps the other addresses the relay said it answers at, onion included, and whether it offers ClairixCoin. */
     private fun keepAddresses(info: RelayClient.Info) {
         if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
         if (info.onion != config.relayOnion) config.setRelayOnion(info.onion)
+        keepCoinOffer(info.coin)
     }
 
     /**
@@ -2300,13 +2302,29 @@ object CommsRepository {
     //
     // Full edition only. The Play edition is built with CLAIRIX_COIN off: it
     // never asks the relay for a balance, never pays, and does not record
-    // payment notices sent to it.
+    // payment notices sent to it. In the Full edition the balance and the Pay
+    // button show only while the relay says at GET / that its operator turned
+    // the coin on (CoinRules.shown).
 
-    /** This identity's coins on the relay, or -1 when the relay could not say (or the edition has no coin). */
+    /**
+     * Keeps what the relay said about ClairixCoin ([offered]), so the balance
+     * and the Pay button show or go to match; a balance shown before the relay
+     * turned the coin off is forgotten.
+     */
+    private fun keepCoinOffer(offered: Boolean) {
+        config.setRelayCoin(offered)
+        _state.update { it.copy(coin = offered, balance = if (offered) it.balance else -1L) }
+    }
+
+    /** This identity's coins on the relay, or -1 when the relay could not say, does not offer the coin, or the edition has none. */
     suspend fun getBalance(): Long = withContext(Dispatchers.IO) {
-        if (!BuildConfig.CLAIRIX_COIN || !config.isRegistered) return@withContext -1L
+        if (!CoinRules.shown(BuildConfig.CLAIRIX_COIN, config.isRegistered, config.relayCoin)) return@withContext -1L
         runCatching { relay.balance().balance }
-            .onFailure { CommsLog.add("Could not read the coin balance: ${it.message}") }
+            .onFailure {
+                // The relay's operator turned the coin off since the relay last said otherwise.
+                if ((it as? RelayException)?.code == 404) keepCoinOffer(false)
+                CommsLog.add("Could not read the coin balance: ${it.message}")
+            }
             .getOrDefault(-1L)
     }
 
@@ -2318,7 +2336,9 @@ object CommsRepository {
 
     /**
      * Pays [contact] [amount] ClairixCoin. The relay moves the coins (it holds
-     * both balances) on this identity's signed request; the recipient then
+     * both balances) on this identity's signed request, which names the
+     * fingerprint of the contact's pinned key, so the coins go to the key this
+     * phone knows and to nobody given the number since; the recipient then
      * hears about it, with the note, through an encrypted envelope the relay
      * cannot read. Returns the balance left afterwards.
      */
@@ -2326,13 +2346,14 @@ object CommsRepository {
         runCatching {
             if (!BuildConfig.CLAIRIX_COIN) throw UnsupportedOperationException("ClairixCoin is not part of this edition")
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
+            if (!config.relayCoin) throw IllegalStateException("Your relay does not offer ClairixCoin")
             if (amount <= 0L) throw IllegalArgumentException("The amount must be at least 1 $COIN_SYMBOL")
             if (contact.number == config.number) throw IllegalArgumentException("That is your own Clairix number")
             // Coins live in the relay's mailboxes; each relay is its own coin
             // community, and the same number on this relay is someone else.
             if (contact.relay != null) throw IllegalArgumentException("${contactLabel(contact)} is on ${relayLabel(contact.relay)}; ClairixCoin moves only between people on the same relay")
             val text = note?.trim()?.take(MAX_COIN_NOTE)?.takeIf { it.isNotEmpty() }
-            val result = relay.pay(contact.number, amount, null)
+            val result = relay.pay(contact.number, fingerprint(contact.ed25519), amount)
             val id = UUID.randomUUID().toString()
             val ts = System.currentTimeMillis()
             // The coins have moved: recorded before anything else can fail.
@@ -2360,20 +2381,26 @@ object CommsRepository {
 
     /**
      * Checks a payment notice against the relay's record of this account: a
-     * credit under [txid] from [from] for [amount]. Found, it is recorded and
-     * shown as received; not found, the conversation says so.
+     * credit under [txid] for [amount] (see [CoinRules.confirms]). The relay
+     * does not record who paid; [from] is the contact whose end-to-end
+     * encrypted notice this is. Found, it is recorded and shown as received;
+     * not found, or already counted for another notice, the conversation says so.
      */
     private suspend fun confirmPayment(from: String, id: String, txid: String, amount: Long, ts: Long, note: String) {
         val history = runCatching { relay.coinHistory() }.getOrElse {
+            if ((it as? RelayException)?.code == 404) keepCoinOffer(false)
             CommsLog.add("Could not check a payment notice from ${formatClairixNumber(from)} with the relay: ${it.message}")
             return
         }
-        val found = history.any { it.id == txid && it.direction == "in" && it.from == from && it.amount == amount }
         lock.withLock {
-            if (found) {
+            val counted = store.countsTxid(txid, id)
+            if (CoinRules.confirms(history, txid, amount, counted)) {
                 if (!store.hasTransaction(id)) store.insertTransaction(CoinTx(id, from, Direction.IN, amount, ts, note, txid))
                 store.setMessageBody(id, paymentLine(amount, note, sent = false))
                 CommsLog.add("Received $amount $COIN_SYMBOL from ${formatClairixNumber(from)}")
+            } else if (counted) {
+                store.setMessageBody(id, "Says they sent $amount $COIN_SYMBOL, but that payment is already counted for another message")
+                CommsLog.add("A payment notice from ${formatClairixNumber(from)} for $amount $COIN_SYMBOL names a payment already counted for another notice; not counted")
             } else {
                 store.setMessageBody(id, "Says they sent $amount $COIN_SYMBOL, but the relay has no such payment")
                 CommsLog.add("A payment notice from ${formatClairixNumber(from)} for $amount $COIN_SYMBOL is not in the relay's record; not counted")

@@ -40,7 +40,9 @@ How the Play edition leaves those features out:
 - **Card Vault and ClairixCoin.** `BuildConfig.CARD_VAULT` and
   `BuildConfig.CLAIRIX_COIN` are `false` in the Play edition. The NFC tab shows
   no vault, save or emulate controls; COMMS shows no balance and no Pay button;
-  and the relay's `/v1/coin/*` endpoints are never called.
+  and the relay's `/v1/coin/*` endpoints are never called. In the Full edition
+  the balance and the Pay button appear unless the relay's `GET /` says
+  `"coin": false` (its operator set `COIN=off`) or a coin request answers 404.
 
 Everything else (scanner, tools, map, navigation, COMMS) is identical.
 

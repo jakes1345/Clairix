@@ -38,7 +38,7 @@ If you choose to use Comms, your phone registers with the Clairix relay server. 
 
 Messages, voice notes, photos, videos, emergency (SOS) alerts and calls are end-to-end encrypted. The relay cannot read their content and does not learn who sent a message. Call audio travels directly between the two phones, or through a relay server that cannot decrypt it.
 
-Before delivery the relay holds each envelope a random few seconds and releases it together with others, so that timing does not pair a sender with a recipient. The relay can observe the recipient of each envelope, its size and the time it was queued. A send is not signed and names no account: it spends one of the single-use tokens above, and the token's hash does not say which account it was issued to. Like any server, the relay handles the network address a request comes from while answering it. We do not keep request logs, and the relay stores nothing that says when you were last online.
+Before delivery the relay holds each envelope a random few seconds and releases it together with others, so that timing does not pair a sender with a recipient. The relay can observe the recipient of each envelope, its size and the time it was queued. A send is not signed and names no account: it spends one of the single-use tokens above, and the token's hash does not say which account it was issued to. Like any server, the relay handles the network address a request comes from while answering it. We do not keep request logs, and the relay stores nothing that says when you were last online, beyond the hour of a ClairixCoin transfer you make (section 2.4).
 
 ### 2.2 Contacts on other relays
 
@@ -50,7 +50,7 @@ If you turn on the offline mesh (off by default), texts, group texts and SOS ale
 
 ### 2.4 ClairixCoin (Clairix Full only)
 
-If you use the coin feature, the relay records the transfers you make: who sent, who received, the amount and the time. It keeps the 100 most recent transfers per account. Notes attached to a transfer are end-to-end encrypted and not visible to the relay. ClairixCoin is an in-app token with no monetary value.
+ClairixCoin is in Clairix Full, on any relay whose operator has not switched it off. If you use it, the relay keeps your balance and, for each transfer you make or receive, its id, the amount, the hour it was made and whether it came in or went out. It does not record who paid whom: your phone tells the person you pay inside an end-to-end encrypted notice, together with any note you add, and the relay sees who pays whom only while it moves the coins. It keeps the 100 most recent transfers per account, none for longer than 30 days, and the balance until you delete your account. ClairixCoin is an in-app token with no monetary value.
 
 ### 2.5 Emergency alerts
 

@@ -92,6 +92,18 @@ class CommsConfig(context: Context) {
     }
 
     /**
+     * Whether the relay offers ClairixCoin, as its `GET /` last said
+     * ([RelayClient.Info.coin]); true until it says otherwise, since every
+     * relay offered it before the flag existed. The balance and the Pay button
+     * show only while it does ([CoinRules.shown]).
+     */
+    val relayCoin: Boolean get() = prefs.getBoolean(KEY_RELAY_COIN, true)
+
+    fun setRelayCoin(offered: Boolean) {
+        if (relayCoin != offered) prefs.edit().putBoolean(KEY_RELAY_COIN, offered).apply()
+    }
+
+    /**
      * Whether this phone sends cover traffic: sealed envelopes nobody reads, to
      * random contacts at random intervals, so the real ones are not the only
      * traffic there is. Off by default: it costs some data and battery.
@@ -168,10 +180,11 @@ class CommsConfig(context: Context) {
             .remove(KEY_PUSH)
             .remove(KEY_PASS_PUBLISHED)
             // Another relay's addresses are no use for this one, and what it
-            // offered for calls says nothing about this one.
+            // offered for calls or for ClairixCoin says nothing about this one.
             .remove(KEY_ALTERNATES)
             .remove(KEY_ONION)
             .remove(KEY_RELAY_TURN)
+            .remove(KEY_RELAY_COIN)
             .apply()
     }
 
@@ -189,6 +202,7 @@ class CommsConfig(context: Context) {
             .remove(KEY_ALTERNATES)
             .remove(KEY_ONION)
             .remove(KEY_RELAY_TURN)
+            .remove(KEY_RELAY_COIN)
             .putLong(KEY_PREKEY_PUBLISHED, 0L)
             .remove(KEY_PASS_PUBLISHED)
             .putString(KEY_PREVIOUS_RELAY, previousRelay.trimEnd('/'))
@@ -251,6 +265,7 @@ class CommsConfig(context: Context) {
         const val KEY_HIDE_PREVIEWS = "hide_previews"
         const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
         const val KEY_RELAY_TURN = "relay_turn"
+        const val KEY_RELAY_COIN = "relay_coin"
         const val KEY_ISSUED_INVITES = "issued_invites"
         const val KEY_COVER_TRAFFIC = "cover_traffic"
         const val KEY_ALTERNATES = "relay_alternates"

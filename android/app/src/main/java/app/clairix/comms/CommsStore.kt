@@ -1349,6 +1349,13 @@ class CommsStore(
     fun hasTransaction(id: String): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM transactions WHERE id = ?", arrayOf(id)).use { it.moveToFirst() }
 
+    /** Whether a payment received under the relay's [txid] is already recorded for a notice other than [exceptId]. */
+    fun countsTxid(txid: String, exceptId: String): Boolean =
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM transactions WHERE txid = ? AND direction = ? AND id <> ?",
+            arrayOf(txid, Direction.IN.name, exceptId)
+        ).use { it.moveToFirst() }
+
     /** Transfers with [peer], newest first. */
     fun transactions(peer: String, limit: Int = 50): List<CoinTx> =
         readableDatabase.query("transactions", null, "peer = ?", arrayOf(peer), null, null, "ts DESC", limit.toString()).use { c ->

@@ -17,7 +17,11 @@
 #                        choose the key yourself. FEDERATION=off stops forwarding either way.
 #
 # Plain variables (may go in [vars] below):
-#   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with, e.g. "100"; unset: none
+#   COIN                 Optional: "off" switches ClairixCoin off (no balances shown, no payments,
+#                        no starting balance, no minting); unset: on. Whether the project's own
+#                        relay switches it off is set on the live Worker by its maintainer
+#   COIN_INITIAL_BALANCE ClairixCoin every new registration starts with while the coin is on, e.g. "100";
+#                        unset: none
 #   RELAY_ALTERNATES     Optional: comma-separated https addresses this same relay also answers at
 #                        (a second domain, its workers.dev name). Phones keep them and fall back
 #                        to them when the address they registered at stops answering; a phone that

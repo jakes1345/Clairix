@@ -62,7 +62,8 @@ SOS to groups with end-to-end encrypted location; duress phrase; scheduled fake 
 
 - No ads, analytics SDK, advertising SDK or crash reporter.
 - Scan results, timeline, location history, app list and unlock ledger stay on the device. Android backup disabled.
-- Relay holds only the Clairix number, public keys, queued envelopes (30 days), push endpoint and unused invites (7 days).
+- Relay holds the Clairix number, public keys, queued envelopes (30 days), push endpoint, pass key, hashes of single-use tokens and unused invites (7 days). Full table at https://clairix.app/security#relay.
+- Clairix Full, on a relay that offers ClairixCoin: the balance, and for each transfer made or received the amount and the hour, the 100 most recent and none older than 30 days, deleted with the account. Never who paid whom.
 - Full list of network destinations published at https://clairix.app/security.
 
 ### Technology

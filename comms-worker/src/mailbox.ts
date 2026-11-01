@@ -2,6 +2,9 @@ import { DurableObject } from "cloudflare:workers";
 import { verifyEd25519 } from "./auth";
 import { timingSafeEqual, type Env } from "./env";
 import {
+  COIN_TX_MAX,
+  coinLedger,
+  coinTx,
   DAY_MS,
   DELIVERY_TOKEN_TTL_MS,
   dayFloor,
@@ -28,6 +31,7 @@ import {
   tokenHash,
   type AbuseReport,
   type Alert,
+  type CoinTx,
   type OtkClaim,
   type SealingPrekey,
   type SignedKey,
@@ -199,8 +203,6 @@ const HEARTBEAT_MS = 120_000;
 const DELETE_BATCH = 128;
 /** How long an invite can be used. */
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
-/** ClairixCoin: transactions kept per mailbox, newest first. */
-const MAX_TX_HISTORY = 100;
 /** ClairixCoin: the most one transfer may move. */
 const MAX_SINGLE_TRANSFER = 1_000_000;
 /**
@@ -352,22 +354,14 @@ function timingSafeEqualHex(a: string, b: string): boolean {
 export const TOKEN_TTL_MS = DELIVERY_TOKEN_TTL_MS;
 
 /**
- * One ClairixCoin transfer as this mailbox's owner saw it. Every relay is its
- * own coin community: a balance lives in the owner's mailbox and moves only
- * through requests signed by the owner's identity key. The relay learns who
- * paid whom and how much; the note the payer wrote travels end-to-end
- * encrypted, so what is kept here is only the note the payer chose to give the
- * relay (the app sends none).
+ * One ClairixCoin transfer as this mailbox keeps it (comms-logic.ts): its id,
+ * the amount, the hour and which way it went. Every relay is its own coin
+ * community: a balance lives in the owner's mailbox and moves only through
+ * requests signed by the owner's identity key. The relay moves the coins but
+ * keeps no record of who paid whom; the payer's phone tells the payee, with
+ * any note, inside an end-to-end encrypted payment notice.
  */
-export interface CoinTx {
-  id: string;
-  from: string;
-  to: string;
-  amount: number;
-  ts: number;
-  direction: "in" | "out";
-  note?: string;
-}
+export type { CoinTx } from "./comms-logic";
 
 /** A contact's public identity, without claiming a one-time key. */
 export interface IdentityKeys {
@@ -804,6 +798,7 @@ export class Mailbox extends DurableObject<Env> {
   static readonly PAY_LIMIT = 30;
 
   async getBalance(): Promise<number> {
+    await this.ledger(Date.now());
     return (await this.ctx.storage.get<number>("balance")) ?? 0;
   }
 
@@ -820,17 +815,18 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /**
-   * Takes [amount] off the owner's balance for a payment to [to]. The check
+   * Takes [amount] off the owner's balance for the payment [txid]. The check
    * and the write happen in one call on the one object that holds this
    * balance, so two payments racing each other cannot both spend the same
-   * coins.
+   * coins. The record says how much and in which hour, not to whom.
    */
-  async debit(to: string, amount: number, txid: string, note: string): Promise<{ ok: boolean; balance: number; reason?: string; repeat?: boolean }> {
+  async debit(amount: number, txid: string): Promise<{ ok: boolean; balance: number; reason?: string; repeat?: boolean }> {
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) {
       return { ok: false, balance, reason: "Invalid amount" };
     }
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+    const now = Date.now();
+    const history = await this.ledger(now);
     // A payment already made under this id is not made again. One that was
     // made and then refunded (the recipient vanished before the credit) is
     // over; a new payment needs a new id, so nothing is paid twice for one.
@@ -839,47 +835,59 @@ export class Mailbox extends DurableObject<Env> {
       return { ok: true, balance, repeat: true };
     }
     if (balance < amount) return { ok: false, balance, reason: "Insufficient balance" };
-    const profile = await this.ctx.storage.get<Profile>("profile");
-    const from = profile?.number ?? "";
     const next = balance - amount;
-    const entries = this.appendTx(history, { id: txid, from, to, amount, ts: Date.now(), direction: "out", note });
-    await this.ctx.storage.put({ balance: next, txHistory: entries });
+    await this.ctx.storage.put({ balance: next, txHistory: this.appendTx(history, coinTx(txid, amount, "out", now)) });
     return { ok: true, balance: next };
   }
 
   /**
-   * Adds [amount] to the owner's balance, for a payment from [from]; returns
-   * the balance afterwards. A credit already made under [txid] is not made
-   * again, so a payment the relay had to repeat lands once.
+   * Adds [amount] to the owner's balance under [txid] ([minted]: the operator
+   * minted it) and returns the balance afterwards, or null when this number
+   * has no account: a mailbox deleted between the payer's debit and this
+   * credit must not keep coins for whoever is given the number next, and the
+   * caller refunds the payer. A credit already made under [txid] is not made
+   * again, so a payment the relay had to repeat lands once. The record says
+   * how much and in which hour, not from whom.
    */
-  async credit(from: string, amount: number, txid: string, note: string): Promise<number> {
+  async credit(amount: number, txid: string, minted = false): Promise<number | null> {
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) throw new Error("Invalid amount");
-    const profile = await this.ctx.storage.get<Profile>("profile");
-    // A mailbox deleted between the payer's debit and this credit must not
-    // keep coins for whoever is given the number next; the payer is refunded.
-    if (!profile) throw new Error("no such number");
+    if (!(await this.ctx.storage.get<Profile>("profile"))) return null;
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+    const now = Date.now();
+    const history = await this.ledger(now);
     if (history.some((t) => t.id === txid && t.direction === "in")) return balance;
-    const to = profile.number;
     const next = balance + amount;
-    const entries = this.appendTx(history, { id: txid, from, to, amount, ts: Date.now(), direction: "in", note });
-    await this.ctx.storage.put({ balance: next, txHistory: entries });
+    await this.ctx.storage.put({ balance: next, txHistory: this.appendTx(history, coinTx(txid, amount, "in", now, minted)) });
     return next;
   }
 
   /** The last [limit] transactions, newest first. */
   async txHistory(limit: number): Promise<CoinTx[]> {
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
-    const n = Math.max(0, Math.min(MAX_TX_HISTORY, Math.floor(limit)));
-    return history.slice(0, n);
+    const history = await this.ledger(Date.now());
+    return history.slice(0, Math.max(0, Math.min(COIN_TX_MAX, Math.floor(limit))));
   }
 
-  /** [history] with [tx] at the front, trimmed to MAX_TX_HISTORY; not yet written. */
+  /** [history] with [tx] at the front, trimmed to COIN_TX_MAX; not yet written. */
   private appendTx(history: CoinTx[], tx: CoinTx): CoinTx[] {
-    const entry: CoinTx = { id: tx.id, from: tx.from, to: tx.to, amount: tx.amount, ts: tx.ts, direction: tx.direction };
-    if (tx.note) entry.note = tx.note;
-    return [entry, ...history].slice(0, MAX_TX_HISTORY);
+    return [tx, ...history].slice(0, COIN_TX_MAX);
+  }
+
+  /**
+   * The transfers this mailbox may still keep at [now] (see coinLedger in
+   * comms-logic.ts): none older than 30 days, at most a hundred, each cut
+   * down to its id, amount, hour and direction. Whatever that drops or
+   * rewrites is written back at once, so the first look at a ledger an
+   * earlier version kept, with both numbers and the moment of each transfer,
+   * leaves none of that behind. Every coin request looks, and so does the
+   * daily cleanup, for owners who never use the coin again.
+   */
+  private async ledger(now: number): Promise<CoinTx[]> {
+    const stored = await this.ctx.storage.get<unknown>("txHistory");
+    if (stored === undefined) return [];
+    const kept = coinLedger(stored, now);
+    if (kept.length === 0) await this.ctx.storage.delete("txHistory");
+    else if (JSON.stringify(kept) !== JSON.stringify(stored)) await this.ctx.storage.put("txHistory", kept);
+    return kept;
   }
 
   /** Deletes everything about this number. */
@@ -1396,6 +1404,13 @@ export class Mailbox extends DurableObject<Env> {
       await this.forgetRefilledAllowances(Date.now());
     } catch (e) {
       console.error("allowance cleanup failed", e);
+    }
+    try {
+      // ClairixCoin transfers past 30 days go, and so does whatever an
+      // earlier version kept about one (see ledger()).
+      await this.ledger(Date.now());
+    } catch (e) {
+      console.error("coin ledger cleanup failed", e);
     }
   }
 

@@ -146,8 +146,6 @@ export { IncidentCache, Mailbox, Traffic };
  *                                                            alone. pin (the ed25519 fingerprint from a QR) also
  *                                                            unlocks an unlisted number. The number travels in the
  *                                                            body, never in a URL anything might log.
- *   GET    /v1/bundle/:number[?pin=]                       → as a claiming lookup; for apps before 3.0.0-beta.3
- *   GET    /v1/identity/:number[?pin=]                     → as a non-claiming lookup; likewise
  *   PUT    /v1/transport       {key|null}                  → the phone's transport key (Ed25519). Requests signed
  *                                                            with it (X-Clairix-Key: transport) may only GET /v1/inbox,
  *                                                            POST /v1/ack and GET /v1/ws: a locked phone collects what
@@ -157,10 +155,16 @@ export { IncidentCache, Mailbox, Traffic };
  *   GET    /v1/ws                                          → live delivery (hibernatable WebSocket)
  *   GET    /v1/turn                                        → ICE servers for a call, with TURN credentials minted
  *                                                            for this request alone
- * ClairixCoin (each relay is its own coin community; balances live in the mailboxes):
+ * ClairixCoin (each relay is its own coin community; balances live in the mailboxes). On unless COIN is
+ * "off": then every route below answers 404, and GET / says coin: false, so the app shows no balance:
  *   GET    /v1/coin/balance                                → {balance, symbol: "AC"}
- *   POST   /v1/coin/pay        {to, amount, note?, txid?}  → {txid, balance, ok}: moves coins to a contact; a repeat with the same txid moves nothing twice
- *   GET    /v1/coin/history                                → {txs: [...]}, newest first
+ *   POST   /v1/coin/pay        {to, pin, amount, txid?}    → {txid, balance, ok}: moves coins to a contact; pin is the
+ *                                                            fingerprint of the payee's identity key, as a lookup
+ *                                                            takes. A number that does not exist and a pin that does
+ *                                                            not match are refused alike, before any coin moves. A
+ *                                                            repeat with the same txid moves nothing twice
+ *   GET    /v1/coin/history                                → {txs: [{id, amount, ts, direction, note?}]}, newest first:
+ *                                                            the hour, never the moment, and never who paid whom
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
  * The operator (no signature; X-Admin-Secret must match ADMIN_SECRET; a few tries a minute per address):
  *   DELETE /v1/admin/accounts/:number                      → {ok, number}: deletes the account as DELETE /v1/me
@@ -231,6 +235,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       // (tokens.ts). The same for every caller: a phone checks the proof that
       // comes with its tokens against these.
       tokens: await blindTokenKeys(env),
+      // Whether this relay offers ClairixCoin (on unless COIN=off): the app
+      // hides the balance and the Pay button when this is false.
+      coin: coinOn(env),
     });
   }
 
@@ -474,22 +481,6 @@ async function route(request: Request, env: Env): Promise<Response> {
     return lookup(env, me, profile, body.target, body.pin, body.claim);
   }
 
-  // The lookups apps before 3.0.0-beta.3 make, with the number in the path.
-  // They answer exactly as /v1/lookup does, and go once every phone has moved.
-  const bundleMatch = /^\/v1\/bundle\/([0-9]{9})$/.exec(path);
-  if (bundleMatch && bundleMatch[1] && request.method === "GET") {
-    const target = normaliseNumber(bundleMatch[1]);
-    if (!target) throw new HttpError(400, "Bad number");
-    return lookup(env, me, profile, target, url.searchParams.get("pin"), true);
-  }
-
-  const identityMatch = /^\/v1\/identity\/([0-9]{9})$/.exec(path);
-  if (identityMatch && identityMatch[1] && request.method === "GET") {
-    const target = normaliseNumber(identityMatch[1]);
-    if (!target) throw new HttpError(400, "Bad number");
-    return lookup(env, me, profile, target, url.searchParams.get("pin"), false);
-  }
-
   if (path === "/v1/inbox" && request.method === "GET") {
     return json({ envelopes: await me.inbox() });
   }
@@ -519,51 +510,53 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   // ── ClairixCoin ─────────────────────────────────────────────────────────
   if (path === "/v1/coin/balance" && request.method === "GET") {
+    requireCoin(env);
     return json({ balance: await me.getBalance(), symbol: COIN_SYMBOL });
   }
 
   if (path === "/v1/coin/pay" && request.method === "POST") {
+    requireCoin(env);
     const allowed = await me.rateOk("pay", Mailbox.PAY_LIMIT);
     if (!allowed.ok) throw new HttpError(429, "Too many payments; try again in a minute", allowed.retryAfter);
-    const body = parseJson<{ to?: unknown; amount?: unknown; note?: unknown; txid?: unknown }>(bodyText);
+    const body = parseJson<{ to?: unknown; pin?: unknown; amount?: unknown; txid?: unknown }>(bodyText);
     const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
     if (!to) throw new HttpError(400, "to must be a Clairix number");
     if (to === profile.number) throw new HttpError(400, "You cannot pay yourself");
+    const pin = coinPin(body.pin);
     const amount = coinAmount(body.amount);
-    const note = coinNote(body.note);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
     // The phone names the payment, so a request it had to repeat (the answer
     // lost on the network) is the same payment: the debit and the credit are
     // each made once per txid, and a repeat gets the balance as it stands.
     const txid = typeof body.txid === "string" && TXID_RE.test(body.txid) ? body.txid.toLowerCase() : crypto.randomUUID();
-    // The debit comes first, so a payer who cannot cover the amount hears the
-    // same thing whether or not the number exists: an unlisted number cannot
-    // be found by paying it what one does not have. Only a payment that would
-    // really have gone through tells the payer the number is real.
-    const debited = await me.debit(to, amount, txid, note);
+    // The payer shows it already knows whom it pays: the fingerprint of the
+    // payee's identity key, which its phone pinned when it added the contact,
+    // as a lookup of an unlisted number asks. A number that does not exist
+    // and a pin that does not match get the same answer, before any coin
+    // moves and whatever the payer holds, so paying tells nobody whether a
+    // number is real; and coins go only to the key the payer's phone knows,
+    // never to whoever was given the number since.
+    const payee = await them.profile();
+    if (!payee || !timingSafeEqual(await fingerprint(payee.ed25519), pin)) throw new HttpError(400, "Payment refused");
+    const debited = await me.debit(amount, txid);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
+    let credited: number | null;
     try {
-      if (!(await them.profile())) {
-        await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
-        throw new HttpError(400, "Payment refused");
-      }
-      await them.credit(profile.number, amount, txid, note);
+      credited = await them.credit(amount, txid);
     } catch (e) {
-      if (e instanceof HttpError) throw e;
-      // The sender has paid and the recipient has not been credited: give the
-      // coins back. If even that fails the error is logged with the txid, so
-      // the operator can put it right by hand.
-      try {
-        await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
-      } catch (refund) {
-        console.error(`coin payment ${txid} for ${amount}: credit failed and so did the refund`, e, refund);
-      }
+      await refundPayment(me, amount, txid, e);
       throw e;
+    }
+    if (credited === null) {
+      // The payee's account was deleted between the check and the credit.
+      await refundPayment(me, amount, txid, "no such number");
+      throw new HttpError(400, "Payment refused");
     }
     return json({ txid, balance: debited.balance, ok: true });
   }
 
   if (path === "/v1/coin/history" && request.method === "GET") {
+    requireCoin(env);
     const raw = Number(url.searchParams.get("limit") ?? "");
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(100, Math.floor(raw)) : 50;
     const txs: CoinTx[] = await me.txHistory(limit);
@@ -571,6 +564,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/admin/coin/mint" && request.method === "POST") {
+    requireCoin(env);
     const secret = requireSecret(env, "ADMIN_SECRET");
     const given = request.headers.get("x-admin-secret") ?? "";
     if (!(await secretEquals(given, secret))) throw new HttpError(403, "Admin secret rejected");
@@ -580,7 +574,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     const amount = coinAmount(body.amount);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
     if (!(await them.profile())) throw new HttpError(404, "No such Clairix number on this relay");
-    const balance = await them.credit("mint", amount, crypto.randomUUID(), `Minted by ${profile.number}`);
+    // Recorded as a mint, in the same words for every mint: not which phone minted it.
+    const balance = await them.credit(amount, crypto.randomUUID(), true);
+    if (balance === null) throw new HttpError(404, "No such Clairix number on this relay");
     return json({ ok: true, balance });
   }
 
@@ -936,7 +932,27 @@ async function refreshWzdx(env: Env, now: number): Promise<void> {
 }
 
 const COIN_SYMBOL = "AC";
-const COIN_NOTE_MAX = 140;
+
+/** The COIN values that switch ClairixCoin off; anything else, unset included, leaves it on. */
+const COIN_OFF = new Set(["off", "false", "0", "no"]);
+
+/**
+ * Whether this relay offers ClairixCoin: yes unless its operator switched it
+ * off (COIN=off), as it always did before the setting existed. Switched off,
+ * the coin routes answer 404, a new account starts with nothing whatever
+ * COIN_INITIAL_BALANCE says, nobody can mint, and GET / says coin: false,
+ * which is what makes the app hide the balance and the Pay button. Switching
+ * it off keeps the balances and ledgers there are; the ledgers still forget
+ * each transfer after 30 days.
+ */
+function coinOn(env: Pick<Env, "COIN">): boolean {
+  return !COIN_OFF.has((env.COIN ?? "").trim().toLowerCase());
+}
+
+/** Refuses a coin request on a relay whose operator switched the coin off. */
+function requireCoin(env: Env): void {
+  if (!coinOn(env)) throw new HttpError(404, "ClairixCoin is off on this relay");
+}
 
 /**
  * The other addresses this relay answers at, from RELAY_ALTERNATES: https
@@ -974,12 +990,27 @@ function coinAmount(raw: unknown): number {
   return raw;
 }
 
-/** The optional note on a payment: a short string, or nothing. */
-function coinNote(raw: unknown): string {
-  if (raw === undefined || raw === null) return "";
-  if (typeof raw !== "string") throw new HttpError(400, "note must be a string");
-  if (raw.length > COIN_NOTE_MAX) throw new HttpError(400, `note must be at most ${COIN_NOTE_MAX} characters`);
+/**
+ * The payee's key fingerprint a payment names (as fingerprint() makes it, and
+ * a lookup's pin is), or a 400. Checked for its form only, before anything
+ * about the payee is read, so the answer says nothing about the number.
+ */
+function coinPin(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 64) throw new HttpError(400, "pin must be the payee's key fingerprint");
   return raw;
+}
+
+/**
+ * Gives the payer back [amount] for the payment [txid], which was debited and
+ * then could not be credited ([cause] says why). If even that fails the error
+ * is logged with the txid, so the operator can put it right by hand.
+ */
+async function refundPayment(me: MailboxStub, amount: number, txid: string, cause: unknown): Promise<void> {
+  try {
+    await me.credit(amount, `${txid}:refund`);
+  } catch (refund) {
+    console.error(`coin payment ${txid} for ${amount}: the credit failed and so did the refund`, cause, refund);
+  }
 }
 
 /**
@@ -1078,8 +1109,8 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
         throw new HttpError(409, "One of these keys is already registered to another Clairix number");
       }
       // A new member of this relay's coin community starts with what the
-      // operator set; nothing when they set nothing.
-      const initial = parseInt(env.COIN_INITIAL_BALANCE ?? "0", 10);
+      // operator set; nothing when they set nothing or the coin is off.
+      const initial = coinOn(env) ? parseInt(env.COIN_INITIAL_BALANCE ?? "0", 10) : 0;
       if (Number.isInteger(initial) && initial > 0) await mailbox.setInitialBalance(initial);
       return json({ number, profile: publicProfile(profile), oneTimeKeys: oneTimeKeys.length }, 201);
     }
@@ -1179,9 +1210,10 @@ function publicProfile(p: Profile) {
 /**
  * The relay API this Worker speaks; 3 is anonymous sending, claim tickets and
  * checked push endpoints; 4 is lookups by body, anonymous traffic and no
- * stored activity times.
+ * stored activity times; 5 is no lookups by URL at all, payments that name
+ * the payee's key, a coin ledger that names nobody, and "coin" at GET /.
  */
-const API_VERSION = 4;
+const API_VERSION = 5;
 
 /** The most a request body may be: nothing the relay accepts is near it (an envelope is 72 KiB sealed, 96 KiB in base64). */
 const MAX_BODY_BYTES = 256 * 1024;

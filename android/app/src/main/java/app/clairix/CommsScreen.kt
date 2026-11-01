@@ -80,6 +80,7 @@ import app.clairix.comms.ActiveCall
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
 import app.clairix.comms.COIN_SYMBOL
+import app.clairix.comms.CoinRules
 import app.clairix.comms.ChatMessage
 import app.clairix.comms.ChatThread
 import app.clairix.comms.CommsMedia
@@ -676,9 +677,11 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
     if (addContact) AddContactDialog(onDismiss = { addContact = false }, onAdded = { addContact = false; onOpen(it) })
     if (createGroup) CreateGroupDialog(onDismiss = { createGroup = false }, onCreated = { createGroup = false; onOpenGroup(it) })
     // The coin balance is the relay's figure; it is asked for when the list comes up.
-    // Editions built without ClairixCoin (the Play edition) never ask.
-    LaunchedEffect(state.registered) {
-        if (BuildConfig.CLAIRIX_COIN && state.registered) CommsRepository.refreshBalance()
+    // Editions built without ClairixCoin (the Play edition) never ask, and nor does a
+    // phone whose relay does not offer it (its GET / says so).
+    val coinShown = CoinRules.shown(BuildConfig.CLAIRIX_COIN, state.registered, state.coin)
+    LaunchedEffect(coinShown) {
+        if (coinShown) CommsRepository.refreshBalance()
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -714,7 +717,7 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                         }
                     )
                     if (!state.listed) append(" · unlisted")
-                    if (BuildConfig.CLAIRIX_COIN && state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
+                    if (coinShown && state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
                     if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -1310,7 +1313,9 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     val usable = c != null && !c.request && !c.blocked
     val placeCall = rememberMicrophoneGate { c?.takeIf { usable }?.let { CallManager.place(it) } }
     var reporting by remember(peer) { mutableStateOf(false) }
-    if (BuildConfig.CLAIRIX_COIN && paying && c != null) PayDialog(c, onDismiss = { paying = false })
+    // Pay shows only where the relay offers ClairixCoin, in an edition built with it.
+    val coinShown = CoinRules.shown(BuildConfig.CLAIRIX_COIN, state.registered, state.coin)
+    if (coinShown && paying && c != null) PayDialog(c, onDismiss = { paying = false })
     if (reporting && c != null) ReportDialog(c, onDismiss = { reporting = false })
     if (reviewing && c != null) {
         HeldReviewDialog(
@@ -1331,7 +1336,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 else -> "Verify" to Tone.Caution
             }
             if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = tone)
-            if (BuildConfig.CLAIRIX_COIN && usable) {
+            if (coinShown && usable) {
                 GhostButton("Pay", onClick = { paying = true }, enabled = c?.keyChanged == false)
             }
             if (usable) GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c?.keyChanged == false)

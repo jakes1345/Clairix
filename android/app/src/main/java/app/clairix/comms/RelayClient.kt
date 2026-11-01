@@ -148,13 +148,13 @@ class RelayClient(
     /** The keys a relay issues blind tokens under in [epoch], kind (wire name) to base64url. */
     data class TokenKeys(val epoch: Long, val keys: Map<String, String>)
 
-    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null)
+    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null, val coin: Boolean = false)
 
     /**
      * The relay's description of itself: its API version, the other addresses it
-     * answers at, its onion address if it has one, and its blind-token keys
-     * (null from a relay before Beta 6). Unauthenticated, on a connection
-     * nothing else uses.
+     * answers at, its onion address if it has one, its blind-token keys (null
+     * from a relay before Beta 6) and whether its operator turned ClairixCoin on
+     * ([CoinRules.offered]). Unauthenticated, on a connection nothing else uses.
      */
     fun info(): Info {
         val relay = base() ?: throw RelayException("Not registered with a relay")
@@ -177,7 +177,7 @@ class RelayClient(
                 val nextEpoch = next?.optLong("epoch", -1L) ?: -1L
                 if (nextKeys != null && nextEpoch == tokens.epoch + 1 && tokenKeys.get(origin, nextEpoch) == null) tokenKeys.put(origin, nextEpoch, nextKeys)
             }
-            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }))
+            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }), CoinRules.offered(json))
         }
     }
 
@@ -778,8 +778,12 @@ class RelayClient(
     /** A payment the relay took: its id, and what is left afterwards. */
     data class PayResult(val txid: String, val balance: Long)
 
-    /** One transfer as the relay recorded it; [direction] is "in" or "out" from this identity's side. */
-    data class CoinTx(val id: String, val from: String, val to: String, val amount: Long, val ts: Long, val direction: String, val note: String)
+    /**
+     * One transfer as the relay recorded it: its id, the amount, the hour it was
+     * made ([ts], the hour's first millisecond) and [direction], "in" or "out"
+     * from this identity's side. The relay keeps no record of who paid whom.
+     */
+    data class CoinTx(val id: String, val amount: Long, val ts: Long, val direction: String)
 
     /** Refuses before anything is sent when the edition is built without ClairixCoin (the Play edition). */
     private fun requireCoin() {
@@ -793,14 +797,16 @@ class RelayClient(
     }
 
     /**
-     * Pays [amount] coins to [to]. Only the amount reaches the relay; the note
-     * the payer wrote travels to the recipient inside an encrypted envelope
-     * (see CommsWire.payment), never here.
+     * Pays [amount] coins to [to], whose identity key has the fingerprint [pin]
+     * (the contact's pinned key, as a lookup of an unlisted number takes): the
+     * relay pays only the account that holds that key, and answers a number
+     * that does not exist exactly as one whose key is another. Only the amount
+     * reaches the relay; the note the payer wrote travels to the recipient
+     * inside an encrypted envelope (see CommsWire.payment), never here.
      */
-    fun pay(to: String, amount: Long, note: String?, txid: String = UUID.randomUUID().toString()): PayResult {
+    fun pay(to: String, pin: String, amount: Long, txid: String = UUID.randomUUID().toString()): PayResult {
         requireCoin()
-        val body = JSONObject().put("to", to).put("amount", amount).put("txid", txid)
-        if (!note.isNullOrBlank()) body.put("note", note)
+        val body = JSONObject().put("to", to).put("pin", pin).put("amount", amount).put("txid", txid)
         // The payment is named here, and the relay makes it once per name: a
         // request whose answer was lost on the network is repeated under the
         // same name, and cannot move the coins twice. An answer the relay gave
@@ -821,10 +827,7 @@ class RelayClient(
             val arr = json.getJSONArray("txs")
             (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
-                CoinTx(
-                    o.getString("id"), o.getString("from"), o.getString("to"), o.getLong("amount"), o.getLong("ts"),
-                    o.optString("direction", "out"), o.optString("note", "")
-                )
+                CoinTx(o.getString("id"), o.getLong("amount"), o.getLong("ts"), o.optString("direction", "out"))
             }
         }
     }

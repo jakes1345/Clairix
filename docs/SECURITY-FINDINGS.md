@@ -63,9 +63,10 @@ twice on two machines in CI, which fails unless the two builds agree.
    `/v1/identity/<number>` carry the target in the URL and the caller in
    `X-Clairix-Number`. With observability on, that pair was in Cloudflare's
    logs for days. *Verified.* **Done:** observability off; `POST /v1/lookup`
-   takes the number in the signed body and the app uses it; the GET routes
-   remain for beta-2 phones and are to be removed once they have updated;
-   README rewritten to name the platform as the operator that matters.
+   takes the number in the signed body and the app uses it (since Beta 3);
+   README rewritten to name the platform as the operator that matters. The
+   GET routes, which only Betas 1 and 2 called and no supported release does,
+   are gone in Beta 8 (relay API 5).
 2. **Traffic probes are tied to the sender.** `RelayClient.trafficProbe`
    (`RelayClient.kt:400`) goes through `signed()`, against the comment at
    `:396`. `trafficReport` sends exact lat/lon with the number. The relay's
@@ -302,8 +303,17 @@ twice on two machines in CI, which fails unless the two builds agree.
 24. **Existence oracle**: send and `coin/pay` return 404 for unknown numbers
     (`mailbox.ts:608`, `index.ts:335`), undoing what the bundle endpoint
     hides. *Reported.* **Done:** a send to a number that does not exist is
-    accepted (202, a fresh id) and dropped, its token spent; a payment to one
-    is "Payment refused" like any other refused payment.
+    accepted (202, a fresh id) and dropped, its token spent. A payment to one
+    was "Payment refused", but a payer who could cover the amount was paid
+    through for a real number, so on a relay that grants a starting balance
+    any account could test unlisted numbers thirty times a minute for
+    nothing. **Done (Beta 8):** a payment names the fingerprint of the
+    payee's identity key, as a lookup of an unlisted number does; the relay
+    reads the payee's keys before any coin moves, and a number that does not
+    exist and a fingerprint that does not match get the same "Payment
+    refused" with both balances untouched. The app sends the fingerprint of
+    the contact's pinned key, so coins also never go to whoever is given a
+    number after the person the payer knew.
 25. **Coin**: every registration gets `COIN_INITIAL_BALANCE` with nothing
     binding a registration to a unique key; invites need no secret. Pay is
     debit-then-credit across two DOs with no idempotency key; a `DELETE
@@ -316,7 +326,12 @@ twice on two machines in CI, which fails unless the two builds agree.
     failure only); a payment refunded under a name is refused under it.
     Farming remains a product question: the coin has no monetary value, and
     the only brake short of a per-identity cost is to grant no starting
-    balance.
+    balance. **Beta 8:** an operator can switch the coin off (`COIN=off`):
+    then no new account gets `COIN_INITIAL_BALANCE`, nobody can mint, every
+    coin route answers 404, and the app shows no balance or Pay button on a
+    relay whose `GET /` says `"coin": false`. Unset, the coin stays on, as it
+    always was. The project relay's settings are its maintainer's, on the
+    live service.
 26. **TURN**: 10/min, 2 h TTL, no daily cap, no call required. *Reported.*
     **Done:** thirty credentials an hour per account on top of the ten a
     minute, as a stored allowance kept to the hour. A call being signalled
@@ -384,6 +399,17 @@ for the wipe and deletion copy:** every page names Wipe Clairix (Comms menu or
 Settings, type WIPE) and Delete identity and number, says the keys go first
 and the relay is told last and retried for a day, and `npm run check-copy`
 (website) fails the build on either old name.
+
+The relay list left out ClairixCoin, whose ledger kept who paid whom, to the
+millisecond, the 100 most recent transfers per account with no expiry, and
+named the minting phone; only the privacy policy said so. **Done (Beta 8):**
+each mailbox keeps its own transfers as id, amount, hour and direction, for
+30 days and a hundred deep, a mint as "Minted by the relay", and a ledger
+from before is cut down the first time the mailbox's coin is touched or by
+its daily cleanup; the app confirms a payment notice by txid and amount, and
+counts one credit once. The README, the security page, the press kit, the
+privacy policy and the delete-account page list it, and the README says what
+ClairixCoin is.
 
 ## Suggested order
 
@@ -559,7 +585,9 @@ fixed:
   keeps sessions under the canonical text.
 - **Payments told whether an unlisted number exists**, for free: "Payment
   refused" against "Insufficient balance". The debit now comes first, so a
-  payer who cannot cover the amount hears the same either way.
+  payer who cannot cover the amount hears the same either way. A payer who
+  could still learned it (24); since Beta 8 a payment must name the payee's
+  key fingerprint, checked before any coin moves.
 - **The relay fetched any https address for anyone**, before checking a
   signature, again on every request, reading the answer without a limit.
   Relay addresses are port 443 only with no trailing-dot hosts; a failed
@@ -701,7 +729,7 @@ Known and not fixed:
   The second review above was internal; nothing here has had an independent
   audit.
 
-Still open after PR #15: 4, 5, 7 (by decision), 23 (since done, Beta 8), 25 (coin farming),
+Still open after PR #15: 4, 5, 7 (by decision), 23 (since done, Beta 8), 25 (coin farming, on a relay that grants a starting balance),
 30 (since done, Beta 8), and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
 matched (since done: Beta 7 rebuilt from its tag matches both published APKs,
 and `verify-release.yml` checks every release as it is published), an audit.

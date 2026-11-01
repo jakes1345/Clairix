@@ -53,7 +53,7 @@ Because the relay has no email address or phone number on file, we cannot verify
 
 - **Messages already delivered to other people.** They hold their own copies on their own phones, encrypted with their own keys. We cannot reach them and neither can the relay.
 - **Anonymous traffic samples** sent while navigating. These carry no account at all, only a pseudonym your phone made up for that drive and replaced every ten minutes, and they are deleted automatically within two hours.
-- **Clairix Full only: other people's record of coin transfers** with you. Each account keeps its own transaction list.
+- **Clairix Full only: other people's record of coin transfers** with you. Each person's phone keeps its own list, naming who they paid or were paid by. The relay's record of their transfers names nobody and is gone after 30 days.
 
 ## Retention if you do nothing
 
@@ -62,6 +62,7 @@ Relay data also expires on its own:
 - Envelopes that are never collected are deleted after 30 days.
 - Invite codes expire after 7 days.
 - Traffic samples are deleted after 2 hours.
+- Clairix Full only: the relay's record of each coin transfer (its amount, hour and direction) is deleted after 30 days; the balance stays until the account is deleted.
 - Your Clairix number and public keys remain until the account is deleted. Dormant accounts are not deleted automatically at present; if that changes, this page will say so.
 
 ## Questions

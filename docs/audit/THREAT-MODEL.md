@@ -29,7 +29,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | Who sent an envelope | Not learnable by the relay, nor later from a seized phone | R, F, N, L | Sealed envelopes; no sender in the request; blind delivery tokens; sealing prekeys rotated weekly and deleted (format 3) |
 | The sender claim inside an envelope | Convinces the recipient only; proves nothing to anyone else | R, L, anyone the recipient shows it to | HMAC keyed by X25519 between the sender's sealing key and the recipient's prekey (format 3) |
 | Who looks up whom | Not in URLs or logs; lookups and one-time keys rate-limited | R, U | Lookups in signed bodies; per-account and per-relay limits |
-| That a number exists | Not learnable by sending, paying or flooding, here or through other relays | U, F | A send to a number that does not exist is accepted and dropped; federated limits answer the same either way |
+| That a number exists | Not learnable by sending, paying or flooding, here or through other relays | U, F | A send to a number that does not exist is accepted and dropped; federated limits answer the same either way; a payment must name the fingerprint of the payee's identity key, as a lookup of an unlisted number must, and a number that does not exist and a fingerprint that does not match are refused alike before any coin moves |
 | A contact's keys | Never silently replaced; only an in-person scan verifies | R, F, U, A | Keys pinned at first contact; a change is flagged and what it sends is held until the owner looks; links and invites never verify or replace keys |
 | Envelope sizes and Olm message types | Short messages, receipts and first messages look alike | R, N | Padding before Olm and inside the sealed box |
 | The phone's network address | Hidden from relays and the network when the owner chooses | R, F, N | Tor (Arti) in the app, onion addresses for relays that have one; relay-only calls via TURN |
@@ -81,7 +81,9 @@ These are stated to users in the README and are not findings:
 - Hiding the recipient of an envelope from the relay that holds their mailbox.
 - Linking: both relays involved in a move see the same keys registered on
   each, which ties the old number to the new one for whoever can read both.
-- That ClairixCoin is anything more than a relay-local ledger.
+- That ClairixCoin is anything more than a relay-local ledger, on unless the
+  relay's operator switches it off, whose coins only that operator creates (see
+  "What ClairixCoin is" in the README).
 - That detection (trackers, cameras, IMSI catchers, spyware) is complete.
 - Hiding that Clairix is installed from someone who handles the phone
   unlocked (P): its name and icon are in the launcher and in Android's app
@@ -158,5 +160,6 @@ credentials and can replay them.
 ## Known open issues
 
 See the "Still open" items in [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md):
-among them, new registrations can farm ClairixCoin (25), and release signing
+among them, on a relay whose operator grants a starting balance, new
+registrations can farm ClairixCoin (25), and release signing
 runs on the CI runner.

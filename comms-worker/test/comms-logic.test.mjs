@@ -3,7 +3,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkPushEndpoint,
+  COIN_MINT_NOTE,
+  COIN_TX_MAX,
+  COIN_TX_TTL_MS,
+  coinLedger,
+  coinTx,
+  DAY_MS,
   DELIVERY_TOKEN_RE,
+  HOUR_MS,
+  hourFloor,
   ENVELOPE_HASH_RE,
   expireClaims,
   groupByShard,
@@ -137,6 +145,40 @@ test("open registration is off unless the operator says on, and its daily cap is
   }
   // A cap with registration off opens nothing.
   assert.equal(openRegistrationCap({ OPEN_REGISTRATION_PER_DAY: "7" }), null);
+});
+
+test("a coin ledger keeps each transfer's id, amount, hour and direction, for 30 days and a hundred deep", () => {
+  const now = 1_790_000_000_000 + 37 * 60_000 + 4_321;
+  const hour = Math.floor(now / HOUR_MS) * HOUR_MS;
+  assert.equal(hourFloor(now), hour);
+  assert.deepEqual(coinTx("t", 5, "out", now), { id: "t", amount: 5, ts: hour, direction: "out" });
+  assert.deepEqual(coinTx("m", 9, "in", now, true), { id: "m", amount: 9, ts: hour, direction: "in", note: COIN_MINT_NOTE });
+  // What an earlier version stored loses the numbers, the note and the moment; a mint keeps only that it was one.
+  const stored = [
+    { id: "a", from: "111222333", to: "444555666", amount: 4, ts: now - 1, direction: "out", note: "lunch" },
+    { id: "b", from: "mint", to: "444555666", amount: 9, ts: now - DAY_MS, direction: "in", note: "Minted by 777888999" },
+    { id: "c", from: "111222333", to: "444555666", amount: 2, ts: hour - COIN_TX_TTL_MS + 1, direction: "in" },
+    { id: "d", amount: 2, ts: hour - COIN_TX_TTL_MS, direction: "in" },
+    { id: "e", amount: "2", ts: now, direction: "in" },
+    { id: "f", amount: 2, ts: now, direction: "sideways" },
+    null,
+  ];
+  const kept = coinLedger(stored, now);
+  assert.deepEqual(kept, [
+    { id: "a", amount: 4, ts: hour, direction: "out" },
+    { id: "b", amount: 9, ts: hourFloor(now - DAY_MS), direction: "in", note: COIN_MINT_NOTE },
+  ]);
+  // "c" is dated to its hour, which is 30 days old: gone with "d".
+  assert.ok(!JSON.stringify(kept).match(/111222333|444555666|777888999|lunch/));
+  // Kept as it is once it is in shape: nothing to write back.
+  assert.equal(JSON.stringify(coinLedger(kept, now)), JSON.stringify(kept));
+  // The newest hundred.
+  const many = Array.from({ length: 130 }, (_, i) => coinTx(`t${i}`, 1, "in", now - i * 60_000));
+  const capped = coinLedger(many, now);
+  assert.equal(capped.length, COIN_TX_MAX);
+  assert.equal(capped[COIN_TX_MAX - 1].id, `t${COIN_TX_MAX - 1}`);
+  assert.deepEqual(coinLedger(undefined, now), []);
+  assert.deepEqual(coinLedger({ id: "x" }, now), []);
 });
 
 test("report reasons are the app's words, and reports are summed up by the number they name", () => {

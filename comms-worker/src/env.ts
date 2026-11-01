@@ -22,7 +22,14 @@ export interface Env {
   /** Optional: Cloudflare Realtime TURN key id + API token, for calls. */
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
-  /** Optional: ClairixCoin minted for every new registration (a whole number, e.g. "100"). Unset or "0": none. */
+  /**
+   * Optional: "off" (or "false", "0", "no") switches ClairixCoin off: the coin
+   * routes answer 404, GET / says coin: false (the app then shows no balance
+   * and no Pay button), COIN_INITIAL_BALANCE is not given and nobody can mint,
+   * whatever ADMIN_SECRET is. Unset or anything else: on, as it always was.
+   */
+  COIN?: string;
+  /** Optional: ClairixCoin minted for every new registration while the coin is on (a whole number, e.g. "100"). Unset or "0": none. */
   COIN_INITIAL_BALANCE?: string;
   /**
    * Optional: protects the operator's routes, POST /v1/admin/coin/mint and

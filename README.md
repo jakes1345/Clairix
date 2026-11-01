@@ -60,11 +60,14 @@ earlier, in a batch, over its signed channel, and the relay keeps only each
 token's hash in a store that never learns which account it went to. Looking
 someone up names them in a signed body, never in a URL that a request log
 could keep. Nothing a mailbox stores says when its owner was last here:
-limits are kept to the hour, nonces to the minute, registrations to the day.
+limits are kept to the hour, nonces to the minute, registrations to the day,
+ClairixCoin transfers to the hour.
 Traffic and incident reports are sent the same way, under a pseudonym the
 phone makes up for each drive and replaces every ten minutes. An image of the
 relay's storage shows public keys, queued envelopes with their recipient, size
-and time, and nothing about senders, lookups or activity.
+and time, and nothing about senders, lookups or activity, except ClairixCoin
+where the relay's operator has not switched it off: a balance, and the amount
+and hour of each transfer for 30 days, never who paid whom.
 
 **What is on the phone when it is seized locked.** The location log, the
 timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the
@@ -211,9 +214,31 @@ if you set one;
 unused invite codes for 7 days; the hashes of unspent tokens for about 14
 days; a note that each key belongs to that number, so nobody else can
 register it. For traffic: anonymous speed samples for 2 hours, learned
-road-segment positions for 30 days, incidents until they expire. Never a
-name, a phone number, an email address, a contact list, a sender, a lookup or
-a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker/README.md).
+road-segment positions for 30 days, incidents until they expire. For
+ClairixCoin, in Clairix Full on a relay that offers it: the balance, until
+the account is deleted, and for each transfer you make or receive its id, the
+amount, the hour and whether it came in or went out, the 100 most recent and
+none older than 30 days. Never a name, a phone number, an email
+address, a contact list, a sender, a lookup, a last-seen time, or who paid
+whom. The full account is in [`comms-worker/README.md`](comms-worker/README.md).
+
+### What ClairixCoin is
+
+A balance of whole coins (AC) that people registered on the same relay can
+pass to one another, in Clairix Full only, on a relay whose operator has not
+switched it off (`COIN=off`); the app hides the balance and the Pay button on
+a relay that says it is off. Coins come from the relay's operator and from
+nowhere else: an account registered while the coin is on starts with
+`COIN_INITIAL_BALANCE` coins (none unless the operator sets a number), and
+the operator, holding `ADMIN_SECRET`, can mint coins into any account on the
+relay. A transfer moves 1 to 1,000,000 coins on the payer's signed request,
+and only to the account holding the identity key the payer's phone has
+pinned for that contact; a note goes to the payee end-to-end encrypted, never
+to the relay. It is not money: nothing in Clairix sells, buys, redeems or
+exchanges it, it cannot leave the relay it was minted on, and it is not in
+the Play edition. On the project's own relay, whether the coin is switched
+off, the starting balance and whether minting is possible are set by its
+maintainer on the live service, not in this repository.
 
 ---
 
