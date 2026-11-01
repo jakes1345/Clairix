@@ -1,13 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- For tests that end the app's own process (the duress wipe brings its lock
-         screen back in a fresh one): run in a process of the app's own, not the
-         main one. See SeparateProcessRunner. -->
-    <instrumentation
-        android:name="app.clairix.SeparateProcessRunner"
-        android:targetPackage="app.clairix"
-        android:targetProcesses="app.clairix:instrumented"
-        android:label="Clairix tests that end the app's process" />
 
     <application>
         <!-- See NoopAccessibilityService: enabled by the emulator workflow so

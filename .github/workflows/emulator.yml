@@ -479,26 +479,45 @@ jobs:
 
       - name: Run the duress passcode test
         working-directory: android
-        timeout-minutes: 10
+        timeout-minutes: 12
         run: |
           # After everything else: the duress passcode erases the app's data. It
-          # also ends the app's process and brings the lock screen back in a new
-          # one, so it runs under SeparateProcessRunner, in a process of its own.
+          # also ends the process the app ran in, which is where an instrumentation
+          # runs, so the test is three runs (DuressFlowDeviceTest): prepare (inside
+          # the app), the duress code typed from outside the app as a person types
+          # it (duress-ui.py, which checks the lock screen is still there ten seconds
+          # later in a new process), and the decoy (inside the app again, then a
+          # relaunch from outside).
+          set -o pipefail
           ADB="$ANDROID_HOME/platform-tools/adb"
+          UI="$GITHUB_WORKSPACE/.github/scripts/duress-ui.py"
+          DURESS=61849302   # DuressFlowDeviceTest.duress
           "$ADB" logcat -c
-          set +e
-          timeout 500 "$ADB" shell am instrument -w -r \
-            -e class app.clairix.security.DuressFlowDeviceTest -e duress true \
-            app.clairix.test/app.clairix.SeparateProcessRunner | tee ../duress.txt
-          set -e
-          "$ADB" logcat -d > ../logcat-duress.txt
-          if grep -A1 "FATAL EXCEPTION" ../logcat-duress.txt | grep -q "Process: app.clairix"; then
-            echo "::error::Clairix crashed during the duress passcode test; see logcat-duress.txt"
-            grep -A 30 "FATAL EXCEPTION" ../logcat-duress.txt | head -80
-            exit 1
-          fi
-          grep -q "^OK (1 test)" ../duress.txt || { echo "::error::The duress passcode test failed; see duress.txt"; exit 1; }
-          if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../duress.txt; then echo "::error::The duress passcode test was skipped"; exit 1; fi
+          : > ../duress.txt
+          step() {
+            set +e
+            timeout 300 "$ADB" shell am instrument -w -r \
+              -e class "app.clairix.security.DuressFlowDeviceTest#$1" -e duress "$1" \
+              app.clairix.test/androidx.test.runner.AndroidJUnitRunner > ../duress-$1.txt
+            set -e
+            cat ../duress-$1.txt >> ../duress.txt
+            if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../duress-$1.txt; then echo "::error::The duress test's $1 step was skipped"; exit 1; fi
+            grep -q "^OK (1 test)" ../duress-$1.txt || { cat ../duress-$1.txt; echo "::error::The duress test's $1 step failed; see duress.txt"; exit 1; }
+          }
+          check_crash() {
+            "$ADB" logcat -d > ../logcat-duress.txt
+            if grep -A1 "FATAL EXCEPTION" ../logcat-duress.txt | grep -q "Process: app.clairix"; then
+              echo "::error::Clairix crashed during the duress passcode test; see logcat-duress.txt"
+              grep -A 30 "FATAL EXCEPTION" ../logcat-duress.txt | head -80
+              exit 1
+            fi
+          }
+          step prepare
+          python3 "$UI" type-duress "$DURESS" | tee -a ../duress.txt
+          check_crash
+          step decoy
+          python3 "$UI" relaunch "$DURESS" | tee -a ../duress.txt
+          check_crash
 
       - name: Upload screenshots and logs
         if: always()
