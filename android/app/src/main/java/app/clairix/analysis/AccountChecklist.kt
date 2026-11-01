@@ -284,7 +284,11 @@ internal class AccountCheckRecord(private val store: Store) {
     }
 
     fun clear() {
-        synchronized(lock) { store.replace(JSONObject()) }
+        synchronized(lock) {
+            // The owner's clear: the file goes even if this run could not read it.
+            store.discardUnread()
+            store.replace(JSONObject())
+        }
     }
 
     private companion object {

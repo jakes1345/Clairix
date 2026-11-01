@@ -642,6 +642,8 @@ class IMSICatcher(
         prevFix = null
         olderFix = null
         lastCallAt = 0L
+        // The owner's clear: the file goes even if this run could not read it.
+        store.discardUnread()
         store.replace(
             JSONObject()
                 .put("cells", JSONObject())

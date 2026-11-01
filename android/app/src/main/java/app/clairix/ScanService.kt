@@ -1501,6 +1501,9 @@ class ScanService : LifecycleService() {
      */
     private fun clearAllData() {
         eventLog.clear()
+        // Every photo kept on a timeline event, including one whose event was in a
+        // timeline this run could not read (cleared unread, so never named to delete).
+        runCatching { app.clairix.analysis.SweepPhotos.deleteAll(filesDir) }
         imsiCatcher.resetBaseline()
         tracker.clear()
         identities.clear()

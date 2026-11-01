@@ -82,6 +82,8 @@ class EventLog(
     fun clear() {
         val gone = ArrayList(events)
         events.clear()
+        // The owner's clear: the file goes even if this run could not read it.
+        store.discardUnread()
         persist()
         dropped(gone)
     }
