@@ -64,9 +64,13 @@ If release file names change in `release.yml`, change the filter on /download
 IzzyOnDroid is an F-Droid-style repository of developers' own APKs, taken from
 their GitHub releases and signed by the developer; its updater checks the
 releases on a schedule. Requests are made as an issue in
-https://gitlab.com/IzzyOnDroid/repo, where the inclusion policy also lives.
-Read the current policy before sending: what follows is what this repository
-can show against it, not a promise of acceptance.
+https://codeberg.org/IzzyOnDroid/repodata/issues (the GitLab repository named
+here before is archived and read-only); the inclusion policy is at
+https://izzyondroid.org/docs/general/AppInclusionPolicy/. Read it before
+sending, including its AI policy, which rejects apps whose code is LLM output:
+much of Clairix's code was written with an AI assistant, and
+docs/outreach/izzyondroid-request.md says so. What follows is what this
+repository can show against the policy, not a promise of acceptance.
 
 What is ready:
 

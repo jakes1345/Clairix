@@ -72,6 +72,7 @@ export const footerColumns: { title: string; links: NavLink[] }[] = [
     title: 'Help',
     links: [
       { label: 'Support', href: '/support' },
+      { label: 'For advocates and helpers', href: '/advocates' },
       { label: 'Report a vulnerability', href: `mailto:${SECURITY_EMAIL}` },
       { label: 'Contact', href: `mailto:${SUPPORT_EMAIL}` },
     ],
@@ -177,6 +178,14 @@ export const pages = {
     ogTitle: 'Clairix press kit',
     ogImage: '/og/press.png',
     ogImageAlt: 'Clairix press kit',
+  },
+  advocates: {
+    title: 'For advocates and helpers – Clairix',
+    description:
+      'For domestic-violence advocates, helpline staff and security trainers: what Clairix checks, what it cannot detect, how to install it when the phone may be watched, and how to verify it.',
+    ogTitle: 'Clairix for advocates and helpers',
+    ogImage: '/og/security.png',
+    ogImageAlt: 'Your data stays on your phone.',
   },
   invite: {
     title: 'Clairix invite',
