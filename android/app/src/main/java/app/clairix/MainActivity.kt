@@ -87,6 +87,8 @@ import app.clairix.analysis.StalkwareWatch
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
 import app.clairix.security.SosLocation
+import app.clairix.security.EmergencyNumbers
+import app.clairix.security.SosExtras
 import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import app.clairix.analysis.Report
@@ -1234,6 +1236,11 @@ private const val SOS_HOLD_MS = 1500L
  * taps Send; if not, the dialog says that nobody would receive it and offers
  * [onSetUpComms] instead, so no one confirms an alert that goes nowhere. The
  * defaults are for previews and screenshots; the shell passes the real gate.
+ *
+ * Both dialogs also carry the extras the owner turned on in Settings, SOS
+ * (SosExtrasUi.kt): a text to one number, sent with the SOS or, with nobody in
+ * Clairix to send to, on its own; and a button that opens the phone app with the
+ * local emergency number. Each says what came of it.
  */
 @Composable
 internal fun SosButton(
@@ -1241,6 +1248,7 @@ internal fun SosButton(
     gate: suspend () -> SosGate = { SosGate.SEND },
     onSetUpComms: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     var sosProgress by remember { mutableFloatStateOf(0f) }
     var sosPressing by remember { mutableStateOf(false) }
     // Held long enough; the gate is being asked. Its own effect, so a finger
@@ -1248,6 +1256,10 @@ internal fun SosButton(
     var sosHeld by remember { mutableStateOf(false) }
     var showSosConfirm by remember { mutableStateOf(false) }
     var sosBlocked by remember { mutableStateOf<SosGate?>(null) }
+    // The extras as set when the button was held, and what they came to after Send.
+    var extras by remember { mutableStateOf(SosExtras.Config.OFF) }
+    var emergency by remember { mutableStateOf(EmergencyNumbers.choose(null, null)) }
+    var showExtrasResult by remember { mutableStateOf(false) }
 
     LaunchedEffect(sosPressing) {
         if (sosPressing) {
@@ -1270,6 +1282,9 @@ internal fun SosButton(
     LaunchedEffect(sosHeld) {
         if (!sosHeld) return@LaunchedEffect
         val who = withContext(Dispatchers.IO) { runCatching { gate() }.getOrDefault(SosGate.NOT_REGISTERED) }
+        extras = withContext(Dispatchers.IO) { runCatching { SosExtras.config(context) }.getOrDefault(SosExtras.Config.OFF) }
+        emergency = EmergencyNumbers.local(context)
+        SosExtrasRun.reset()
         if (who == SosGate.SEND) showSosConfirm = true else sosBlocked = who
         sosHeld = false
     }
@@ -1317,23 +1332,42 @@ internal fun SosButton(
                 showSosConfirm = false
                 sosProgress = 0f
                 onConfirmed()
+                extras.textTo?.let { SosExtrasRun.sendText(context, it) }
+                if (extras.any) showExtrasResult = true
             },
-            onDismiss = { showSosConfirm = false; sosProgress = 0f }
+            onDismiss = { showSosConfirm = false; sosProgress = 0f },
+            content = if (extras.any) {
+                { SosExtrasSheet(extras, emergency, offerText = false) }
+            } else {
+                null
+            }
         )
+    }
+
+    if (showExtrasResult) {
+        SosExtrasResultDialog(extras, emergency, onDismiss = { showExtrasResult = false })
     }
 
     // The honest state when there is no one to send to: said before anything
     // is sent, instead of a "sent" that would be false.
     sosBlocked?.let { why ->
         val notRegistered = why == SosGate.NOT_REGISTERED
+        // With an extra set up there is still something to do here, and "nothing was
+        // sent" would turn false once the text goes: the sentence names Clairix.
+        val nothing = if (extras.any) "No Clairix SOS was sent." else "Nothing was sent."
         ClairixDialog(
             title = "Nobody would receive this",
             text = if (notRegistered) {
                 "An SOS goes to the members of your Clairix groups, and this phone is not set up for Comms. " +
-                    "Set it up, then make a group or accept an invitation to one. Nothing was sent."
+                    "Set it up, then make a group or accept an invitation to one. $nothing"
             } else {
                 "An SOS goes to the members of your Clairix groups, and this phone is in no group with anyone else in it. " +
-                    "Make a group in Comms, or accept an invitation to one. Nothing was sent."
+                    "Make a group in Comms, or accept an invitation to one. $nothing"
+            },
+            content = if (extras.any) {
+                { SosExtrasSheet(extras, emergency, offerText = true) }
+            } else {
+                null
             },
             confirmLabel = if (notRegistered) "Set up Comms" else "Open Comms",
             onConfirm = {

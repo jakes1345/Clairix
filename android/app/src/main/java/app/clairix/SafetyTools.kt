@@ -501,6 +501,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     "• Nothing is written on this phone: no timeline entry, no log line, no notification, and " +
                     "never the phrase itself. Only the visible SOS button writes a timeline entry, with how many " +
                     "people it reached.\n" +
+                    "• It never texts or calls anyone, even with Also text this number on in Settings: a text " +
+                    "would stay in the messaging app for whoever is holding the phone to read.\n" +
                     "• Nothing on screen changes. Carry on as if nothing happened.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle

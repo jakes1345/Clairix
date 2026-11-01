@@ -308,6 +308,20 @@ maintainer on the live service, not in this repository.
   with anyone else in it, the button says nobody would receive it instead of
   sending. A timeline entry records the count. Location is read at that
   moment and at no other time.
+  For the weeks before you have a group, or as well, Settings, SOS has two
+  extras, both off until you turn them on. "Also text this number" texts one
+  number your position as an OpenStreetMap link (never a faked or old one;
+  the text says when there is none): the full edition sends it itself, with
+  the SMS permission it asks for when you turn the option on; the Google Play
+  edition may not hold that permission, so it opens your messaging app with
+  the text written and you press send. A text is not encrypted: your carrier
+  can read it, and it stays in the messaging app's sent texts. "Emergency
+  call button" puts a Call button on the SOS sheet that opens the phone app
+  with the emergency number for the country of the mobile network (112 when
+  that cannot be told); you press call, and Clairix needs no phone
+  permission. The sheet says whether the text went, the messaging app
+  opened, and the number was dialled. Both work with nobody in Clairix to
+  send to. The duress phrase never texts or calls.
 - **Fake call.** Rings the phone with its own ringtone and vibration for
   45 seconds, honouring silent mode, and shows a real-looking call screen over
   the lock screen, so you can walk away. It needs notifications and
@@ -447,7 +461,9 @@ What there is to see:
   ultrasound listener); the camera (the camera sweep, pairing codes); nearby
   devices; notifications. The scanner editions can also see every installed
   app, for the spyware check, and hold usage access and the alarms permission
-  if you grant them.
+  if you grant them. Clairix Full and the Comms edition declare permission to
+  send SMS, asked for only when you turn on "Also text this number" (Settings,
+  SOS); they cannot read or receive texts. The Play edition does not declare it.
 - **Device admin.** Only once you switch on the unlock ledger: Settings →
   Security → Device admin apps then lists Clairix, with two policies,
   watching lock-screen events and locking the screen. Android's activation
@@ -507,7 +523,8 @@ reach main and how a release is checked before it is signed are in
 
 - Android 12 or newer.
 - Permissions for camera, location, microphone, Bluetooth and NFC, each asked
-  for only when the feature that needs it is used.
+  for only when the feature that needs it is used; in Clairix Full and the
+  Comms edition, sending SMS, asked for only when the SOS text is turned on.
 
 ## Reporting a vulnerability
 

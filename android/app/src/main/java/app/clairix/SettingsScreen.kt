@@ -673,6 +673,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                 }
             }
 
+            // ── SOS ──────────────────────────────────────────────────────────
+            //
+            // The SOS sheet's optional text and emergency call, in both editions
+            // (SosExtrasUi.kt). Both off until turned on.
+            item(key = "§sos-hdr") { SectionHeader("SOS") }
+            item(key = "§sos") { SosExtrasSettingsCard() }
+
             // ── Passcode lock ────────────────────────────────────────────────
             item(key = "§lock-hdr") { SectionHeader("App passcode") }
 
@@ -1009,7 +1016,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "Google Play services where the phone has it, otherwise from Android's own location " +
                                 "service; one worked out from Wi-Fi and cell towers sends their identifiers to that " +
                                 "service, which on most phones is Google's, and so does the GPS check's comparison. " +
-                                "Satellite-only positioning, under Location above, asks the satellites alone."
+                                "Satellite-only positioning, under Location above, asks the satellites alone. " +
+                                "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
+                                "unencrypted text through your mobile carrier to that number."
                         else
                             "Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who " +
                                 "sent them. Your keys, contacts and history are stored on this phone only. Location is " +
@@ -1018,7 +1027,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
                                 "to that service. Satellite-only positioning, under Location above, asks the satellites alone. " +
                                 "Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the " +
-                                "newest version from GitHub; nothing about you goes with the request.",
+                                "newest version from GitHub; nothing about you goes with the request. " +
+                                "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
+                                "unencrypted text through your mobile carrier to that number.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )

@@ -98,7 +98,7 @@ Run against itself, Clairix's own scoring gives Clairix Full 5 (high starts at 5
 
 ### I have no invite
 
-Messaging, calls, SOS and the duress phrase need a Clairix number, and our relay gives one only to someone invited by a person already on it: they tap **Invite** in Comms, then send you the link or show you the QR code. The rest of Clairix works without a number: the tracker, camera, spyware and network checks, and the app lock.
+Messaging, calls, SOS to your groups and the duress phrase need a Clairix number, and our relay gives one only to someone invited by a person already on it: they tap **Invite** in Comms, then send you the link or show you the QR code. The rest of Clairix works without a number: the tracker, camera, spyware and network checks, and the app lock.
 
 If there is nobody you can ask:
 
