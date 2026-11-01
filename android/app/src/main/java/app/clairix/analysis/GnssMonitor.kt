@@ -268,18 +268,17 @@ object GnssMonitor {
         if (now - last < ALERT_WINDOW_MS) return
         alertedAt[a.verdict] = now
         val reasons = (a.failing + a.warning).joinToString(" ") { "${it.label}: ${it.detail}" }
-        val advice = when (a.verdict) {
-            GnssVerdict.SPOOFED -> " Do not trust the position on the map or in any app until this clears; Wi-Fi and cell towers are the better guide."
-            GnssVerdict.JAMMED -> " Navigation and anything that tracks a vehicle by GPS will lose it here."
-            else -> ""
-        }
         Registry.publishAlert(
             Alert(
                 id = "gnss_${a.verdict.name.lowercase()}@$now", ts = now, severity = severity,
-                title = a.verdict.label, detail = reasons + advice,
+                title = a.verdict.label, detail = reasons + a.advice(),
                 kind = EventKind.GNSS, dedupeKey = "gnss_${a.verdict.name.lowercase()}",
-                // Where the phone really is: the Wi-Fi/cell position when the satellites are lying.
-                lat = a.networkLat, lon = a.networkLon
+                // Where the phone is, from Wi-Fi and cell towers, only when a recent
+                // network position agrees with the satellites. When the two disagree
+                // nothing here knows which is wrong, and an old one says nothing about
+                // now, so the alert then carries no position at all.
+                lat = a.vouchedNetwork?.first,
+                lon = a.vouchedNetwork?.second
             ),
             dedupeWindowMs = ALERT_WINDOW_MS
         )

@@ -877,13 +877,18 @@ class ScanService : LifecycleService() {
                             )
                         )
                     }
-                    if (wifiAnomalies.isNotEmpty()) {
-                        val top = wifiAnomalies.maxByOrNull { it.threat.ordinal }!!
+                    // The LOW flags are information for the Wi-Fi tab (an open carrier
+                    // hotspot, which is what xfinitywifi and attwifi are by design):
+                    // no timeline event and no part in the correlation below. The old
+                    // code wrote a HIGH event per open hotspot every half hour.
+                    val wifiBait = wifiAnomalies.filter { it.threat.ordinal > Threat.LOW.ordinal }
+                    if (wifiBait.isNotEmpty()) {
+                        val top = wifiBait.maxByOrNull { it.threat.ordinal }!!
                         val evt = TimelineEvent(
                             id = "wifi@${top.bssid}@$now",
                             kind = EventKind.WIFI_ANOMALY,
                             ts = now, title = "Wi-Fi anomaly: ${top.ssid}",
-                            detail = "${wifiAnomalies.size} suspicious network(s) — ${top.reason}",
+                            detail = "${wifiBait.size} suspicious network(s) — ${top.reason}",
                             severity = when (top.threat) {
                                 Threat.CRITICAL -> Severity.CRITICAL
                                 Threat.HIGH -> Severity.HIGH
@@ -896,18 +901,23 @@ class ScanService : LifecycleService() {
                         }
                     }
 
-                    // Correlated surveillance: persistent BLE tracker + active cell anomaly + wifi bait
+                    // Correlated surveillance: persistent BLE tracker + active cell
+                    // anomaly + Wi-Fi bait. Bait is a HIGH anomaly (evil twin, Wi-Fi
+                    // interception kit) or the canary being answered — the one Wi-Fi
+                    // signal with no benign explanation, which used to be left out
+                    // while an open xfinitywifi counted.
                     if (Registry.cell.value.level.ordinal >= Threat.HIGH.ordinal) {
                         val correlatedBle = list.filter {
                             it.persistent && !it.following && it.address !in trusted
                         }
-                        if (correlatedBle.isNotEmpty() && wifiAnomalies.isNotEmpty()) {
+                        if (correlatedBle.isNotEmpty() && (wifiBait.isNotEmpty() || karmaHits.isNotEmpty())) {
+                            val wifiPart = if (karmaHits.isNotEmpty()) "rogue access point answered the canary" else "Wi-Fi bait"
                             val evt2 = TimelineEvent(
                                 id = "corr@${correlatedBle.first().key}@$now",
                                 kind = EventKind.CORRELATED_SURVEILLANCE,
                                 ts = now,
                                 title = "Correlated surveillance indicators",
-                                detail = "${correlatedBle.size} persistent BLE device(s) + active cell anomaly + WiFi bait",
+                                detail = "${correlatedBle.size} persistent BLE device(s) + active cell anomaly + $wifiPart",
                                 severity = Severity.CRITICAL,
                                 lat = track.current?.lat, lon = track.current?.lon
                             )

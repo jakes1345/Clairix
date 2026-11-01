@@ -3649,7 +3649,7 @@ private fun HealthFindingRow(f: PhoneHealthFinding) {
 
 private fun wifiReason(reason: String): String = when (reason) {
     "known_catcher_ssid" -> "Default SSID of known interception equipment"
-    "carrier_open_network" -> "Carrier name on an unencrypted network — likely bait"
+    "carrier_open_network" -> "Open carrier hotspot — captive portal, unencrypted; use a VPN on it"
     "open_twin_of_secured" -> "Open copy of a network that is encrypted nearby — evil twin"
     "open_unsecured" -> "Open, unsecured network — traffic can be intercepted"
     else -> reason.replace('_', ' ').replaceFirstChar { it.uppercase(Locale.US) }
@@ -3677,6 +3677,9 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
     val flagged = wifi.nearby.count { it.flags.isNotEmpty() }
     val open = wifi.nearby.count { !it.security.secure }
     val high = sorted.count { it.threat.ordinal >= Threat.HIGH.ordinal }
+    // Open carrier hotspots are noted, not flagged as bait: xfinitywifi and attwifi are
+    // open captive portals by design. When they are all there is, say what they are.
+    val onlyHotspots = sorted.isNotEmpty() && sorted.all { it.reason == WifiScanner.REASON_OPEN_CARRIER_HOTSPOT }
     val c = ClairixTheme.colors
 
     ScreenList {
@@ -3684,17 +3687,21 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         item(key = "§hero") {
             StatusHero(
                 eyebrow = "Wi-Fi",
+                // Being joined to an open network outranks notes about networks nearby,
+                // as the tone below already does.
                 headline = when {
                     high > 0 -> if (high == 1) "Bait network" else "$high bait networks"
-                    sorted.isNotEmpty() -> "Worth a look"
                     conn != null && !conn.security.secure -> "Open network"
+                    onlyHotspots -> "Open hotspots nearby"
+                    sorted.isNotEmpty() -> "Worth a look"
                     wifi.scannedTs > 0 -> "Wi-Fi clean"
                     else -> "Checking"
                 },
                 body = when {
                     high > 0 -> "Networks below look built to catch your traffic. Don't join them."
-                    sorted.isNotEmpty() -> "${plural(sorted.size, "network")} nearby look off. Nothing you're joined to is flagged."
                     conn != null && !conn.security.secure -> "You're on an unencrypted network. Anyone nearby can read what isn't end-to-end encrypted."
+                    onlyHotspots -> "${plural(sorted.size, "open carrier hotspot")} nearby. Not bait: captive portals that leave traffic unencrypted, so use a VPN if you join one."
+                    sorted.isNotEmpty() -> "${plural(sorted.size, "network")} nearby look off. Nothing you're joined to is flagged."
                     wifi.scannedTs > 0 -> "${plural(wifi.nearby.size, "network")} in range, none flagged. Checked ${fmtAgo(now, wifi.scannedTs)}."
                     else -> "Reading what's in range. Results fill in within a few seconds."
                 },
@@ -3712,7 +3719,7 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         if (sorted.isNotEmpty()) {
             item(key = "§anomaly-head") {
                 SectionHeader(
-                    "Suspicious networks",
+                    if (onlyHotspots) "Open carrier hotspots" else "Suspicious networks",
                     supporting = "${sorted.size}" + if (high > 0) " · $high high" else "",
                     tone = if (high > 0) Tone.Danger else Tone.Caution
                 )
@@ -4013,24 +4020,28 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     // explainer keys off the heuristic name in front of it.
     val (what, todo, certain) = when (f.id.substringBefore(':')) {
         "rat_downgrade" -> Triple(
-            "Your device has been forced from a newer radio technology (4G/5G) down to an older one (2G/3G). " +
-            "IMSI catchers do this deliberately because older protocols have weaker encryption and are easier " +
-            "to intercept. Legitimate networks only downgrade in areas with no newer coverage.",
+            "Your device has dropped from a newer radio technology (4G/5G) to an older one (2G/3G) while " +
+            "standing still, with no voice call in progress. IMSI catchers force this because the older " +
+            "protocols have weaker encryption and are easier to intercept. Legitimate networks only downgrade " +
+            "where there is no newer coverage, and a phone without VoLTE drops to 3G or 2G for every call; " +
+            "Clairix does not count a reading taken during a call or within five minutes of one.",
             "Avoid making voice calls or sending SMS until you leave the area. Use end-to-end encrypted " +
             "messaging apps over WiFi or data. Do not transmit sensitive information. Move away from the " +
             "area and observe whether the technology level returns to normal.",
             "High confidence indicator. A drop to 2G/3G within half an hour of 4G/5G serving you at the " +
-            "same spot, without you having moved, is a primary IMSI catcher signature. Moving resets " +
-            "the comparison, so a drive into a basement car park does not count."
+            "same spot, without you having moved and without a call, is a primary IMSI catcher signature. " +
+            "Moving resets the comparison, so a drive into a basement car park does not count, and neither " +
+            "does a call falling back to the older network."
         )
         "cellid_tac_mismatch" -> Triple(
-            "A cell tower ID that you have seen before is now claiming to be in a different area (tracking " +
-            "area code). Real base stations have fixed, permanent area assignments. A portable IMSI catcher " +
-            "moving through the area will produce inconsistent area codes.",
+            "A cell tower ID that you have seen before, on the same radio technology, is now claiming to be " +
+            "in a different area (tracking area code). Real base stations have fixed area assignments. A " +
+            "portable IMSI catcher borrowing a real cell's number produces inconsistent area codes.",
             "Monitor for additional indicators. A single mismatch could be a network reconfiguration, but " +
             "combined with other findings it is significant. Avoid sensitive calls in this area.",
-            "High confidence indicator when combined with other findings. Alone it may reflect legitimate " +
-            "network changes, but it warrants heightened caution."
+            "High confidence indicator when combined with other findings. Alone it may reflect a carrier " +
+            "re-plan: if this cell keeps reporting the new area consistently for forty readings over an " +
+            "hour or more, Clairix accepts the new area as its baseline and this finding clears."
         )
         "tac_change_stationary" -> Triple(
             "Your device registered a different tracking area while you were not moving. " +
@@ -4039,7 +4050,8 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "Note your exact location and time. A stationary area change combined with other indicators " +
             "is a strong surveillance signal. Consider moving away from the area.",
             "Medium confidence. Stationary area changes can occur due to legitimate network maintenance, " +
-            "but are uncommon and warrant attention alongside other findings."
+            "but are uncommon and warrant attention alongside other findings. A change during a voice call, " +
+            "or within five minutes of one, is not counted: a call can move the phone to another network layer."
         )
         "signal_outlier" -> Triple(
             "The cell signal is significantly stronger than the historical maximum for this area. " +
@@ -4067,8 +4079,10 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "A portable surveillance device driven into and away from an area looks exactly like this.",
             "Note the time and location. An ephemeral cell that appeared and disappeared suggests a " +
             "mobile surveillance asset that has moved on. Review your surroundings at the time of detection.",
-            "Medium-to-high confidence. Ephemeral cells have few legitimate explanations. " +
-            "A duration under 90 seconds is the strictest threshold."
+            "Medium-to-high confidence. Ephemeral cells have few legitimate explanations once the two " +
+            "common ones are ruled out: a cell that served while you were moving, and a 3G or 2G cell " +
+            "that carried a voice call on a phone without VoLTE, are never counted. A duration under " +
+            "90 seconds is the strictest threshold."
         )
         "cell_flapping" -> Triple(
             "Your device has switched between multiple different cell towers rapidly while you were " +
@@ -4090,14 +4104,16 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "Low confidence as a standalone indicator. Meaningful when combined with other findings."
         )
         "timing_advance_zero" -> Triple(
-            "LTE timing advance of zero means the transmitter is within approximately 78 metres of " +
-            "your device. Macro cell towers are never this close to you. A portable IMSI catcher in " +
-            "a parked vehicle or nearby building would produce exactly this reading.",
-            "A transmitter within 78 metres is immediately actionable. Scan your visual surroundings " +
-            "for parked vehicles with rooftop antennas or unusual equipment. Do not make sensitive " +
-            "calls. Move away and observe whether the indicator follows you.",
-            "High confidence. LTE timing advance is a precise physical measurement — zero means very " +
-            "close proximity to the transmitter."
+            "LTE timing advance of zero means the transmitter serving you is within about 78 metres. " +
+            "A rooftop site, an in-building antenna or a small cell is this close legitimately, and so " +
+            "is a portable IMSI catcher in a parked vehicle or a nearby building. On its own the reading " +
+            "does not say which.",
+            "Nothing on its own. If it appears together with other indicators, note the time and place, " +
+            "look for a vehicle or equipment that was not there before, avoid sensitive calls and see " +
+            "whether the indicator follows you when you move.",
+            "Low confidence alone. The distance is a precise physical measurement; what is at that " +
+            "distance is not. Clairix remembers each cell: once one has read timing advance zero on " +
+            "twenty readings spread over a day, it treats that as normal there and stops listing it."
         )
         "signal_spike" -> Triple(
             "The signal strength on your current cell tower jumped suddenly between two consecutive " +
@@ -4110,14 +4126,16 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "or other environmental factors, but are notable when combined with other findings."
         )
         "rat_oscillation" -> Triple(
-            "Your device has switched between multiple radio technologies (2G, 3G, 4G) rapidly in " +
-            "a short window. IMSI catchers force devices through technology cycles to capture separate " +
-            "authentication events on each technology, revealing the device's IMSI.",
+            "Your device has switched between three or more radio technologies (2G, 3G, 4G, 5G) in " +
+            "a short window while standing still and not on a call. IMSI catchers force devices through " +
+            "technology cycles to capture separate authentication events on each technology, revealing " +
+            "the device's IMSI. A voice call on a phone without VoLTE walks 5G to 3G and back on its " +
+            "own, so readings taken in a call, or within five minutes of one, are not counted.",
             "Multiple technology switches in a short window strongly indicate active interference. " +
             "Avoid all calls and data use. Use WiFi with a VPN for any communications. " +
             "Move out of the area and observe whether the switching stops.",
-            "High confidence. Rapid multi-technology oscillation is a strong signature of active " +
-            "IMSI capture operations."
+            "High confidence. Rapid multi-technology oscillation outside a call is a strong signature " +
+            "of active IMSI capture operations."
         )
         else -> Triple(
             "An anomaly was detected in your cellular environment that deviates from your established " +

@@ -83,7 +83,7 @@ internal fun GnssScreen() {
                 body = when (a.verdict) {
                     GnssVerdict.SPOOFED -> "The position the phone is being given does not come from satellites. Do not trust the map or any app's location until this clears."
                     GnssVerdict.JAMMED -> "Something is drowning out the satellites here. Navigation, and any tracker that relies on GPS, has lost them."
-                    GnssVerdict.SUSPECT -> "Two or more checks look off. Not proof; keep an eye on it."
+                    GnssVerdict.SUSPECT -> "One check failed on its own, or two look off, and nothing else corroborates it. Not proof; keep an eye on it."
                     GnssVerdict.GENUINE -> "${a.usedCount} satellites in the fix from ${a.constellationsUsed.joinToString(", ").ifEmpty { "one system" }}, behaving like satellites."
                     GnssVerdict.NO_FIX -> "Satellites are not in the fix right now: indoors, underground or in a deep street canyon. Step outside to check."
                     GnssVerdict.NO_DATA -> if (!hasLocation) "Precise location permission is needed to read the satellites."
@@ -99,12 +99,26 @@ internal fun GnssScreen() {
             }
         }
 
-        if (a.verdict == GnssVerdict.SPOOFED && a.networkLat != null && a.networkLon != null) {
+        // The network position is offered as the real one only when a recent one agrees
+        // with the satellites: when the two disagree nothing here knows which is wrong
+        // (a confidently wrong Wi-Fi fix looks exactly like a spoofer), and an old one
+        // says nothing about now.
+        val vouched = a.vouchedNetwork
+        if (a.verdict == GnssVerdict.SPOOFED && vouched != null) {
             item(key = "§real") {
                 Notice(
                     Tone.Danger,
                     title = "Where Wi-Fi and cell towers put you",
-                    text = "%.5f, %.5f. A spoofer can move the satellite position; it cannot move the towers and access points around you.".format(a.networkLat, a.networkLon)
+                    text = "%.5f, %.5f. A spoofer can move the satellite position; it cannot move the towers and access points around you.".format(vouched.first, vouched.second)
+                )
+            }
+        }
+        if ((a.verdict == GnssVerdict.SPOOFED || a.verdict == GnssVerdict.SUSPECT) && a.networkDisputed) {
+            item(key = "§disputed") {
+                Notice(
+                    if (a.verdict == GnssVerdict.SPOOFED) Tone.Danger else Tone.Caution,
+                    title = "Two positions disagree",
+                    text = "The satellites and the Wi-Fi and cell position put this phone in different places. A spoofer moves the satellite position; a mis-mapped access point or a stale cell fix moves the other. Clairix cannot tell which is wrong, so do not navigate by either until they agree again."
                 )
             }
         }

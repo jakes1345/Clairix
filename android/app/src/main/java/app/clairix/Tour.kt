@@ -97,8 +97,9 @@ internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
         "Run the self-test first: the phone plays a 19 kHz tone and listens for it, to prove it can hear the band. Then Listen " +
         "near the TV or speaker you are wondering about. Only the spectrum is read; no audio is kept."
     ScanCategory.WIFI -> "The network you are on, and every hotspot in range." to
-        "Flags open networks, evil twins of networks you use, carrier names on open hotspots and the default names of " +
-        "interception kit, and checks the network you are on: encryption, captive portals, where DNS goes. It also sets " +
+        "Flags open networks, evil twins of networks you use and the default names of Wi-Fi interception kit, notes " +
+        "open carrier hotspots such as xfinitywifi for what they are (captive portals: use a VPN), and checks the " +
+        "network you are on: encryption, captive portals, where DNS goes. It also sets " +
         "a trap: a made-up network name only this phone knows, which the phone asks for in every scan. A box that " +
         "answers to any name (a Karma or Pineapple interception kit) answers that one too, and is caught. Adding the " +
         "name is why Android may ask, the first time you start scanning, whether Clairix can suggest Wi-Fi networks. " +

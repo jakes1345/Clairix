@@ -7,6 +7,7 @@ import android.net.wifi.WifiNetworkSuggestion
 import app.clairix.AppSettings
 import app.clairix.Threat
 import app.clairix.WifiAnomaly
+import app.clairix.analysis.WifiBeacon
 import java.security.SecureRandom
 
 /**
@@ -88,13 +89,17 @@ object KarmaCanary {
      * Pure check of a scan-result list against the canary. One anomaly per
      * answering BSSID; a Karma box with several radios is several anomalies.
      */
-    fun check(canary: String, results: List<ScanResult>, now: Long): List<WifiAnomaly> {
+    fun check(canary: String, results: List<ScanResult>, now: Long): List<WifiAnomaly> =
+        checkBeacons(canary, results.map { WifiBeacon.of(it) }, now)
+
+    /** The same check on plain beacons, which is what a JVM test can build. */
+    fun checkBeacons(canary: String, beacons: List<WifiBeacon>, now: Long): List<WifiAnomaly> {
         val hits = ArrayList<WifiAnomaly>(1)
-        for (r in results) {
-            val seen = r.SSID?.trim()?.trim('"') ?: continue
+        for (b in beacons) {
+            val seen = b.ssid?.trim()?.trim('"') ?: continue
             if (seen != canary) continue
-            val bssid = r.BSSID ?: continue
-            hits.add(WifiAnomaly(seen, bssid, r.level, REASON, Threat.CRITICAL, now))
+            val bssid = b.bssid ?: continue
+            hits.add(WifiAnomaly(seen, bssid, b.rssi, REASON, Threat.CRITICAL, now))
         }
         return hits.distinctBy { it.bssid }
     }

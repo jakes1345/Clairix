@@ -153,7 +153,15 @@ data class ServingCell(
     /** LTE/NR reference-signal quality, dB. */
     val rsrq: Int? = null,
     /** LTE RSSNR / NR SS-SINR, dB. */
-    val sinr: Int? = null
+    val sinr: Int? = null,
+    /**
+     * True when a voice call was up or ringing as this reading was taken, or ended
+     * less than a minute before it; CellMonitor reads it from the audio mode, which
+     * needs no permission. A phone without VoLTE drops to 3G or 2G for every call —
+     * circuit-switched fallback — so the heuristics a call can trip have to know the
+     * reading was taken in one.
+     */
+    val inCall: Boolean = false
 ) {
     val key: String get() = "${mcc ?: "?"}-${mnc ?: "?"}-${tac ?: "?"}-$cellId"
 
