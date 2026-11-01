@@ -195,14 +195,23 @@ class SmokeTest {
         fail("Clairix did not leave \"$step\" within ${BACK_PATIENCE_MS / 1000} s of Back")
     }
 
-    /** Scrolls the main list until [selector] is on screen; null if 30 swipes do not bring it. */
+    /**
+     * Scrolls the main list until [selector] is on screen: down first, then back up,
+     * since what is wanted can lie above where the list stands (a page that grew
+     * while it was scrolled); null if neither way brings it within 30 swipes.
+     */
     private fun scrollTo(selector: BySelector): UiObject2? {
-        repeat(30) {
-            ui.find(selector)?.let { return it }
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
-            device.waitForIdle(1_000)
+        val x = device.displayWidth / 2
+        val low = device.displayHeight * 3 / 4
+        val high = device.displayHeight / 3
+        for ((fromY, toY) in listOf(low to high, high to low)) {
+            repeat(30) {
+                ui.find(selector)?.let { return it }
+                device.swipe(x, fromY, x, toY, 20)
+                device.waitForIdle(1_000)
+            }
         }
-        return null
+        return ui.find(selector)
     }
 
     /**
