@@ -1489,6 +1489,8 @@ class ScanService : LifecycleService() {
         GnssMonitor.clear()
         runCatching { app.clairix.analysis.CellularExposure.clear(this) }
         runCatching { StalkwareWatch.clear(this) }
+        // The camera sweep's findings, checklist and self-test, kept in their own store.
+        runCatching { app.clairix.analysis.HiddenCameraScanner.forget(this) }
         LocationHistory.clear(this)
         alerted.clear()
         followAlerts.clear()

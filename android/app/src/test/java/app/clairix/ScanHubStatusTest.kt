@@ -157,9 +157,22 @@ class ScanHubStatusTest {
     @Test
     fun cameraFindingsSplitStrongFromPossible() {
         fun finding(c: Float) = CameraFinding("id$c", 0L, CameraFindMethod.LENS_GLINT, c, "centre", "", null, null)
-        assertEquals("No findings", cameraStatus(emptyList()).text)
-        assertEquals("2 possible findings to check", cameraStatus(listOf(finding(0.3f), finding(0.5f))).text)
-        assertEquals("1 strong finding", cameraStatus(listOf(finding(0.9f), finding(0.3f))).text)
+        assertEquals("No findings", cameraStatus(emptyList(), lastRunTs = 1L).text)
+        assertEquals("2 possible findings to check", cameraStatus(listOf(finding(0.3f), finding(0.5f)), lastRunTs = 1L).text)
+        assertEquals("1 strong finding", cameraStatus(listOf(finding(0.9f), finding(0.3f)), lastRunTs = 1L).text)
+    }
+
+    @Test
+    fun cameraHubNeverSaysNothingFoundBeforeASweepOrWhenTheWiFiSweepCouldNotLook() {
+        // Nothing has been swept: no verdict either way.
+        val never = cameraStatus(emptyList(), lastRunTs = 0L)
+        assertEquals("Not swept yet", never.text)
+        assertEquals(StatusTone.NEUTRAL, never.tone)
+        // The last Wi-Fi sweep saw only the router: say so rather than "No findings".
+        assertEquals("Nothing found, Wi-Fi sweep inconclusive", cameraStatus(emptyList(), lastRunTs = 5L, networkInconclusive = true).text)
+        // Findings still lead, whatever else is true.
+        val f = CameraFinding("id", 0L, CameraFindMethod.NETWORK, 0.9f, "10.0.0.7", "", null, null)
+        assertEquals("1 strong finding", cameraStatus(listOf(f), lastRunTs = 0L, networkInconclusive = true).text)
     }
 
     @Test

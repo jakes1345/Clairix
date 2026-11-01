@@ -1,6 +1,8 @@
 package app.clairix.analysis
 
+import app.clairix.EventKind
 import app.clairix.Registry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,6 +31,21 @@ class CameraAlertSilenceTest {
         assertTrue(silent("optical|glint|s1"))
         assertTrue(silent("optical|ir|s1"))
         assertTrue(silent("mag|s1"))
+    }
+
+    @Test
+    fun anAlertIsFiledAsACameraEventWithWhereThePhoneWas() {
+        HiddenCameraScanner.report(finding("net|10.0.0.9|s3", CameraFindMethod.NETWORK).copy(lat = 51.5, lon = -0.12))
+        val alert = Registry.alerts.value.first { it.id == "camera|net|10.0.0.9|s3" }
+        assertEquals(EventKind.CAMERA, alert.kind)
+        assertEquals(51.5, alert.lat!!, 0.0)
+        assertEquals(-0.12, alert.lon!!, 0.0)
+    }
+
+    @Test
+    fun anIrLightWaitingForTheOwnersAnswerRaisesNoAlert() {
+        HiddenCameraScanner.report(finding("optical|ir|s4", CameraFindMethod.IR_ILLUMINATOR).copy(needsConfirmation = true))
+        assertTrue(Registry.alerts.value.none { it.id == "camera|optical|ir|s4" })
     }
 
     @Test

@@ -2780,6 +2780,8 @@ private fun TimelineRow(
         if (lat != null && lon != null) {
             Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         }
+        // A photo the owner kept from the camera sweep, sealed on the phone until opened here.
+        e.attachment?.takeIf { app.clairix.analysis.SweepPhotos.isPhoto(it) }?.let { SweepPhotoButton(it) }
         if (open) {
             // An unlock while you slept, a changed PIN or an added fingerprint: what
             // the alert tells you to do next can also tell whoever did it.

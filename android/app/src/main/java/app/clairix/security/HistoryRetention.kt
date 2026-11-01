@@ -11,6 +11,7 @@ import app.clairix.Registry
 import app.clairix.ScanService
 import app.clairix.ScannerRecordings
 import app.clairix.TimelineLog
+import app.clairix.analysis.HiddenCameraScanner
 import app.clairix.analysis.LocationHistory
 import app.clairix.analysis.Report
 import app.clairix.nav.MapTiles
@@ -22,9 +23,11 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
- * How long the scanner's history is kept: the location log, the timeline, the
- * vehicle trips, the unlock ledger, the map's tile cache and the navigation's
- * cache of typical road speeds; and what the cell-tower baseline keeps of when.
+ * How long the scanner's history is kept: the location log, the timeline (with
+ * any photo kept on it), the vehicle trips, the unlock ledger, the hidden-camera
+ * sweep's findings, the radio scanner's recordings, the map's tile cache and the
+ * navigation's cache of typical road speeds; and what the cell-tower baseline
+ * keeps of when.
  *
  * A seized phone gives up what is on it, however well sealed, once it is
  * unlocked under compulsion; what was deleted last month cannot be given up at
@@ -81,8 +84,9 @@ object HistoryRetention {
 
     /**
      * Deletes what is older than the cutoff from the location log, the vehicle
-     * trips, the unlock ledger, the tile cache, the typical-speed cache and the
-     * timeline; coarsens and thins the cell-tower baseline; deletes exported
+     * trips, the unlock ledger, the tile cache, the typical-speed cache, the radio
+     * scanner's recordings, the hidden-camera sweep's findings and the timeline
+     * (a photo kept on an event goes with it); coarsens and thins the cell-tower baseline; deletes exported
      * reports older than a day. Runs when the setting changes, at each start of
      * the app, every hour while the scanner runs
      * ([app.clairix.analysis.ScanPacing.RETENTION_EVERY_MS]) and once a day by
@@ -111,6 +115,7 @@ object HistoryRetention {
         runCatching { TypicalSpeedCache.prune(app, cutoff, now) }
         // The radio scanner's recordings, by when each was last written.
         runCatching { ScannerRecordings.pruneOlderThan(app, cutoff) }
+        runCatching { HiddenCameraScanner.pruneOlderThan(app, cutoff) }
         runCatching {
             val log = TimelineLog.get(app)
             if (log.pruneOlderThan(cutoff) > 0) Registry.publishTimeline(log.snapshot())

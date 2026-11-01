@@ -74,11 +74,11 @@ Some phones' Bluetooth controllers do not report their own advertisements to the
 
 ### The network sweep found nothing
 
-The sweep covers the Wi-Fi network your phone is joined to. Join the venue's network first. If the venue isolates guests from one another, the sweep cannot see other devices and will say so. A camera on its own hotspot shows up in the **Wireless** tab instead.
+The sweep covers the Wi-Fi network your phone is joined to. Join the venue's network first. If the venue isolates guests from one another, the sweep cannot see other devices and says so: when only the router answers it ends as **Sweep inconclusive**, with the reason, instead of "No camera-like hosts found". It does the same when the network is wider than the block of 254 addresses around your phone that it checks, and when the Wi-Fi gives the phone no IPv4 address. Most consumer cameras (Wyze, Blink, Ring, Arlo, Nest and the like) talk only to their maker's cloud and are invisible to the sweep on any network; the optical, wireless and hands-on steps are what find them. A camera on its own hotspot shows up in the **Wireless** tab instead.
 
 ### The magnetic gauge says "unreliable"
 
-The compass sensor is reporting that it needs calibration. Move the phone in a figure of eight for a few seconds, then try again. Keep it away from magnetic cases and metal furniture while the baseline settles.
+The compass sensor is reporting that it needs calibration, so the gauge pauses and shows no verdict. Move the phone in a figure of eight for a few seconds; the gauge settles again by itself once the compass recovers. Keep it away from magnetic cases and metal furniture while the baseline settles.
 
 ### The cell tab says "RISK: NONE" but the baseline is young
 

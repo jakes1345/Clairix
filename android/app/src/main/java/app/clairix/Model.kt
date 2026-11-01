@@ -273,7 +273,12 @@ enum class EventKind {
     /** Evidence the owner saved: a flagged app's details, from the sheet before its settings open or before the report is exported. */
     EVIDENCE,
     /** Any other platform-hardening alert. */
-    PLATFORM
+    PLATFORM,
+    /**
+     * A hidden-camera sweep finding, a magnetic anomaly or a photo the owner kept
+     * of one. Stored by name, so events written with the kinds before it still load.
+     */
+    CAMERA
 }
 
 /**
@@ -407,7 +412,14 @@ data class TimelineEvent(
     val detail: String,
     val severity: Severity,
     val lat: Double? = null,
-    val lon: Double? = null
+    val lon: Double? = null,
+    /**
+     * A file kept with the event, named relative to the app's files directory: a
+     * sealed photo from the camera sweep ([app.clairix.analysis.SweepPhotos]). Null
+     * for every other event, and for every event stored before it existed. Deleted
+     * with the event.
+     */
+    val attachment: String? = null
 )
 
 // --- NFC / HF RFID ----------------------------------------------------------

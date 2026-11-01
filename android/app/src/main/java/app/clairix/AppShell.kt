@@ -226,11 +226,19 @@ internal fun trackerStatus(
     }
 }
 
-internal fun cameraStatus(findings: List<CameraFinding>): CategoryStatus {
+/**
+ * The camera sweep's hub line. [lastRunTs] is when any sweep method last ran (0 =
+ * never): before then there is nothing to report either way. [networkInconclusive]
+ * is true when the last Wi-Fi sweep could not look (client isolation, a network
+ * wider than it checked, no IPv4 address), so "nothing found" is not said plainly.
+ */
+internal fun cameraStatus(findings: List<CameraFinding>, lastRunTs: Long, networkInconclusive: Boolean = false): CategoryStatus {
     val strong = findings.count { it.confidence >= STRONG_CAMERA_CONFIDENCE }
     return when {
         strong > 0 -> CategoryStatus(count(strong, "strong finding"), StatusTone.ALERT)
         findings.isNotEmpty() -> CategoryStatus("${count(findings.size, "possible finding")} to check", StatusTone.CAUTION)
+        lastRunTs == 0L -> CategoryStatus("Not swept yet", StatusTone.NEUTRAL)
+        networkInconclusive -> CategoryStatus("Nothing found, Wi-Fi sweep inconclusive", StatusTone.NEUTRAL)
         else -> CategoryStatus("No findings", StatusTone.NEUTRAL)
     }
 }
@@ -302,11 +310,16 @@ internal fun rememberCategoryStatuses(): Map<ScanCategory, CategoryStatus> {
     val nfc by Registry.nfc.collectAsStateWithLifecycle()
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val cameras by HiddenCameraScanner.findings.collectAsStateWithLifecycle()
+    val camerasRun by HiddenCameraScanner.lastRunTs.collectAsStateWithLifecycle()
+    val cameraNetwork by HiddenCameraScanner.network.collectAsStateWithLifecycle()
     val gnss by Registry.gnss.collectAsStateWithLifecycle()
     val positioning by Registry.positioning.collectAsStateWithLifecycle()
+    // The sweep's findings and when it last ran are kept on disk; put them back for the hub.
+    val ctx = LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) { HiddenCameraScanner.restore(ctx) }
     return mapOf(
         ScanCategory.TRACKERS to trackerStatus(status, detections, trusted, faking = positioning.faking(System.currentTimeMillis())),
-        ScanCategory.CAMERAS to cameraStatus(cameras),
+        ScanCategory.CAMERAS to cameraStatus(cameras, camerasRun, cameraNetwork.inconclusiveReason != null),
         ScanCategory.CELL to cellStatus(cell),
         ScanCategory.GPS to gnssStatus(gnss, status.scanning),
         ScanCategory.ULTRASOUND to CategoryStatus("Listen on demand", StatusTone.NEUTRAL),

@@ -16,11 +16,11 @@ The following is created and stored only on your phone. We never upload it and c
 - Your Comms encryption keys, contacts and message history, in a database that is encrypted as a whole.
 - Who you have blocked, and the message requests waiting for you, in the same database (see section 2.9).
 - Your duress phrase and app-lock settings.
-- Hidden-camera sweep images. The camera feed is analysed live and is not saved.
+- Hidden-camera sweep findings, checklist progress and any photo you keep. The camera feed is analysed live and is not saved unless you press Keep a photo on a finding: that one picture, with the time and your position written on it, is kept encrypted on your phone with the finding's timeline entry and deleted with it.
 - Radio scanner recordings, only if you turn "Record transmissions" on in Drive (it is off by default, and off again whenever drive mode ends). Each transmission is encrypted with a key held in your phone's secure hardware, stops after 10 minutes, and is deleted with your history (see below) or once all recordings pass 256 MB, oldest first. You can play and delete them on the Scanner card. Recordings made by earlier versions were not encrypted; the Scanner card offers to encrypt or delete any that are left, and does neither until you choose.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
 
-You can delete all of this at any time with Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or by uninstalling Clairix. History (the location log, the timeline, vehicle trip records, the unlock ledger, and the map's tile and traffic caches) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. The cell-tower baseline keeps which towers are usual where you go, not when you were near them, and forgets a tower not seen for three times the retention. An evidence report you export is deleted from the phone a day later. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
+You can delete all of this at any time with Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or by uninstalling Clairix. History (the location log, the timeline with any photo kept on it, vehicle trip records, the unlock ledger, the hidden-camera sweep's findings, and the map's tile and traffic caches) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. The cell-tower baseline keeps which towers are usual where you go, not when you were near them, and forgets a tower not seen for three times the retention. An evidence report you export is deleted from the phone a day later. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
 
 ## 2. Information that leaves your device
 
@@ -107,7 +107,7 @@ Clairix asks for each permission when you use the feature that needs it. Locatio
 In particular:
 
 - **Background location** is used only by the tracker scanner you start, to tell whether a device is moving with you. Location history stays on the device.
-- **Camera** is used for the hidden-camera sweep and to scan a contact's pairing code. Nothing is recorded.
+- **Camera** is used for the hidden-camera sweep and to scan a contact's pairing code. The sweep records nothing unless you press Keep a photo on a finding (see section 1).
 - **Microphone** is used only during a call you place or answer, and while you hold the record button for a voice note.
 - **Access to the installed-app list** is used only by the spyware check, on the device. Nothing about your apps leaves the phone: the check matches them against a stalkerware list built into the app, and about once a day while you use Clairix it asks GitHub for a newer, signed copy of that list, which tells GitHub your IP address and that the list was asked for.
 

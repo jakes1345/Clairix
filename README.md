@@ -18,7 +18,7 @@ just as plainly, what it cannot do.
 
 | What you want to do | How Clairix helps |
 |---|---|
-| Find a hidden camera | Point the phone around the room and it spots the lens glint every camera has |
+| Find a hidden camera | Point the phone around the room and it spots the glint a lens throws back when it can see you |
 | Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers, and says FOLLOWING only once one away from its owner has been heard at places far apart while your own position shows you travelled between them; anything else that does the same is reported as travelling with you, not as a tracker |
 | Catch a fake cell tower | Learns the towers that are normal for the places you go and warns when one breaks the rules |
 | Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |

@@ -7,6 +7,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -27,7 +28,11 @@ import app.clairix.Alert
 import app.clairix.EventKind
 import app.clairix.Registry
 import app.clairix.Severity
+import app.clairix.Store
+import app.clairix.TimelineEvent
+import app.clairix.TimelineLog
 import app.clairix.WifiSecurity
+import app.clairix.security.HistoryRetention
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +47,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -52,6 +58,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import java.net.ConnectException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -63,12 +70,13 @@ import java.net.SocketTimeoutException
 import java.util.Arrays
 import java.util.Collections
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -89,7 +97,15 @@ data class CameraFinding(
     val location: String,
     val detail: String,
     val lat: Double?,
-    val lon: Double?
+    val lon: Double?,
+    /**
+     * An IR point of light waiting for the owner's answer: one they can see with
+     * their own eyes is an ordinary LED, one they cannot is a possible illuminator.
+     * Held below alert level until they say.
+     */
+    val needsConfirmation: Boolean = false,
+    /** The photo the owner kept of it ([SweepPhotos]), as the attachment its timeline event carries. */
+    val photo: String? = null
 )
 
 /** The two optical passes. Glint wants the torch on the back camera; IR wants a dark room and the front camera. */
@@ -110,7 +126,10 @@ data class GlintBlob(
     val radius: Float,
     /** How long, in camera time, this spot has held still while the scene held still. */
     val heldMs: Long,
-    /** It stayed lit with the torch off: a light, not a reflection. Never reported. */
+    /**
+     * Not a lens: it stayed lit with the torch off (a light), or stayed put on the
+     * sensor while the phone turned (a hot pixel). Never reported.
+     */
     val lightSource: Boolean,
     /** Held still and, where the torch could test it, confirmed a reflection. */
     val candidate: Boolean,
@@ -137,6 +156,8 @@ data class OpticalState(
     val washedOut: Boolean = false,
     /** IR mode only: the room is too bright for an IR dot to stand out. */
     val tooBright: Boolean = false,
+    /** The last torch-off test never saw the torch go off, so it decided nothing; it is tried again. */
+    val torchUnseen: Boolean = false,
     val tracks: List<GlintBlob> = emptyList(),
     val frames: Long = 0L,
     val fps: Float = 0f
@@ -153,7 +174,14 @@ data class NetworkScanProgress(
     val liveHosts: Int = 0,
     val error: String? = null,
     val lastScanTs: Long = 0L,
-    val found: Int = 0
+    val found: Int = 0,
+    /**
+     * Why the last sweep proves nothing, or null when its result means something:
+     * only the router answered (client isolation), the network is wider than the
+     * block that was checked, the Wi-Fi gave the phone no IPv4 address, or the
+     * sweep was stopped. See [NetworkSweepCoverage].
+     */
+    val inconclusiveReason: String? = null
 )
 
 data class WirelessState(
@@ -205,26 +233,56 @@ data class SweepStep(val id: String, val title: String, val detail: String, val 
  * IR mode is the same machinery with the torch off on the front camera, in a dark
  * room: a night-vision camera lights the room with 850 nm LEDs the eye cannot see,
  * and on phones whose front camera lets some infrared through, they show as a dot.
+ * The same frames feed the IR self-test ([IrSelfTest]) while one is running.
  *
- * Only the Y plane is read; frames never leave this class.
+ * Only the Y plane is read; frames never leave this class. (A photo the owner
+ * chooses to keep comes from the preview, not from here: [HiddenCameraScanner.keepPhoto].)
  */
 class LensGlintAnalyzer(
     private val mode: OpticalMode,
     /** True when the preview is mirrored (front camera), so overlay x is flipped to match. */
     private val mirrored: Boolean,
-    /** Switches the torch, or null when this camera has none. */
+    /** Switches the torch, or null in a mode that never uses it. */
     private val torch: ((Boolean) -> Unit)?,
     private val onState: (OpticalState) -> Unit,
     private val onCandidate: (GlintBlob) -> Unit
 ) : ImageAnalysis.Analyzer {
 
-    private val tracker = GlintTracker(ir = mode == OpticalMode.IR, torchAvailable = mode.torch && torch != null)
+    private val tracker = GlintTracker(ir = mode == OpticalMode.IR, torchAvailable = false)
     private var luma = ByteArray(0)
     private var frames = 0L
     private var fpsWindowStart = 0L
     private var fpsWindowFrames = 0
     private var fps = 0f
     @Volatile private var closed = false
+
+    /**
+     * Whether the bound camera has a torch ([androidx.camera.core.CameraInfo.hasFlashUnit]),
+     * set once it is bound. False until then, so a camera without one never runs the
+     * torch-off test and the glint mode says it cannot work.
+     */
+    @Volatile var torchAvailable: Boolean = false
+
+    /** The torch as the camera reports it ([androidx.camera.core.CameraInfo.getTorchState]). */
+    @Volatile var torchReportedOn: Boolean = false
+
+    /** The camera confirmed (a capture result) that the torch went off as the test asked. */
+    @Volatile private var torchConfirmedOff = false
+
+    /** The torch switch the tracker asked for has taken effect, by the camera's own account. */
+    fun torchConfirmed(on: Boolean) { torchConfirmedOff = !on }
+
+    private val turnLock = Any()
+    private var turnX = 0f
+    private var turnY = 0f
+
+    /** The gyroscope: the phone turned [dxDeg] and [dyDeg] about its x and y axes. */
+    fun addTurn(dxDeg: Float, dyDeg: Float) {
+        synchronized(turnLock) { turnX += dxDeg; turnY += dyDeg }
+    }
+
+    private var irTest = IrSelfTest()
+    private var irTestRun = 0L
 
     /** Stops emitting; the executor may still be mid-frame when the use case unbinds. */
     fun close() { closed = true }
@@ -246,8 +304,26 @@ class LensGlintAnalyzer(
         if (luma.size != size) luma = ByteArray(size)
         buf.get(luma, 0, size)
         buf.rewind()
-        val r = tracker.process(luma, image.width, image.height, plane.rowStride, plane.pixelStride, image.imageInfo.timestamp)
-        r.torch?.let { on -> if (!closed) torch?.invoke(on) }
+        tracker.torchAvailable = torchAvailable
+        val (tx, ty) = synchronized(turnLock) { (turnX to turnY).also { turnX = 0f; turnY = 0f } }
+        val r = tracker.process(
+            luma, image.width, image.height, plane.rowStride, plane.pixelStride, image.imageInfo.timestamp,
+            torchOffConfirmed = torchConfirmedOff, turnXDeg = tx, turnYDeg = ty
+        )
+        r.torch?.let { on ->
+            // A new switch: the camera's word on the last one no longer applies.
+            torchConfirmedOff = false
+            if (!closed) torch?.invoke(on)
+        }
+        if (mode == OpticalMode.IR) {
+            val run = HiddenCameraScanner.irCheckRun()
+            if (run != 0L) {
+                if (run != irTestRun) { irTestRun = run; irTest = IrSelfTest() }
+                if (irTest.process(luma, image.width, image.height, plane.rowStride, plane.pixelStride, image.imageInfo.timestamp)) {
+                    HiddenCameraScanner.irCheckPassed(run)
+                }
+            }
+        }
 
         frames++
         val now = SystemClock.elapsedRealtime()
@@ -264,10 +340,12 @@ class LensGlintAnalyzer(
         if (!closed) for (s in r.report) onCandidate(blob(s, r, rotation))
         if (!closed) onState(
             OpticalState(
-                mode = mode, running = true, torchOn = mode.torch && torch != null, hasTorch = torch != null,
+                mode = mode, running = true,
+                torchOn = mode.torch && torchAvailable && torchReportedOn,
+                hasTorch = !mode.torch || torchAvailable,
                 checking = r.checking, error = null,
                 meanLuma = r.meanLuma, lumaChange = r.lumaChange, brightPixels = r.brightCells,
-                washedOut = r.washedOut, tooBright = r.tooBright,
+                washedOut = r.washedOut, tooBright = r.tooBright, torchUnseen = r.torchUnseen,
                 tracks = blobs, frames = frames, fps = fps
             )
         )
@@ -277,7 +355,9 @@ class LensGlintAnalyzer(
         val (vx, vy) = toView((s.gx + 0.5f) / r.gridWidth, (s.gy + 0.5f) / r.gridHeight, rotation)
         return GlintBlob(
             id = s.id, x = vx, y = vy, radius = s.radius / max(r.gridWidth, r.gridHeight),
-            heldMs = s.heldMs, lightSource = s.kind == GlintTracker.Kind.LIGHT_SOURCE,
+            heldMs = s.heldMs,
+            // A light, or a spot stuck to the sensor: shown grey either way, never reported.
+            lightSource = s.kind == GlintTracker.Kind.LIGHT_SOURCE || s.kind == GlintTracker.Kind.FIXED,
             candidate = s.candidate, confidence = s.confidence
         )
     }
@@ -309,19 +389,178 @@ class LensGlintAnalyzer(
  * Findings from all six methods land on [findings], newest first, and anything at
  * or above [ALERT_CONFIDENCE] also goes through [Registry.publishAlert] so it reaches
  * the timeline, and the notification shade when the owner is not on the sweep
- * screen to see it ([Alert.silent], [sweepScreenResumed]). Each method keeps its
- * own live state flow for the tab that drives it.
+ * screen to see it ([Alert.silent], [sweepScreenResumed]). A magnetic anomaly,
+ * which never reaches that confidence, goes on the timeline when its episode ends.
+ * Each method keeps its own live state flow for the tab that drives it.
+ *
+ * The findings, the checklist, when a method last ran, the last network sweep's
+ * result and the infrared self-test are kept in an encrypted [Store]
+ * ([CameraSweepRecord]), put back by [restore] and emptied by Clear and by
+ * "Clear all data" ([forget]).
  */
 object HiddenCameraScanner {
 
     private const val FINDINGS_CAP = 200
     private const val FINDINGS_PER_METHOD = 50
     private const val ALERT_CONFIDENCE = 0.7f
+    /** An IR point of light stays below alert level until the owner says they cannot see it. */
+    private const val IR_UNCONFIRMED_CAP = 0.65f
+    /** A magnetic peak this far from the baseline is as strong as a magnetic hint gets. */
+    private const val FULL_CONFIDENCE_UT = 200f
+    private const val STORE_FILE = "camera_sweep.json"
+    /** Writes of the sweep record are batched to at most one in this long. */
+    private const val PERSIST_DELAY_MS = 1_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _findings = MutableStateFlow<List<CameraFinding>>(emptyList())
     val findings: StateFlow<List<CameraFinding>> = _findings.asStateFlow()
+
+    private val _lastRunTs = MutableStateFlow(0L)
+    /** When any sweep method last ran, or 0 if none ever has: the hub says "Not swept yet" until one does. */
+    val lastRunTs: StateFlow<Long> = _lastRunTs.asStateFlow()
+
+    private fun markRun() {
+        _lastRunTs.value = System.currentTimeMillis()
+        persistSoon()
+    }
+
+    // ── Kept on disk ─────────────────────────────────────────────────────────
+
+    private val persistLock = Any()
+    @Volatile private var appContext: Context? = null
+    @Volatile private var store: Store? = null
+    /** The record on disk has been read (or cleared) in this process; writes may go ahead. */
+    @Volatile private var restored = false
+    private val restoreStarted = AtomicBoolean(false)
+    private val persistQueued = AtomicBoolean(false)
+    /** Bumped by [forget], so a restore already reading the old record puts nothing back. */
+    @Volatile private var generation = 0
+    /** The last network sweep as it finished: what is kept, rather than a sweep half run. */
+    @Volatile private var networkResult = NetworkScanProgress()
+
+    private fun storeFor(app: Context): Store = synchronized(persistLock) {
+        store ?: Store(app, STORE_FILE).also { store = it }
+    }
+
+    /**
+     * Opens the sweep's encrypted store and puts back what was found before this
+     * process started, once, in the background. Anything found meanwhile stays (it
+     * is newer). Safe from any thread and as often as wanted: the hub and the sweep
+     * screen call it as they appear, and every method calls it as it starts.
+     */
+    fun restore(context: Context) {
+        val app = context.applicationContext ?: return
+        if (appContext == null) appContext = app
+        if (!restoreStarted.compareAndSet(false, true)) return
+        val gen = generation
+        scope.launch { runCatching { restoreNow(app, gen) }.onFailure { restored = true } }
+    }
+
+    private fun restoreNow(app: Context, gen: Int) {
+        val s = storeFor(app)
+        val saved = runCatching { CameraSweepRecord.fromJson(s.load { JSONObject() }) }.getOrDefault(CameraSweepRecord())
+        val cutoff = runCatching { HistoryRetention.cutoff(app) }.getOrNull()
+        synchronized(persistLock) {
+            if (gen == generation) {
+                _findings.update { CameraSweepRecord.merge(it, saved.findings, cutoff, FINDINGS_CAP) }
+                _sweepDone.update { it + saved.done }
+                _lastRunTs.update { max(it, saved.lastRunTs) }
+                if (networkResult.lastScanTs == 0L) networkResult = saved.network
+                _network.update { if (it.lastScanTs == 0L && !it.running) saved.network else it }
+                _irCheck.update { IrCheck(max(it.passedTs, saved.ir.passedTs), max(it.failedTs, saved.ir.failedTs)) }
+            }
+            restored = true
+        }
+        // Writes back the merge, without anything the history retention has since cut.
+        persistSoon()
+    }
+
+    /** Writes the record soon, batching a burst of findings into one write. */
+    private fun persistSoon() {
+        if (!restored || store == null) return
+        if (!persistQueued.compareAndSet(false, true)) return
+        scope.launch {
+            delay(PERSIST_DELAY_MS)
+            persistQueued.set(false)
+            writeNow()
+        }
+    }
+
+    /** Writes the record now, in the background: after Clear, so what was cleared is gone from disk too. */
+    private fun persistNow() {
+        if (!restored || store == null) return
+        scope.launch { writeNow() }
+    }
+
+    private fun writeNow() {
+        val s = store ?: return
+        synchronized(persistLock) {
+            if (!restored) return
+            val cutoff = appContext?.let { runCatching { HistoryRetention.cutoff(it) }.getOrNull() }
+            val record = CameraSweepRecord(
+                findings = _findings.value.filter { cutoff == null || it.ts >= cutoff },
+                done = _sweepDone.value,
+                lastRunTs = _lastRunTs.value,
+                network = networkResult,
+                ir = _irCheck.value
+            )
+            runCatching { s.replace(record.toJson()) }
+        }
+    }
+
+    /**
+     * The history retention ([HistoryRetention.apply]): findings from before [cutoff]
+     * go, in memory and on disk, also in a process that never opened the sweep (the
+     * daily alarm's), so a finding ages out on a phone whose owner has not opened
+     * Clairix since. Disk I/O; call off the main thread.
+     */
+    fun pruneOlderThan(context: Context, cutoff: Long) {
+        val app = context.applicationContext ?: return
+        if (appContext == null) appContext = app
+        synchronized(persistLock) {
+            _findings.update { list -> if (list.any { it.ts < cutoff }) list.filter { it.ts >= cutoff } else list }
+            if (!restored) {
+                // Not read in this process yet: cut the record on disk itself. A restore
+                // that is reading it now applies the same cutoff when it merges.
+                val s = storeFor(app)
+                val saved = runCatching { CameraSweepRecord.fromJson(s.load { JSONObject() }) }.getOrNull() ?: return
+                val kept = saved.findings.filter { it.ts >= cutoff }
+                if (kept.size != saved.findings.size) runCatching { s.replace(saved.copy(findings = kept).toJson()) }
+                return
+            }
+        }
+        // Read in this process: write the record back, which drops what is past the cutoff.
+        writeNow()
+    }
+
+    /**
+     * "Clear all data": every finding, tick, time and self-test result, in memory and
+     * on disk, now. Photos kept on the timeline go with their timeline events, which
+     * the same action clears. Disk I/O; it runs where the scanner's own clearing does.
+     */
+    fun forget(context: Context) {
+        val app = context.applicationContext ?: return
+        if (appContext == null) appContext = app
+        synchronized(persistLock) {
+            generation++
+            restoreStarted.set(true)
+            restored = true
+            _findings.value = emptyList()
+            _sweepDone.value = emptySet()
+            _lastRunTs.value = 0L
+            networkResult = NetworkScanProgress()
+            _network.update { if (it.running) it else NetworkScanProgress() }
+            _irCheck.value = IrCheck()
+            irConfirmed.clear()
+            _irConfirmedIds.value = emptySet()
+            irDismissed.clear()
+            _irDismissedIds.value = emptySet()
+            irSpots.clear()
+            alerted.clear()
+            runCatching { storeFor(app).replace(CameraSweepRecord().toJson()) }
+        }
+    }
 
     private val _optical = MutableStateFlow(OpticalState())
     val optical: StateFlow<OpticalState> = _optical.asStateFlow()
@@ -362,32 +601,39 @@ object HiddenCameraScanner {
     /**
      * Adds or replaces (by id) a finding; alerts once when it is strong enough and
      * [mayAlert]. Each method keeps at most [FINDINGS_PER_METHOD], so a stream of one
-     * kind cannot push the others off the list.
+     * kind cannot push the others off the list. A photo kept of a finding stays with
+     * it as later frames refresh it.
      */
     fun report(f: CameraFinding, mayAlert: Boolean = true) {
         _findings.update { current ->
-            val merged = listOf(f) + current.filter { it.id != f.id }
+            val previous = current.firstOrNull { it.id == f.id }
+            val next = if (f.photo == null && previous?.photo != null) f.copy(photo = previous.photo) else f
+            val merged = listOf(next) + current.filter { it.id != f.id }
             val perMethod = HashMap<CameraFindMethod, Int>()
             merged.filter { (perMethod.merge(it.method, 1, Int::plus) ?: 0) <= FINDINGS_PER_METHOD }.take(FINDINGS_CAP)
         }
-        if (mayAlert && f.confidence >= ALERT_CONFIDENCE && alerted.add(f.id)) {
+        if (mayAlert && f.confidence >= ALERT_CONFIDENCE && !f.needsConfirmation && alerted.add(f.id)) {
             Registry.publishAlert(
                 Alert(
                     id = "camera|${f.id}", ts = f.ts,
                     severity = if (f.confidence >= 0.85f) Severity.HIGH else Severity.MEDIUM,
                     title = "Possible hidden camera — ${methodLabel(f.method)}",
                     detail = "${f.location}. ${f.detail}",
-                    kind = EventKind.PLATFORM, dedupeKey = "camera|${f.id}",
+                    kind = EventKind.CAMERA, dedupeKey = "camera|${f.id}",
+                    lat = f.lat, lon = f.lon,
                     silent = f.method in ON_SCREEN_METHODS || screenResumed
                 ),
                 dedupeWindowMs = 6 * 60 * 60_000L
             )
         }
+        persistSoon()
     }
 
+    /** Clears the findings of [method], or all of them, from the list and from disk. Photos kept on the timeline stay there. */
     fun clear(method: CameraFindMethod? = null) {
         if (method == null) _findings.value = emptyList()
         else _findings.update { current -> current.filter { it.method != method } }
+        persistNow()
     }
 
     fun methodLabel(m: CameraFindMethod): String = when (m) {
@@ -412,18 +658,36 @@ object HiddenCameraScanner {
     fun opticalStarting(mode: OpticalMode) {
         PhoneHealthMonitor.ownCameraStarted(CAMERA_CLAIM)
         opticalSession = System.currentTimeMillis()
+        opticalRunMarked = false
+        // The answers given about IR spots belong to the last session's spots.
+        irDismissed.clear()
+        _irDismissedIds.value = emptySet()
+        irConfirmed.clear()
+        _irConfirmedIds.value = emptySet()
+        irSpots.clear()
         _optical.value = OpticalState(mode = mode, running = true, torchOn = mode.torch)
     }
 
-    fun publishOptical(state: OpticalState) { _optical.value = state }
+    /** The optical sweep counts as run once its first frame has been looked at. */
+    @Volatile private var opticalRunMarked = false
+
+    fun publishOptical(state: OpticalState) {
+        _optical.value = state
+        if (state.running && state.frames > 0L && !opticalRunMarked) {
+            opticalRunMarked = true
+            markRun()
+        }
+    }
 
     fun opticalError(mode: OpticalMode, message: String?) {
         PhoneHealthMonitor.ownCameraStopped(CAMERA_CLAIM)
+        cancelIrCheck()
         _optical.value = OpticalState(mode = mode, running = false, error = message ?: "Camera could not be opened")
     }
 
     fun opticalStopped(mode: OpticalMode) {
         PhoneHealthMonitor.ownCameraStopped(CAMERA_CLAIM)
+        cancelIrCheck()
         _optical.value = OpticalState(mode = mode, running = false)
     }
 
@@ -433,30 +697,203 @@ object HiddenCameraScanner {
     /** When the optical sweep last raised an alert; it raises at most one a minute. */
     @Volatile private var lastOpticalAlertAt = 0L
 
-    /** Called by the analyzer when a spot has held still long enough. */
-    fun opticalCandidate(context: Context, mode: OpticalMode, blob: GlintBlob) {
-        val (lat, lon) = fix(context)
+    /**
+     * The finding a spot makes: one per place in the frame (a 10 % grid) per camera
+     * session, so a spot that blinks out and back is not a new finding.
+     */
+    fun opticalFindingId(mode: OpticalMode, blob: GlintBlob): String {
         val px = (blob.x * 100).roundToInt().coerceIn(0, 100)
         val py = (blob.y * 100).roundToInt().coerceIn(0, 100)
-        val method = if (mode == OpticalMode.GLINT) CameraFindMethod.LENS_GLINT else CameraFindMethod.IR_ILLUMINATOR
-        val seconds = String.format(Locale.US, "%.1f", blob.heldMs / 1000f)
-        val detail = if (mode == OpticalMode.GLINT)
-            "A small round pinpoint held still for $seconds s while the phone held still, and went dark when the torch switched off, so it is a reflection of the torch, not a light. A lens returns torchlight straight back along its own axis. Step closer: look for a dark pinhole behind the spot."
-        else
-            "A point of light in a dark scene held still for $seconds s. The eye sees nothing there; a night-vision camera lights the room with infrared LEDs, and this camera lets some infrared through."
-        // One finding per place in the frame (a 10 % grid), so a spot that blinks out and back is not a new finding.
+        return "optical|${mode.name.lowercase(Locale.US)}|$opticalSession|${px / 10}|${py / 10}"
+    }
+
+    /** An IR spot's own confidence and holding time, before the cap that waits for the owner's answer. */
+    private class IrSpot(val confidence: Float, val heldMs: Long)
+
+    /** IR spots the owner can see with their own eyes: ordinary LEDs, not raised again this session. */
+    private val irDismissed = Collections.synchronizedSet(HashSet<String>())
+    /** IR spots the owner cannot see: possible illuminators, raised at their own confidence. */
+    private val irConfirmed = Collections.synchronizedSet(HashSet<String>())
+    private val irSpots = ConcurrentHashMap<String, IrSpot>()
+
+    private val _irConfirmedIds = MutableStateFlow<Set<String>>(emptySet())
+    /** The finding ids of IR spots the owner said they cannot see; the viewfinder draws those red. */
+    val irConfirmedIds: StateFlow<Set<String>> = _irConfirmedIds.asStateFlow()
+
+    private val _irDismissedIds = MutableStateFlow<Set<String>>(emptySet())
+    /** The finding ids of IR spots the owner can see (ordinary LEDs); the viewfinder draws those grey and asks no more. */
+    val irDismissedIds: StateFlow<Set<String>> = _irDismissedIds.asStateFlow()
+
+    /** Called by the analyzer when a spot has held still long enough. */
+    fun opticalCandidate(context: Context, mode: OpticalMode, blob: GlintBlob) {
+        val id = opticalFindingId(mode, blob)
+        if (mode == OpticalMode.IR && id in irDismissed) return
+        val (lat, lon) = fix(context)
+        val f = opticalFinding(mode, blob, id, lat, lon)
         val now = System.currentTimeMillis()
-        val mayAlert = blob.confidence < ALERT_CONFIDENCE || now - lastOpticalAlertAt >= 60_000L
-        if (mayAlert && blob.confidence >= ALERT_CONFIDENCE) lastOpticalAlertAt = now
-        report(
-            mayAlert = mayAlert,
-            f = CameraFinding(
-                id = "optical|${mode.name.lowercase(Locale.US)}|$opticalSession|${px / 10}|${py / 10}",
-                ts = System.currentTimeMillis(), method = method, confidence = blob.confidence,
-                location = "In the viewfinder, $px % from the left and $py % from the top",
-                detail = detail, lat = lat, lon = lon
+        val mayAlert = f.confidence < ALERT_CONFIDENCE || now - lastOpticalAlertAt >= 60_000L
+        if (mayAlert && f.confidence >= ALERT_CONFIDENCE) lastOpticalAlertAt = now
+        report(f, mayAlert = mayAlert)
+    }
+
+    private fun opticalFinding(mode: OpticalMode, blob: GlintBlob, id: String, lat: Double?, lon: Double?): CameraFinding {
+        val px = (blob.x * 100).roundToInt().coerceIn(0, 100)
+        val py = (blob.y * 100).roundToInt().coerceIn(0, 100)
+        val location = "In the viewfinder, $px % from the left and $py % from the top"
+        val now = System.currentTimeMillis()
+        if (mode == OpticalMode.GLINT) {
+            val seconds = String.format(Locale.US, "%.1f", blob.heldMs / 1000f)
+            return CameraFinding(
+                id = id, ts = now, method = CameraFindMethod.LENS_GLINT, confidence = blob.confidence, location = location,
+                detail = "A small round pinpoint held still for $seconds s while the phone held still, and went dark when the torch switched off, so it is a reflection of the torch, not a light. A lens returns torchlight straight back along its own axis. Step closer: look for a dark pinhole behind the spot.",
+                lat = lat, lon = lon
             )
+        }
+        irSpots[id] = IrSpot(blob.confidence, blob.heldMs)
+        val confirmed = id in irConfirmed
+        return CameraFinding(
+            id = id, ts = now, method = CameraFindMethod.IR_ILLUMINATOR,
+            confidence = if (confirmed) blob.confidence else min(blob.confidence, IR_UNCONFIRMED_CAP),
+            location = location, detail = irDetail(blob.heldMs, confirmed), lat = lat, lon = lon,
+            needsConfirmation = !confirmed
         )
+    }
+
+    /** An IR spot's words; [heldMs] is null for one put back from disk, whose holding time is gone. */
+    private fun irDetail(heldMs: Long?, confirmed: Boolean): String {
+        val held = if (heldMs == null) "held still" else "held still for ${String.format(Locale.US, "%.1f", heldMs / 1000f)} s"
+        return if (confirmed)
+            "A point of light $held in a dark scene, and you could not see it with your own eyes: a possible night-vision illuminator. Night-vision cameras light the room with infrared LEDs the eye cannot see, and this phone's front camera lets some of that light through. Look for a lens beside it."
+        else
+            "A point of light $held in a dark scene. If you can see this light with your own eyes it is an ordinary LED, not infrared. If you cannot, treat it as a possible night-vision illuminator."
+    }
+
+    /**
+     * The owner cannot see the IR spot [id] with their own eyes: it is raised as a
+     * possible illuminator at its own confidence, alerting if that is high enough.
+     */
+    fun confirmIr(id: String) {
+        irConfirmed.add(id)
+        _irConfirmedIds.value = irConfirmed.toSet()
+        val f = _findings.value.firstOrNull { it.id == id } ?: return
+        val spot = irSpots[id]
+        val confidence = max(f.confidence, spot?.confidence ?: 0f)
+        report(f.copy(confidence = confidence, detail = irDetail(spot?.heldMs, confirmed = true), needsConfirmation = false), mayAlert = true)
+    }
+
+    /** The owner can see the IR spot [id]: an ordinary LED. Removed, and not raised again this session. */
+    fun dismissIr(id: String) {
+        irDismissed.add(id)
+        _irDismissedIds.value = irDismissed.toSet()
+        irSpots.remove(id)
+        _findings.update { current -> current.filter { it.id != id } }
+        persistSoon()
+    }
+
+    // ── Optical: can this phone see infrared? ────────────────────────────────
+
+    /** How long the self-test watches for a remote's flashing. */
+    const val IR_CHECK_MS = 10_000L
+
+    private val _irCheck = MutableStateFlow(IrCheck())
+    /** What this phone's infrared self-test has shown, kept with the sweep. */
+    val irCheck: StateFlow<IrCheck> = _irCheck.asStateFlow()
+
+    private val _irCheckUntil = MutableStateFlow(0L)
+    /** Wall-clock end of the self-test in progress, or 0 when none is. */
+    val irCheckUntil: StateFlow<Long> = _irCheckUntil.asStateFlow()
+
+    private val irLock = Any()
+    @Volatile private var irRun = 0L
+    private var irCheckJob: Job? = null
+
+    /**
+     * Starts the infrared self-test: for [IR_CHECK_MS] the IR view's frames are
+     * watched for a TV remote's flashing ([IrSelfTest]). Passing records the date;
+     * running out of time records a check that saw nothing.
+     */
+    fun startIrCheck() {
+        val run = synchronized(irLock) {
+            if (irRun != 0L) return
+            System.currentTimeMillis().also { irRun = it }
+        }
+        _irCheckUntil.value = run + IR_CHECK_MS
+        irCheckJob = scope.launch {
+            delay(IR_CHECK_MS)
+            finishIrCheck(run, passed = false)
+        }
+    }
+
+    /** The self-test the analyzer should feed frames to, or 0 when none is running. */
+    internal fun irCheckRun(): Long = irRun
+
+    /** The analyzer saw a remote flashing during self-test [run]. */
+    internal fun irCheckPassed(run: Long) {
+        if (finishIrCheck(run, passed = true)) irCheckJob?.cancel()
+    }
+
+    private fun finishIrCheck(run: Long, passed: Boolean): Boolean {
+        synchronized(irLock) {
+            if (run == 0L || irRun != run) return false
+            irRun = 0L
+        }
+        _irCheckUntil.value = 0L
+        val now = System.currentTimeMillis()
+        _irCheck.update { if (passed) it.copy(passedTs = now) else it.copy(failedTs = now) }
+        persistNow()
+        return true
+    }
+
+    /** The IR view closed mid-test: stop without recording a result either way. */
+    private fun cancelIrCheck() {
+        synchronized(irLock) {
+            if (irRun == 0L) return
+            irRun = 0L
+        }
+        irCheckJob?.cancel()
+        _irCheckUntil.value = 0L
+    }
+
+    // ── Optical: keeping a photo ─────────────────────────────────────────────
+
+    /**
+     * "Keep a photo of this": [shot] is the viewfinder as the owner sees it, taken on
+     * the main thread, and [marks] the red candidates in it. Circles them, burns in
+     * the time, the place and where in the frame, seals the JPEG under files/sweep/
+     * and records a camera event on the timeline with the photo attached. Returns
+     * false when it could not be kept. Encryption and file I/O: call off the main thread.
+     */
+    fun keepPhoto(context: Context, mode: OpticalMode, marks: List<GlintBlob>, shot: Bitmap, density: Float): Boolean {
+        val lead = marks.maxByOrNull { it.confidence } ?: return false
+        val app = context.applicationContext ?: return false
+        restore(app)
+        val (fixLat, fixLon) = fix(app)
+        val id = opticalFindingId(mode, lead)
+        val finding = _findings.value.firstOrNull { it.id == id } ?: opticalFinding(mode, lead, id, fixLat, fixLon)
+        val lat = fixLat ?: finding.lat
+        val lon = fixLon ?: finding.lon
+        val now = System.currentTimeMillis()
+        val caption = SweepPhotos.caption(now, TimeZone.getDefault(), lat, lon, methodLabel(finding.method), finding.location)
+        val jpeg = runCatching { SweepPhotos.render(shot, marks, caption, density) }.getOrNull() ?: return false
+        val attachment = runCatching { SweepPhotos.save(app.filesDir, jpeg) }.getOrNull() ?: return false
+        val recorded = runCatching {
+            TimelineLog.record(
+                app,
+                TimelineEvent(
+                    id = "camera_photo|$id@$now", kind = EventKind.CAMERA, ts = now,
+                    title = "Photo kept: possible hidden camera, ${methodLabel(finding.method)}",
+                    detail = "${finding.location}. ${finding.detail}",
+                    severity = if (finding.confidence >= 0.85f) Severity.HIGH else Severity.MEDIUM,
+                    lat = lat, lon = lon, attachment = attachment
+                )
+            )
+        }.getOrDefault(false)
+        if (!recorded) {
+            SweepPhotos.delete(app.filesDir, listOf(attachment))
+            return false
+        }
+        report(finding.copy(photo = attachment), mayAlert = false)
+        return true
     }
 
     // ── Network: cameras on the local Wi-Fi ──────────────────────────────────
@@ -466,6 +903,7 @@ object HiddenCameraScanner {
     fun startNetworkScan(context: Context) {
         if (_network.value.running) return
         val app = context.applicationContext
+        restore(app)
         networkJob = scope.launch { runCatching { scanNetwork(app) } }
     }
 
@@ -527,12 +965,18 @@ object HiddenCameraScanner {
      *
      * Three independent probes run together: a TCP connect sweep of the camera ports
      * (RTSP, the Dahua and XMeye recorder ports, the web ports) with banners fetched
-     * from whatever answers; an ONVIF WS-Discovery multicast probe, which every
-     * ONVIF camera must answer; and mDNS browsing for `_rtsp`, `_axis-video`, `_psia`,
-     * `_onvif`, HomeKit cameras (`_hap` with category 17/18) and web servers whose
-     * name says camera. A host with only a web UI and no camera fingerprint is not
-     * reported — that is every printer and router. Everything is bound to the Wi-Fi
-     * [Network] so mobile data cannot swallow the probes.
+     * from whatever answers; an ONVIF WS-Discovery multicast probe, which most ONVIF
+     * cameras answer (a setting some brands ship switched off); and mDNS browsing for
+     * `_rtsp`, `_axis-video`, `_psia`, `_onvif`, HomeKit cameras (`_hap` with category
+     * 17/18) and web servers whose name says camera. A host with only a web UI and no
+     * camera fingerprint is not reported — that is every printer and router.
+     * Everything is bound to the Wi-Fi [Network] so mobile data cannot swallow the
+     * probes. A camera that talks only to its maker's cloud answers none of them
+     * ([CLOUD_ONLY_NOTE]).
+     *
+     * When the sweep could not look ([NetworkSweepCoverage]: only the router
+     * answered, a network wider than the block checked, no IPv4 address, a sweep
+     * stopped early) it says so in [NetworkScanProgress.inconclusiveReason].
      */
     suspend fun scanNetwork(context: Context): List<CameraFinding> = withContext(Dispatchers.IO) {
         val app = context.applicationContext
@@ -544,38 +988,41 @@ object HiddenCameraScanner {
             }
         }
         val link: LinkProperties? = wifiNet?.let { cm?.getLinkProperties(it) }
-        val v4 = link?.linkAddresses?.firstOrNull { it.address is Inet4Address }
-        if (wifiNet == null || link == null || v4 == null) {
+        if (wifiNet == null || link == null) {
             _network.update { it.copy(running = false, error = "Not on Wi-Fi — join the venue's network first, then scan", phase = "") }
             return@withContext emptyList()
         }
-        val selfIp = v4.address.hostAddress ?: ""
-        val gateway = link.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway?.hostAddress
         val ssid = Registry.wifiStatus.value.connection?.ssid
             ?: runCatching {
                 @Suppress("DEPRECATION")
                 app.getSystemService(WifiManager::class.java)?.connectionInfo?.ssid?.trim('"')
             }.getOrNull()?.takeIf { it.isNotBlank() && it != WifiManager.UNKNOWN_SSID }
+        val v4 = link.linkAddresses.firstOrNull { it.address is Inet4Address }
+        if (v4 == null) {
+            // On the Wi-Fi, but with no IPv4 address (an IPv6-only network, or no lease
+            // yet): there is nothing to sweep, and that is the result, not "Not on Wi-Fi".
+            networkResult = NetworkScanProgress(lastScanTs = System.currentTimeMillis(), ssid = ssid, inconclusiveReason = NetworkSweepCoverage.NO_IPV4)
+            _network.value = networkResult
+            markRun()
+            return@withContext emptyList()
+        }
+        val gateway = link.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway?.hostAddress
 
-        // The /24 round our own address, even on a wider network: 254 hosts is a
-        // sweep, 65 000 is a denial of service on the venue's router.
-        val ipInt = ipToInt(v4.address.address)
-        val prefix = max(v4.prefixLength, 24)
-        val mask = if (prefix >= 32) -1 else (-1 shl (32 - prefix))
-        val base = ipInt and mask
-        val count = if (prefix >= 32) 1 else (1 shl (32 - prefix))
-        val hosts = (1 until count - 1).map { base + it }.filter { it != ipInt }.map { intToIp(it) }
-        val subnet = "${intToIp(base)}/$prefix"
+        // The /24 round our own address, even on a wider network (and the sweep says how much it checked).
+        val range = NetworkSweepCoverage.range(NetworkSweepCoverage.ipToInt(v4.address.address), v4.prefixLength)
+        val hosts = range.hosts.map { NetworkSweepCoverage.ipString(it) }
 
         _network.value = NetworkScanProgress(
             running = true, phase = "Probing ${hosts.size} addresses", hostsTotal = hosts.size,
-            subnet = subnet, ssid = ssid, lastScanTs = _network.value.lastScanTs
+            subnet = range.subnet, ssid = ssid, lastScanTs = _network.value.lastScanTs
         )
 
         val hits = ConcurrentHashMap<String, HostHit>()
         fun hit(ip: String): HostHit = hits.computeIfAbsent(ip) { HostHit(ip) }
         val (lat, lon) = fix(app)
         val out = ArrayList<CameraFinding>()
+        var inconclusive: String? = null
+        var completed = false
         try {
             coroutineScope {
                 val onvif = async { runCatching { onvifProbe(wifiNet, 3_000L) }.getOrDefault(emptyMap()) }
@@ -599,6 +1046,9 @@ object HiddenCameraScanner {
                         _network.update { it.copy(hostsDone = d, liveHosts = alive.size) }
                     }
                 }.joinAll()
+
+                // Did anything but the router answer? If not, an empty result proves nothing.
+                inconclusive = NetworkSweepCoverage.inconclusiveReason(range, alive, gateway)
 
                 // Stage 2: the live hosts get the long port list and banners.
                 _network.update { it.copy(phase = "Fingerprinting ${alive.size} live hosts", hostsDone = 0, hostsTotal = alive.size, liveHosts = alive.size) }
@@ -666,17 +1116,21 @@ object HiddenCameraScanner {
             // Replace the previous network sweep rather than stacking stale hosts.
             _findings.update { current -> (out + current.filter { it.method != CameraFindMethod.NETWORK }).take(FINDINGS_CAP) }
             out.forEach { f -> if (f.confidence >= ALERT_CONFIDENCE) report(f) }
-            _network.update { it.copy(found = out.size, error = null) }
+            _network.update { it.copy(found = out.size, error = null, inconclusiveReason = inconclusive) }
+            completed = true
             out
         } finally {
-            _network.update { it.copy(running = false, phase = "", lastScanTs = System.currentTimeMillis(), hostsDone = it.hostsTotal) }
+            _network.update {
+                it.copy(
+                    running = false, phase = "", lastScanTs = System.currentTimeMillis(), hostsDone = it.hostsTotal,
+                    // Cancelled or cut short: what it did not reach, it did not check.
+                    inconclusiveReason = if (completed) it.inconclusiveReason else NetworkSweepCoverage.STOPPED
+                )
+            }
+            networkResult = _network.value
+            markRun()
         }
     }
-
-    private fun ipToInt(b: ByteArray): Int =
-        ((b[0].toInt() and 0xFF) shl 24) or ((b[1].toInt() and 0xFF) shl 16) or ((b[2].toInt() and 0xFF) shl 8) or (b[3].toInt() and 0xFF)
-
-    private fun intToIp(i: Int): String = "${(i ushr 24) and 255}.${(i ushr 16) and 255}.${(i ushr 8) and 255}.${i and 255}"
 
     private fun probe(network: Network, ip: String, port: Int, timeoutMs: Int): PortState {
         val s: Socket = try { network.socketFactory.createSocket() } catch (_: Exception) { return PortState.FILTERED }
@@ -756,8 +1210,10 @@ object HiddenCameraScanner {
 
     /**
      * WS-Discovery: one multicast `Probe` for `NetworkVideoTransmitter` to
-     * 239.255.255.250:3702; every ONVIF device answers with a unicast `ProbeMatch`
-     * carrying its scopes (name, hardware) and service address.
+     * 239.255.255.250:3702. An ONVIF device with discovery switched on (most ship
+     * that way; some brands ship it off) answers with a unicast `ProbeMatch`
+     * carrying its scopes (name, hardware) and service address. A network that
+     * isolates clients delivers neither the probe nor the answer.
      */
     private fun onvifProbe(network: Network, listenMs: Long): Map<String, String> {
         val found = LinkedHashMap<String, String>()
@@ -911,6 +1367,7 @@ object HiddenCameraScanner {
     fun startWifiSetupScan(context: Context) {
         if (_wireless.value.wifiScanning) return
         val app = context.applicationContext
+        restore(app)
         wifiJob = scope.launch { runCatching { scanWifiSetupAps(app) } }
     }
 
@@ -973,6 +1430,7 @@ object HiddenCameraScanner {
             _findings.update { current -> (out + current.filter { it.method != CameraFindMethod.WIFI_SETUP_AP }).take(FINDINGS_CAP) }
             out.forEach { f -> if (f.confidence >= ALERT_CONFIDENCE) report(f) }
             _wireless.update { it.copy(wifiScannedTs = measuredAt, wifiApsSeen = results.size, wifiError = null) }
+            markRun()
             return out
         } finally {
             _wireless.update { it.copy(wifiScanning = false) }
@@ -1009,6 +1467,7 @@ object HiddenCameraScanner {
     fun startBleListening(context: Context, durationMs: Long = 20_000L) {
         if (_wireless.value.bleListening) return
         val app = context.applicationContext
+        restore(app)
         bleJob = scope.launch { runCatching { listenBle(app, durationMs) } }
     }
 
@@ -1074,6 +1533,8 @@ object HiddenCameraScanner {
             }
         } finally {
             _wireless.update { it.copy(bleListening = false, bleUntilTs = 0L) }
+            // A window that heard the air counts as a sweep; one Bluetooth refused does not.
+            if (_wireless.value.bleError == null) markRun()
         }
     }
 
@@ -1105,30 +1566,19 @@ object HiddenCameraScanner {
 
     // ── Magnetic: a sweep with the phone's compass ───────────────────────────
 
-    private class MagneticListener(private val context: Context) : SensorEventListener {
-        companion object {
-            const val WARMUP = 40
-            const val WINDOW = 96
-            const val MIN_DELTA_UT = 18f
-            const val SUSTAIN_MS = 250L
-            const val COOLDOWN_MS = 1_500L
-            const val ALPHA = 0.03f
-            const val FULL_CONFIDENCE_UT = 200f
-        }
-
-        private val window = FloatArray(WINDOW)
-        private var wi = 0
-        private var wn = 0
-        private var baseline = 0f
-        private var warm = 0
-        private var onsetTs = 0L
-        private var triggered = false
-        private var peak = 0f
-        private var episodeId = 0L
-        private var episodeEnded = 0L
-        @Volatile var unreliable = false
+    /**
+     * Feeds the gauge's verdict ([MagneticBaseline]) and turns its episodes into
+     * findings: one per episode, refreshed as the peak grows, and put on the
+     * timeline with its final peak when the episode ends or the gauge stops.
+     */
+    private class MagneticListener(context: Context) : SensorEventListener {
+        private val verdict = MagneticBaseline()
         private val lat: Double?
         private val lon: Double?
+        /** The open episode's finding, or null. */
+        private var episode: CameraFinding? = null
+        /** The baseline when the open episode began. */
+        private var episodeBaselineUt = 0f
 
         init {
             val (la, lo) = fix(context)
@@ -1136,95 +1586,84 @@ object HiddenCameraScanner {
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-            unreliable = accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE
-        }
-
-        private fun push(v: Float) {
-            window[wi] = v
-            wi = (wi + 1) % WINDOW
-            if (wn < WINDOW) wn++
-        }
-
-        private fun sigma(): Float {
-            if (wn < 8) return 0f
-            var s = 0.0
-            for (i in 0 until wn) s += window[i]
-            val m = s / wn
-            var v = 0.0
-            for (i in 0 until wn) { val d = window[i] - m; v += d * d }
-            return sqrt(v / wn).toFloat()
+            verdict.accuracyChanged(accuracy)
+            if (verdict.unreliable) closeEpisode()
+            // Re-seeded: settling again, or paused until the compass recovers.
+            _magnetic.update { it.copy(triggered = false, unreliable = verdict.unreliable, warmingUp = !verdict.unreliable) }
         }
 
         override fun onSensorChanged(e: SensorEvent) {
+            // From TYPE_MAGNETIC_FIELD_UNCALIBRATED, values[0..2] are the raw field with the
+            // phone's own hard-iron bias still in it (values[3..5] estimate that bias). The
+            // bias is constant for the length of a sweep and the baseline absorbs it; the
+            // calibrated stream instead jumps whenever the platform re-estimates it.
             val x = e.values[0]; val y = e.values[1]; val z = e.values[2]
-            val mag = sqrt(x * x + y * y + z * z)
-            val now = SystemClock.elapsedRealtime()
-
-            if (warm < WARMUP) {
-                warm++
-                baseline = if (warm == 1) mag else baseline + (mag - baseline) / warm
-                push(mag)
-                _magnetic.value = MagneticState(active = true, fieldUt = mag, baselineUt = baseline, unreliable = unreliable, warmingUp = true)
-                return
+            val r = verdict.sample(sqrt(x * x + y * y + z * z), SystemClock.elapsedRealtime())
+            if (r.started) {
+                episodeBaselineUt = r.baselineUt
+                episode = finding(System.currentTimeMillis(), r).also { report(it) }
+            } else if (r.peakGrew) {
+                episode?.let { open -> episode = finding(open.ts, r).also { report(it) } }
             }
-
-            val threshold = max(MIN_DELTA_UT, 4f * sigma())
-            val delta = abs(mag - baseline)
-            if (!triggered) {
-                if (delta > threshold) {
-                    if (onsetTs == 0L) onsetTs = now
-                    else if (now - onsetTs >= SUSTAIN_MS && now - episodeEnded >= COOLDOWN_MS) {
-                        triggered = true
-                        peak = delta
-                        episodeId = System.currentTimeMillis()
-                        emit(threshold)
-                    }
-                } else {
-                    onsetTs = 0L
-                    // The baseline only learns from quiet samples, so the thing we
-                    // are hunting cannot teach the detector to ignore it.
-                    baseline += ALPHA * (mag - baseline)
-                    push(mag)
-                }
-            } else {
-                if (delta > peak) { peak = delta; emit(threshold) }
-                if (delta < threshold / 2f) {
-                    triggered = false
-                    onsetTs = 0L
-                    episodeEnded = now
-                }
-            }
+            if (!r.triggered) closeEpisode()
             _magnetic.value = MagneticState(
-                active = true, fieldUt = mag, baselineUt = baseline, deltaUt = delta, thresholdUt = threshold,
-                peakUt = peak, triggered = triggered, unreliable = unreliable, warmingUp = false
+                active = true, fieldUt = r.fieldUt, baselineUt = r.baselineUt, deltaUt = r.deltaUt, thresholdUt = r.thresholdUt,
+                peakUt = r.peakUt, triggered = r.triggered, unreliable = r.unreliable, warmingUp = r.warmingUp
             )
         }
 
-        private fun emit(threshold: Float) {
+        private fun finding(ts: Long, r: MagneticBaseline.Reading): CameraFinding {
             // A magnet is not a camera: speakers, mounts and door catches all move the
             // needle. This is a hint about where to look, so it caps well below alert level.
-            val conf = (peak / FULL_CONFIDENCE_UT).coerceIn(0.15f, 0.6f)
-            report(
-                CameraFinding(
-                    id = "mag|$episodeId", ts = episodeId, method = CameraFindMethod.MAGNETIC, confidence = conf,
-                    location = "Where the phone was when the needle jumped",
-                    detail = "Field rose ${peak.roundToInt()} µT above the ${baseline.roundToInt()} µT baseline (trigger ${threshold.roundToInt()} µT). " +
-                        "Covert cameras carry a speaker magnet or a magnetic mount; so do real speakers, door catches and steel studs. Look for a lens at this spot.",
-                    lat = lat, lon = lon
-                )
+            val conf = (r.peakUt / FULL_CONFIDENCE_UT).coerceIn(0.15f, 0.6f)
+            return CameraFinding(
+                id = "mag|$ts", ts = ts, method = CameraFindMethod.MAGNETIC, confidence = conf,
+                location = "Where the phone was when the needle jumped",
+                detail = "The field moved ${r.peakUt.roundToInt()} µT from the ${episodeBaselineUt.roundToInt()} µT baseline (trigger ${r.thresholdUt.roundToInt()} µT). " +
+                    "Covert cameras carry a speaker magnet or a magnetic mount; so do real speakers, door catches and steel studs. Look for a lens at this spot.",
+                lat = lat, lon = lon
             )
         }
+
+        /** The open episode is over (or the gauge stops): it goes on the timeline with its peak. */
+        fun closeEpisode() {
+            val f = episode ?: return
+            episode = null
+            recordMagnetic(f)
+        }
+    }
+
+    /**
+     * A magnetic anomaly on the timeline. It never reaches alert confidence (a magnet
+     * is a hint, not a camera), so it is recorded as LOW and raises no notification.
+     */
+    private fun recordMagnetic(f: CameraFinding) {
+        Registry.publishAlert(
+            Alert(
+                id = "camera|${f.id}", ts = f.ts, severity = Severity.LOW,
+                title = "Magnetic anomaly: look for a lens here",
+                detail = "${f.location}. ${f.detail}",
+                kind = EventKind.CAMERA, dedupeKey = "camera|${f.id}",
+                lat = f.lat, lon = f.lon, silent = true
+            ),
+            dedupeWindowMs = 6 * 60 * 60_000L
+        )
     }
 
     private var magListener: MagneticListener? = null
     private var magManager: SensorManager? = null
 
-    /** Starts the magnetometer sweep; call from the main thread (sensor events land on it). */
+    /**
+     * Starts the magnetometer sweep; call from the main thread (sensor events land on
+     * it). Reads the uncalibrated stream where the phone has one, which the
+     * platform's calibration updates do not step; the calibrated stream otherwise.
+     */
     fun startMagnetic(context: Context) {
         stopMagnetic()
         val app = context.applicationContext
+        restore(app)
         val sm = app.getSystemService(SensorManager::class.java)
-        val sensor = sm?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        val sensor = sm?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED) ?: sm?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
         if (sm == null || sensor == null) {
             _magnetic.value = MagneticState(active = false, error = "This phone has no magnetometer")
             return
@@ -1238,10 +1677,14 @@ object HiddenCameraScanner {
         magListener = l
         magManager = sm
         _magnetic.value = MagneticState(active = true, warmingUp = true)
+        markRun()
     }
 
     fun stopMagnetic() {
-        magListener?.let { l -> runCatching { magManager?.unregisterListener(l) } }
+        magListener?.let { l ->
+            runCatching { magManager?.unregisterListener(l) }
+            l.closeEpisode()
+        }
         magListener = null
         magManager = null
         _magnetic.update { it.copy(active = false, triggered = false, warmingUp = false) }
@@ -1255,17 +1698,19 @@ object HiddenCameraScanner {
         SweepStep("lights", "Lights off, blinds closed",
             "Let your eyes adjust for a minute, then look slowly around at eye height and up. Most covert cameras have a tiny status LED or an IR glow that is lost under room lighting.", "Eyes"),
         SweepStep("glint", "Glint sweep with the torch",
-            "OPTICAL tab, Lens glint mode. Hold the phone at arm's length and pan slowly: a lens throws the torch straight back as a steady pinpoint; a screw head or glass edge flashes and slides. Circles that turn red have held still.", "OPTICAL"),
+            "OPTICAL tab, Lens glint mode. Hold the phone at arm's length and pan slowly: a lens throws the torch straight back as a steady pinpoint; a screw head or glass edge flashes and slides. Circles that turn red have held still. It works best within about a metre of the surface: for ceiling fixtures, stand on a chair or use the 2× zoom.", "OPTICAL"),
         SweepStep("ir", "Infrared sweep in the dark",
-            "OPTICAL tab, IR illuminator mode, room dark. Point the front camera at smoke detectors, clocks, chargers, outlets and vents. A night-vision camera lights the room with LEDs you cannot see; the phone can.", "OPTICAL"),
+            "OPTICAL tab, IR illuminator mode. First check this phone can see infrared at all, with a TV remote and the check on that tab. Then, room dark, point the front camera at smoke detectors, clocks, chargers, outlets and vents. A night-vision camera lights the room with LEDs you cannot see; a phone that passed the check can. A light you can see with your own eyes is an ordinary LED.", "OPTICAL"),
         SweepStep("objects", "Check the usual disguises",
-            "Smoke detectors, USB chargers and power strips, alarm clocks, air fresheners, picture frames, tissue boxes, books, plant pots, screws with a hole in the head. Anything with a dark pinhole facing the room, especially facing the bed or shower.", "Hands · torch"),
+            "Smoke detectors, USB chargers and power strips, alarm clocks, air fresheners, picture frames, tissue boxes, books, plant pots, screws with a hole in the head. Light bulbs and lamp shades: bulb cameras screw into any socket and point down at the bed. Coat and towel hooks on the back of doors, routers and TV boxes, TVs, soundbars and smart speakers, thermostats, door peepholes, shower heads. Anything with a dark pinhole facing the room, especially facing the bed or shower.", "Hands · torch"),
         SweepStep("outlets", "Outlets, vents and ceiling fixtures",
             "Pull chargers out and look at their faces. Shine the torch into vents and around the edges of ceiling lights and detectors; a lens behind a grille still glints.", "Torch"),
+        SweepStep("above", "Above and behind you",
+            "Lie on the bed and stand in the shower; look up and at the door. Anything with a dark dot facing you from above (a bulb, a hook, a detector) gets the glint and IR check from where you are.", "Eyes · OPTICAL"),
         SweepStep("mirrors", "Mirror test",
             "Fingernail on the glass: a gap between the nail and its reflection is a normal mirror. No gap, or a dark room showing through when you cup the torch against the glass, is a two-way mirror.", "Hands · torch"),
         SweepStep("network", "Scan the venue's Wi-Fi",
-            "Join the venue's network and run the NETWORK tab. Most cameras on a network answer ONVIF or RTSP, or have a web page with the maker's name on it. Cheap cloud-only mini cameras often expose no ports at all, so a clean result here is not the last word.", "NETWORK"),
+            "Join the venue's network and run the NETWORK tab. Cameras that serve video on the network answer RTSP, many answer ONVIF, and some have a web page with the maker's name on it. Most consumer cameras talk only to their maker's cloud and answer none of that, so a clean result here is not the last word.", "NETWORK"),
         SweepStep("wireless", "Listen for setup beacons",
             "WIRELESS tab: a camera that has not been paired broadcasts its own open hotspot or a Bluetooth name. A planted one that was never finished is loud.", "WIRELESS"),
         SweepStep("magnet", "Magnetic pass along surfaces",
@@ -1273,10 +1718,40 @@ object HiddenCameraScanner {
     )
 
     fun toggleSweepStep(id: String) {
-        _sweepDone.update { done -> if (id in done) done - id else done + id }
+        val done = _sweepDone.updateAndGet { done -> if (id in done) done - id else done + id }
+        // A step ticked off is part of the room swept.
+        if (id in done) markRun() else persistSoon()
     }
 
-    fun resetSweep() { _sweepDone.value = emptySet() }
+    fun resetSweep() {
+        _sweepDone.value = emptySet()
+        persistNow()
+    }
+
+    /**
+     * What the network sweep cannot see even on the same Wi-Fi. Shown on the
+     * Network tab whatever the result, and in the website's limits.
+     */
+    const val CLOUD_ONLY_NOTE: String =
+        "Most consumer cameras (Wyze, Blink, Ring, Arlo, Nest, many cheap \"IP camera\" app cameras) talk only to their maker's cloud " +
+        "and run no local service. They are invisible to this sweep even on the same Wi-Fi; the optical, wireless and hands-on steps are what find them."
+
+    /** Shown on the IR tab until this phone has shown it can see infrared. */
+    const val IR_UNSEEN_TITLE: String = "This phone has not shown it can see infrared"
+
+    /** What the IR tab's notice says about [check], or null once the phone has shown infrared. */
+    fun irNotice(check: IrCheck): String? = when {
+        check.seen -> null
+        check.failedTs > 0L ->
+            "The last check saw no remote flashing. Some front cameras filter infrared out completely, and on those the IR view cannot show an illuminator. " +
+                "Try again with the remote close to the screen, and rely on the other tabs until it passes."
+        else ->
+            "Point a TV remote at the front camera, press and hold a button, and run the check. Until this phone has shown the remote flashing, an empty IR result says nothing about the room."
+    }
+
+    /** The IR tab's empty findings text: prefixed with [IR_UNSEEN_TITLE] until the phone has shown infrared. */
+    fun irEmptyText(check: IrCheck): String =
+        if (check.seen) "No steady points of light recorded yet" else "$IR_UNSEEN_TITLE. No steady points of light recorded yet."
 
     const val ANALOG_RF_NOTE: String =
         "What this phone cannot see: analogue wireless cameras. Cheap video senders on 900 MHz, 1.2 GHz, 2.4 GHz and 5.8 GHz " +

@@ -17,7 +17,16 @@ import org.json.JSONObject
  * It is capped so the file cannot grow without bound, dropping the oldest
  * entries first.
  */
-class EventLog(private val store: Store, private val cap: Int = 500) {
+class EventLog(
+    private val store: Store,
+    private val cap: Int = 500,
+    /**
+     * Told about every event that leaves the log, by [clear], [pruneOlderThan] or
+     * the cap, so a file kept with one ([TimelineEvent.attachment]) goes with it.
+     * Called under the log's lock.
+     */
+    private val onDropped: (List<TimelineEvent>) -> Unit = {}
+) {
 
     private val events = ArrayList<TimelineEvent>()
 
@@ -53,8 +62,10 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
         // dated from its last heartbeat is written after events that came later.
         val at = events.indexOfFirst { it.ts <= event.ts }
         events.add(if (at < 0) events.size else at, event)
-        while (events.size > cap) events.removeAt(events.size - 1)
+        val overflow = ArrayList<TimelineEvent>()
+        while (events.size > cap) overflow.add(events.removeAt(events.size - 1))
         persist()
+        dropped(overflow)
         return true
     }
 
@@ -66,18 +77,25 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
 
     @Synchronized
     fun clear() {
+        val gone = ArrayList(events)
         events.clear()
         persist()
+        dropped(gone)
     }
 
     /** Deletes events before [cutoff]; returns how many. */
     @Synchronized
     fun pruneOlderThan(cutoff: Long): Int {
-        val before = events.size
+        val gone = events.filter { it.ts < cutoff }
+        if (gone.isEmpty()) return 0
         events.removeAll { it.ts < cutoff }
-        val removed = before - events.size
-        if (removed > 0) persist()
-        return removed
+        persist()
+        dropped(gone)
+        return gone.size
+    }
+
+    private fun dropped(gone: List<TimelineEvent>) {
+        if (gone.isNotEmpty()) runCatching { onDropped(gone) }
     }
 
     private fun persist() {
@@ -100,16 +118,21 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
         put("severity", e.severity.name)
         if (e.lat != null) put("lat", e.lat)
         if (e.lon != null) put("lon", e.lon)
+        if (e.attachment != null) put("attachment", e.attachment)
     }
 
     private fun fromJson(o: JSONObject) = TimelineEvent(
         id = o.optString("id"),
-        kind = runCatching { EventKind.valueOf(o.optString("kind")) }.getOrDefault(EventKind.FOLLOWING),
+        // Stored by name. A kind this build does not know (one written by a newer build)
+        // reads as a plain platform alert, not as a tracker following.
+        kind = runCatching { EventKind.valueOf(o.optString("kind")) }.getOrDefault(EventKind.PLATFORM),
         ts = o.optLong("ts"),
         title = o.optString("title"),
         detail = o.optString("detail"),
         severity = runCatching { Severity.valueOf(o.optString("severity")) }.getOrDefault(Severity.MEDIUM),
         lat = if (o.has("lat")) o.optDouble("lat") else null,
-        lon = if (o.has("lon")) o.optDouble("lon") else null
+        lon = if (o.has("lon")) o.optDouble("lon") else null,
+        // Absent from every event stored before attachments existed.
+        attachment = if (o.has("attachment")) o.optString("attachment").takeIf { it.isNotEmpty() } else null
     )
 }
