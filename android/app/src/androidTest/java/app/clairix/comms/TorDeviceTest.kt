@@ -126,7 +126,16 @@ class TorDeviceTest {
             invite = repo.createInvite()
         }
         assertTrue("signed requests did not reach the relay at its onion address: ${invite.exceptionOrNull()}", invite.isSuccess)
-        repo.sync().getOrThrow()
+        // A circuit to a young onion service can still drop between one request
+        // and the next ("SOCKS: Host unreachable" once, on Android 34 in CI, just
+        // after the invite went through); the app tries a failed sync again
+        // later, and so does this, within the same patience.
+        var synced = repo.sync()
+        while (synced.isFailure && System.currentTimeMillis() < deadline) {
+            kotlinx.coroutines.delay(5_000)
+            synced = repo.sync()
+        }
+        synced.getOrThrow()
     }
 
     @Test
