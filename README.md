@@ -19,7 +19,7 @@ just as plainly, what it cannot do.
 | What you want to do | How Clairix helps |
 |---|---|
 | Find a hidden camera | Point the phone around the room and it spots the lens glint every camera has |
-| Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers, and says FOLLOWING only once the same device has been heard at two places far apart |
+| Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers, and says FOLLOWING only once one away from its owner has been heard at places far apart while your own position shows you travelled between them; anything else that does the same is reported as travelling with you, not as a tracker |
 | Catch a fake cell tower | Learns the towers that are normal for the places you go and warns when one breaks the rules |
 | Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level |
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |

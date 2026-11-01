@@ -8,6 +8,7 @@ import app.clairix.CellStatus
 import app.clairix.Detection
 import app.clairix.NfcTag
 import app.clairix.ScanStatus
+import app.clairix.Threat
 import app.clairix.TimelineEvent
 import app.clairix.WifiAnomaly
 import org.json.JSONArray
@@ -98,12 +99,22 @@ object Report {
             if (d.advertisedName != null) appendLine("    Adv name: ${d.advertisedName}")
             if (d.services.isNotEmpty()) appendLine("    Services: ${d.services.joinToString(" / ")}")
             appendLine("    Signal  : ${d.rssi} dBm")
-            appendLine("    Status  : ${if (d.following) "*** CONFIRMED FOLLOWING ***" else if (d.persistent) "Persistent" else "Brief"}")
+            // What the threat says, not `following` alone: a recognised tracker that moved
+            // with you is confirmed following; anything else that did is travelling with
+            // you, which a companion's phone also does.
+            val verdict = when {
+                d.following && d.threat == Threat.CRITICAL -> "*** CONFIRMED FOLLOWING ***"
+                d.following -> "Travelling with you (not a recognised tracker away from its owner)"
+                d.persistent -> "Persistent"
+                else -> "Brief"
+            }
+            appendLine("    Status  : $verdict")
             appendLine("    Threat  : ${d.threat}  Score: ${d.score}")
             appendLine("    Confidence: ${d.confidence.name}")
             appendLine("    First seen: ${sdfMinute.format(Date(d.firstSeen))}  Last seen: ${sdfMinute.format(Date(d.lastSeen))}")
             appendLine("    Sightings: ${d.sightings}  Places: ${d.places}  Displacement: ${d.displacementM.toInt()} m")
             if (d.tracker != null) appendLine("    Type    : ${d.tracker.label} (${d.tracker.brand})")
+            if (d.separatedAt != 0L) appendLine("    Separated from owner since: ${sdfMinute.format(Date(d.separatedAt))}")
             if (d.rotations > 0) appendLine("    MAC rotations: ${d.rotations}")
             appendLine("    ${d.addresses} address rotation${if (d.addresses == 1) "" else "s"}")
             if (d.points.isNotEmpty()) {

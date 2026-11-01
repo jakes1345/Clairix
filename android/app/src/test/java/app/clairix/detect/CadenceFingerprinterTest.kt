@@ -69,8 +69,10 @@ class CadenceFingerprinterTest {
         val match = answers.firstOrNull { it != null }
         assertNotNull(answers.toString(), match)
         assertEquals("tag-one", match!!.logicalId)
-        // Nothing but cadence separates two AirTags, so this is never "certain".
+        // Nothing but cadence separates two AirTags, so this is never "certain", and the
+        // caller is told so: a verdict must not ride across such a stitch.
         assertFalse(match.certain)
+        assertTrue(match.indistinguishable)
     }
 
     @Test
@@ -106,6 +108,7 @@ class CadenceFingerprinterTest {
         assertNotNull(answers.toString(), match)
         assertEquals("gadget", match!!.logicalId)
         assertTrue(match.certain)
+        assertFalse(match.indistinguishable)
     }
 
     private companion object {

@@ -55,7 +55,13 @@ data class Detection(
      * asked. A tracker that answers is by definition away from its owner; one that
      * refuses the connection ([DultResult.error] set, nothing answered) is probably not.
      */
-    val dult: DultResult? = null
+    val dult: DultResult? = null,
+    /**
+     * When a reading of this tracker as "owner nearby" gave way to one as separated
+     * from its owner, or 0: the moment, for a tag riding along, it stopped being
+     * somebody's keys.
+     */
+    val separatedAt: Long = 0L
 ) {
     val identified: Boolean get() = tracker != null
 

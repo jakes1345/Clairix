@@ -103,7 +103,15 @@ class CadenceFingerprinter(
          * then merge histories wholesale; otherwise they should not let the merge
          * extend how long the device appears to have been present.
          */
-        val certain: Boolean
+        val certain: Boolean,
+        /**
+         * Both addresses belong to one tracker family and share every confirming
+         * feature (transmit power, PHY, payload shape and length), as two units of one
+         * product do, so only the cadence and the timing of the hand-over say they are
+         * one device. Never [certain]. Callers should not let such a stitch carry a
+         * verdict the old address earned onto the new one: it may be the other unit.
+         */
+        val indistinguishable: Boolean
     )
 
     /**
@@ -155,6 +163,8 @@ class CadenceFingerprinter(
         var attempts = 0
         /** Whether the stitch that gave this address its id was [Match.certain]. */
         var stitchCertain = false
+        /** Whether that stitch was [Match.indistinguishable]. */
+        var stitchIndistinguishable = false
 
         fun push(deltaMs: Long) {
             deltas[head] = deltaMs
@@ -216,7 +226,7 @@ class CadenceFingerprinter(
         val track = existing ?: Track(address, nowMs).also { tracks[address] = it }
         record(track, packet)
 
-        if (track.stitched) return Match(track.logicalId, track.stitchCertain)
+        if (track.stitched) return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable)
 
         // A fresh address is scored only once it has measured its own cadence; until
         // then it has nothing that is its own to compare. Packets before that point
@@ -233,7 +243,8 @@ class CadenceFingerprinter(
         track.logicalId = best.candidate.logicalId
         track.stitched = true
         track.stitchCertain = best.certain
-        return Match(track.logicalId, track.stitchCertain)
+        track.stitchIndistinguishable = best.indistinguishable
+        return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable)
     }
 
     /**
@@ -361,7 +372,7 @@ class CadenceFingerprinter(
 
     // ── Matching ─────────────────────────────────────────────────────────────
 
-    private class Best(val candidate: Track, val certain: Boolean)
+    private class Best(val candidate: Track, val certain: Boolean, val indistinguishable: Boolean)
 
     /** A score and the facts about the comparison that decide whether a stitch on it is certain. */
     private class Score(val value: Double, val bothMeasured: Boolean, val indistinguishable: Boolean) {
@@ -393,7 +404,7 @@ class CadenceFingerprinter(
         val certain = bestScore.bothMeasured && !bestScore.indistinguishable &&
             best.samples() >= CERTAIN_SAMPLES &&
             bestScore.value >= CERTAIN_SCORE && second < threshold
-        return Best(best, certain)
+        return Best(best, certain, bestScore.indistinguishable)
     }
 
     /**

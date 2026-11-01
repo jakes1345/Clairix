@@ -45,6 +45,7 @@ import app.clairix.analysis.AudioRouteMonitor
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.EventLog
 import app.clairix.analysis.Fingerprint
+import app.clairix.analysis.FollowAlertPolicy
 import app.clairix.analysis.GnssMonitor
 import app.clairix.analysis.Fix
 import app.clairix.analysis.IMSICatcher
@@ -132,6 +133,8 @@ class ScanService : LifecycleService() {
     private lateinit var cellStore: Store
 
     private val alerted: MutableSet<String> = Collections.synchronizedSet(HashSet())
+    /** When a confirmed follower wakes the shade: a recognised tracker at once, anything unidentified once per journey. */
+    private val followAlerts = FollowAlertPolicy()
     private val gpsTrail = ArrayList<LatLon>(500)
     private var publishCycle = 0
     private lateinit var phoneHealthMonitor: PhoneHealthMonitor
@@ -637,6 +640,8 @@ class ScanService : LifecycleService() {
      * next fix that has moved, brings GPS back.
      */
     private fun applyPace(pace: MotionPolicy.Pace) {
+        // The phone settling ends a journey; see [summariseRiders].
+        if (pace == MotionPolicy.Pace.STILL) summariseRiders(System.currentTimeMillis())
         if (!running || !granted(Manifest.permission.ACCESS_FINE_LOCATION)) return
         val request = when (pace) {
             MotionPolicy.Pace.MOVING -> LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 15_000L)
@@ -952,14 +957,17 @@ class ScanService : LifecycleService() {
         // the id the device already had.
         val stitched = cadence.stitch(result)
         val certain = stitched?.certain == true
+        // Two units of one product that only their cadence tells apart: the stitch may
+        // have swapped them, and a verdict the old address earned must not carry over.
+        val indistinguishable = stitched?.indistinguishable == true
         val key = if (stitched != null && stitched.logicalId != resolution.identity.id) {
-            tracker.merge(resolution.identity.id, stitched.logicalId, certain)
+            tracker.merge(resolution.identity.id, stitched.logicalId, certain, indistinguishable)
             stitched.logicalId
         } else {
             cadence.assign(address, resolution.identity.id)
             resolution.identity.id
         }
-        cadence.supersededKey(address)?.let { tracker.merge(it, key, certain) }
+        cadence.supersededKey(address)?.let { tracker.merge(it, key, certain, indistinguishable) }
         val tracked = Signatures.match(record)
         val txPower = record?.txPowerLevel?.takeIf { it != Int.MIN_VALUE }
 
@@ -972,7 +980,7 @@ class ScanService : LifecycleService() {
             approxMetres = Signatures.approximateMetres(result.rssi, txPower),
             rotations = resolution.identity.rotations,
             addresses = resolution.identity.addresses.size,
-            fix = track.current, hasPosition = track.hasFix(), now = now,
+            fix = track.current, hasPosition = track.hasFix(), now = now, travelledM = track.travelledM,
             advertisedName = BleNames.advertisedName(this, record, device),
             manufacturer = BleNames.manufacturer(record),
             services = BleNames.services(record),
@@ -980,8 +988,30 @@ class ScanService : LifecycleService() {
             addressKind = BleNames.addressKind(device, address)
         )
 
-        if (observation.becameFollowing && alerted.add(observation.detection.key)) {
+        // A recognised tracker is announced the moment it is confirmed; an unidentified
+        // co-traveller is held for one notice when the journey ends (FollowAlertPolicy).
+        // The timeline records every confirmation as it happens either way.
+        val verdict = observation.becameFollowing || observation.escalated
+        if (verdict && followAlerts.onVerdict(observation.detection) == FollowAlertPolicy.Decision.ANNOUNCE) {
             notifyFollowing(observation.detection)
+        }
+        if (observation.escalated) {
+            val fix = track.current
+            recordEvent(
+                TimelineEvent(
+                    id = "separated@${observation.detection.key}@$now",
+                    kind = EventKind.FOLLOWING,
+                    ts = now,
+                    title = followingTitle(observation.detection),
+                    detail = "Now advertising as ${observation.detection.tracker?.label ?: "a tracker"} away from its owner; " +
+                        "confirmed over ${observation.detection.displacementM.toInt()} m, ${observation.detection.sightings} sightings",
+                    severity = Severity.CRITICAL,
+                    lat = fix?.lat, lon = fix?.lon
+                ),
+                dedupeKey = "separated@${observation.detection.key}"
+            )
+        }
+        if (observation.becameFollowing && alerted.add(observation.detection.key)) {
             val fix = track.current
             recordEvent(
                 TimelineEvent(
@@ -1164,6 +1194,8 @@ class ScanService : LifecycleService() {
         // main thread, where the scan is managed.
         lifecycleScope.launch { if (running) restartScan() }
         findings.forEach(::publishVehicleFinding)
+        // Parking ends a journey too; see [summariseRiders].
+        summariseRiders(now)
     }
 
     /** A device that has ridden along on enough separate drives, through the shared alert path. */
@@ -1188,6 +1220,25 @@ class ScanService : LifecycleService() {
                 id = "scanner_deaf@$now", ts = now, severity = Severity.MEDIUM,
                 title = "Scanner cannot hear", detail = cause,
                 kind = EventKind.PLATFORM, dedupeKey = "scanner_deaf"
+            )
+        )
+    }
+
+    /**
+     * One notice, through the shared alert path, for the unidentified devices that
+     * travelled with you on the journey that has just ended — see [FollowAlertPolicy].
+     * Called when the phone settles and when a drive ends; does nothing when nothing
+     * was held, so the two can overlap.
+     */
+    private fun summariseRiders(now: Long) {
+        val summary = followAlerts.onJourneyEnd(now, Registry.trusted.value) { tracker.snapshot(now) } ?: return
+        val fix = track.current
+        Registry.publishAlert(
+            Alert(
+                id = "riders@$now", ts = now, severity = Severity.MEDIUM,
+                title = summary.title, detail = summary.detail,
+                kind = EventKind.FOLLOWING, dedupeKey = "riders@$now",
+                lat = fix?.lat, lon = fix?.lon
             )
         )
     }
@@ -1219,6 +1270,7 @@ class ScanService : LifecycleService() {
         runCatching { app.clairix.analysis.CellularExposure.clear(this) }
         LocationHistory.clear(this)
         alerted.clear()
+        followAlerts.clear()
         synchronized(gpsTrail) { gpsTrail.clear() }
         publishCycle = 0
         lastOngoingText = null

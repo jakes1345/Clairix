@@ -2944,13 +2944,19 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
         }
 
         if (topThreat != null) {
+            // A recognised tracker following you is a tracker; anything else that moved
+            // with you only travelled with you, and is shared as that.
+            val isTracker = topThreat.threat == Threat.CRITICAL
             Spacer(Modifier.height(4.dp))
             Row(
                 Modifier.fillMaxWidth().background(ClairixTheme.colors.danger.copy(alpha = 0.10f), ClairixShapes.Card).padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Active tracker: ${topThreat.tracker?.label ?: topThreat.name}", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger)
+                    Text(
+                        "${if (isTracker) "Active tracker" else "Travelling with you"}: ${topThreat.tracker?.label ?: topThreat.name}",
+                        style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger
+                    )
                     Text("Tap to share with the group", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                 }
                 GhostButton(
@@ -2964,7 +2970,8 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 lat = status.lat,
                                 lon = status.lon,
                                 title = topThreat.tracker?.label ?: topThreat.name,
-                                detail = "Clairix has detected a possible following tracker."
+                                detail = if (isTracker) "Clairix has detected a possible following tracker."
+                                else "Clairix has detected a device travelling with me that does not identify itself as a tracker."
                             ).onFailure { sendError = it.message }
                         }
                     },

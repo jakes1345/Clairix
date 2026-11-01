@@ -48,7 +48,7 @@ That is normal. Clairix lists only devices worth your attention: confirmed follo
 
 ### "Following" never confirms, even for my own tracker
 
-Confirmation needs movement. By default a device has to be heard with you for about ten minutes across about three hundred metres while you are actually travelling. Walk or drive somewhere with the tracker and the phone, with the scan running. If you never get a GPS fix (an indoor test, for example), Clairix will not make the stronger claim, because without position it cannot tell a tracker in your bag from one in the next room. You can lower both thresholds in Settings.
+Confirmation needs movement. By default a device has to be heard with you for about ten minutes across about three hundred metres while you are actually travelling. Walk or drive somewhere with the tracker and the phone, with the scan running. If you never get a GPS fix (an indoor test, for example), Clairix will not make the stronger claim, because without position it cannot tell a tracker in your bag from one in the next room. You can lower both thresholds in Settings. The fixes also have to be fresh, and your own travelled distance has to account for the separation: a position that jumps or wanders while the phone sits still does not count, which is why a test indoors usually confirms nothing.
 
 ### The self-test says it cannot hear its own signal
 

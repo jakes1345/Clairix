@@ -173,7 +173,14 @@ private fun TrackerLocator(detection: Detection, onBack: () -> Unit) {
                 detection.dultLabel?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) }
                 KeyValueRow("Address", detection.address)
                 KeyValueRow("Last RSSI", if (detection.rssi == 0) "—" else "${detection.rssi} dBm")
-                if (detection.following) KeyValueRow("Status", "FOLLOWING", valueColor = ClairixTheme.colors.danger)
+                if (detection.following) {
+                    // A recognised tracker follows; anything else only travels with you.
+                    val tracker = detection.threat == Threat.CRITICAL
+                    KeyValueRow(
+                        "Status", if (tracker) "FOLLOWING" else "TRAVELLING WITH YOU",
+                        valueColor = if (tracker) ClairixTheme.colors.danger else ClairixTheme.colors.caution
+                    )
+                }
             }
         }
         if (!status.scanning) {

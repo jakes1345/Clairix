@@ -1729,7 +1729,11 @@ internal fun ScanScreen(
 @Composable
 private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggle: () -> Unit) {
     val context = LocalContext.current
-    val following = live.filter { it.following }
+    // Branch on the threat, not on `following` alone: a recognised tracker that moved
+    // with you is a tracker on you; an unidentified device that did is travelling with
+    // you, which a companion's phone also does.
+    val trackers = live.filter { it.following && it.threat == Threat.CRITICAL }
+    val riders = live.filter { it.following && it.threat != Threat.CRITICAL }
     val persistent = live.count { it.persistent }
     val error = status.error
     val (headline, body, tone) = when {
@@ -1747,19 +1751,33 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
             "Start scanning to check for Bluetooth trackers travelling with you.",
             Tone.Neutral
         )
-        following.size == 1 -> Triple(
+        trackers.size == 1 -> Triple(
             "Tracker on you",
-            "${following[0].name} was heard ${following[0].displacementM.roundToInt()} m apart while you moved. " +
+            "${trackers[0].name} was heard ${trackers[0].displacementM.roundToInt()} m apart while you moved. " +
                 "Open it below to see where to look.",
             Tone.Danger
         )
-        following.size > 1 -> Triple(
-            "${following.size} trackers on you",
+        trackers.size > 1 -> Triple(
+            "${trackers.size} trackers on you",
             "They were heard in different places while you moved. Open each one below to see where to look.",
             Tone.Danger
         )
+        riders.size == 1 -> Triple(
+            "A device is travelling with you",
+            "${riders[0].name} was heard ${riders[0].displacementM.roundToInt()} m apart while you moved. " +
+                "It is not recognised as a tracker away from its owner: a companion's phone, watch or keys, or the " +
+                "vehicle's own electronics, look the same. If you are alone, open it below and check the car.",
+            Tone.Caution
+        )
+        riders.size > 1 -> Triple(
+            "${riders.size} devices are travelling with you",
+            "They were heard in different places while you moved. None is recognised as a tracker away from its " +
+                "owner: companions' phones, watches and keys, or the vehicle's own electronics, look the same. " +
+                "If you are alone, open each one below and check the car.",
+            Tone.Caution
+        )
         // Registered and hearing nothing (Location off, five quiet minutes): a confirmed
-        // follower above still stands, but "nothing following" below would be unproven.
+        // follower or rider above still stands, but "nothing following" below would be unproven.
         error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
         persistent > 0 -> Triple(
             "Keep watching",
@@ -1823,7 +1841,11 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
             StatTile("${status.nearbyCount}", "In range", Modifier.weight(1f))
             StatTile(
                 "${detections.size}", "Flagged", Modifier.weight(1f),
-                tone = if (live.any { it.following }) Tone.Danger else Tone.Neutral
+                tone = when {
+                    live.any { it.following && it.threat == Threat.CRITICAL } -> Tone.Danger
+                    live.any { it.following } -> Tone.Caution
+                    else -> Tone.Neutral
+                }
             )
         }
         ClairixCard(spacing = 8.dp) {
@@ -1938,7 +1960,7 @@ private fun DetectionRow(
 
     ClairixCard(
         tone = tone,
-        emphasis = d.following && !trusted,
+        emphasis = d.following && d.threat == Threat.CRITICAL && !trusted,
         onClick = { expanded = !expanded },
         onClickLabel = if (expanded) "Hide details" else "Show details"
     ) {
@@ -1987,7 +2009,11 @@ private fun DetectionRow(
         }
 
         if (d.following && !trusted) {
-            WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
+            if (d.threat == Threat.CRITICAL) {
+                WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
+            } else {
+                WarningLine("Travelling with you: heard ${d.displacementM.roundToInt()} m apart. Not recognised as a tracker away from its owner.", Tone.Caution)
+            }
         }
 
         if (expanded) DetectionDetail(d, trusted, onShowExplainer)
@@ -2024,10 +2050,10 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                     "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
                         "Check wheel wells, bumper covers, the OBD-II port, under seats and bag linings."
                 } else {
-                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, but it does not identify itself as a " +
-                        "tracker. It may be the phone, earbuds or watch of someone travelling with you, or your vehicle's own " +
-                        "electronics. A hardwired GPS tracker looks the same: if you are alone, check the OBD-II port, under the " +
-                        "dash, wheel wells and bumpers. Mark it as yours if you recognise it."
+                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, but it is not recognised as a " +
+                        "tracker away from its owner. It may be the phone, earbuds, watch or keys of someone travelling with you, " +
+                        "or your vehicle's own electronics. A hardwired GPS tracker looks the same: if you are alone, check the " +
+                        "OBD-II port, under the dash, wheel wells and bumpers. Mark it as yours if you recognise it."
                 }
         }
         Text(explanation, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
@@ -2194,7 +2220,10 @@ private fun MapScreen() {
     val context = LocalContext.current
 
     val cellHot = cell.available && cell.level.ordinal >= Threat.HIGH.ordinal
-    val followingTrails = mapData.devices.count { it.following }
+    // A recognised tracker moving with you is a tracker on you; anything else that did
+    // is only travelling with you, as a companion's phone does.
+    val followingTrails = mapData.devices.count { it.following && it.threat == Threat.CRITICAL }
+    val travellingTrails = mapData.devices.count { it.following && it.threat != Threat.CRITICAL }
     val theme = ClairixTheme.colors
     val palette = MarkerPalette(
         danger = theme.danger.toArgb(),
@@ -2400,6 +2429,13 @@ private fun MapScreen() {
                     if (followingTrails == 1) "1 tracker on you" else "$followingTrails trackers on you",
                     style = MaterialTheme.typography.titleSmall,
                     color = ClairixTheme.colors.onDanger
+                )
+            }
+        } else if (travellingTrails > 0) {
+            Box(Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 88.dp, bottom = 16.dp)) {
+                MapChip(
+                    if (travellingTrails == 1) "1 device travelling with you" else "$travellingTrails devices travelling with you",
+                    Tone.Caution
                 )
             }
         }
@@ -3891,20 +3927,47 @@ private data class ExplainerContent(
 private fun bleExplainerContent(d: Detection): ExplainerContent {
     val tone = if (d.threat.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
     return when {
-        d.following -> ExplainerContent(
+        d.following && d.threat == Threat.CRITICAL -> ExplainerContent(
             headline = "Tracker on you: ${d.name}",
             whatIsThis = "A Bluetooth tracker has been verified as following your movements. " +
-                "It appeared at multiple locations ${d.displacementM.roundToInt()} metres apart while you were " +
-                "moving, which cannot be explained by proximity alone. ${d.tracker?.let { "This matches a known ${it.brand} ${it.label}." } ?: "No commercial tracker signature matched, but the movement pattern is conclusive."}",
+                "It was heard at places ${d.displacementM.roundToInt()} metres apart while your own position " +
+                "showed you travelling between them, which cannot be explained by proximity alone." +
+                (d.tracker?.let { " It identifies itself as ${it.label} (${it.brand}), away from its owner." } ?: ""),
             whatToDo = "Stop and search the vehicle or your belongings now. Check: wheel wells, bumper covers and cavities, " +
                 "OBD-II diagnostic port (under dashboard), under seats and floor mats, inside bag linings and seams. " +
                 "If found, do not discard it on the roadside — it is evidence. Photograph it in place before removing it. " +
                 "Consider filing a police report and contacting legal counsel.",
-            howCertain = "High confidence. Confirmation requires the device to appear at locations " +
-                "${d.displacementM.roundToInt()} m apart during your movement. " +
+            howCertain = "High confidence. Confirmation requires the device to be heard, more than once, at places " +
+                "${d.displacementM.roundToInt()} m apart, with your own travelled distance accounting for the separation. " +
                 "Threat score: ${d.score}/100 across ${d.sightings} sightings.",
             tone = tone
         )
+        d.following -> {
+            // Moved with you, but not a recognised tracker away from its owner: either
+            // nothing identifies it, or it is a tag with its owner's phone in range.
+            val known = d.tracker
+            ExplainerContent(
+                headline = "Travelling with you: ${d.name}",
+                whatIsThis = "This device was heard at places ${d.displacementM.roundToInt()} metres apart while you travelled, " +
+                    "so it moved with you. " +
+                    (if (known != null) {
+                        "It identifies itself as ${known.label}, which Clairix does not count as a tracker away from its owner. ${known.notes}"
+                    } else {
+                        "Nothing identifies it as a tracker: the phone, earbuds or watch of someone travelling with you " +
+                            "look exactly like this, and so do a vehicle's own electronics. A hardwired GPS tracker looks " +
+                            "the same, which is why it is shown."
+                    }),
+                whatToDo = "If you were alone, check the vehicle: the OBD-II port under the dashboard, under the dash and seats, " +
+                    "wheel wells and bumpers. If you recognise the device, mark it as yours below and it will not be raised again. " +
+                    "If it keeps turning up on journeys you make alone, treat it as a tracker: photograph anything you find " +
+                    "in place, keep it as evidence, and consider contacting the police.",
+                howCertain = "That it moved with you is confirmed over ${d.sightings} sightings. " +
+                    (if (known != null) "It is not a tracker away from its owner, so Clairix does not say it is following you. "
+                    else "What it is remains unknown, so Clairix does not call it a tracker. ") +
+                    "Threat score: ${d.score}/100.",
+                tone = Tone.Caution
+            )
+        }
         d.persistent && d.identified -> ExplainerContent(
             headline = "Known tracker nearby: ${d.name}",
             whatIsThis = "A ${d.tracker?.brand ?: "commercial"} ${d.tracker?.label ?: "tracker"} has been " +
