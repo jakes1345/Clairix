@@ -157,10 +157,13 @@ class PermissionsDeniedDeviceTest {
      * Scrolls the hub's list until [t] shows, then taps it: down first, then back up.
      * A scroll's own answer is not trusted to mean the end (the first scrollable
      * node found can be another one, which reports no movement); the end is two
-     * looks in a row with nothing new, as SmokeTest.tapScrolling finds it.
+     * looks in a row with nothing new, as SmokeTest.tapScrolling finds it. A
+     * system dialog that came and went mid-pass can make a pass stop early
+     * (Android 12 on 84dc242: "NFC" missed with the list back at the top), so
+     * after down and up the list is gone down once more.
      */
     private fun tapScrolling(t: String) {
-        for (direction in listOf(Direction.DOWN, Direction.UP)) {
+        for (direction in listOf(Direction.DOWN, Direction.UP, Direction.DOWN)) {
             var still = 0
             var swipes = 0
             while (swipes++ < 40 && still < 2) {
