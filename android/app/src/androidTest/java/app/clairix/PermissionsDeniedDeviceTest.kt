@@ -164,6 +164,10 @@ class PermissionsDeniedDeviceTest {
             var still = 0
             var swipes = 0
             while (swipes++ < 40 && still < 2) {
+                // The hub asks for what its scans need as it comes up, and that
+                // prompt covers the list (Android 13 on a90015a: the location
+                // prompt over the hub while it was scrolled for "Trackers").
+                alive("scrolling for $t")
                 if (tapIfShown(By.text(t), t, timeoutMs = 500)) return
                 still = if (scrollStep(direction)) 0 else still + 1
             }
