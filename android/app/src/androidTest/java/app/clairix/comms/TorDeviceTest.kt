@@ -83,7 +83,15 @@ class TorDeviceTest {
     @Test
     fun theListedRelayAnswersThroughTorWithItsListedKey() {
         val listed = RelayDirectory.current(context)!!.relays.first()
-        assertEquals(listed.key, RelayDirectory.liveKey(listed.url))
+        // liveKey answers null for any failed request, and an exit that closes the
+        // TLS handshake is one (see requestsLeaveThroughTor): it is asked again
+        // through a new circuit. A key that does come back must be the listed one.
+        var live: String? = null
+        for (attempt in 1..CHECK_TRIES) {
+            live = RelayDirectory.liveKey(listed.url)
+            if (live != null) break
+        }
+        assertEquals("the listed relay's key, through Tor, in $CHECK_TRIES tries", listed.key, live)
     }
 
     @Test
