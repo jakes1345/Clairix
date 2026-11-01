@@ -659,21 +659,42 @@ jobs:
                  android.permission.ACCESS_BACKGROUND_LOCATION android.permission.BLUETOOTH_SCAN
                  android.permission.BLUETOOTH_CONNECT android.permission.BLUETOOTH_ADVERTISE
                  android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.POST_NOTIFICATIONS"
-          "$ADB" uninstall app.clairix || true
-          # The package service can drop a streamed install just after the
-          # uninstall ("Failure calling service package: Broken pipe (32)", seen
-          # on the AOSP image): wait until it answers, install again, and count
-          # the install done only when the package manager lists the app.
-          installed=""
-          for try in 1 2 3 4; do
+          # On the AOSP image system_server has reached its watchdog here, after
+          # the run of relaunches above (WAITED_UNTIL_PRE_WATCHDOG in
+          # logcat-duress, then "Failure calling service package: Broken pipe
+          # (32)" on the install half a minute later, as the watchdog restarted
+          # the framework). So: wait for a framework that answers, as after boot,
+          # install, and count the install done only when the package manager
+          # lists the app; a restart in between costs a try, with time for the
+          # framework to come back.
+          ready() {
             "$ADB" wait-for-device
-            for _ in $(seq 1 30); do "$ADB" shell pm path android > /dev/null 2>&1 && break; sleep 2; done
-            if "$ADB" install -r app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk \
-               && "$ADB" shell pm path app.clairix | grep -q '^package:'; then installed=1; break; fi
-            echo "install try $try did not go through; trying again"
-            sleep 10
+            for _ in $(seq 1 60); do
+              [ "$(timeout 10 "$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] \
+                && timeout 10 "$ADB" shell am get-started-user-state 0 2>/dev/null | grep -q RUNNING_UNLOCKED \
+                && timeout 10 "$ADB" shell pm path android > /dev/null 2>&1 && return 0
+              sleep 2
+            done
+            return 1
+          }
+          installed=""
+          for try in 1 2 3 4 5 6; do
+            if ready; then
+              timeout 60 "$ADB" uninstall app.clairix > /dev/null 2>&1 || true
+              # The watchdog restarts the framework up to a minute after it
+              # hangs, so an install that went through is looked at again
+              # after that minute, on a framework that still answers.
+              if timeout 180 "$ADB" install -r app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk \
+                 && sleep 60 && ready \
+                 && timeout 10 "$ADB" shell pm path app.clairix | grep -q '^package:'; then installed=1; break; fi
+            fi
+            echo "install try $try did not go through; waiting for the framework and trying again"
+            sleep 20
           done
           [ -n "$installed" ] || { echo "::error::The app could not be installed again for the denied-permissions run"; exit 1; }
+          # A framework restart brings the lock screen back: wake and dismiss it.
+          "$ADB" shell input keyevent KEYCODE_WAKEUP
+          "$ADB" shell input keyevent 82
           : > ../denied.txt
           : > ../logcat-denied.txt
           mkdir -p ../screens/denied
