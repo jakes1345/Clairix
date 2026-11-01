@@ -108,6 +108,8 @@ object UnlockLedger {
     @Volatile private var store: Store? = null
     /** "ts:kind" of every row held, so neither source writes a moment already written. */
     private val held = HashSet<String>()
+    /** Opens the sealed document: [Store] with the Keystore cipher; a JVM test, which has no Keystore, hands in another. */
+    @Volatile internal var openStore: (Context) -> Store = { Store(it, FILE) }
 
     /** The legacy database, opened only to read it into the store. */
     private class LegacyDb(context: Context) : SQLiteOpenHelper(context, LEGACY_DB_NAME, null, 1) {
@@ -133,7 +135,7 @@ object UnlockLedger {
      */
     private fun ledgerLocked(): Pair<Store, JSONArray>? {
         val app = appContext ?: return null
-        val s = store ?: Store(app, FILE).also { fresh ->
+        val s = store ?: openStore(app).also { fresh ->
             val root = fresh.json
             val arr = root.optJSONArray(KEY_ROWS) ?: JSONArray().also { root.put(KEY_ROWS, it) }
             held.clear()
@@ -153,7 +155,7 @@ object UnlockLedger {
      */
     private fun migrateLocked(app: Context, s: Store) {
         if (!app.getDatabasePath(LEGACY_DB_NAME).exists()) return
-        runCatching {
+        val copied = runCatching {
             val helper = LegacyDb(app)
             try {
                 helper.readableDatabase.query(LEGACY_TABLE, arrayOf("ts", "event", "extra"), null, null, null, null, "ts ASC").use { c ->
@@ -165,9 +167,13 @@ object UnlockLedger {
             } finally {
                 helper.close()
             }
+            // insertLocked leaves the write to its caller: without this the copied
+            // rows stayed in memory and the database below was deleted all the same.
+            s.markDirty()
             s.flush()
-        }
-        runCatching { app.deleteDatabase(LEGACY_DB_NAME) }
+        }.isSuccess
+        // Deleted only once its rows are in the sealed file; a failed read keeps it for the next start.
+        if (copied) runCatching { app.deleteDatabase(LEGACY_DB_NAME) }
     }
 
     // ── Writing ─────────────────────────────────────────────────────────────
@@ -187,7 +193,7 @@ object UnlockLedger {
     }
 
     /** Inserts one row and schedules the write; null when it was a duplicate or the store is unavailable. */
-    private fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = synchronized(lock) {
+    internal fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = synchronized(lock) {
         val (s, _) = ledgerLocked() ?: return null
         val event = insertLocked(ts, kind, extra) ?: return null
         // The device-admin receiver writes here on every unlock whether or not
@@ -251,6 +257,14 @@ object UnlockLedger {
             s.markDirty()
         }
         return removed
+    }
+
+    /** Forgets the open document and the app, as a new process would start; for JVM tests. */
+    internal fun closeForTest() = synchronized(lock) {
+        store = null
+        held.clear()
+        appContext = null
+        _recent.value = null
     }
 
     private fun publish(event: UnlockEvent) {

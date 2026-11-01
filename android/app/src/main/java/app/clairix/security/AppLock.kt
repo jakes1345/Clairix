@@ -545,7 +545,7 @@ object AppLock {
             }
             isDuress -> {
                 // The code goes with the wipe: the decoy it leaves opens to it.
-                Wiper.start(context, duressCode = code)
+                seam.duressWipe(context, code)
                 Verdict.Wiping
             }
             wipeAfter > 0 && failed + 1 >= wipeAfter -> {
@@ -806,6 +806,8 @@ object AppLock {
         fun now(): Long
         /** Starts [Wiper]: the failure limit was reached, or a verifier outlived its key. */
         fun wipe(context: Context)
+        /** Starts [Wiper] under duress: [code] was the duress passcode, and the decoy the wipe leaves opens to it. */
+        fun duressWipe(context: Context, code: String)
     }
 
     internal object Platform : Seam {
@@ -838,6 +840,8 @@ object AppLock {
         override fun now(): Long = System.currentTimeMillis()
 
         override fun wipe(context: Context) = Wiper.start(context)
+
+        override fun duressWipe(context: Context, code: String) = Wiper.start(context, duressCode = code)
     }
 
     /** [Platform], except under a JVM test. */

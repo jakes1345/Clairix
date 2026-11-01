@@ -41,9 +41,18 @@ object AssetSignature {
      */
     fun verifyRoot(message: ByteArray, signatureB64: String): Boolean {
         if (!enforced) return unverifiedBuild()
+        return verifyWith(publicKey, message, signatureB64)
+    }
+
+    /**
+     * Whether [signatureB64] is [key]'s Ed25519 signature over [message]: the check
+     * [verifyRoot] makes with the built-in key, apart so a test can make it with a
+     * key of its own.
+     */
+    internal fun verifyWith(key: String, message: ByteArray, signatureB64: String): Boolean {
         val signature = signatureB64.trim()
         if (signature.isEmpty() || signature.length > 128) return false
-        return runCatching { ed25519Verify(publicKey, message, signature) }.getOrDefault(false)
+        return runCatching { ed25519Verify(key, message, signature) }.getOrDefault(false)
     }
 
     private fun unverifiedBuild(): Boolean {

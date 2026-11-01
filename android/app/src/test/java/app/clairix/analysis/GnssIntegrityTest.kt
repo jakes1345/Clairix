@@ -347,4 +347,73 @@ class GnssIntegrityTest {
         assertEquals(GnssVerdict.NO_DATA, a.verdict)
         assertTrue(a.checks.all { it.state == CheckState.NO_DATA })
     }
+
+    // ── Benign failures: what an ordinary bad day looks like ────────────────
+
+    @Test
+    fun aCellOnlyPositionKilometresOutWithinItsOwnAccuracyAgrees() {
+        val g = GnssIntegrity()
+        feed(g, 10, ::realSky)
+        g.onGnssFix(fix(now))
+        // No Wi-Fi around: the network position is one cell tower's, 2 km out and saying it is good to 1.5 km.
+        g.onNetworkFix(NetworkFix(now, home.first + 0.02, home.second, 1_500f))
+        val a = g.assess(now)
+        assertEquals(CheckState.PASS, state(a, "network"))
+        assertEquals(GnssVerdict.GENUINE, a.verdict)
+    }
+
+    @Test
+    fun aMisMappedAccessPointOnceThenRightIsAMomentsWarningNotAVerdict() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(fix(now))
+        // A router that moved house: the Wi-Fi position is 20 km away, once.
+        g.onNetworkFix(NetworkFix(now, home.first + 0.18, home.second, 30f))
+        val first = g.assess(now)
+        assertEquals(CheckState.WARN, state(first, "network"))
+        assertEquals(GnssVerdict.GENUINE, first.verdict)
+        // The next Wi-Fi position, from the neighbours' routers, agrees.
+        now += 15_000L
+        g.onSky(realSky(now))
+        g.onGnssFix(fix(now))
+        g.onNetworkFix(NetworkFix(now, home.first + 0.001, home.second, 30f))
+        val next = g.assess(now)
+        assertEquals(CheckState.PASS, state(next, "network"))
+        assertEquals(GnssVerdict.GENUINE, next.verdict)
+        assertTrue(next.networkAgrees)
+    }
+
+    @Test
+    fun aWrongNetworkClockAloneIsUnusualNotSpoofed() {
+        val g = GnssIntegrity()
+        feed(g, 10, ::realSky)
+        // The carrier's network time is two hours out; the satellites, rightly, disagree with it.
+        g.onGnssFix(fix(now, satTime = now + 2 * 3_600_000L))
+        g.onNetworkFix(NetworkFix(now, home.first + 0.001, home.second, 40f))
+        val a = g.assess(now)
+        assertEquals(CheckState.FAIL, state(a, "time"))
+        assertEquals(CheckState.PASS, state(a, "network"))
+        assertEquals(GnssVerdict.SUSPECT, a.verdict)
+    }
+
+    @Test
+    fun aMultipathHopInAStreetOfTallBuildingsIsNotAJump() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(fix(now)); now += 1_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.0012)); now += 1_000L // 133 m in a second, off a glass wall
+        g.onGnssFix(fix(now))                                           // and back
+        val a = g.assess(now)
+        assertEquals(CheckState.PASS, state(a, "jumps"))
+        assertEquals(GnssVerdict.GENUINE, a.verdict)
+    }
+
+    @Test
+    fun aColdStartsFirstFixFarOutWithItsOwnPoorAccuracyIsNotAJump() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(GnssFix(now, home.first + 0.05, home.second, 900f, now, false)); now += 2_000L
+        g.onGnssFix(fix(now))
+        assertEquals(CheckState.PASS, state(g.assess(now), "jumps"))
+    }
 }

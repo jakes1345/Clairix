@@ -35,6 +35,7 @@ class AppLockTest {
         var elapsed = 5_000_000L
         var wall = 1_790_000_000_000L
         val wipes = ArrayList<Context>()
+        val duressWipes = ArrayList<String>()
 
         override fun existingKey(): SecretKey? {
             keyReads++
@@ -53,6 +54,10 @@ class AppLockTest {
 
         override fun wipe(context: Context) {
             wipes += context
+        }
+
+        override fun duressWipe(context: Context, code: String) {
+            duressWipes += code
         }
     }
 
@@ -249,6 +254,61 @@ class AppLockTest {
         platform.key = null
         assertEquals(AppLock.Verdict.Wiping, guess())
         assertEquals(1, platform.wipes.size)
+    }
+
+    // ── The duress passcode ────────────────────────────────────────────────
+
+    private val duress = "48261937"
+
+    @Test
+    fun theDuressPasscodeStartsTheDuressWipeWithItsCode() {
+        AppLock.setDuress(context, duress).getOrThrow()
+        assertTrue(AppLock.hasDuress(context))
+        assertEquals(AppLock.Verdict.Wiping, guess(duress))
+        assertEquals("the decoy the wipe leaves must open to this code", listOf(duress), platform.duressWipes)
+        assertTrue("a plain wipe instead of the decoy", platform.wipes.isEmpty())
+    }
+
+    @Test
+    fun theDuressPasscodeIsCountedBeforeItIsRecognised() {
+        AppLock.setDuress(context, duress).getOrThrow()
+        var countSeenByTheCheck = -1
+        platform.onKeyRead = { countSeenByTheCheck = failedOnDisk() }
+        guess(duress)
+        assertEquals("from the outside it is one more attempt, like any other", 1, countSeenByTheCheck)
+    }
+
+    @Test
+    fun theDuressPasscodeWipesWithNoLimitSetAndAfterWrongGuesses() {
+        assertEquals(0, AppLock.wipeAfter(context))
+        AppLock.setDuress(context, duress).getOrThrow()
+        guess(); guess()
+        assertEquals(AppLock.Verdict.Wiping, guess(duress))
+        assertEquals(listOf(duress), platform.duressWipes)
+    }
+
+    @Test
+    fun withADuressPasscodeSetTheOthersBehaveAsBefore() {
+        AppLock.setDuress(context, duress).getOrThrow()
+        assertEquals(AppLock.Verdict.Rejected(0L), guess())
+        assertEquals(AppLock.Verdict.Accepted, guess(passcode))
+        assertTrue(platform.duressWipes.isEmpty())
+        assertTrue(platform.wipes.isEmpty())
+    }
+
+    @Test
+    fun aRemovedDuressPasscodeIsJustAWrongOne() {
+        AppLock.setDuress(context, duress).getOrThrow()
+        AppLock.setDuress(context, null).getOrThrow()
+        assertEquals(AppLock.Verdict.Rejected(0L), guess(duress))
+        assertTrue(platform.duressWipes.isEmpty())
+    }
+
+    @Test
+    fun theDuressAndAppPasscodesCannotBeTheSame() {
+        assertTrue(AppLock.setDuress(context, passcode).isFailure)
+        AppLock.setDuress(context, duress).getOrThrow()
+        assertTrue(AppLock.setPasscode(context, duress).isFailure)
     }
 
     // ── Telling the owner ──────────────────────────────────────────────────

@@ -128,4 +128,43 @@ class WifiScannerTest {
         val twice = listOf(open("Starbucks", "60:00:00:00:00:02"), wpa2("Starbucks", "60:00:00:00:00:01"), open("Starbucks", "60:00:00:00:00:02"))
         assertEquals(1, WifiScanner.classify(twice, now).size)
     }
+
+    @Test
+    fun routersMeshesHiddenNetworksAndGuestNetworksAreNothing() {
+        val eap = "[WPA2-EAP/SHA1-CCMP][RSN-EAP/SHA1-CCMP][ESS]"
+        val a = WifiScanner.classify(listOf(
+            // A dual-band home router: one name per band, several radios each.
+            wpa2("HOME", "70:00:00:00:00:01"), wpa2("HOME", "70:00:00:00:00:02"), wpa2("HOME-5G", "70:00:00:00:00:03"),
+            // Its open guest network has a name of its own: no twin.
+            open("HOME-guest", "70:00:00:00:00:04"),
+            // A campus: one name on many access points, the same channel reused.
+            WifiBeacon("eduroam", "80:00:00:00:00:01", -60, eap),
+            WifiBeacon("eduroam", "80:00:00:00:00:02", -71, eap),
+            WifiBeacon("eduroam", "80:00:00:00:00:03", -80, eap),
+            // WPA2/WPA3 transition mode and WEP are encrypted, however badly.
+            WifiBeacon("Cafe", "90:00:00:00:00:01", -55, "[WPA2-PSK-CCMP][RSN-PSK+SAE-CCMP][ESS][MFPC]"),
+            WifiBeacon("Cafe", "90:00:00:00:00:02", -58, "[WEP][ESS]"),
+            // Hidden networks: no name to be a twin of, open or not.
+            open("", "a0:00:00:00:00:01"), wpa2("", "a0:00:00:00:00:02"),
+            WifiBeacon(null, "a0:00:00:00:00:03", -66, "[ESS]"),
+            // No capabilities reported is not evidence of an open network.
+            WifiBeacon("HOME", "a0:00:00:00:00:04", -70, null),
+            // No address: nothing to report.
+            WifiBeacon("Pineapple", null, -40, "[ESS]"),
+        ), now)
+        assertTrue(a.toString(), a.isEmpty())
+        assertTrue(WifiScanner.classify(emptyList(), now).isEmpty())
+    }
+
+    @Test
+    fun aTwinIsCaughtWhateverTheCaseOrQuotesOfItsName() {
+        val a = WifiScanner.classify(listOf(
+            wpa2("Starbucks", "b0:00:00:00:00:01"),
+            open("\"starbucks\"", "b0:00:00:00:00:02"),
+            open(" STARBUCKS ", "b0:00:00:00:00:03"),
+        ), now)
+        assertEquals(a.toString(), listOf("b0:00:00:00:00:02", "b0:00:00:00:00:03"), a.map { it.bssid })
+        assertTrue(a.all { it.reason == "open_twin_of_secured" && it.threat == Threat.HIGH })
+        assertEquals("the label is the name as broadcast, without its quotes", "starbucks", a[0].ssid)
+    }
 }

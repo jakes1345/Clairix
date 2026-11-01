@@ -67,6 +67,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.nio.ByteBuffer
 import java.util.Arrays
 import java.util.Collections
 import java.util.Locale
@@ -299,7 +300,18 @@ class LensGlintAnalyzer(
 
     private fun process(image: ImageProxy) {
         val plane = image.planes[0]
-        val buf = plane.buffer
+        processLuma(
+            plane.buffer, image.width, image.height, plane.rowStride, plane.pixelStride,
+            image.imageInfo.timestamp, image.imageInfo.rotationDegrees
+        )
+    }
+
+    /**
+     * One frame, from its Y plane on: everything [analyze] does once the camera has
+     * handed over the frame. Apart so a device test can feed it frames of its own,
+     * with no camera.
+     */
+    internal fun processLuma(buf: ByteBuffer, width: Int, height: Int, rowStride: Int, pixelStride: Int, timestampNs: Long, rotation: Int) {
         val size = buf.remaining()
         if (luma.size != size) luma = ByteArray(size)
         buf.get(luma, 0, size)
@@ -307,7 +319,7 @@ class LensGlintAnalyzer(
         tracker.torchAvailable = torchAvailable
         val (tx, ty) = synchronized(turnLock) { (turnX to turnY).also { turnX = 0f; turnY = 0f } }
         val r = tracker.process(
-            luma, image.width, image.height, plane.rowStride, plane.pixelStride, image.imageInfo.timestamp,
+            luma, width, height, rowStride, pixelStride, timestampNs,
             torchOffConfirmed = torchConfirmedOff, turnXDeg = tx, turnYDeg = ty
         )
         r.torch?.let { on ->
@@ -319,7 +331,7 @@ class LensGlintAnalyzer(
             val run = HiddenCameraScanner.irCheckRun()
             if (run != 0L) {
                 if (run != irTestRun) { irTestRun = run; irTest = IrSelfTest() }
-                if (irTest.process(luma, image.width, image.height, plane.rowStride, plane.pixelStride, image.imageInfo.timestamp)) {
+                if (irTest.process(luma, width, height, rowStride, pixelStride, timestampNs)) {
                     HiddenCameraScanner.irCheckPassed(run)
                 }
             }
@@ -335,7 +347,6 @@ class LensGlintAnalyzer(
             fpsWindowFrames = 0
         }
         if (r.gridWidth == 0) return
-        val rotation = image.imageInfo.rotationDegrees
         val blobs = r.spots.map { blob(it, r, rotation) }
         if (!closed) for (s in r.report) onCandidate(blob(s, r, rotation))
         if (!closed) onState(
@@ -936,7 +947,6 @@ object HiddenCameraScanner {
     /** Hosts that answered the first pass are then asked about the rest. */
     private val STAGE2_PORTS = intArrayOf(8554, 10554, 81, 88, 8000, 8081, 8899, 9000, 1935)
     private val HTTP_PORTS = setOf(80, 81, 88, 8000, 8080, 8081, 8899, 9000)
-    private val RTSP_PORTS = setOf(554, 8554, 10554)
 
     internal class HttpSignature(val regex: Regex, val label: String, val confidence: Float)
 
@@ -964,10 +974,7 @@ object HiddenCameraScanner {
         HttpSignature(Regex("\\bnvr\\b|\\bdvr\\b|\\bxvr\\b|video recorder"), "Video recorder (NVR/DVR)", 0.7f)
     )
 
-    private class MdnsHit(val ip: String, val type: String, val name: String, val label: String, val confidence: Float)
-
     private val MDNS_TYPES = listOf("_rtsp._tcp.", "_axis-video._tcp.", "_psia._tcp.", "_onvif._tcp.", "_hap._tcp.", "_http._tcp.")
-    private val MDNS_CAMERA_NAME = Regex("cam(era)?\\b|ipc|wyze|reolink|arlo|blink|eufy|tapo|ezviz|hik|dahua|imou|amcrest|foscam|nest cam|yi home|kami|doorbell|nvr|dvr|axis", RegexOption.IGNORE_CASE)
 
     private class HostHit(val ip: String) {
         val openPorts: MutableSet<Int> = ConcurrentHashMap.newKeySet()
@@ -977,7 +984,13 @@ object HiddenCameraScanner {
         @Volatile var httpServer: String? = null
         @Volatile var httpPort: Int = 0
         @Volatile var onvif: String? = null
-        val mdns = Collections.synchronizedList(ArrayList<MdnsHit>())
+        val mdns = Collections.synchronizedList(ArrayList<CameraEvidence.MdnsHit>())
+
+        /** What it answered, as it stands now, for [CameraEvidence.judgeHost]. */
+        fun evidence() = CameraEvidence.HostEvidence(
+            ip = ip, openPorts = LinkedHashSet(openPorts), rtsp = rtsp, rtspPort = rtspPort,
+            http = http, httpServer = httpServer, httpPort = httpPort, onvif = onvif, mdns = mdns.toList()
+        )
     }
 
     /**
@@ -1080,7 +1093,7 @@ object HiddenCameraScanner {
                         }
                         val h = hits[ip]
                         if (h != null) {
-                            for (port in h.openPorts.filter { it in RTSP_PORTS }.sorted()) {
+                            for (port in h.openPorts.filter { it in CameraEvidence.RTSP_PORTS }.sorted()) {
                                 val banner = sem.withPermit { rtspBanner(wifiNet, ip, port) }
                                 if (banner != null) { h.rtsp = banner; h.rtspPort = port; break }
                             }
@@ -1103,35 +1116,7 @@ object HiddenCameraScanner {
 
             // Judge each host.
             val now = System.currentTimeMillis()
-            for (h in hits.values) {
-                var conf = 0f
-                val reasons = ArrayList<String>()
-                h.onvif?.let { conf = max(conf, 0.95f); reasons += "Answered an ONVIF discovery probe ($it)" }
-                h.rtsp?.let { conf = max(conf, 0.85f); reasons += "RTSP video server on port ${h.rtspPort}: $it" }
-                h.http?.let {
-                    conf = max(conf, it.confidence)
-                    val server = h.httpServer
-                    val serverNote = if (server != null) ", server \"$server\"" else ""
-                    reasons += "${it.label} (web UI on port ${h.httpPort}$serverNote)"
-                }
-                for (m in h.mdns.toList()) { conf = max(conf, m.confidence); reasons += "${m.label} — advertises \"${m.name}\" as ${m.type.trimEnd('.')}" }
-                if (37777 in h.openPorts && h.http == null) { conf = max(conf, 0.5f); reasons += "Dahua-protocol port 37777 open" }
-                if (34567 in h.openPorts && h.http == null) { conf = max(conf, 0.5f); reasons += "XMeye/Sofia recorder port 34567 open" }
-                if (1935 in h.openPorts) { conf = max(conf, 0.35f); reasons += "RTMP streaming port 1935 open" }
-                if (h.rtsp == null && h.openPorts.any { it in RTSP_PORTS }) { conf = max(conf, 0.4f); reasons += "RTSP port ${h.openPorts.first { it in RTSP_PORTS }} open but silent" }
-                if (conf <= 0f) continue
-                // The router runs a web UI and sometimes a media port; only hard
-                // evidence makes it a camera.
-                if (h.ip == gateway && conf < 0.9f) continue
-                val ports = h.openPorts.sorted().joinToString(", ")
-                out += CameraFinding(
-                    id = "net|${h.ip}", ts = now, method = CameraFindMethod.NETWORK, confidence = conf,
-                    location = "${h.ip} on ${ssid ?: "this Wi-Fi"}" + if (h.ip == gateway) " (the router)" else "",
-                    detail = reasons.joinToString(". ") + (if (ports.isNotEmpty()) ". Open ports: $ports" else "") +
-                        ". There is a camera on this network. If it is not yours, or a camera the venue has told you about, ask who put it there.",
-                    lat = lat, lon = lon
-                )
-            }
+            for (h in hits.values) CameraEvidence.judgeHost(h.evidence(), gateway, ssid, now, lat, lon)?.let { out += it }
             out.sortByDescending { it.confidence }
             // Replace the previous network sweep rather than stacking stale hosts.
             _findings.update { current -> (out + current.filter { it.method != CameraFindMethod.NETWORK }).take(FINDINGS_CAP) }
@@ -1259,12 +1244,8 @@ object HiddenCameraScanner {
                 val ip = pkt.address?.hostAddress ?: continue
                 val xml = String(pkt.data, 0, pkt.length, Charsets.UTF_8)
                 // Only a device that says it is a video transmitter counts; printers and NAS boxes answer ONVIF probes too.
-                if (!xml.contains("ProbeMatch", ignoreCase = true) || !xml.contains("NetworkVideoTransmitter", ignoreCase = true)) continue
-                val name = Regex("onvif://www\\.onvif\\.org/name/([^ <\"]+)").find(xml)?.groupValues?.get(1)?.let { urlDecode(it) }
-                val hardware = Regex("onvif://www\\.onvif\\.org/hardware/([^ <\"]+)").find(xml)?.groupValues?.get(1)?.let { urlDecode(it) }
-                val xaddr = Regex("<[^>]*XAddrs>([^<]+)<").find(xml)?.groupValues?.get(1)?.trim()?.substringBefore(' ')
-                val desc = listOfNotNull(name, hardware, xaddr).distinct().joinToString(" · ").ifEmpty { "ONVIF device" }
-                found.putIfAbsent(ip, desc.take(120))
+                val desc = CameraEvidence.parseProbeMatch(xml) ?: continue
+                found.putIfAbsent(ip, desc)
             }
         } finally {
             runCatching { sock.close() }
@@ -1272,12 +1253,10 @@ object HiddenCameraScanner {
         return found
     }
 
-    private fun urlDecode(s: String): String = runCatching { java.net.URLDecoder.decode(s, "UTF-8") }.getOrDefault(s)
-
     /** Browses the camera-shaped mDNS service types for [listenMs]; resolves one hit at a time, as NsdManager insists. */
-    private suspend fun discoverMdns(app: Context, listenMs: Long): List<MdnsHit> {
+    private suspend fun discoverMdns(app: Context, listenMs: Long): List<CameraEvidence.MdnsHit> {
         val nsd = app.getSystemService(NsdManager::class.java) ?: return emptyList()
-        val hits = Collections.synchronizedList(ArrayList<MdnsHit>())
+        val hits = Collections.synchronizedList(ArrayList<CameraEvidence.MdnsHit>())
         val resolveLock = Mutex()
         coroutineScope {
             for (type in MDNS_TYPES) {
@@ -1290,7 +1269,7 @@ object HiddenCameraScanner {
                         override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
                         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                             // Cheap pre-filter: a web server is only interesting if its name says camera.
-                            if (type == "_http._tcp." && !MDNS_CAMERA_NAME.containsMatchIn(serviceInfo.serviceName ?: "")) return
+                            if (type == "_http._tcp." && !CameraEvidence.MDNS_CAMERA_NAME.containsMatchIn(serviceInfo.serviceName ?: "")) return
                             launch {
                                 val resolved = resolveLock.withLock { resolveMdns(nsd, serviceInfo) } ?: return@launch
                                 classifyMdns(type, resolved)?.let { hits.add(it) }
@@ -1319,28 +1298,17 @@ object HiddenCameraScanner {
         }
     }
 
+    /** [CameraEvidence.classifyMdns] on what NsdManager resolved. */
     @Suppress("DEPRECATION")
-    private fun classifyMdns(type: String, info: NsdServiceInfo): MdnsHit? {
-        val ip = info.host?.hostAddress?.substringBefore('%') ?: return null
-        if (info.host !is Inet4Address) return null
-        val name = info.serviceName ?: ""
-        return when (type) {
-            "_rtsp._tcp." -> MdnsHit(ip, type, name, "RTSP video stream advertised over mDNS", 0.8f)
-            "_axis-video._tcp." -> MdnsHit(ip, type, name, "Axis camera advertised over mDNS", 0.9f)
-            "_psia._tcp." -> MdnsHit(ip, type, name, "PSIA camera interface advertised over mDNS", 0.85f)
-            "_onvif._tcp." -> MdnsHit(ip, type, name, "ONVIF camera advertised over mDNS", 0.9f)
-            "_hap._tcp." -> {
-                // HomeKit accessory category: 17 is an IP camera, 18 a video doorbell.
-                val ci = info.attributes?.get("ci")?.let { String(it, Charsets.UTF_8).trim() }
-                when (ci) {
-                    "17" -> MdnsHit(ip, type, name, "HomeKit IP camera", 0.9f)
-                    "18" -> MdnsHit(ip, type, name, "HomeKit video doorbell", 0.85f)
-                    else -> null
-                }
-            }
-            "_http._tcp." -> if (MDNS_CAMERA_NAME.containsMatchIn(name)) MdnsHit(ip, type, name, "Web server named like a camera", 0.6f) else null
-            else -> null
-        }
+    private fun classifyMdns(type: String, info: NsdServiceInfo): CameraEvidence.MdnsHit? {
+        val host = info.host
+        return CameraEvidence.classifyMdns(
+            type = type,
+            ip = host?.hostAddress?.substringBefore('%'),
+            ipv4 = host is Inet4Address,
+            name = info.serviceName ?: "",
+            homeKitCategory = if (type == "_hap._tcp.") info.attributes?.get("ci")?.let { String(it, Charsets.UTF_8) } else null
+        )
     }
 
     // ── Wireless: unprovisioned cameras announcing themselves ────────────────
@@ -1457,31 +1425,6 @@ object HiddenCameraScanner {
         }
     }
 
-    private class BleRule(pattern: String, val label: String, val confidence: Float) {
-        val regex = Regex(pattern)
-    }
-
-    /** Advertised BLE names, lower-cased, anchored at the start. */
-    private val BLE_NAME_RULES = listOf(
-        BleRule("^(wyze|wyzecam|wyze_cam).*", "Wyze camera pairing over Bluetooth", 0.85f),
-        BleRule("^(arlo|blink|eufy|eufycam|eufy_cam|reolink|amcrest|foscam|tapo|ezviz|imou|lorex|swann|zmodo|annke|wansview|vimtag).*", "Security camera pairing over Bluetooth", 0.8f),
-        BleRule("^(nest cam|nest_cam|google nest cam|nest doorbell|ring video doorbell|ring doorbell|ring-cam|ring cam).*", "Nest / Ring camera pairing over Bluetooth", 0.8f),
-        BleRule("^(yi|kami)[-_ ](home|cam|dome|outdoor|smart|pro).*", "YI / Kami camera pairing over Bluetooth", 0.8f),
-        BleRule("^(ipc|ipcam|ip_cam|ip-cam|camhi|v380|yoosee|icsee|xmeye|lookcam|a9[-_ ]|sq\\d{1,2}[-_ ]|minicam|spycam|hdcam).*", "Budget / covert Wi-Fi camera pairing over Bluetooth", 0.85f),
-        BleRule("^(mi camera|mi_camera|xiaomi camera|chuangmi|imilab|aqara camera|aqara-cam|aqara g\\d).*", "Xiaomi / Aqara camera pairing over Bluetooth", 0.8f),
-        BleRule("^(camera|cam|webcam)[-_ ]?[0-9a-f]{4,}$", "Device named like a camera pairing over Bluetooth", 0.7f),
-        BleRule("^(gopro|insta360|osmo|dji|akaso)[-_ ].*|^(gopro|insta360)$", "Action camera (GoPro / Insta360 / DJI)", 0.5f),
-        BleRule("^(70mai|viofo|blackvue|nextbase|ddpai|thinkware|dashcam|dash cam).*", "Dash camera", 0.45f)
-    )
-
-    /** 16-bit service UUIDs that mark a device as unprovisioned IoT; weak alone, so they rank low. */
-    private val BLE_SERVICE_RULES = mapOf(
-        "0000fea6-0000-1000-8000-00805f9b34fb" to ("GoPro camera control service" to 0.55f),
-        "0000fd50-0000-1000-8000-00805f9b34fb" to ("Tuya smart-home device (budget cameras, plugs, bulbs) advertising for setup" to 0.3f),
-        "0000fe95-0000-1000-8000-00805f9b34fb" to ("Xiaomi Mi Home device advertising for setup" to 0.25f),
-        "0000ffff-0000-1000-8000-00805f9b34fb" to ("Espressif BluFi — an unprovisioned Wi-Fi IoT module" to 0.3f)
-    )
-
     private var bleJob: Job? = null
 
     fun startBleListening(context: Context, durationMs: Long = 20_000L) {
@@ -1515,25 +1458,16 @@ object HiddenCameraScanner {
                 if (seen.add(address)) _wireless.update { it.copy(bleDevicesSeen = seen.size) }
                 val record = r.scanRecord
                 val name = record?.deviceName?.trim()?.takeIf { it.isNotEmpty() }
-                val lower = name?.lowercase(Locale.US)
-                var label: String? = null
-                var conf = 0f
-                if (lower != null) BLE_NAME_RULES.firstOrNull { it.regex.matches(lower) }?.let { label = it.label; conf = it.confidence }
-                if (label == null) {
-                    record?.serviceUuids?.forEach { pu ->
-                        BLE_SERVICE_RULES[pu.uuid.toString().lowercase(Locale.US)]?.let { (l, c) -> if (c > conf) { label = l; conf = c } }
-                    }
-                }
-                val finalLabel = label
+                val match = CameraEvidence.matchBle(name, record?.serviceUuids?.map { it.uuid.toString() }.orEmpty())
                 val nowMs = System.currentTimeMillis()
-                if (finalLabel != null && nowMs - (refreshedAt[address] ?: 0L) >= 1_000L) {
+                if (match != null && nowMs - (refreshedAt[address] ?: 0L) >= 1_000L) {
                     refreshedAt[address] = nowMs
                     val metres = approxMetres(r.rssi)
                     report(
                         CameraFinding(
-                            id = "ble|$address", ts = System.currentTimeMillis(), method = CameraFindMethod.BLE_SETUP_AP, confidence = conf,
+                            id = "ble|$address", ts = System.currentTimeMillis(), method = CameraFindMethod.BLE_SETUP_AP, confidence = match.confidence,
                             location = "${name ?: "Unnamed device"} ($address) at ${r.rssi} dBm — roughly ${fmtMetres(metres)} away" + if (r.rssi >= -50) ", probably in this room" else "",
-                            detail = "$finalLabel. Cameras advertise over Bluetooth while they wait for an app to hand them Wi-Fi credentials; a working camera has usually stopped. Follow the signal strength to find it.",
+                            detail = "${match.label}. Cameras advertise over Bluetooth while they wait for an app to hand them Wi-Fi credentials; a working camera has usually stopped. Follow the signal strength to find it.",
                             lat = lat, lon = lon
                         )
                     )

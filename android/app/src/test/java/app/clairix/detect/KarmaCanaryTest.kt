@@ -223,4 +223,24 @@ class KarmaCanaryTest {
         assertTrue(hits.all { it.threat == Threat.CRITICAL && it.reason == KarmaCanary.REASON })
         assertTrue(KarmaCanary.checkBeacons(emptySet(), beacons, now).isEmpty())
     }
+
+    @Test
+    fun lookalikesHiddenNetworksAndNamesWithdrawnOverAWeekAgoAreNotAnswers() {
+        val names = Names(
+            current = "Juniper4417", rotatedAt = now,
+            retired = listOf(Retired("heron-82", now - KarmaCanary.RETIRED_KEEP_MS - 1), Retired("Basalt_90", now - KarmaCanary.RETIRED_KEEP_MS))
+        )
+        val beacons = listOf(
+            WifiBeacon("juniper4417", "02:00:00:00:00:01", -50, "[ESS]"),       // another case: another network
+            WifiBeacon("Juniper 4417", "02:00:00:00:00:02", -50, "[ESS]"),
+            WifiBeacon("Juniper44170", "02:00:00:00:00:03", -50, "[ESS]"),
+            WifiBeacon("", "02:00:00:00:00:04", -50, "[ESS]"),                  // a hidden network
+            WifiBeacon(null, "02:00:00:00:00:05", -50, "[ESS]"),
+            WifiBeacon("heron-82", "02:00:00:00:00:06", -50, "[ESS]"),          // withdrawn a week and a moment ago
+            WifiBeacon("Juniper4417", null, -50, "[ESS]"),                      // no address to report
+            WifiBeacon("Basalt_90", "02:00:00:00:00:07", -70, "[WPA2-PSK-CCMP][ESS]"), // exactly a week: still watched
+        )
+        val hits = KarmaCanary.checkBeacons(names.live(now), beacons, now)
+        assertEquals(hits.toString(), listOf("02:00:00:00:00:07"), hits.map { it.bssid })
+    }
 }

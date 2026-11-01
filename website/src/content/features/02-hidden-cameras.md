@@ -50,5 +50,6 @@ Clairix turns your phone into a six-method sweep for covert cameras: lens glint,
 - Cameras sold as "no-glow" use 940 nm LEDs that most phone cameras cannot see at all. An empty IR result does not clear them; the physical steps do.
 - A lens behind a dark plastic window throws back no visible light, so lens glint cannot see it. Dark glossy panels on clocks, detectors and chargers get the IR view in the dark and a close look by hand.
 - Infrared mode needs a dark room. Lens glint mode needs a scene that is not washed out by sunlight or mirrors, and a camera with a torch.
+- None of the six methods has yet been measured against named cameras, illuminators and LEDs on a test bench, so there is no detection or false-alarm rate to quote. The code is tested on synthetic frames and on the formats cameras send; [how the bench run will be done, and the table its results go in](https://github.com/jakes1345/Clairix/blob/main/docs/CAMERA-SWEEP-VALIDATION.md), are public, and the table is empty until it has been done.
 
 </div>

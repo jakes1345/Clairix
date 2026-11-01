@@ -907,7 +907,7 @@ class ScanService : LifecycleService() {
                 // Fused location goes quiet once the car is parked (25 m minimum
                 // displacement), so the end of a trip is noticed here, not in the
                 // location callback.
-                if (vehicleTrips.inTrip && now - lastDrivingAt > TRIP_END_MS) endTrip(now)
+                if (ScanLoopPolicy.tripEnded(vehicleTrips.inTrip, lastDrivingAt, now)) endTrip(now)
                 // An identity behind a confirmed follower must outlive the identity
                 // window, or the same device comes back as a stranger and the original
                 // row is orphaned as a permanent "following" ghost.
@@ -924,40 +924,15 @@ class ScanService : LifecycleService() {
                     val all = tracker.snapshot(now)
                     // Only surface devices worth the user's attention; transient single-sighting
                     // signals from people walking by are tracked internally but not listed.
-                    list = all.filter { d ->
-                        d.following || d.persistent ||
-                            (d.tracker != null && d.sightings >= 3) ||
-                            d.sightings >= 5
-                    }.sortedWith(
-                        compareByDescending<Detection> { it.following }
-                            .thenByDescending { it.persistent }
-                            .thenByDescending { it.identified }
-                            .thenByDescending { it.sightings }
-                    )
+                    list = ScanLoopPolicy.listed(all)
                     Registry.update { it.copy(nearbyCount = all.size) }
                     Registry.publish(list)
 
                     val trail = synchronized(gpsTrail) { ArrayList(gpsTrail) }
-                    // Ordered by key, not by the sighting-sorted `list`: the map only cares
-                    // where each device is, and sightings change on nearly every advert, so
-                    // the sighting order made every 1.5 s MapData compare unequal. Each one
-                    // then re-ran the map's overlay effect and invalidated the MapView, and
-                    // every redraw re-requests any expired tile from the tile server.
-                    // With a stable order the StateFlow drops publishes that change nothing.
-                    // A device the owner marked as theirs, or as found, is no longer drawn
-                    // (or counted on the map's banner) as moving with them.
-                    val deviceTrails = list.filter { it.points.isNotEmpty() }.map {
-                        val withYou = it.following && !it.resolved && it.address !in trusted
-                        DeviceTrail(it.key, it.name, it.threat, withYou, it.points, it.lastHeardAt)
-                    }.sortedBy { it.key }
-                    val cellNow = Registry.cell.value
-                    val cellMarkers = if (cellNow.level.ordinal >= Threat.MEDIUM.ordinal && cellNow.cell != null) {
-                        val fix = track.current
-                        if (fix != null) listOf(
-                            CellMarker("${cellNow.cell.rat.label} ${cellNow.cell.cellId}",
-                                LatLon(fix.lat, fix.lon), cellNow.level)
-                        ) else emptyList()
-                    } else emptyList()
+                    // In a stable order, so the StateFlow drops publishes that change
+                    // nothing; see [ScanLoopPolicy.deviceTrails].
+                    val deviceTrails = ScanLoopPolicy.deviceTrails(list, trusted)
+                    val cellMarkers = ScanLoopPolicy.cellMarkers(Registry.cell.value, track.current)
                     Registry.publishMap(MapData(trail, deviceTrails, cellMarkers))
                     // Screen off: a device that has become worth watching gets a filter of its own.
                     if (!screenOn) refreshWatchedFilters(all, trusted, now)
@@ -974,8 +949,7 @@ class ScanService : LifecycleService() {
                 // is using the phone, and the microphone and camera are watched
                 // through callbacks in between.
                 publishCycle++
-                val healthEvery = if (screenOn) 30_000L else 5 * 60_000L
-                if (publishCycle == 1 || now - lastHealthAt >= healthEvery) {
+                if (ScanLoopPolicy.healthDue(publishCycle, lastHealthAt, now, screenOn)) {
                     lastHealthAt = now
                     // The stalkerware check, once a day: every installed app scored and matched
                     // against the list, compared with the last check, and what is new alerted. Off
@@ -996,7 +970,7 @@ class ScanService : LifecycleService() {
                 val wifiEvery = ScanPacing.wifiScanEveryMs(
                     screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING, lowPower = LowPowerMode.active
                 )
-                if (publishCycle == 1 || now - lastWifiAt >= wifiEvery) {
+                if (ScanLoopPolicy.wifiDue(publishCycle, lastWifiAt, now, wifiEvery)) {
                     lastWifiAt = now
                     ScanPower.effort?.wifiScan()
                     // A new canary name every few hours, before the scan below asks for it,
@@ -1034,7 +1008,7 @@ class ScanService : LifecycleService() {
                     // hotspot, which is what xfinitywifi and attwifi are by design):
                     // no timeline event and no part in the correlation below. The old
                     // code wrote a HIGH event per open hotspot every half hour.
-                    val wifiBait = wifiAnomalies.filter { it.threat.ordinal > Threat.LOW.ordinal }
+                    val wifiBait = ScanLoopPolicy.bait(wifiAnomalies)
                     if (wifiBait.isNotEmpty()) {
                         val top = wifiBait.maxByOrNull { it.threat.ordinal }!!
                         val evt = TimelineEvent(
@@ -1042,11 +1016,7 @@ class ScanService : LifecycleService() {
                             kind = EventKind.WIFI_ANOMALY,
                             ts = now, title = "Wi-Fi anomaly: ${top.ssid}",
                             detail = "${wifiBait.size} suspicious network(s) — ${top.reason}",
-                            severity = when (top.threat) {
-                                Threat.CRITICAL -> Severity.CRITICAL
-                                Threat.HIGH -> Severity.HIGH
-                                else -> Severity.MEDIUM
-                            },
+                            severity = ScanLoopPolicy.baitSeverity(top.threat),
                             lat = track.current?.lat, lon = track.current?.lon
                         )
                         if (eventLog.record(evt, "wifi@${top.bssid}")) {
@@ -1059,24 +1029,22 @@ class ScanService : LifecycleService() {
                     // interception kit) or the canary being answered — the one Wi-Fi
                     // signal with no benign explanation, which used to be left out
                     // while an open xfinitywifi counted.
-                    if (Registry.cell.value.level.ordinal >= Threat.HIGH.ordinal) {
-                        val correlatedBle = list.filter {
-                            it.persistent && !it.following && it.address !in trusted
-                        }
-                        if (correlatedBle.isNotEmpty() && (wifiBait.isNotEmpty() || karmaHits.isNotEmpty())) {
-                            val wifiPart = if (karmaHits.isNotEmpty()) "a fake Wi-Fi hotspot" else "Wi-Fi bait"
-                            val evt2 = TimelineEvent(
-                                id = "corr@${correlatedBle.first().key}@$now",
-                                kind = EventKind.CORRELATED_SURVEILLANCE,
-                                ts = now,
-                                title = "Correlated surveillance indicators",
-                                detail = "${correlatedBle.size} persistent BLE device(s) + active cell anomaly + $wifiPart",
-                                severity = Severity.CRITICAL,
-                                lat = track.current?.lat, lon = track.current?.lon
-                            )
-                            if (eventLog.record(evt2, "corr@${correlatedBle.first().key}")) {
-                                Registry.publishTimeline(eventLog.snapshot())
-                            }
+                    val correlatedBle = ScanLoopPolicy.correlated(
+                        Registry.cell.value.level, list, trusted, bait = wifiBait.isNotEmpty(), canaryAnswered = karmaHits.isNotEmpty()
+                    )
+                    if (correlatedBle.isNotEmpty()) {
+                        val wifiPart = if (karmaHits.isNotEmpty()) "a fake Wi-Fi hotspot" else "Wi-Fi bait"
+                        val evt2 = TimelineEvent(
+                            id = "corr@${correlatedBle.first().key}@$now",
+                            kind = EventKind.CORRELATED_SURVEILLANCE,
+                            ts = now,
+                            title = "Several warning signs at once",
+                            detail = "${correlatedBle.size} Bluetooth device(s) staying near you, a phone-network warning and $wifiPart, all at the same time",
+                            severity = Severity.CRITICAL,
+                            lat = track.current?.lat, lon = track.current?.lon
+                        )
+                        if (eventLog.record(evt2, "corr@${correlatedBle.first().key}")) {
+                            Registry.publishTimeline(eventLog.snapshot())
                         }
                     }
                 }
@@ -1393,7 +1361,7 @@ class ScanService : LifecycleService() {
 
     /**
      * Driving is two consecutive fixes at road speed; the trip then runs until no fix
-     * has shown that speed for [TRIP_END_MS]. Walking and cycling never reach it, and a
+     * has shown that speed for [ScanLoopPolicy.TRIP_END_MS]. Walking and cycling never reach it, and a
      * single spurious speed reading on its own starts nothing.
      */
     private fun updateVehicle(fix: Fix) {
@@ -1970,8 +1938,6 @@ class ScanService : LifecycleService() {
 
         /** Road speed: about 29 km/h, above anything on foot or a bicycle sustains. */
         private const val DRIVING_SPEED_MS = 8f
-        /** No fix at road speed for this long and the car is parked. */
-        private const val TRIP_END_MS = 5 * 60_000L
         /** How long the start of a drive is scanned at low latency. */
         private const val INTENSIVE_SWEEP_MS = 5 * 60_000L
         /** Allowance past the interrogator's own budget before its collector is cancelled. */

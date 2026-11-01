@@ -99,28 +99,97 @@ object HistoryRetention {
         val app = context.applicationContext
         val now = System.currentTimeMillis()
         ensureScheduled(app)
+        sweep(AppStores(app), days(app), now)
+    }
+
+    /**
+     * Where [apply] deletes from, one call per store, so which run and with what
+     * cutoff ([sweep]) is decided apart from the files themselves.
+     */
+    internal interface Stores {
+        /** Exported evidence reports older than a day. */
+        fun exports(now: Long)
+        /** Store files set aside as unreadable ([Store]) more than 30 days ago. */
+        fun setAside(now: Long) = Unit
+        /** The cell-tower baseline: coarsened and thinned; [cutoff] null keeps every tower. */
+        fun cellBaseline(cutoff: Long?, now: Long)
+        fun locations(cutoff: Long)
+        fun trips(cutoff: Long)
+        fun unlocks(cutoff: Long)
+        fun tiles(cutoff: Long)
+        fun typicalSpeeds(cutoff: Long, now: Long)
+        fun recordings(cutoff: Long)
+        fun cameraSweep(cutoff: Long)
+        fun timeline(cutoff: Long)
+    }
+
+    /**
+     * The retention of [days] at [now] over [stores]: the exported reports and the
+     * cell baseline whatever the choice, everything else only when the choice is
+     * not [FOREVER]. A store that fails does not stop the others.
+     */
+    internal fun sweep(stores: Stores, days: Int, now: Long) {
         // Whatever the retention: a report is shared once, and kept only for the app it went to.
-        runCatching { Report.pruneExports(app.cacheDir, now) }
+        runCatching { stores.exports(now) }
         // Whatever the retention too: a store file that could not be read was set
         // aside, nothing can open it, and after 30 days it goes.
-        runCatching { Store.pruneSetAside(app.filesDir, now) }
-        val cutoff = cutoff(app, now)
-        runCatching { ScanService.applyCellRetention(app, cutoff, now) }
+        runCatching { stores.setAside(now) }
+        val cutoff = cutoffFor(days, now)
+        runCatching { stores.cellBaseline(cutoff, now) }
         if (cutoff == null) return
-        runCatching { LocationHistory.pruneOlderThan(app, cutoff) }
-        runCatching { ScanService.pruneTripsOlderThan(app, cutoff) }
-        // In a process the app's screens never opened (this alarm's, the scanner's
-        // at boot) the ledger has not been told where its file is yet.
-        runCatching {
+        runCatching { stores.locations(cutoff) }
+        runCatching { stores.trips(cutoff) }
+        runCatching { stores.unlocks(cutoff) }
+        runCatching { stores.tiles(cutoff) }
+        runCatching { stores.typicalSpeeds(cutoff, now) }
+        runCatching { stores.recordings(cutoff) }
+        runCatching { stores.cameraSweep(cutoff) }
+        runCatching { stores.timeline(cutoff) }
+    }
+
+    /** The app's own stores, as [apply] reaches them. */
+    private class AppStores(private val app: Context) : Stores {
+        override fun exports(now: Long) {
+            Report.pruneExports(app.cacheDir, now)
+        }
+
+        override fun setAside(now: Long) {
+            Store.pruneSetAside(app.filesDir, now)
+        }
+
+        override fun cellBaseline(cutoff: Long?, now: Long) {
+            ScanService.applyCellRetention(app, cutoff, now)
+        }
+
+        override fun locations(cutoff: Long) {
+            LocationHistory.pruneOlderThan(app, cutoff)
+        }
+
+        override fun trips(cutoff: Long) {
+            ScanService.pruneTripsOlderThan(app, cutoff)
+        }
+
+        override fun unlocks(cutoff: Long) {
+            // In a process the app's screens never opened (this alarm's, the scanner's
+            // at boot) the ledger has not been told where its file is yet.
             UnlockLedger.init(app)
             UnlockLedger.pruneOlderThan(cutoff)
         }
-        runCatching { MapTiles.prune(app, cutoff) }
-        runCatching { TypicalSpeedCache.prune(app, cutoff, now) }
+
+        override fun tiles(cutoff: Long) = MapTiles.prune(app, cutoff)
+
+        override fun typicalSpeeds(cutoff: Long, now: Long) {
+            TypicalSpeedCache.prune(app, cutoff, now)
+        }
+
         // The radio scanner's recordings, by when each was last written.
-        runCatching { ScannerRecordings.pruneOlderThan(app, cutoff) }
-        runCatching { HiddenCameraScanner.pruneOlderThan(app, cutoff) }
-        runCatching {
+        override fun recordings(cutoff: Long) {
+            ScannerRecordings.pruneOlderThan(app, cutoff)
+        }
+
+        override fun cameraSweep(cutoff: Long) = HiddenCameraScanner.pruneOlderThan(app, cutoff)
+
+        override fun timeline(cutoff: Long) {
             val log = TimelineLog.get(app)
             if (log.pruneOlderThan(cutoff) > 0) Registry.publishTimeline(log.snapshot())
         }

@@ -1,3 +1,4 @@
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.Properties
 import java.util.TreeMap
@@ -619,6 +620,48 @@ dependencies {
     testImplementation("org.json:json:20240303")
     // The desktop JNA jar carries the native dispatch library for the build machine.
     testImplementation("net.java.dev.jna:jna:5.19.1")
+    // A real Context, SharedPreferences and SQLite for the few JVM tests that need the
+    // framework (marked @RunWith(RobolectricTestRunner::class)); every other test keeps
+    // the stubbed android.jar above. 4.14 is the first release that knows compileSdk 35;
+    // its tests run against SDK 34 (src/test/resources/robolectric.properties), because
+    // Robolectric's SDK 35 needs Java 21 and this build runs on 17.
+    testImplementation("org.robolectric:robolectric:4.14.1")
+}
+
+// Robolectric's Android runtime, resolved by Gradle like any other dependency (and
+// cached with it) instead of downloaded by Robolectric itself while the tests run,
+// which made every run depend on Maven Central answering at that moment (it
+// rate-limits). The tests then run Robolectric offline against this copy. The
+// versions are the ones robolectric 4.14.1 pairs with SDK 34, which the tests
+// run on (src/test/resources/robolectric.properties), and SDK 35, the target.
+// Two configurations: one module in two versions in one configuration resolves to
+// the newer alone.
+val robolectricRuntime: Configuration by configurations.creating
+val robolectricTarget: Configuration by configurations.creating
+dependencies {
+    robolectricRuntime("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
+    // The SDK the app targets: Robolectric reads the app's resources against it,
+    // whichever SDK the tests run on.
+    robolectricTarget("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7")
+}
+val robolectricJars = layout.buildDirectory.dir("robolectric-jars")
+// Links into Gradle's cache, not copies: the two jars are about 300 MB.
+val copyRobolectricRuntime by tasks.registering {
+    inputs.files(robolectricRuntime, robolectricTarget)
+    outputs.dir(robolectricJars)
+    doLast {
+        val dir = robolectricJars.get().asFile
+        dir.deleteRecursively()
+        dir.mkdirs()
+        (robolectricRuntime.files + robolectricTarget.files).forEach { jar ->
+            Files.createSymbolicLink(dir.toPath().resolve(jar.name), jar.toPath())
+        }
+    }
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(copyRobolectricRuntime)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricJars.get().asFile.absolutePath)
 }
 
 // detekt, run by .github/workflows/android.yml with its default rules and

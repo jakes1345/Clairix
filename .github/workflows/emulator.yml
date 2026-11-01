@@ -27,6 +27,10 @@ name: Emulator smoke test
 # relays (RelayMoveTest), the app over the real Tor network (TorDeviceTest), and last,
 # since they move the app's vault keys, the lock screen tests (VaultLockScreenTest).
 #
+# After those, the app is installed again without -g and walked through onboarding
+# and every Scan category with its runtime permissions refused, all at once and one
+# at a time (PermissionsDeniedDeviceTest); every earlier step runs with them granted.
+#
 # The APKs are built once (job build) and every step above runs on five emulators,
 # Android 12 (API 31, the oldest Clairix runs on), 13, 14 and 15 with Google APIs, and
 # Android 15 without them (the plain AOSP image), as a phone without Google Play
@@ -116,6 +120,7 @@ jobs:
     name: smoke (${{ matrix.api }}${{ matrix.image == 'default' && ', AOSP' || '' }})
     needs: build
     runs-on: ubuntu-latest
+    # Ten walks with permissions refused (about two minutes each) came on top of the rest.
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -617,6 +622,64 @@ jobs:
           python3 "$UI" relaunch "$DURESS" | tee -a ../duress.txt
           check_crash
 
+      - name: Run first run and the Scan hub with permissions refused
+        working-directory: android
+        timeout-minutes: 45
+        run: |
+          # Every step above runs on an install made with -g, every permission
+          # granted, so no refusal was ever run. Here the app is installed again
+          # without -g, and PermissionsDeniedDeviceTest walks onboarding and every
+          # Scan category answering each prompt "Don't allow": once with every
+          # runtime permission revoked, then once per permission with only that one
+          # revoked. Revoking ends the app's process, which is where the test runs,
+          # so it is done here with pm revoke before each run. Last, after the
+          # duress test: the reinstall starts from nothing.
+          set -o pipefail
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          PERMS="android.permission.ACCESS_FINE_LOCATION android.permission.ACCESS_COARSE_LOCATION
+                 android.permission.ACCESS_BACKGROUND_LOCATION android.permission.BLUETOOTH_SCAN
+                 android.permission.BLUETOOTH_CONNECT android.permission.BLUETOOTH_ADVERTISE
+                 android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.POST_NOTIFICATIONS"
+          "$ADB" uninstall app.clairix || true
+          "$ADB" install -r app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
+          : > ../denied.txt
+          : > ../logcat-denied.txt
+          mkdir -p ../screens/denied
+          # pm grant and pm revoke refuse a permission this Android version does not
+          # have (POST_NOTIFICATIONS before 13); the test checks each is refused.
+          grant() { for p in "$@"; do "$ADB" shell pm grant app.clairix "$p" > /dev/null 2>&1 || true; done; }
+          revoke() { for p in "$@"; do "$ADB" shell pm revoke app.clairix "$p" > /dev/null 2>&1 || true; done; }
+          walk() {
+            "$ADB" logcat -c
+            set +e
+            timeout 600 "$ADB" shell am instrument -w -r \
+              -e class app.clairix.PermissionsDeniedDeviceTest -e permissions denied -e denied "$2" -e label "$1" \
+              app.clairix.test/androidx.test.runner.AndroidJUnitRunner > "../denied-$1.txt"
+            set -e
+            cat "../denied-$1.txt" >> ../denied.txt
+            "$ADB" logcat -d > ../logcat-denied-run.txt
+            cat ../logcat-denied-run.txt >> ../logcat-denied.txt
+            "$ADB" pull /sdcard/Android/data/app.clairix/files/denied ../screens/denied/ > /dev/null 2>&1 || true
+            if grep -A1 "FATAL EXCEPTION" ../logcat-denied-run.txt | grep -q "Process: app.clairix"; then
+              echo "::error::Clairix crashed with $1 refused; see logcat-denied.txt"
+              grep -A 30 "FATAL EXCEPTION" ../logcat-denied-run.txt | head -80
+              exit 1
+            fi
+            if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" "../denied-$1.txt"; then echo "::error::The denied-permissions run ($1) was skipped"; exit 1; fi
+            grep -q "^OK (1 test)" "../denied-$1.txt" || { cat "../denied-$1.txt"; echo "::error::The app failed with $1 refused; see denied.txt"; exit 1; }
+          }
+          # shellcheck disable=SC2086
+          revoke $PERMS
+          # shellcheck disable=SC2086
+          walk all "$(echo $PERMS | tr ' ' ',')"
+          for p in $PERMS; do
+            "$ADB" shell pm clear app.clairix > /dev/null
+            # shellcheck disable=SC2086
+            grant $PERMS
+            revoke "$p"
+            walk "${p##*.}" "$p"
+          done
+
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -635,6 +698,9 @@ jobs:
             logcat-cardvault.txt
             duress.txt
             logcat-duress.txt
+            denied.txt
+            denied-*.txt
+            logcat-denied.txt
             tor.txt
             logcat-tor.txt
             soak.txt

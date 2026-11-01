@@ -357,7 +357,11 @@ object PatternOfLife {
      */
     private fun dbscan(fixes: List<Fix>): IntArray {
         val n = fixes.size
-        val labels = IntArray(n) { UNVISITED }
+        // A fix taken on the move (a walk, a slow drive) is never part of a stay: at
+        // walking pace consecutive fixes fall within EPS_M and WINDOW_MS of each
+        // other and chained two places into one. Unknown speed counts as still.
+        val moving = BooleanArray(n) { (fixes[it].speed ?: 0f) > STILL_MAX_MPS }
+        val labels = IntArray(n) { if (moving[it]) NOISE else UNVISITED }
         val index = GridIndex(fixes, EPS_M)
         var cluster = 0
         val queue = ArrayDeque<Int>()
@@ -370,6 +374,7 @@ object PatternOfLife {
             queue.addAll(neigh)
             while (queue.isNotEmpty()) {
                 val j = queue.removeFirst()
+                if (moving[j]) continue
                 if (labels[j] == NOISE) labels[j] = cluster
                 if (labels[j] != UNVISITED) continue
                 labels[j] = cluster
@@ -381,6 +386,8 @@ object PatternOfLife {
         return labels
     }
 
+    /** Above this reported speed a fix is taken on the move (a slow walk is about 1.1 m/s). */
+    private const val STILL_MAX_MPS = 1.0f
     private const val UNVISITED = -2
     private const val NOISE = -1
 

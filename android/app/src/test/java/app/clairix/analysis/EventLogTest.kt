@@ -7,6 +7,7 @@ import app.clairix.TestStoreCipher
 import app.clairix.TimelineEvent
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -110,5 +111,54 @@ class EventLogTest {
         // Nothing to prune: nothing handed over.
         assertEquals(0, log.pruneOlderThan(10_000L))
         assertEquals(4, dropped.size)
+    }
+
+    @Test
+    fun theCapHoldsAcrossAReopenAndKeepsTheNewest() {
+        val log = EventLog(store(), cap = 500)
+        for (i in 1..520) log.record(event("e$i", i * 1_000L))
+        assertEquals(500, log.snapshot().size)
+        assertEquals("e520", log.snapshot().first().id)
+        assertEquals("e21", log.snapshot().last().id)
+        val reopened = EventLog(store(), cap = 500).snapshot()
+        assertEquals(500, reopened.size)
+        assertEquals("e21", reopened.last().id)
+    }
+
+    @Test
+    fun aLateOldEventOverTheCapIsTheOneThatGoes() {
+        val log = EventLog(store(), cap = 3)
+        log.record(event("b", 2_000L))
+        log.record(event("c", 3_000L))
+        log.record(event("d", 4_000L))
+        log.record(event("a", 1_000L)) // older than all three: it is the oldest, so it goes at once
+        assertEquals(listOf("d", "c", "b"), log.snapshot().map { it.id })
+    }
+
+    @Test
+    fun aRepeatWithinTheWindowIsOneEntryAndAfterItAnother() {
+        val log = EventLog(store())
+        val window = 30 * 60_000L
+        assertTrue(log.record(event("follow:AA@1000", 1_000L), dedupeKey = "follow:AA"))
+        assertFalse("a repeat a minute later", log.record(event("follow:AA@61000", 61_000L), dedupeKey = "follow:AA"))
+        assertFalse(log.record(event("follow:AA@x", 1_000L + window - 1), dedupeKey = "follow:AA"))
+        // Another device is its own entry inside the same window.
+        assertTrue(log.record(event("follow:BB@2000", 2_000L), dedupeKey = "follow:BB"))
+        // A key that is a prefix of another does not swallow it.
+        assertTrue(log.record(event("follow:A@3000", 3_000L), dedupeKey = "follow:A"))
+        // The window measured from the entry kept, not from the repeats dropped.
+        assertTrue(log.record(event("follow:AA@late", 1_000L + window), dedupeKey = "follow:AA"))
+        assertEquals(4, log.snapshot().size)
+        // Without a key nothing is suppressed.
+        assertTrue(log.record(event("follow:AA@late", 1_000L + window)))
+        assertEquals(5, log.snapshot().size)
+    }
+
+    @Test
+    fun aShorterWindowLetsTheRepeatThrough() {
+        val log = EventLog(store())
+        assertTrue(log.record(event("k@1", 1_000L), dedupeKey = "k", dedupeWindowMs = 10_000L))
+        assertFalse(log.record(event("k@2", 10_999L), dedupeKey = "k", dedupeWindowMs = 10_000L))
+        assertTrue(log.record(event("k@3", 11_000L), dedupeKey = "k", dedupeWindowMs = 10_000L))
     }
 }
