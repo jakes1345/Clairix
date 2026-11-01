@@ -45,7 +45,6 @@ import app.clairix.ui.components.StatusPill
 import app.clairix.ui.components.Tone
 import app.clairix.ui.SafetyFirst
 import app.clairix.ui.SafetyFirstCard
-import app.clairix.ui.shareEvidenceReport
 
 // The Phone check category's on-demand pages: the stalkerware scan and the
 // certificate and TLS audit, and the Device page's headsets and microphones.
@@ -182,7 +181,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                         onExport = {
                             scope.launch {
                                 withContext(Dispatchers.IO) { saveFlaggedEvidence(context, r) }
-                                shareEvidenceReport(context)
+                                EvidenceExport.request()
                             }
                         }
                     )

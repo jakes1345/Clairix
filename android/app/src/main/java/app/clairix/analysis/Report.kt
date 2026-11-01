@@ -1,33 +1,24 @@
 package app.clairix.analysis
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
-import app.clairix.CellStatus
 import app.clairix.Detection
-import app.clairix.NfcTag
-import app.clairix.ScanStatus
-import app.clairix.Threat
 import app.clairix.TimelineEvent
-import app.clairix.WifiAnomaly
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 
+/**
+ * The evidence report: the text a person reads ([toText]) or the JSON a tool reads
+ * ([toJson]), each ending in a SHA-256 of the body and a signature over it by a
+ * per-install Keystore key, written to the share area with any photos kept from
+ * the camera sweep and handed to the share sheet ([share], [shareJson]).
+ */
 object Report {
-
-    private val utc: TimeZone = TimeZone.getTimeZone("UTC")
-
-    // All timestamps are written in UTC so reports from different phones and time
-    // zones can be lined up against each other and against server logs.
-    private val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US).apply { timeZone = utc }
-    private val sdfMinute = SimpleDateFormat("yyyy-MM-dd HH:mm 'UTC'", Locale.US).apply { timeZone = utc }
-    private val sdfIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = utc }
 
     /** How long an exported report stays in the cache for a share target to read. */
     const val EXPORT_RETENTION_MS = 24 * 60 * 60_000L
@@ -39,224 +30,230 @@ object Report {
      */
     private const val REPORTS_DIR = "reports"
 
+    /** What an export writes: the report and the photos that go with it, each starting "clairix_". */
+    private val EXPORT_EXTENSIONS = setOf("txt", "json", "jpg")
+
+    private const val SUBJECT = "Clairix Evidence Report"
+
     /**
-     * Deletes exported reports older than [EXPORT_RETENTION_MS], and any left at
-     * the cache root by earlier versions; returns how many went. A report is the
-     * one file the app writes in the clear, with the positions where devices were
-     * seen, so it is not left lying in the cache: it is kept a day, not deleted
-     * at once, because a mail client reads the attachment when it actually sends,
-     * which offline can be well after the share, and deleting the file underneath
-     * it lost the report. Runs at every export and on the retention schedule
+     * Deletes exported reports and photos older than [EXPORT_RETENTION_MS], and any
+     * left at the cache root by earlier versions; returns how many went. A report is
+     * the one file the app writes in the clear, with the positions where devices were
+     * seen, and a photo shared with it is decrypted for the share, so neither is left
+     * lying in the cache: they are kept a day, not deleted at once, because a mail
+     * client reads the attachment when it actually sends, which offline can be well
+     * after the share, and deleting the file underneath it lost the report. Runs at
+     * every export and on the retention schedule
      * ([app.clairix.security.HistoryRetention]), so the last export does not wait
      * for the next one to go.
      */
     fun pruneExports(cacheDir: File, now: Long): Int {
-        val isReport = java.io.FileFilter { f -> f.isFile && f.name.startsWith("clairix_") && f.name.endsWith(".txt") }
+        val isExport = java.io.FileFilter { f -> f.isFile && f.name.startsWith("clairix_") && f.extension in EXPORT_EXTENSIONS }
         var removed = 0
-        cacheDir.listFiles(isReport)?.forEach { if (it.delete()) removed++ }
-        File(cacheDir, REPORTS_DIR).listFiles(isReport)
+        cacheDir.listFiles(isExport)?.forEach { if (it.delete()) removed++ }
+        File(cacheDir, REPORTS_DIR).listFiles(isExport)
             ?.filter { now - it.lastModified() > EXPORT_RETENTION_MS }
             ?.forEach { if (it.delete()) removed++ }
         return removed
     }
 
+    // ── Building ────────────────────────────────────────────────────────────
+
+    /**
+     * The human-readable report: the body ([ReportText]), then the integrity block
+     * with the SHA-256 of the body and [signer]'s signature over the same bytes.
+     */
+    fun toText(header: ReportHeader, input: ReportInput, range: ReportRange, signer: ReportSigner?): String {
+        val body = ReportText.body(header, input, range)
+        val seal = ReportSigning.seal(body.toByteArray(Charsets.UTF_8), signer, header.signing)
+        return body + integrityText(seal, header.signing)
+    }
+
+    /**
+     * The machine-readable report. The first line is `{"report":` followed by the
+     * body as compact JSON and a comma; the body's bytes are what is hashed and
+     * signed, and the `integrity` member after it says so and how to check.
+     */
+    fun toJson(header: ReportHeader, input: ReportInput, range: ReportRange, signer: ReportSigner?): String {
+        val body = ReportJson.body(header, input, range).toString()
+        val seal = ReportSigning.seal(body.toByteArray(Charsets.UTF_8), signer, header.signing)
+        val integrity = JSONObject().apply {
+            put("sha256", seal.sha256)
+            put("algorithm", header.signing.algorithm)
+            seal.signature?.let { put("signature", it) }
+            seal.failure?.let { put("signature_unavailable", it) }
+            put("signed_bytes", "the value of \"report\" exactly as written on the first line of this file, without the comma that ends the line")
+            put("how_to_check", JSONArray().also { a -> checkCommands(ReportFormat.JSON, header.signing, seal).forEach { a.put(it) } })
+        }
+        return "{\"report\":$body,\n\"integrity\":${integrity.toString(2)}}\n"
+    }
+
+    fun render(format: ReportFormat, header: ReportHeader, input: ReportInput, range: ReportRange, signer: ReportSigner?): String =
+        when (format) {
+            ReportFormat.TEXT -> toText(header, input, range, signer)
+            ReportFormat.JSON -> toJson(header, input, range, signer)
+        }
+
+    /** "Apple AirTag (address …) was heard with this phone at 4 places 412 m apart, …": one device, in sentences. */
+    fun summary(d: Detection, header: ReportHeader): String = ReportText.summary(d, ReportTime(header.zone))
+
+    private fun integrityText(seal: ReportSigning.Seal, key: SigningKey): String = buildString {
+        appendLine(ReportText.INTEGRITY_MARKER)
+        appendLine("SHA-256 of everything above this block (UTF-8): ${seal.sha256}")
+        if (seal.signature != null) {
+            appendLine("Signature (${key.algorithm}, DER, base64): ${seal.signature}")
+        } else {
+            appendLine(
+                "Signature: none (${seal.failure}). Anyone can recompute a SHA-256 after an edit, " +
+                    "so on its own it does not show the text is unchanged."
+            )
+        }
+        appendLine()
+        appendLine("To check this file on a computer with OpenSSL, save it as report.txt and run:")
+        checkCommands(ReportFormat.TEXT, key, seal).forEach { appendLine("  $it") }
+        appendLine()
+        appendLine(VERIFY_MEANING)
+    }
+
+    private const val VERIFY_MEANING =
+        "The second command prints the hash above. The last prints \"Verified OK\" when the text above this block is " +
+            "exactly what this phone wrote and signed. The key fingerprint (the SHA-256 of key.der) is shown on the " +
+            "phone when a report is exported and is the same in every report from this install, until Clairix is " +
+            "wiped or reinstalled; compare it to know the key is this phone's. A match says nothing about who held the phone."
+
+    /** The OpenSSL commands that check a report saved as report.txt or report.json. */
+    internal fun checkCommands(format: ReportFormat, key: SigningKey, seal: ReportSigning.Seal): List<String> = buildList {
+        when (format) {
+            ReportFormat.TEXT -> add("sed '/^${ReportText.INTEGRITY_MARKER}\$/,\$d' report.txt > body.txt")
+            ReportFormat.JSON -> add("head -n 1 report.json | sed -e 's/^{\"report\"://' -e 's/,\$//' | tr -d '\\n' > body.txt")
+        }
+        add("openssl dgst -sha256 body.txt")
+        val publicKey = key.publicKey
+        val signature = seal.signature
+        if (publicKey != null && signature != null) {
+            add("echo '$publicKey' | base64 -d > key.der")
+            add("openssl dgst -sha256 key.der")
+            add("openssl pkey -pubin -inform DER -in key.der -out key.pem")
+            add("echo '$signature' | base64 -d > sig.der")
+            add("openssl dgst -sha256 -verify key.pem -signature sig.der body.txt")
+        }
+    }
+
+    // ── Sharing ─────────────────────────────────────────────────────────────
+
+    /** The photos going with a report: the share name of each by its event's id, and the opened bytes by share name. */
+    data class SharedPhotos(val names: Map<String, String>, val files: List<Pair<String, ByteArray>>)
+
+    /** "clairix_<now>.<ext>": the report's file name. */
+    fun reportName(now: Long, format: ReportFormat): String = "clairix_$now.${format.extension}"
+
+    /** "clairix_<now>_photo_<n>.jpg", counting from 1: the share name of a kept photo. */
+    fun photoName(now: Long, index: Int): String = "clairix_${now}_photo_$index.jpg"
+
+    /**
+     * The photos kept on camera events in [range], opened with [open] (which
+     * decrypts one by its attachment name, null when it cannot); a photo that does
+     * not open is left out and the report says so.
+     */
+    fun sharedPhotos(timeline: List<TimelineEvent>, range: ReportRange, now: Long, open: (String) -> ByteArray?): SharedPhotos {
+        val names = LinkedHashMap<String, String>()
+        val files = ArrayList<Pair<String, ByteArray>>()
+        for (e in ReportText.photoEvents(timeline, range)) {
+            val bytes = e.attachment?.let { runCatching { open(it) }.getOrNull() } ?: continue
+            val name = photoName(now, files.size + 1)
+            names[e.id] = name
+            files += name to bytes
+        }
+        return SharedPhotos(names, files)
+    }
+
+    /**
+     * Writes the report [content] and the opened [photos] into the share folder
+     * under [cacheDir], and returns the files, the report first. The photos are
+     * plain JPEGs there, as the report is plain text: both go after a day
+     * ([pruneExports]).
+     */
+    fun writeExport(cacheDir: File, now: Long, format: ReportFormat, content: String, photos: List<Pair<String, ByteArray>>): List<File> {
+        val dir = File(cacheDir, REPORTS_DIR).also { it.mkdirs() }
+        val report = File(dir, reportName(now, format)).also { it.writeText(content, Charsets.UTF_8) }
+        return listOf(report) + photos.map { (name, bytes) -> File(dir, name).also { it.writeBytes(bytes) } }
+    }
+
+    /** The share's MIME type: the report's own alone, any type once photos go with it. */
+    fun shareMime(format: ReportFormat, fileCount: Int): String = if (fileCount <= 1) format.mimeType else "*/*"
+
+    /**
+     * Writes the report in [format] with the photos kept in [range] and returns the
+     * share intent: one file with ACTION_SEND, the report and its photos with
+     * ACTION_SEND_MULTIPLE, all through the file provider. Keystore, decryption
+     * and file I/O; call off the main thread.
+     */
     fun share(
         context: Context,
-        status: ScanStatus,
-        detections: List<Detection>,
-        timeline: List<TimelineEvent>,
-        cell: CellStatus,
-        nfc: List<NfcTag>,
-        wifi: List<WifiAnomaly> = emptyList()
+        header: ReportHeader,
+        input: ReportInput,
+        range: ReportRange,
+        format: ReportFormat = ReportFormat.TEXT,
+        signer: ReportSigner? = KeystoreReportSigner
     ): Intent {
-        val text = toText(status, detections, timeline, cell, nfc, wifi)
-        val now = System.currentTimeMillis()
-        pruneExports(context.cacheDir, now)
-        val dir = File(context.cacheDir, REPORTS_DIR).also { it.mkdirs() }
-        val file = File(dir, "clairix_${now}.txt")
-        file.writeText(text)
-        val uri: Uri = FileProvider.getUriForFile(
-            context, "${context.packageName}.fileprovider", file
-        )
-        return Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "Clairix Evidence Report")
-            putExtra(Intent.EXTRA_TEXT, text.take(2000))
+        val app = context.applicationContext
+        val now = header.generatedAt
+        pruneExports(app.cacheDir, now)
+        val photos = sharedPhotos(input.timeline, range, now) { SweepPhotos.open(app.filesDir, it) }
+        val content = render(format, header, input.copy(photos = photos.names), range, signer)
+        val files = writeExport(app.cacheDir, now, format, content, photos.files)
+        val uris: List<Uri> = files.map { FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", it) }
+        val intent = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+        return intent.apply {
+            type = shareMime(format, uris.size)
+            clipData = ClipData.newRawUri(SUBJECT, uris[0]).also { clip -> uris.drop(1).forEach { clip.addItem(ClipData.Item(it)) } }
+            putExtra(Intent.EXTRA_SUBJECT, SUBJECT)
+            if (format == ReportFormat.TEXT) putExtra(Intent.EXTRA_TEXT, content.take(2000))
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }
 
-    /** Human-readable evidence report. All timestamps are UTC. */
-    fun toText(
-        status: ScanStatus,
-        detections: List<Detection>,
-        timeline: List<TimelineEvent>,
-        cell: CellStatus,
-        nfc: List<NfcTag>,
-        wifi: List<WifiAnomaly> = emptyList()
-    ): String = buildString {
-        val now = Date()
-        appendLine("=== CLAIRIX EVIDENCE REPORT ===")
-        appendLine("Clairix Report — generated ${sdf.format(now)}")
-        appendLine()
+    /** [share] as clairix_<ts>.json, application/json. */
+    fun shareJson(
+        context: Context,
+        header: ReportHeader,
+        input: ReportInput,
+        range: ReportRange,
+        signer: ReportSigner? = KeystoreReportSigner
+    ): Intent = share(context, header, input, range, ReportFormat.JSON, signer)
 
-        appendLine("LOCATION")
-        appendLine("  GPS: ${if (status.hasFix) "%.5f, %.5f".format(status.lat, status.lon) else "No fix"}")
-        appendLine("  Travelled: %.2f km".format(status.travelledM / 1000.0))
-        appendLine()
-
-        appendLine("TRACKED DEVICES (${detections.size} total)")
-        for (d in detections) {
-            appendLine()
-            appendLine("  ${d.name}")
-            appendLine("    Address : ${d.address}${d.addressKind?.let { " ($it)" } ?: ""}")
-            appendLine("    Maker   : ${d.manufacturer ?: "not advertised"}  Radio: ${d.radio}")
-            if (d.advertisedName != null) appendLine("    Adv name: ${d.advertisedName}")
-            if (d.services.isNotEmpty()) appendLine("    Services: ${d.services.joinToString(" / ")}")
-            appendLine("    Signal  : ${d.rssi} dBm")
-            // What the threat says, not `following` alone: a recognised tracker that moved
-            // with you is confirmed following; anything else that did is travelling with
-            // you, which a companion's phone also does.
-            val verdict = when {
-                d.following && d.threat == Threat.CRITICAL -> "*** CONFIRMED FOLLOWING ***"
-                d.following -> "Travelling with you (not a recognised tracker away from its owner)"
-                d.persistent -> "Persistent"
-                else -> "Brief"
-            }
-            appendLine("    Status  : $verdict")
-            appendLine("    Threat  : ${d.threat}  Score: ${d.score}")
-            appendLine("    Confidence: ${d.confidence.name}")
-            appendLine("    First seen: ${sdfMinute.format(Date(d.firstSeen))}  Last seen: ${sdfMinute.format(Date(d.lastSeen))}")
-            appendLine("    Sightings: ${d.sightings}  Places: ${d.places}  Displacement: ${d.displacementM.toInt()} m")
-            if (d.tracker != null) appendLine("    Type    : ${d.tracker.label} (${d.tracker.brand})")
-            if (d.separatedAt != 0L) appendLine("    Separated from owner since: ${sdfMinute.format(Date(d.separatedAt))}")
-            if (d.resolvedAt != 0L) appendLine("    Marked found by the owner: ${sdfMinute.format(Date(d.resolvedAt))}")
-            if (d.rotations > 0) appendLine("    MAC rotations: ${d.rotations}")
-            appendLine("    ${d.addresses} address rotation${if (d.addresses == 1) "" else "s"}")
-            if (d.points.isNotEmpty()) {
-                appendLine("    LOCATIONS:")
-                for (p in d.points) appendLine("      - %.6f,%.6f".format(p.lat, p.lon))
-            }
-        }
-        appendLine()
-
-        appendLine("CELLULAR STATUS")
-        val c = cell.cell
-        if (c != null) {
-            appendLine("  Cell    : ${c.cellId}  RAT: ${c.rat.label}")
-            appendLine("  MCC/MNC : ${c.mcc}/${c.mnc}  TAC: ${c.tac}")
-            appendLine("  Signal  : ${c.signalDbm ?: "??"} dBm  Neighbours: ${c.neighbors ?: "??"}")
-            appendLine("  Threat  : ${cell.level}  Score: ${cell.score}")
-        } else {
-            appendLine("  ${cell.reason ?: "No cell data"}")
-        }
-        if (cell.findings.isNotEmpty()) {
-            appendLine("  Indicators (${cell.findings.size}):")
-            for (f in cell.findings) appendLine("    [${f.severity}] ${f.id}: ${f.title}")
-            appendLine("    Detail: ${cell.findings.joinToString("; ") { it.detail }}")
-        }
-        appendLine()
-
-        appendLine("WIFI ANOMALIES (${wifi.size})")
-        for (w in wifi) {
-            appendLine()
-            appendLine("  SSID  : ${w.ssid}")
-            appendLine("  BSSID : ${w.bssid}  Signal: ${w.rssi} dBm")
-            appendLine("  Reason: ${w.reason}  Threat: ${w.threat}")
-            appendLine("  Seen  : ${sdf.format(Date(w.ts))}")
-        }
-        appendLine()
-
-        appendLine("NFC TAGS SCANNED (${nfc.size})")
-        for (t in nfc) {
-            appendLine()
-            appendLine("  UID  : ${t.uid}")
-            appendLine("  Type : ${t.type}  Techs: ${t.techs.joinToString()}")
-            if (t.payload != null) appendLine("  Data : ${t.payload}")
-            appendLine("  Note : ${t.note}${if (t.suspicious) "  *** SUSPICIOUS ***" else ""}")
-        }
-        appendLine()
-
-        appendLine("EVENT TIMELINE (${timeline.size} events, showing last 100)")
-        for (e in timeline.take(100)) {
-            appendLine("  ${sdf.format(Date(e.ts))} [${e.severity}] ${e.kind}: ${e.title}")
-            if (e.detail.isNotBlank()) appendLine("    ${e.detail}")
-            if (e.lat != null) appendLine("    @ %.5f, %.5f".format(e.lat, e.lon))
-        }
-    }
+    // ── What the screens say about it ───────────────────────────────────────
 
     /**
-     * Machine-readable counterpart of [toText]: the same evidence as JSON, using the
-     * per-threat blocks from [ThreatPayload] so a report and a shared threat payload
-     * describe a device in the same shape. Pretty-printed with two-space indent.
+     * The warning in front of every export. N comes from the range the owner
+     * picked, or from the retention when the report covers everything kept.
      */
-    fun toJson(
-        status: ScanStatus,
-        detections: List<Detection>,
-        timeline: List<TimelineEvent>,
-        cell: CellStatus?,
-        wifi: List<WifiAnomaly> = emptyList(),
-        nfc: List<NfcTag> = emptyList()
-    ): String {
-        val now = System.currentTimeMillis()
-        val root = JSONObject()
-        root.put("v", ThreatPayload.VERSION)
-        root.put("app", "clairix")
-        root.put("ts", now)
-        root.put("ts_utc", sdfIso.format(Date(now)))
-
-        root.put("status", JSONObject().apply {
-            put("scanning", status.scanning)
-            put("fix", status.hasFix)
-            if (status.hasFix && status.lat != null && status.lon != null) {
-                put("lat", status.lat); put("lon", status.lon)
-            }
-            put("travelled_m", status.travelledM)
-            put("nearby", status.nearbyCount)
-        })
-
-        val dArr = JSONArray()
-        for (d in detections) {
-            dArr.put(ThreatPayload.buildBleSection(d, includeTrail = true).also {
-                it.put("name", d.name)
-                it.put("threat", d.threat.name)
-                it.put("score", d.score)
-                it.put("following", d.following)
-                it.put("persistent", d.persistent)
-                if (d.resolvedAt != 0L) it.put("resolved_at", d.resolvedAt)
-                d.tracker?.let { t -> it.put("tracker", t.label); it.put("brand", t.brand) }
-            })
+    fun preShareWarning(range: ReportRange, retentionDays: Int, now: Long): String {
+        val from = range.from
+        val to = range.to
+        val span = when {
+            from != null && to != null && to < now - TimeUnit.DAYS.toMillis(1) ->
+                "for the ${days(daysBetween(from, to))} you picked"
+            from != null -> "for the last ${days(daysBetween(from, now))}"
+            retentionDays == 0 -> "for as far back as Clairix has kept it"
+            else -> "for the last ${days(retentionDays)}"
         }
-        root.put("ble", dArr)
-
-        cell?.let { root.put("cell", ThreatPayload.buildCellSection(it)) }
-
-        val wArr = JSONArray()
-        for (w in wifi) wArr.put(ThreatPayload.buildWifiSection(w))
-        root.put("wifi", wArr)
-
-        val nArr = JSONArray()
-        for (t in nfc) {
-            nArr.put(JSONObject().apply {
-                put("uid", t.uid); put("type", t.type)
-                put("techs", JSONArray().also { a -> t.techs.forEach { a.put(it) } })
-                t.payload?.let { put("payload", it) }
-                put("suspicious", t.suspicious); put("note", t.note); put("ts", t.ts)
-            })
-        }
-        root.put("nfc", nArr)
-
-        val tArr = JSONArray()
-        for (e in timeline.take(100)) {
-            tArr.put(JSONObject().apply {
-                put("id", e.id); put("kind", e.kind.name); put("ts", e.ts)
-                put("sev", e.severity.name); put("title", e.title); put("detail", e.detail)
-                e.lat?.let { put("lat", it) }; e.lon?.let { put("lon", it) }
-            })
-        }
-        root.put("timeline", tArr)
-
-        return root.toString(2)
+        return "This report contains your own location history $span and device identifiers. " +
+            "Share it only with people you trust."
     }
+
+    /** The Timeline's footer: what the retention deletes and that an export keeps it; null when nothing is deleted. */
+    fun timelineFooter(retentionDays: Int): String? =
+        if (retentionDays == 0) null
+        else "Entries older than ${days(retentionDays)} are deleted automatically. " +
+            "Export the evidence report to keep them: Settings, Export evidence."
+
+    private fun daysBetween(from: Long, to: Long): Int =
+        ((to - from + TimeUnit.DAYS.toMillis(1) - 1) / TimeUnit.DAYS.toMillis(1)).toInt().coerceAtLeast(1)
+
+    private fun days(n: Int): String = if (n == 1) "1 day" else "$n days"
 }

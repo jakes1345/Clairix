@@ -535,6 +535,26 @@ object HiddenCameraScanner {
     }
 
     /**
+     * The sweep's record as the evidence report needs it: what this process holds
+     * and, when the sweep has not been opened in it, what is on disk too. Reads the
+     * store without restoring it, so nothing is written. Disk I/O; call off the main thread.
+     */
+    fun reportRecord(context: Context): CameraSweepRecord {
+        val app = context.applicationContext ?: return CameraSweepRecord()
+        if (appContext == null) appContext = app
+        val saved = if (restored) null else runCatching { CameraSweepRecord.fromJson(storeFor(app).load { JSONObject() }) }.getOrNull()
+        synchronized(persistLock) {
+            return CameraSweepRecord(
+                findings = CameraSweepRecord.merge(_findings.value, saved?.findings.orEmpty(), null, FINDINGS_CAP),
+                done = _sweepDone.value + saved?.done.orEmpty(),
+                lastRunTs = max(_lastRunTs.value, saved?.lastRunTs ?: 0L),
+                network = networkResult,
+                ir = _irCheck.value
+            )
+        }
+    }
+
+    /**
      * "Clear all data": every finding, tick, time and self-test result, in memory and
      * on disk, now. Photos kept on the timeline go with their timeline events, which
      * the same action clears. Disk I/O; it runs where the scanner's own clearing does.

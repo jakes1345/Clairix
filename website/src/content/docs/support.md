@@ -123,6 +123,24 @@ No. Your identity key is the only credential, and it existed only on that phone.
 
 There is no reset. The passcode is never stored, only a verifier that cannot be reversed. If wipe-on-failure is on, repeated wrong attempts will erase the app's data. Otherwise you can uninstall and reinstall, which also erases it.
 
+### Exporting and checking an evidence report
+
+**Export evidence** in Settings, or **Export evidence report** on Scan → Trackers, writes a text report; **Export as JSON** beside each writes the same report as JSON. With a passcode set, each asks for it first. Then Clairix asks for the period (From and To; everything it has kept, by default) and warns you that the report holds your own location history and device identifiers. Photos you kept in the hidden-camera sweep during that period go with the report as separate pictures. The report and the pictures are deleted from the phone a day later; the share goes wherever you send it.
+
+Every report ends with a SHA-256 of its text and a signature (ECDSA P-256 with SHA-256) by a key Clairix makes in your phone's Android Keystore the first time you export. The public key and its fingerprint are at the top of the report, and the fingerprint is shown on the phone when you export. To check a text report on a computer with OpenSSL, save it as report.txt and run the commands printed at its end, which fill in the key and the signature for you:
+
+```
+sed '/^=== INTEGRITY ===$/,$d' report.txt > body.txt
+openssl dgst -sha256 body.txt
+echo '<public key from the report>' | base64 -d > key.der
+openssl dgst -sha256 key.der
+openssl pkey -pubin -inform DER -in key.der -out key.pem
+echo '<signature from the report>' | base64 -d > sig.der
+openssl dgst -sha256 -verify key.pem -signature sig.der body.txt
+```
+
+For a JSON report, saved as report.json, the first command is `head -n 1 report.json | sed -e 's/^{"report"://' -e 's/,$//' | tr -d '\n' > body.txt` and the rest are the same; the report lists them under `integrity`. The second command prints the hash at the end of the report, the fourth the key fingerprint, and the last "Verified OK" when not one character of the report was changed after the phone wrote it. Compare the fingerprint with the one the phone shows to know the key is that phone's. Wiping or reinstalling Clairix makes a new key. A check says nothing about who held the phone.
+
 ## Report a bug
 
 The quickest way is **Report a problem** in Settings → About: it opens your mail app on a message to support@clairix.app with the Clairix version, phone model and Android version filled in, and nothing else. You write the rest and send it yourself. Or write to support@clairix.app with:
@@ -132,7 +150,7 @@ The quickest way is **Report a problem** in Settings → About: it opens your ma
 3. **Phone model, Android version and Clairix version.**
 4. **If Clairix crashed**, the crash record: after a crash, Settings → About shows "Clairix crashed last time" with **Copy** and **Share**. It holds the error's stack trace (code locations, never the error text), the app version, the phone model and the Android version: nothing from your conversations, no places, no identifiers. It stays on your phone until you send it, and **Delete** removes it.
 5. For Comms problems, the **diagnostics log**: in Comms settings, open Diagnostics and tap **Copy**. The log records connections and delivery events. It never contains message text.
-6. For scanner problems, an **evidence report export** is helpful if you are comfortable sharing it. It contains device identifiers and positions, so send it only if you are. You can delete lines before sending.
+6. For scanner problems, an **evidence report export** is helpful if you are comfortable sharing it. It contains your own location history, device identifiers and positions, so send it only if you are, and pick a short period. You can delete lines before sending; that breaks its signature, which does not matter for a bug report.
 
 Please do not send screenshots of conversations or anyone else's personal information. We reply by email within five business days. We have no telemetry, so your report is the only way we learn about a problem.
 

@@ -26,7 +26,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.clairix.analysis.Report
 import app.clairix.comms.CommsRepository
 import app.clairix.security.AppLock
 import app.clairix.security.HistoryRetention
@@ -817,7 +816,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             wipeChosen = AppLock.wipeChoiceConfirmed(context)
                         },
                         onCancel = { showPasscodeSetup = false },
-                        onExportEvidence = if (BuildConfig.FULL_ACCESS) { { shareEvidenceReport(context) } } else null
+                        onExportEvidence = if (BuildConfig.FULL_ACCESS) { { EvidenceExport.request() } } else null
                     )
                 }
             }
@@ -907,14 +906,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             }
                         }
                     )
-                    // With a passcode set, the export asks for it (or a biometric) every time.
-                    val askOwner = rememberOwnerCheck()
-                    PrimaryButton(
-                        "Export evidence",
-                        onClick = askOwner.guard("export the evidence report") { shareEvidenceReport(context) },
-                        icon = Icons.Filled.Share,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // With a passcode set, each export asks for it (or a biometric) every time.
+                    EvidenceExportButtons("Export evidence", modifier = Modifier.fillMaxWidth(), primary = true)
                     SecondaryButton("Clear all data", onClick = { showClearDialog = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
@@ -1087,19 +1080,6 @@ private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
 
 /** The limit earlier versions armed, unasked, with every new passcode. */
 private const val UNASKED_WIPE_AFTER = 3
-
-/**
- * Writes the evidence report as it stands and opens the share sheet: the Data
- * section's Export button, and the shortcut in [WipeChoiceDialog] wherever a
- * passcode is set in the full edition, before a wipe limit is picked.
- */
-internal fun shareEvidenceReport(context: Context) {
-    val intent = Report.share(
-        context, Registry.status.value, Registry.detections.value, Registry.timeline.value,
-        Registry.cell.value, Registry.nfc.value
-    )
-    context.startActivity(Intent.createChooser(intent, "Share evidence report"))
-}
 
 /**
  * What Settings, Clear all data removes, as [ScanService]'s clearAllData does it: keep the

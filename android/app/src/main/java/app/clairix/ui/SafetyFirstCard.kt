@@ -1,21 +1,16 @@
 package app.clairix.ui
 
-import android.app.Activity
-import android.content.Context
-import android.content.Intent
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.clairix.Detection
 import app.clairix.EventKind
+import app.clairix.EvidenceExport
 import app.clairix.Registry
-import app.clairix.analysis.Report
 import app.clairix.analysis.StalkwareScanner
 import app.clairix.ui.components.GhostButton
 import app.clairix.ui.components.Notice
@@ -98,8 +93,9 @@ internal object SafetyFirst {
  * The safety card. [title] says what is about to be removed; the two
  * sentences under it are the same on every screen. "Export the evidence first"
  * runs [onExport] when the screen has evidence of its own to add first, and
- * otherwise shares the evidence report as it stands; "Get help" opens the
- * Get help page over whatever is showing.
+ * otherwise asks for the evidence report as it stands ([EvidenceExport], which
+ * shows the period and the warning before the share sheet); "Get help" opens
+ * the Get help page over whatever is showing.
  */
 @Composable
 internal fun SafetyFirstCard(
@@ -107,7 +103,6 @@ internal fun SafetyFirstCard(
     title: String = SafetyFirst.TITLE_REMOVE,
     onExport: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
     Notice(
         Tone.Caution,
         text = SafetyFirst.NOTICE + "\n\n" + SafetyFirst.ADVOCATE,
@@ -117,7 +112,7 @@ internal fun SafetyFirstCard(
             Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 SecondaryButton(
                     SafetyFirst.EXPORT,
-                    onClick = { if (onExport != null) onExport() else shareEvidenceReport(context) },
+                    onClick = { if (onExport != null) onExport() else EvidenceExport.request() },
                     tone = Tone.Accent,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -125,27 +120,4 @@ internal fun SafetyFirstCard(
             }
         }
     )
-}
-
-/**
- * Shares the evidence report from what Clairix holds now, the Wi-Fi findings
- * included, through the same chooser as the Export buttons on the Trackers
- * screen and in Settings. Writes the report file; quick enough for a tap.
- */
-internal fun shareEvidenceReport(context: Context) {
-    val shared = runCatching {
-        val report = Report.share(
-            context,
-            Registry.status.value,
-            Registry.detections.value,
-            Registry.timeline.value,
-            Registry.cell.value,
-            Registry.nfc.value,
-            Registry.wifi.value
-        )
-        val chooser = Intent.createChooser(report, "Share evidence report")
-        if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(chooser)
-    }
-    if (shared.isFailure) Toast.makeText(context, "Could not export the evidence report", Toast.LENGTH_LONG).show()
 }

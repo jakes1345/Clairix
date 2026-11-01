@@ -368,7 +368,7 @@ internal fun NoPasscodeBanner(setting: Boolean, onSettingChange: (Boolean) -> Un
                 onDone = { onSettingChange(false) },
                 onCancel = { onSettingChange(false) },
                 // These pages are the full edition's: there is evidence to export before a wipe limit is picked.
-                onExportEvidence = if (BuildConfig.FULL_ACCESS) { { shareEvidenceReport(context) } } else null
+                onExportEvidence = if (BuildConfig.FULL_ACCESS) { { EvidenceExport.request() } } else null
             )
         }
     }

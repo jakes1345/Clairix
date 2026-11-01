@@ -37,7 +37,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -76,6 +75,7 @@ import app.clairix.analysis.CardVault
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.CellularExposure
 import app.clairix.analysis.NfcScanner
+import app.clairix.analysis.Report
 import app.clairix.analysis.ScanPacing
 import app.clairix.analysis.ScanRecord
 import app.clairix.analysis.ScannerHealth
@@ -91,7 +91,6 @@ import app.clairix.security.EmergencyNumbers
 import app.clairix.security.SosExtras
 import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
-import app.clairix.analysis.Report
 import app.clairix.detect.BleNames
 import app.clairix.detect.KarmaTrap
 import app.clairix.detect.VehicleTrips
@@ -442,6 +441,8 @@ class MainActivity : AppCompatActivity() {
                         }
                         // Once past the lock: wrong passcodes entered while she was away.
                         WrongPasscodeNotice()
+                        // An evidence export asked for anywhere: its period, warning and share.
+                        EvidenceExportHost()
                     }
                 }
             }
@@ -1791,10 +1792,7 @@ internal fun ScanScreen(
     val detections by Registry.detections.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val trusted by Registry.trusted.collectAsStateWithLifecycle()
-    val timeline by Registry.timeline.collectAsStateWithLifecycle()
     val cell by Registry.cell.collectAsStateWithLifecycle()
-    val nfc by Registry.nfc.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val now = rememberNow()
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -1864,17 +1862,9 @@ internal fun ScanScreen(
 
         // ── Actions ──
         item(key = "§export") {
-            // With a passcode set, the export asks for it (or a biometric) every time.
-            val askOwner = rememberOwnerCheck()
-            SecondaryButton(
-                "Export evidence report",
-                onClick = askOwner.guard("export the evidence report") {
-                    val i = Report.share(context, status, detections, timeline, cell, nfc)
-                    context.startActivity(Intent.createChooser(i, "Share evidence report"))
-                },
-                icon = Icons.Filled.Share,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-            )
+            // With a passcode set, each export asks for it (or a biometric) every time;
+            // then the period and the warning, then the share sheet.
+            EvidenceExportButtons("Export evidence report", modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
         }
     }
 }
@@ -2720,6 +2710,9 @@ internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer:
     // The newest stop on record. When it was the system's and the scanner is still
     // down, its row offers to resume; older stops are history.
     val latestStop = remember(events) { events.firstOrNull { it.kind == EventKind.SCAN_STOP } }
+    // What the retention deletes, read again as the log changes (it prunes by the setting).
+    val context = LocalContext.current
+    val retentionFooter = remember(events) { Report.timelineFooter(HistoryRetention.days(context)) }
 
     ScreenList {
         // ── Status first: how much is on record and how much of it matters ──
@@ -2751,6 +2744,17 @@ internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer:
                         onExplain = explain?.let { show -> { show(e) } }
                     )
                 }
+            }
+        }
+        // Always there, history or none: what goes, and how to keep it. Nothing when kept forever.
+        retentionFooter?.let { footer ->
+            item(key = "§retention") {
+                Text(
+                    footer,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textSubtle,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                )
             }
         }
     }
