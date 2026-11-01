@@ -16,6 +16,7 @@ import android.net.wifi.WifiManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import app.clairix.Threat
+import app.clairix.VpnCoverage
 import app.clairix.WifiAnomaly
 import app.clairix.WifiConnection
 import app.clairix.WifiNetwork
@@ -377,9 +378,15 @@ object WifiScanner {
         }
         val caps = wifiNet?.let { cm?.getNetworkCapabilities(it) }
         val link: LinkProperties? = wifiNet?.let { cm?.getLinkProperties(it) }
-        val activeCaps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
-        val vpn = networks.any { n -> cm?.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true } ||
-            activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        // Android picks the default network per app, and it is a VPN only when the VPN
+        // carries this app. A VPN set to cover some apps is still in the list of networks,
+        // which is all the row used to look at: "Active", in green, with Clairix outside it.
+        val active = cm?.activeNetwork
+        val activeCaps = active?.let { cm?.getNetworkCapabilities(it) }
+        val appOnVpn = activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        val vpnOnDevice = appOnVpn ||
+            networks.any { n -> cm?.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
+        val vpn = NetworkLeaks.coverage(vpnOnDevice, appHasNetwork = active != null, appOnVpn = appOnVpn)
 
         val ssid = info?.ssid?.trim()?.trim('"')?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
         val bssid = info?.bssid?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" && it != "00:00:00:00:00:00" }
@@ -406,6 +413,8 @@ object WifiScanner {
         if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == false) flags += "No confirmed internet access on this network"
         if (dns.isNotEmpty() && gateway != null && dns.all { it == gateway } && privateDns == null) flags += "DNS is answered by the router itself — it sees every site you look up"
         if (dns.any { it in SUSPICIOUS_DNS }) flags += "DNS points at an unusual resolver"
+        if (vpn == VpnCoverage.EXCLUDES_APP) flags += "A VPN is up, but Clairix's traffic does not go through it: it covers " +
+            "only some apps, or a work profile. Other apps may be outside it too."
 
         return WifiConnection(
             ssid = ssid, bssid = bssid?.lowercase(), rssi = rssi,
@@ -417,7 +426,7 @@ object WifiScanner {
             txMbps = info?.txLinkSpeedMbps?.takeIf { it > 0 },
             rxMbps = info?.rxLinkSpeedMbps?.takeIf { it > 0 },
             ipv4 = v4, ipv6 = v6, gateway = gateway, dnsServers = dns,
-            privateDns = privateDns, vpnActive = vpn,
+            privateDns = privateDns, vpn = vpn,
             captivePortal = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true,
             metered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false,
             flags = flags

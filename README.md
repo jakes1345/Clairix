@@ -352,11 +352,22 @@ maintainer on the live service, not in this repository.
   range.
 - **2G** (Phone check → Health): Android keeps the "Allow 2G" switch's state
   from apps, so the row says whether the phone has the switch, marks it red if
-  the phone is ever seen on a 2G tower, and opens the page where it is turned off.
+  the phone has used a 2G tower in the past week, and opens the page where it is
+  turned off. Say you have turned it off and the row reads off, keeps the last
+  2G date as history, and turns red again only if the phone uses 2G after that.
+  On Android 14 and later a second row points to Android's own cell network
+  protections, which apps cannot read.
 - **VPN coverage** (Phone check → Health): with a VPN up, flags DNS still going
   to the router or carrier, IPv6 the VPN does not carry, Clairix itself left
   outside the VPN, "Block connections without VPN" off, and a proxy on the
-  network.
+  network. The Wi-Fi tab's VPN row says whether Clairix's own traffic goes
+  through the VPN, not just whether one is up.
+- **Wi-Fi trap** (Scan → Wi-Fi): while the scanner runs, a made-up network
+  name, replaced every six hours and on every start, is registered for the
+  phone to probe for; only an answer-everything box (Karma, Pineapple) answers
+  it. Android asks first whether Clairix may suggest networks, and the tab says
+  whether the trap is armed. The name is untrusted, has auto-join off and a
+  password nobody knows, and is withdrawn when scanning stops.
 - **Ultrasound** (Scan → Ultrasound): on demand only, never in the background.
   Nothing is recorded; the microphone feeds a spectrum and the spectrum is
   thrown away.

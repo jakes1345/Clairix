@@ -458,7 +458,7 @@ class PhoneHealthMonitor(private val context: Context) {
         out += HealthFact("pdns", "Network", "Private DNS", if (privateDns) (link?.privateDnsServerName ?: "Automatic") else "Off")
         val alwaysOnVpn = runCatching { Settings.Secure.getString(cr, "always_on_vpn_app") }.getOrNull()
         if (!alwaysOnVpn.isNullOrBlank()) out += HealthFact("vpn_always", "Network", "Always-on VPN", alwaysOnVpn)
-        runCatching { CellularExposure.fact(context, advancedProtectionEnabled()) }.getOrNull()?.let { out += it }
+        runCatching { CellularExposure.facts(context, advancedProtectionEnabled()) }.getOrNull()?.let { out += it }
         runCatching { NetworkLeaks.facts(NetworkLeaks.read(context)) }.getOrNull()?.let { out += it }
         caFact()?.let { out += it }
         runCatching { KeyboardExposure.fact(KeyboardExposure.current(context)) }.getOrNull()?.let { out += it }

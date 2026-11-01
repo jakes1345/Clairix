@@ -1,6 +1,7 @@
 package app.clairix.analysis
 
 import app.clairix.Severity
+import app.clairix.VpnCoverage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -43,6 +44,21 @@ class NetworkLeaksTest {
         assertEquals(Severity.MEDIUM, fact(wifi.copy(appOnVpn = false), "vpn_excluded")!!.severity)
         assertEquals(Severity.MEDIUM, fact(wifi.copy(lockdown = false), "vpn_lockdown")!!.severity)
         assertNull(fact(wifi.copy(lockdown = null), "vpn_lockdown")!!.severity)
+    }
+
+    @Test
+    fun theWifiTabsVpnRowSaysWhetherClairixIsCarried() {
+        // This app's default network is the VPN: its traffic goes through it.
+        assertEquals(VpnCoverage.COVERS_APP, NetworkLeaks.coverage(vpnOnDevice = true, appHasNetwork = true, appOnVpn = true))
+        // A per-app VPN that leaves Clairix out: a VPN network exists, but Clairix's default is the Wi-Fi.
+        // This used to read "Active", in green.
+        assertEquals(VpnCoverage.EXCLUDES_APP, NetworkLeaks.coverage(vpnOnDevice = true, appHasNetwork = true, appOnVpn = false))
+        // A VPN is up and Clairix has no network at all (blocked, or between networks): unknown, not covered.
+        assertEquals(VpnCoverage.APP_OFFLINE, NetworkLeaks.coverage(vpnOnDevice = true, appHasNetwork = false, appOnVpn = false))
+        assertEquals(VpnCoverage.NONE, NetworkLeaks.coverage(vpnOnDevice = false, appHasNetwork = true, appOnVpn = false))
+        assertEquals(VpnCoverage.NONE, NetworkLeaks.coverage(vpnOnDevice = false, appHasNetwork = false, appOnVpn = false))
+        // The default network being a VPN is a VPN on the device, whatever the list said.
+        assertEquals(VpnCoverage.COVERS_APP, NetworkLeaks.coverage(vpnOnDevice = false, appHasNetwork = true, appOnVpn = true))
     }
 
     @Test

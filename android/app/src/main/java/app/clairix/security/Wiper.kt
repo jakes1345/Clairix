@@ -16,6 +16,7 @@ import app.clairix.TOUR_SEEN_KEY
 import app.clairix.analysis.TlsCanary
 import app.clairix.comms.CallService
 import app.clairix.comms.CommsService
+import app.clairix.detect.KarmaCanary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -334,6 +335,9 @@ object Wiper {
         // Alarms live with the system, not in the files erased below.
         runCatching { TlsCanary.stop(app) }
         runCatching { HistoryRetention.cancelSchedule(app) }
+        // So does the Wi-Fi trap's network suggestion, which the scanner withdraws only
+        // in onDestroy, and a wipe may end the process before that runs.
+        runCatching { KarmaCanary.withdrawForWipe(app) }
     }
 
     /** Every notification channel and channel group the app has made. */

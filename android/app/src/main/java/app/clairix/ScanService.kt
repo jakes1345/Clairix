@@ -519,9 +519,10 @@ class ScanService : LifecycleService() {
             val live = runCatching { BluetoothExposure.connectedDevices(this@ScanService) }.getOrDefault(emptySet())
             Registry.replaceBluetoothConnected(live)
         }
-        // The Karma canary is a hidden network suggestion the platform probes for;
-        // registering it is idempotent, and a refusal only means no canary this run.
-        runCatching { KarmaCanary.ensure(this) }
+        // The Karma canary: a made-up network name the platform probes for, registered
+        // afresh on every start (whatever an earlier run left is withdrawn first) and
+        // withdrawn in onDestroy. A refusal only means no canary; the Wi-Fi tab says so.
+        runCatching { KarmaCanary.start(this) }
         // The TLS canary runs while the scanner does, so a phone without comms still
         // learns of a proxy on its network; with comms it also watches the relay's key.
         runCatching { TlsCanary.start(this) }
@@ -907,6 +908,9 @@ class ScanService : LifecycleService() {
                 val wifiEvery = ScanPacing.wifiScanEveryMs(screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING)
                 if (publishCycle == 1 || now - lastWifiAt >= wifiEvery) {
                     lastWifiAt = now
+                    // A new canary name every few hours, before the scan below asks for it,
+                    // and another try at one Android refused; see [KarmaCanary.rotationDue].
+                    runCatching { KarmaCanary.rotateIfDue(this@ScanService, now) }
                     // The picture the WIFI tab shows, then the judgement on it. The
                     // snapshot requests a fresh scan and waits for its results, so both
                     // it and the anomaly scan below read this cycle's beacons rather than
@@ -1585,6 +1589,10 @@ class ScanService : LifecycleService() {
         // The owner turned the scanner off: the TLS canary stops too, unless comms keep
         // it. A scanner the system ended keeps it, as the owner still wants the cover.
         if (!AppSettings.scanEnabled) TlsCanary.stopIfUnwanted(this)
+        // The Karma canary's name is withdrawn however the scanner ends: with nothing
+        // reading the answers, the phone should not go on asking for it. The next start
+        // registers a new one.
+        runCatching { KarmaCanary.stop(this) }
         Registry.update {
             if (running) it.copy(
                 scanning = false,

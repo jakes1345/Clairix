@@ -557,6 +557,22 @@ data class WifiNetwork(
     val ageMs: Long?
 )
 
+/**
+ * What can be said about a VPN from this app's own seat. A VPN can be set to carry
+ * only some apps, so "a VPN network exists" says nothing about Clairix's traffic;
+ * Android's default network for this app does. See [app.clairix.analysis.NetworkLeaks.coverage].
+ */
+enum class VpnCoverage {
+    /** No VPN on the phone. */
+    NONE,
+    /** Clairix's own traffic goes through the VPN. */
+    COVERS_APP,
+    /** A VPN is up, but Clairix's traffic does not go through it: it covers only some apps, or a work profile. */
+    EXCLUDES_APP,
+    /** A VPN is up and Clairix has no network at the moment, so which way its traffic would go is unknown. */
+    APP_OFFLINE
+}
+
 /** The network the phone is on right now, from the radio and the IP stack. */
 data class WifiConnection(
     val ssid: String?,
@@ -577,7 +593,8 @@ data class WifiConnection(
     val dnsServers: List<String>,
     /** Hostname of the private (DoT) resolver when one is active, else null. */
     val privateDns: String?,
-    val vpnActive: Boolean,
+    /** Whether Clairix's own traffic goes through a VPN, not merely whether one exists. */
+    val vpn: VpnCoverage,
     /** True when the system judges the network as behind a captive portal. */
     val captivePortal: Boolean,
     val metered: Boolean,
@@ -656,9 +673,18 @@ data class HealthFact(
      * nothing to tap. The Device tab falls back to the security settings page when
      * the phone has no activity for the action.
      */
-    val fixAction: String? = null
+    val fixAction: String? = null,
+    /**
+     * Something only the owner can tell Clairix about this row, offered as a button,
+     * or null when the row asks nothing; for example "I turned 2G off", which Android
+     * gives apps no way to read.
+     */
+    val answer: Answer? = null
 ) {
     val ok: Boolean get() = severity == null
+
+    /** A button on a checklist row: [label] is shown, [id] says what it records (see [app.clairix.analysis.CellularExposure.answer]). */
+    data class Answer(val id: String, val label: String)
 }
 
 data class PhoneHealth(

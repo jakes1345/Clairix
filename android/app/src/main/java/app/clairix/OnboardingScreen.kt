@@ -181,7 +181,8 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                             "and start it later from Scan → Trackers.",
                         note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together. " +
                             "Android may ask whether Clairix can suggest Wi-Fi networks: that is the Wi-Fi trap, a made-up " +
-                            "network name only interception kit answers to. Nothing ever joins it. The tour explains it."
+                            "network name only interception kit answers to. It is added with auto-join off and a password " +
+                            "nobody knows, so the phone does not join what answers. The tour explains it."
                     )
                 }
             } else {

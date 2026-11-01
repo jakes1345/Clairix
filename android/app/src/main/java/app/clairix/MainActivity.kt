@@ -74,6 +74,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import app.clairix.CatcherFinding
 import app.clairix.analysis.CardVault
 import app.clairix.analysis.CellMonitor
+import app.clairix.analysis.CellularExposure
 import app.clairix.analysis.NfcScanner
 import app.clairix.analysis.ScanPacing
 import app.clairix.analysis.ScanRecord
@@ -90,6 +91,7 @@ import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import app.clairix.analysis.Report
 import app.clairix.detect.BleNames
+import app.clairix.detect.KarmaTrap
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
 import app.clairix.comms.CommsNotifications
@@ -3623,6 +3625,16 @@ internal fun DeviceScreen(onShown: () -> Unit) {
     val checked = health.facts.size
     val issues = health.findings.size + problems.size
     val c = ClairixTheme.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // A row's answer ("I turned 2G off") is stored off the main thread, then the
+    // checklist is read again so the row shows what it now knows.
+    val onAnswer: (String) -> Unit = { id ->
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { CellularExposure.answer(context.applicationContext, id) } }
+            onShown()
+        }
+    }
 
     ScreenList {
         // ── Status first ───────────────────────────────────────────────────
@@ -3700,7 +3712,7 @@ internal fun DeviceScreen(onShown: () -> Unit) {
                     ListGroup {
                         rows.forEachIndexed { i, f ->
                             if (i > 0) Hairline()
-                            HealthFactRow(f)
+                            HealthFactRow(f, onAnswer)
                         }
                     }
                 }
@@ -3765,8 +3777,9 @@ private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
 }
 
 @Composable
-private fun HealthFactRow(f: HealthFact) {
+private fun HealthFactRow(f: HealthFact, onAnswer: (String) -> Unit) {
     val c = ClairixTheme.colors
+    val context = LocalContext.current
     // Purely informational rows (a version number, a battery level) get a neutral
     // mark; a check that passed gets safe; a problem gets its severity's tone.
     val informational = f.severity == null && INFORMATIONAL_FACTS.contains(f.id)
@@ -3784,35 +3797,57 @@ private fun HealthFactRow(f: HealthFact) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .semantics(mergeDescendants = true) {},
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(Modifier.size(8.dp).background(mark, ClairixShapes.Tag))
-            Text(f.label, style = MaterialTheme.typography.bodyMedium, color = c.text, modifier = Modifier.weight(1f))
-            Text(
-                f.value,
-                style = MaterialTheme.typography.mono,
-                color = if (f.severity == null) c.textMuted else tone.color(),
-                textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f)
-            )
+        // The text reads as one item; the buttons under it stay buttons of their own.
+        Column(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(8.dp).background(mark, ClairixShapes.Tag))
+                Text(f.label, style = MaterialTheme.typography.bodyMedium, color = c.text, modifier = Modifier.weight(1f))
+                Text(
+                    f.value,
+                    style = MaterialTheme.typography.mono,
+                    color = if (f.severity == null) c.textMuted else tone.color(),
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (f.detail != null) {
+                Text(
+                    f.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (f.severity == null) c.textSubtle else tone.color(),
+                    modifier = Modifier.padding(start = 20.dp)
+                )
+            }
         }
-        if (f.detail != null) {
-            Text(
-                f.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (f.severity == null) c.textSubtle else tone.color(),
-                modifier = Modifier.padding(start = 20.dp)
-            )
+        // The page where the row is put right, and what only the owner can tell Clairix.
+        val fix = f.fixAction
+        val answer = f.answer
+        if (fix != null || answer != null) {
+            Row(Modifier.padding(start = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (fix != null) GhostButton("Open settings", onClick = { openFix(context, fix) })
+                if (answer != null) GhostButton(answer.label, onClick = { onAnswer(answer.id) })
+            }
         }
     }
 }
 
+/**
+ * Opens the Settings page a checklist row names. A phone without that page (an OEM
+ * that renamed or dropped it) gets the security settings page instead, as
+ * [HealthFact.fixAction] promises.
+ */
+private fun openFix(context: Context, action: String) {
+    val opened = runCatching { context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+    if (!opened) openExternal(context, Intent(Settings.ACTION_SECURITY_SETTINGS))
+}
+
 /** Checklist rows that describe rather than judge, so a safe mark would overclaim. */
 private val INFORMATIONAL_FACTS = setOf(
-    "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always", "profiles"
+    "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always", "profiles",
+    CellularExposure.NOTIFICATIONS_FACT_ID
 )
 
 @Composable
@@ -3839,11 +3874,15 @@ private fun wifiReason(reason: String): String = when (reason) {
     else -> reason.replace('_', ' ').replaceFirstChar { it.uppercase(Locale.US) }
 }
 
+/** When the Karma trap was armed, as the Wi-Fi tab says it. Main thread only, like the formatters above. */
+private val trapSinceFmt = SimpleDateFormat("MMM d, HH:mm", Locale.US)
+
 @Composable
 internal fun WifiScreen(onShown: () -> Unit = {}) {
     val anomalies by Registry.wifi.collectAsStateWithLifecycle()
     val wifi by Registry.wifiStatus.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
+    val trap by Registry.karmaTrap.collectAsStateWithLifecycle()
     val now = rememberNow(5_000L)
     val sorted = remember(anomalies) {
         anomalies.sortedWith(compareByDescending<WifiAnomaly> { it.threat.ordinal }.thenByDescending { it.ts })
@@ -3909,6 +3948,19 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
             itemsIndexed(sorted, key = { i, a -> "anomaly|${a.bssid}|${a.reason}|$i" }) { _, a -> WifiRow(a) }
         }
 
+        // ── The Karma trap: armed only once Android may use the suggestion ───
+        item(key = "§trap") {
+            Notice(
+                tone = when (trap.state) {
+                    KarmaTrap.State.ARMED -> Tone.Safe
+                    KarmaTrap.State.OFF -> Tone.Neutral
+                    else -> Tone.Caution
+                },
+                text = trap.detail(),
+                title = trap.headline(if (trap.since > 0L) trapSinceFmt.format(Date(trap.since)) else "")
+            )
+        }
+
         // ── Connected network ─────────────────────────────────────────────────
         item(key = "§conn-head") { SectionHeader("Your connection") }
         if (!wifi.available) {
@@ -3955,7 +4007,14 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
                     KeyValueRow("Gateway", conn.gateway ?: "Unknown")
                     KeyValueRow("DNS", if (conn.dnsServers.isEmpty()) "None" else conn.dnsServers.joinToString("\n"))
                     KeyValueRow("Private DNS", conn.privateDns ?: "Off", valueColor = if (conn.privateDns != null) c.safe else null)
-                    KeyValueRow("VPN", if (conn.vpnActive) "Active" else "None", valueColor = if (conn.vpnActive) c.safe else null)
+                    // Whether Clairix's own traffic goes through a VPN: a VPN set to carry
+                    // only some apps is not protection for the rest, and is not shown as such.
+                    when (conn.vpn) {
+                        VpnCoverage.COVERS_APP -> KeyValueRow("VPN", "Active for Clairix", valueColor = c.safe)
+                        VpnCoverage.EXCLUDES_APP -> KeyValueRow("VPN", "Active, not covering Clairix", valueColor = c.caution)
+                        VpnCoverage.APP_OFFLINE -> KeyValueRow("VPN", "Active, Clairix offline")
+                        VpnCoverage.NONE -> KeyValueRow("VPN", "None")
+                    }
                     if (conn.metered) KeyValueRow("Metered", "Yes")
                     conn.flags.forEach { flag ->
                         WarningLine(flag, if (conn.security.secure) Tone.Caution else Tone.Danger, Modifier.padding(top = 4.dp))
@@ -4200,6 +4259,17 @@ private fun bleExplainerContent(d: Detection): ExplainerContent {
     }
 }
 
+/**
+ * What the phone itself can do against a fake tower, for the findings that point at
+ * a forced drop to an older network: refuse 2G, and let Android warn about networks
+ * that turn encryption off. Neither can be read or set by an app.
+ */
+private const val CELL_PLATFORM_DEFENCE =
+    "For the next time: if your phone has the \"Allow 2G\" switch, turn it off (Phone check → Health shows it), " +
+        "and on Android 14 and later turn on Android's own cell network protections, on phones whose modem " +
+        "supports them, so the phone refuses or warns about a network that turns encryption off (Settings, " +
+        "search for \"network security\")."
+
 private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     val tone = f.severity.tone()
     // Findings that can fire for more than one cell carry it after a colon, so the
@@ -4213,7 +4283,7 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "Clairix does not count a reading taken during a call or within five minutes of one.",
             "Avoid making voice calls or sending SMS until you leave the area. Use end-to-end encrypted " +
             "messaging apps over WiFi or data. Do not transmit sensitive information. Move away from the " +
-            "area and observe whether the technology level returns to normal.",
+            "area and observe whether the technology level returns to normal. $CELL_PLATFORM_DEFENCE",
             "High confidence indicator. A drop to 2G/3G within half an hour of 4G/5G serving you at the " +
             "same spot, without you having moved and without a call, is a primary IMSI catcher signature. " +
             "Moving resets the comparison, so a drive into a basement car park does not count, and neither " +
@@ -4319,7 +4389,7 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "own, so readings taken in a call, or within five minutes of one, are not counted.",
             "Multiple technology switches in a short window strongly indicate active interference. " +
             "Avoid all calls and data use. Use WiFi with a VPN for any communications. " +
-            "Move out of the area and observe whether the switching stops.",
+            "Move out of the area and observe whether the switching stops. $CELL_PLATFORM_DEFENCE",
             "High confidence. Rapid multi-technology oscillation outside a call is a strong signature " +
             "of active IMSI capture operations."
         )

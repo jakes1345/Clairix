@@ -102,11 +102,13 @@ internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
     ScanCategory.WIFI -> "The network you are on, and every hotspot in range." to
         "Flags open networks, evil twins of networks you use and the default names of Wi-Fi interception kit, notes " +
         "open carrier hotspots such as xfinitywifi for what they are (captive portals: use a VPN), and checks the " +
-        "network you are on: encryption, captive portals, where DNS goes. It also sets " +
-        "a trap: a made-up network name only this phone knows, which the phone asks for in every scan. A box that " +
-        "answers to any name (a Karma or Pineapple interception kit) answers that one too, and is caught. Adding the " +
-        "name is why Android may ask, the first time you start scanning, whether Clairix can suggest Wi-Fi networks. " +
-        "Nothing joins it: no such network exists. Say no and the trap stays off; everything else still works."
+        "network you are on: encryption, captive portals, where DNS goes, and whether the VPN carries Clairix. While " +
+        "the scanner runs it also sets a trap: a made-up network name only this phone knows, new every six hours, " +
+        "which the phone asks for when it scans. A box that answers to any name (a Karma or Pineapple interception " +
+        "kit) answers that one too, and is caught. Adding the name is why Android may ask, the first time you start " +
+        "scanning, whether Clairix can suggest Wi-Fi networks; the tab says whether the trap is armed. The name is " +
+        "added untrusted, with auto-join off and a password nobody knows, so the phone does not join what answers, " +
+        "and it is withdrawn when scanning stops. Say no and the trap stays off; everything else still works."
     ScanCategory.NFC -> "NFC tags and cards, and skimmers." to
         "Hold a card or tag to the back of the phone to read what it carries and flag tags that look planted. In the full " +
         "edition a card can be kept in the vault, locked by your screen lock, and presented from the phone."

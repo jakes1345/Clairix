@@ -82,6 +82,11 @@ object Registry {
     val wifiStatus: StateFlow<WifiStatus> = _wifiStatus.asStateFlow()
     fun publishWifiStatus(status: WifiStatus) { _wifiStatus.value = status }
 
+    /** Whether the Karma trap is set, for the WIFI tab; see [app.clairix.detect.KarmaCanary]. Off until the scanner says otherwise. */
+    private val _karmaTrap = MutableStateFlow(app.clairix.detect.KarmaTrap())
+    val karmaTrap: StateFlow<app.clairix.detect.KarmaTrap> = _karmaTrap.asStateFlow()
+    fun publishKarmaTrap(trap: app.clairix.detect.KarmaTrap) { _karmaTrap.value = trap }
+
     /** Read-modify-write of the cell status; the service and the activity both write it. */
     fun updateCell(block: (CellStatus) -> CellStatus) { _cell.update(block) }
 
