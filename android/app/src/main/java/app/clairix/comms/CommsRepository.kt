@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.channels.Channel
@@ -53,6 +55,7 @@ import uniffi.clairix_comms_crypto.verify
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ln
 
 /**
@@ -214,7 +217,8 @@ object CommsRepository {
      */
     private val tokenRefill = TokenRefill(
         topUp = { topUpTokens() },
-        retry = { scope.launch { flushOutbox(); flushReceipts() } },
+        // Tokens came: the outbox, the receipts, and an SOS waiting on them.
+        retry = { panicNudge.trySend(Unit); scope.launch { flushOutbox(); flushReceipts() } },
         launch = { block -> scope.launch { block() } },
     )
 
@@ -365,12 +369,24 @@ object CommsRepository {
         }
         // An SOS (the button, or the duress phrase in an outgoing text) goes to
         // every group this phone is in, with the last known position, and the
-        // flag is lowered once that has been tried.
+        // flag is lowered once that has been tried. What came of it is
+        // published for the button to say and written to the timeline, never
+        // for the covert phrase; members the relay could not take are tried
+        // again for a while after the flag drops (see retryPanic).
         scope.launch {
             Registry.panicActive.collect { active ->
                 if (!active) return@collect
                 val covert = Registry.panicCovert
-                runCatching { broadcastPanic(covert) }.onFailure { if (!covert) CommsLog.add("SOS could not be sent: ${it.message}") }
+                val attempt = panicAttempts.incrementAndGet()
+                val result = runCatching { broadcastPanic(attempt, covert) }.getOrElse { e ->
+                    if (!covert) CommsLog.add("SOS could not be sent: ${e.message}")
+                    val s = Registry.status.value
+                    PanicResult(attempt, System.currentTimeMillis(), s.lat, s.lon, error = e.message ?: e.javaClass.simpleName)
+                }
+                if (!covert) {
+                    recordPanicEvent(result)
+                    _panicResult.value = result
+                }
                 Registry.setPanicActive(false)
             }
         }
@@ -1890,6 +1906,8 @@ object CommsRepository {
         if (!initialised || !config.isRegistered) return
         retryBackoffMs = RETRY_MIN_MS
         retryJob?.cancel()
+        // An SOS waiting on the relay goes now rather than at its next pause's end.
+        panicNudge.trySend(Unit)
         scope.launch {
             flushMoveNotices()
             flushPassNotices()
@@ -2183,40 +2201,61 @@ object CommsRepository {
      * Sends [payload] to every one of [members] who is a contact on this phone,
      * one envelope each; returns how many the relay took. Failures are logged
      * per member. Nothing is queued: a group payload is sent once, and the
-     * caller decides what a complete failure means.
+     * caller decides what a complete failure means. An SOS uses [fanOutEach]
+     * to know who was reached and who to try again.
      */
-    private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): Int {
+    private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): Int =
+        fanOutEach(what, members, payload, quiet).count { it.delivery == MemberDelivery.SENT }
+
+    /**
+     * [fanOut], member by member: what each one's envelope came to, so an SOS
+     * can count who the relay took, who the offline mesh carries, who must be
+     * tried again and who it cannot reach at all.
+     */
+    private suspend fun fanOutEach(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): List<MemberResult> {
         // A covert SOS leaves no line in the comms log, failures included.
         val log: (String) -> Unit = if (quiet) { _ -> } else CommsLog::add
-        var sent = 0
+        val out = ArrayList<MemberResult>(members.size)
         for (m in members) {
             val contact = store.contact(m.number)
             if (contact == null) {
-                log("$what to ${memberLabel(m)} not sent: they are not a contact on this phone")
+                val why = "they are not a contact on this phone"
+                log("$what to ${memberLabel(m)} not sent: $why")
+                out += MemberResult(m.number, MemberDelivery.FAILED, why)
                 continue
             }
             if (!isGroupMember(contact, m.ed25519)) {
                 // Someone else holds this number on another relay: the group's
                 // messages go to the member the group knows, never to a number.
-                log("$what to ${memberLabel(m)} not sent: the contact with that number is not the person this group knows")
+                val why = "the contact with that number is not the person this group knows"
+                log("$what to ${memberLabel(m)} not sent: $why")
+                out += MemberResult(m.number, MemberDelivery.FAILED, why)
                 continue
             }
-            when (val d = deliver(contact, payload)) {
-                Deliver.Sent -> sent++
-                is Deliver.Failed -> log("$what to ${memberLabel(m)} failed: ${d.reason}")
-                is Deliver.TooLarge -> log("$what to ${memberLabel(m)} failed: ${d.reason}")
+            out += when (val d = deliver(contact, payload)) {
+                Deliver.Sent -> MemberResult(m.number, MemberDelivery.SENT)
+                is Deliver.Failed -> {
+                    log("$what to ${memberLabel(m)} failed: ${d.reason}")
+                    MemberResult(m.number, MemberDelivery.FAILED, d.reason)
+                }
+                is Deliver.TooLarge -> {
+                    log("$what to ${memberLabel(m)} failed: ${d.reason}")
+                    MemberResult(m.number, MemberDelivery.FAILED, d.reason)
+                }
                 is Deliver.Offline -> {
                     val id = payload.optString(CommsWire.F_ID)
                     val type = payload.optString(CommsWire.F_TYPE)
                     if (type in MESH_TYPES && id.isNotEmpty() && meshQueue(contact, payload, id)) {
                         log("$what to ${memberLabel(m)} is in the offline mesh: the relay is not reachable (${d.reason})")
+                        MemberResult(m.number, MemberDelivery.MESH_QUEUED, d.reason)
                     } else {
                         log("$what to ${memberLabel(m)} not sent: ${d.reason}")
+                        MemberResult(m.number, MemberDelivery.OFFLINE, d.reason)
                     }
                 }
             }
         }
-        return sent
+        return out
     }
 
     /**
@@ -2379,31 +2418,189 @@ object CommsRepository {
         }
     }
 
-    /** Sends an SOS to every member of [gid], with this phone's position when it has one. */
-    suspend fun sendPanic(gid: String, lat: Double?, lon: Double?, note: String? = null, covert: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (!config.isRegistered) throw RelayException("Not registered with a relay")
-            val ctx = groupContext(gid)
-            val id = UUID.randomUUID().toString()
-            val ts = System.currentTimeMillis()
-            val text = note?.trim()?.take(MAX_PANIC_NOTE)
-            val sent = fanOut("SOS", ctx.others(), CommsWire.panic(gid, id, ts, lat, lon, text), quiet = covert)
-            if (!covert) CommsLog.add("SOS sent to \"${ctx.group.name}\": $sent of ${ctx.others().size} member(s) reached" + if (lat == null || lon == null) " (no position)" else "")
-            if (sent == 0 && ctx.others().isNotEmpty()) throw RelayException("No member of \"${ctx.group.name}\" could be reached")
-            Unit
-        }
+    // ── SOS ───────────────────────────────────────────────────────────────
+
+    /**
+     * What became of the latest visible SOS (the button's), as it stands: after
+     * its first pass over every member, then after each retry pass until it is
+     * final. Null before any. A covert SOS (the duress phrase) is never
+     * published here: nothing on this phone may say it was sent.
+     */
+    private val _panicResult = MutableStateFlow<PanicResult?>(null)
+    val panicResult: StateFlow<PanicResult?> = _panicResult.asStateFlow()
+
+    /** Numbers each raise of the SOS flag, so a caller waiting on [panicResult] knows its own. */
+    private val panicAttempts = AtomicLong(0)
+    /** The retry passes of the latest SOS; a new SOS cancels them, since everyone it reaches has the newer alert. */
+    private var panicRetry: Job? = null
+    /** A fresh network ends a retry pause early. */
+    private val panicNudge = Channel<Unit>(Channel.CONFLATED)
+
+    /** One group's SOS: who it goes to and the payload, kept so a retry pass sends the same alert (recipients dedupe it by id). */
+    private class PanicTarget(val group: Group, val members: List<GroupMember>, val payload: JSONObject)
+
+    /**
+     * Whether an SOS raised now would have anyone to go to: what the SOS
+     * button checks before its confirm dialog. Reads the store; call off the
+     * main thread.
+     */
+    fun sosGate(): SosGate {
+        if (!initialised || !config.isRegistered) return SosGate.NOT_REGISTERED
+        val me = config.number
+        val groups = groups()
+        val others = groups.sumOf { g -> groupMembers(g.id).count { it.number != me } }
+        return SosGate.decide(true, groups.size, others)
     }
 
-    /** The SOS was raised: to every group, with the last known position. */
-    private suspend fun broadcastPanic(covert: Boolean) {
-        if (!config.isRegistered) return
+    /**
+     * Raises the visible SOS and waits for its first pass over every member of
+     * every group: what the button says, after the sends and not before.
+     * Members the relay could not take are tried again in the background; each
+     * pass replaces the result in [panicResult].
+     */
+    suspend fun sendSos(): PanicResult {
+        // A broadcast still running lowers the flag when it is done; raising it
+        // again before that would be lost.
+        Registry.panicActive.first { !it }
+        val before = _panicResult.value?.attempt ?: 0L
+        Registry.setPanicActive(true)
+        return panicResult.first { it != null && it.attempt > before }!!
+    }
+
+    private fun panicTarget(gid: String, lat: Double?, lon: Double?, note: String?): PanicTarget {
+        val ctx = groupContext(gid)
+        val id = UUID.randomUUID().toString()
+        val ts = System.currentTimeMillis()
+        val text = note?.trim()?.take(MAX_PANIC_NOTE)
+        return PanicTarget(ctx.group, ctx.others(), CommsWire.panic(gid, id, ts, lat, lon, text))
+    }
+
+    /** One pass of [target]'s SOS over [members]: all of them, or those still waiting. Logged per member unless [covert]. */
+    private suspend fun panicPass(target: PanicTarget, members: List<GroupMember>, covert: Boolean): PanicGroupResult =
+        PanicGroupResult(target.group.id, target.group.name, fanOutEach("SOS", members, target.payload, quiet = covert))
+
+    private fun panicGroupLine(r: PanicGroupResult, position: Boolean): String =
+        "SOS sent to \"${r.groupName}\": ${r.reached} of ${r.members.size} member(s) reached" +
+            (if (r.meshQueued > 0) ", ${r.meshQueued} in the offline mesh" else "") +
+            (if (position) "" else " (no position)")
+
+    /**
+     * Sends an SOS to every other member of [gid] once, with this phone's
+     * position when it has one. What each member's envelope came to is in the
+     * result; nothing is tried again here (see [broadcastPanic]).
+     */
+    suspend fun sendPanic(gid: String, lat: Double?, lon: Double?, note: String? = null, covert: Boolean = false): PanicGroupResult = withContext(Dispatchers.IO) {
+        if (!config.isRegistered) throw RelayException("Not registered with a relay")
+        val target = panicTarget(gid, lat, lon, note)
+        val result = panicPass(target, target.members, covert)
+        if (!covert) CommsLog.add(panicGroupLine(result, lat != null && lon != null))
+        result
+    }
+
+    /**
+     * The SOS was raised: to every group, with the last known position. Each
+     * group is tried whatever became of the last; the result counts people
+     * the relay took, people the offline mesh carries and people nobody could
+     * reach. Members the relay could not take are tried again by [retryPanic]
+     * after this returns. Logged unless [covert]; the caller records it.
+     */
+    private suspend fun broadcastPanic(attempt: Long, covert: Boolean): PanicResult {
+        val s = Registry.status.value
+        val lat = s.lat
+        val lon = s.lon
+        val position = lat != null && lon != null
+        val ts = System.currentTimeMillis()
+        if (!config.isRegistered) {
+            if (!covert) CommsLog.add("SOS raised, but this phone is not set up for Comms")
+            return PanicResult(attempt, ts, lat, lon, blocked = PanicBlocked.NOT_REGISTERED)
+        }
         val groups = store.groups()
         if (groups.isEmpty()) {
             if (!covert) CommsLog.add("SOS raised, but this phone is in no group to send it to")
-            return
+            return PanicResult(attempt, ts, lat, lon, blocked = PanicBlocked.NO_GROUPS)
         }
-        val s = Registry.status.value
-        for (g in groups) sendPanic(g.id, s.lat, s.lon, null, covert)
+        // A new SOS supersedes the last one's retries: everyone it reaches has the newer alert.
+        panicRetry?.cancel()
+        panicNudge.tryReceive()
+        // Tokens are fetched apart from the sends that spend them (RelayClient.send
+        // never fetches); after a long time offline the pool may be empty, and an
+        // SOS cannot wait for the outbox's backoff to refill it. Fetches only
+        // when few are left.
+        topUpTokensForPanic(covert)
+        val targets = ArrayList<PanicTarget>(groups.size)
+        val results = groups.map { g ->
+            runCatching { panicTarget(g.id, lat, lon, null) }
+                .mapCatching { t -> targets += t; panicPass(t, t.members, covert) }
+                .getOrElse { e ->
+                    if (!covert) CommsLog.add("SOS to \"${g.name}\" could not be tried: ${e.message}")
+                    PanicGroupResult(g.id, g.name, emptyList(), error = e.message ?: e.javaClass.simpleName)
+                }
+        }
+        var result = PanicResult(attempt, ts, lat, lon, groups = results)
+        if (result.people == 0 && results.all { it.error == null }) result = result.copy(blocked = PanicBlocked.NO_OTHER_MEMBERS)
+        result = result.copy(retrying = result.anyPending)
+        if (!covert) {
+            for (r in results) if (r.error == null) CommsLog.add(panicGroupLine(r, position))
+            CommsLog.add(result.headline() + " · " + result.detail())
+        }
+        if (result.retrying) panicRetry = scope.launch { retryPanic(result, targets, covert) }
+        return result
+    }
+
+    /**
+     * Tries the members the relay could not take again, pass by pass, with
+     * growing pauses ([PanicResult.RETRY_DELAYS_MS]); a fresh network ends a
+     * pause early. Each pass replaces [panicResult]; the last word, since
+     * retries were needed, is also a notification, for an owner who has put
+     * the phone away. Lives in this process's memory: a per-recipient outbox
+     * that survives it is the next step. Nothing is logged or shown for a
+     * covert SOS.
+     */
+    private suspend fun retryPanic(first: PanicResult, targets: List<PanicTarget>, covert: Boolean) {
+        var result = first
+        val delays = PanicResult.RETRY_DELAYS_MS
+        for ((i, wait) in delays.withIndex()) {
+            withTimeoutOrNull(wait) { panicNudge.receive() }
+            topUpTokensForPanic(covert)
+            val passResults = targets.mapNotNull { t ->
+                val pending = result.pendingIn(t.group.id)
+                if (pending.isEmpty()) null else panicPass(t, t.members.filter { it.number in pending }, covert)
+            }
+            result = result.merged(passResults, pass = i + 2, retrying = false)
+            result = result.copy(retrying = i < delays.lastIndex && result.anyPending)
+            // A newer SOS may have taken over while this pass ran; its result stands.
+            if (!covert) _panicResult.update { cur -> if (cur != null && cur.attempt == result.attempt) result else cur }
+            if (!result.anyPending) break
+        }
+        // Cancelled by a newer SOS during the last pass: that one's word is the one that counts.
+        if (covert || !currentCoroutineContext().isActive) return
+        CommsLog.add("SOS after retrying: " + result.headline() + " · " + result.detail())
+        recordPanicEvent(result, retried = true)
+        if (_panicResult.value?.attempt == result.attempt) {
+            CommsNotifications.notifySosOutcome(appContext, result.headline(), System.currentTimeMillis())
+        }
+    }
+
+    /** [topUpTokens] for an SOS: the same fetch, without the log line a failure writes, when the SOS is covert. */
+    private fun topUpTokensForPanic(covert: Boolean) {
+        if (covert) runCatching { relay.topUpTokens() } else topUpTokens()
+    }
+
+    /**
+     * The visible SOS on the timeline, with who it reached: the record the
+     * owner can look back on. The covert phrase writes none. Written after the
+     * first pass, and again after the retries when there were any, so neither
+     * entry promises a retry that is over.
+     */
+    private fun recordPanicEvent(r: PanicResult, retried: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val event = TimelineEvent(
+            id = "sos_sent@${UUID.randomUUID()}", kind = EventKind.PANIC, ts = now,
+            title = r.copy(retrying = false).headline(),
+            detail = (if (retried) "After retrying · " else if (r.retrying) "Trying the rest again · " else "") + r.detail(),
+            severity = Severity.HIGH, lat = r.lat, lon = r.lon
+        )
+        scope.launch { runCatching { TimelineLog.record(appContext, event) } }
     }
 
     private fun expireSharedThreats() {

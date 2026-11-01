@@ -52,7 +52,7 @@ If you use the coin feature, the relay records the transfers you make: who sent,
 
 ### 2.5 Emergency alerts
 
-When you send an SOS or type your duress phrase, Clairix reads your current location and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time.
+When you send an SOS or type your duress phrase, Clairix takes your last known position, or reads a fresh one when the phone can get a fix within a few seconds, and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time.
 
 ### 2.6 Traffic and navigation
 

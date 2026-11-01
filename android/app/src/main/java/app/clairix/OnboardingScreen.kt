@@ -167,7 +167,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                             Triple(Icons.Filled.Notifications, "Notifications", "So a new message shows and a call rings while the app is closed."),
                             Triple(Icons.Filled.Call, "Microphone", "For calls. Asked once you have a number, so the first call isn't also the first question."),
                             Triple(ClairixIcons.Videocam, "Camera", "To scan a contact's pairing code. Nothing is recorded."),
-                            Triple(Icons.Filled.LocationOn, "Location", "Attached to an SOS so your group knows where you are. Read only when you press SOS.")
+                            Triple(Icons.Filled.LocationOn, "Location", "Attached to an SOS so your group knows where you are. Read only for an SOS: the button, or the duress phrase.")
                         )
                     )
                     else -> ReadyPage(

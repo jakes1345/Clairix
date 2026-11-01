@@ -21,9 +21,9 @@ Quiet tools for the moment a situation turns: SOS to your group, a duress phrase
 
 <div class="methods">
 
-**SOS.** Hold the red octagon until it fills, then confirm: Clairix reads your position and sends it, end-to-end encrypted, to every member of every group you are in. Location is read at that moment only. The relay never holds an SOS back to mix it with other traffic. With the offline mesh on, an SOS that cannot reach the relay is carried phone to phone over Bluetooth instead.
+**SOS.** Hold the red octagon until it fills, then confirm: Clairix sends your last known position, or reads a fresh one when the phone can get a fix within a few seconds, end-to-end encrypted, to every member of every group you are in, and then tells you how many people it reached. Location is read at that moment only. Anyone the relay could not take is tried again for about eight minutes while the app runs. The relay never holds an SOS back to mix it with other traffic. With the offline mesh on, an SOS that cannot reach the relay is carried phone to phone over Bluetooth instead.
 
-**Duress phrase.** Set an ordinary-looking sentence. Type it into any Clairix conversation and the message goes out as written while the SOS fires underneath. The phrase itself is stored encrypted and compared only in memory. It is never written to a log, a notification or the timeline.
+**Duress phrase.** Set an ordinary-looking sentence. Type it into any Clairix conversation and the message goes out as written while the SOS fires underneath, with the same position. The phrase itself is stored encrypted and compared only in memory. Neither it nor the SOS it sends is written to a log, a notification or the timeline: nothing on this phone says help was called.
 
 **Fake call.** Schedule an incoming call for 30 seconds, 2 minutes or 5 minutes ahead, from a contact of your choosing. The phone rings with its real ringtone and vibration, over the lock screen, honouring silent mode. Answer it to hold a pretend call with a timer and an end button, or have it place a real encrypted call to the contact's Clairix number. The screen is excluded from your recent apps so nothing is left behind.
 
@@ -37,8 +37,9 @@ Quiet tools for the moment a situation turns: SOS to your group, a duress phrase
 
 ### What it cannot do {#emergency-limits}
 
-- SOS and the duress phrase depend on Comms. If you are not registered, or have no group, there is nobody to send to, and the app tells you so.
-- SOS sends your last known position. Indoors or with location off, that may be old or missing. The alert says when no position was available.
+- SOS and the duress phrase depend on Comms. If you are not registered, or have no group with anyone else in it, there is nobody to send to, and the app tells you so: the SOS button says nobody would receive it before you confirm, and the Duress phrase page says so in red.
+- SOS sends your last known position, or a fresh fix when one can be read within a few seconds. Indoors or with location off, that may be old or missing. The alert says when no position was available, and a fix found afterwards follows as a second alert.
+- An SOS the relay could not take is tried again for about eight minutes, only while the app runs; after that it is given up, and the app tells you how many people it reached either way.
 - The fake call is a social tool. It does not contact emergency services.
 - The app lock protects Clairix, not the phone. It cannot stop someone with root access from editing the app's files.
 - The panic wipe cannot recall messages already delivered to other people's phones.

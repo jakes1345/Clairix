@@ -80,6 +80,7 @@ import app.clairix.security.LockScreen
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
+import app.clairix.security.SosLocation
 import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import app.clairix.analysis.Report
@@ -91,12 +92,9 @@ import app.clairix.comms.CommsRepository
 import app.clairix.comms.CommsSecureWindow
 import app.clairix.comms.KeepOffScreen
 import app.clairix.comms.PairingCode
+import app.clairix.comms.PanicResult
+import app.clairix.comms.SosGate
 import android.nfc.cardemulation.CardEmulation
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
-import com.google.android.gms.tasks.Tasks
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -1115,14 +1113,26 @@ private const val SOS_HOLD_MS = 1500L
 
 /**
  * The SOS button: an octagon, like a stop sign and like the mark, in the danger
- * colour. Holding it fills it from the bottom; once [SOS_HOLD_MS] has passed a
- * confirm dialog appears, and [onConfirmed] runs only after the user taps Send.
+ * colour. Holding it fills it from the bottom; once [SOS_HOLD_MS] has passed,
+ * [gate] (run off the main thread) says whether anyone would receive an SOS.
+ * If so a confirm dialog appears, and [onConfirmed] runs only after the user
+ * taps Send; if not, the dialog says that nobody would receive it and offers
+ * [onSetUpComms] instead, so no one confirms an alert that goes nowhere. The
+ * defaults are for previews and screenshots; the shell passes the real gate.
  */
 @Composable
-internal fun SosButton(onConfirmed: () -> Unit) {
+internal fun SosButton(
+    onConfirmed: () -> Unit,
+    gate: suspend () -> SosGate = { SosGate.SEND },
+    onSetUpComms: () -> Unit = {}
+) {
     var sosProgress by remember { mutableFloatStateOf(0f) }
     var sosPressing by remember { mutableStateOf(false) }
+    // Held long enough; the gate is being asked. Its own effect, so a finger
+    // lifting meanwhile (which restarts the hold effect) cannot cut it short.
+    var sosHeld by remember { mutableStateOf(false) }
     var showSosConfirm by remember { mutableStateOf(false) }
+    var sosBlocked by remember { mutableStateOf<SosGate?>(null) }
 
     LaunchedEffect(sosPressing) {
         if (sosPressing) {
@@ -1130,16 +1140,23 @@ internal fun SosButton(onConfirmed: () -> Unit) {
             while (sosPressing) {
                 sosProgress = (System.currentTimeMillis() - start) / SOS_HOLD_MS.toFloat()
                 if (sosProgress >= 1f) {
-                    showSosConfirm = true
+                    sosHeld = true
                     sosPressing = false
                     break
                 }
                 delay(16)
             }
-            if (!showSosConfirm) sosProgress = 0f
-        } else if (!showSosConfirm) {
+            if (!showSosConfirm && sosBlocked == null && !sosHeld) sosProgress = 0f
+        } else if (!showSosConfirm && sosBlocked == null && !sosHeld) {
             sosProgress = 0f
         }
+    }
+
+    LaunchedEffect(sosHeld) {
+        if (!sosHeld) return@LaunchedEffect
+        val who = withContext(Dispatchers.IO) { runCatching { gate() }.getOrDefault(SosGate.NOT_REGISTERED) }
+        if (who == SosGate.SEND) showSosConfirm = true else sosBlocked = who
+        sosHeld = false
     }
 
     val c = ClairixTheme.colors
@@ -1178,7 +1195,7 @@ internal fun SosButton(onConfirmed: () -> Unit) {
     if (showSosConfirm) {
         ClairixDialog(
             title = "Send an SOS?",
-            text = "Your groups get an alert with your location right away.",
+            text = "Every member of your groups gets an alert with your position right away. You are told how many people it reached.",
             confirmLabel = "Send SOS",
             confirmTone = Tone.Danger,
             onConfirm = {
@@ -1187,6 +1204,30 @@ internal fun SosButton(onConfirmed: () -> Unit) {
                 onConfirmed()
             },
             onDismiss = { showSosConfirm = false; sosProgress = 0f }
+        )
+    }
+
+    // The honest state when there is no one to send to: said before anything
+    // is sent, instead of a "sent" that would be false.
+    sosBlocked?.let { why ->
+        val notRegistered = why == SosGate.NOT_REGISTERED
+        ClairixDialog(
+            title = "Nobody would receive this",
+            text = if (notRegistered) {
+                "An SOS goes to the members of your Clairix groups, and this phone is not set up for Comms. " +
+                    "Set it up, then make a group or accept an invitation to one. Nothing was sent."
+            } else {
+                "An SOS goes to the members of your Clairix groups, and this phone is in no group with anyone else in it. " +
+                    "Make a group in Comms, or accept an invitation to one. Nothing was sent."
+            },
+            confirmLabel = if (notRegistered) "Set up Comms" else "Open Comms",
+            onConfirm = {
+                sosBlocked = null
+                sosProgress = 0f
+                onSetUpComms()
+            },
+            onDismiss = { sosBlocked = null; sosProgress = 0f },
+            dismissLabel = "Not now"
         )
     }
 }
@@ -1422,28 +1463,41 @@ private fun MainApp(
         // phone is locked; no animation needed for a critical safety button.
         sos = if (locked) null else {
             {
-                SosButton(onConfirmed = {
-                    scope.launch(Dispatchers.IO) {
-                        suspend fun toast(text: String) = withContext(Dispatchers.Main) {
-                            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                SosButton(
+                    // Who would receive it is checked before the confirm dialog: with
+                    // no Clairix number, or no group with anyone else in it, the dialog
+                    // says so and offers Comms instead of a send that goes nowhere.
+                    gate = { CommsRepository.sosGate() },
+                    onSetUpComms = { openTab(HomeTab.COMMS) },
+                    onConfirmed = {
+                        scope.launch(Dispatchers.IO) {
+                            suspend fun toast(text: String) = withContext(Dispatchers.Main) {
+                                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                            }
+                            // Members the relay could not take are tried again for a
+                            // while; the last word follows when it differs from the first.
+                            fun followUp(sent: PanicResult, subject: String) = launch {
+                                val last = CommsRepository.panicResult.first { it == null || it.attempt != sent.attempt || !it.retrying }
+                                if (last != null && last.attempt == sent.attempt && last.reached != sent.reached) toast(last.headline(subject))
+                            }
+                            // The alert goes out at once with whatever position is known;
+                            // a fix found afterwards follows as a second alert. The toast
+                            // says what happened: it comes after the sends, never before.
+                            val s = Registry.status.value
+                            val hadFix = s.lat != null && s.lon != null
+                            val first = CommsRepository.sendSos()
+                            val findingFix = !hadFix && first.blocked == null && first.error == null
+                            toast(first.headline() + if (findingFix) ". Finding your location…" else "")
+                            if (first.retrying) followUp(first, "SOS")
+                            if (!findingFix) return@launch
+                            val loc = SosLocation.find(context)
+                            if (loc == null) { toast("No GPS fix to attach to the SOS"); return@launch }
+                            val second = CommsRepository.sendSos()
+                            toast(second.headline("Your location"))
+                            if (second.retrying) followUp(second, "Your location")
                         }
-                        // The alert goes out at once with whatever position is known.
-                        // Waiting for a fix first held it up by several seconds; now a
-                        // fix found afterwards follows as a second alert.
-                        val s = Registry.status.value
-                        val hadFix = s.lat != null && s.lon != null
-                        Registry.setPanicActive(true)
-                        toast(if (hadFix) "SOS sent with your location" else "SOS sent. Finding your location…")
-                        if (hadFix) return@launch
-                        val loc = sosLocation(context)
-                        if (loc == null) { toast("No GPS fix to attach to the SOS"); return@launch }
-                        // The first broadcast lowers the flag when it is done; a second
-                        // raise before that would be lost, so wait for it.
-                        Registry.panicActive.first { !it }
-                        Registry.setPanicActive(true)
-                        toast("Your location followed the SOS")
                     }
-                })
+                )
             }
         }
     ) {
@@ -1528,30 +1582,6 @@ private fun MainApp(
             ThreatExplainerSheet(target = target, onDismiss = { explainerTarget = null })
         }
     }
-}
-
-/**
- * A position for an SOS when the scanner has none (scanner off, or the
- * comms-only build, which has no scanner): the platform's last known position,
- * else a fresh fix with a short wait. Whatever is found is put in the status the
- * panic broadcast reads. Null when location is not granted or nothing could be
- * found in time.
- */
-private fun sosLocation(context: Context): LatLon? {
-    val granted = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-        .any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
-    if (!granted) return null
-    val client = LocationServices.getFusedLocationProviderClient(context)
-    val fix = runCatching { Tasks.await(client.lastLocation, 2, TimeUnit.SECONDS) }.getOrNull()
-        ?: runCatching {
-            Tasks.await(
-                client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token),
-                6, TimeUnit.SECONDS
-            )
-        }.getOrNull()
-        ?: return null
-    Registry.update { it.copy(lat = fix.latitude, lon = fix.longitude) }
-    return LatLon(fix.latitude, fix.longitude)
 }
 
 // ── Scan (BLE) screen ────────────────────────────────────────────────────

@@ -257,7 +257,8 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                         Text(
                             "An ordinary-looking sentence you can type into any Clairix conversation. The " +
                             "message goes out as written, so anyone watching the screen sees a normal chat; " +
-                            "underneath, the SOS fires to your groups with your last known position.",
+                            "underneath, the SOS fires to your groups with your position: the last known one, " +
+                            "or a fresh fix when the phone can read one within a few seconds.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )
@@ -343,8 +344,11 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                 Text(
                     "• Type the phrase as a message to any contact or group and send it as usual.\n" +
                     "• The message is delivered normally, so the conversation looks unremarkable.\n" +
-                    "• At the same time an SOS goes to all your groups with your last known location, " +
-                    "and the timeline records only that an SOS was triggered — never the phrase itself.\n" +
+                    "• At the same time an SOS goes to all your groups with your position: the last known one, " +
+                    "or a fresh fix when the phone can read one within a few seconds.\n" +
+                    "• Nothing is written on this phone: no timeline entry, no log line, no notification, and " +
+                    "never the phrase itself. Only the visible SOS button writes a timeline entry, with how many " +
+                    "people it reached.\n" +
                     "• Nothing on screen changes. Carry on as if nothing happened.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle

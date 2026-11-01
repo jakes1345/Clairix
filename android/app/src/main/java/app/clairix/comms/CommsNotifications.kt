@@ -68,6 +68,8 @@ object CommsNotifications {
     const val LOCKED_CALL_NOTIFICATION_ID = 0x5C00_0005
     const val LOCKED_SOS_NOTIFICATION_ID = 0x5C00_0006
     const val LOCKED_MESSAGES_NOTIFICATION_ID = 0x5C00_0007
+    /** The last word on an SOS the owner sent, once its retries are over: who it reached. */
+    const val SOS_OUTCOME_NOTIFICATION_ID = 0x5C00_0008
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -649,6 +651,41 @@ object CommsNotifications {
             )
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(panicId(panicId), notification)
+    }
+
+    /**
+     * What became of the SOS the owner sent, once the members the relay could
+     * not take have been tried again: [text] is the result's own sentence
+     * ("SOS reached 3 of 4 people"). Posted so the outcome reaches an owner
+     * who has put the phone away; the button's toast said the first pass.
+     * Never posted for the covert duress phrase.
+     */
+    fun notifySosOutcome(context: Context, text: String, ts: Long) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Your SOS")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, SOS_OUTCOME_NOTIFICATION_ID))
+            .setWhen(ts)
+            .setShowWhen(true)
+            // On a locked phone it says only that there is word on the SOS, not who it reached.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_SOS)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle("Your SOS")
+                    .setContentText("Unlock to see who it reached")
+                    .setCategory(NotificationCompat.CATEGORY_STATUS)
+                    .build()
+            )
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(SOS_OUTCOME_NOTIFICATION_ID, notification)
     }
 
     /**

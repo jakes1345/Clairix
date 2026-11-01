@@ -198,12 +198,17 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
   and deletes every file. The same wipe runs when the duress passcode is
   entered at the lock screen or the wrong-passcode limit is hit.
 - **Duress phrase.** A sentence you can type into any chat. It is sent as
-  written; underneath, an SOS with your last known position goes to every
-  group you are in. In no group it sends nothing, and the Duress phrase page
-  says so in red until you join one.
+  written; underneath, an SOS with your position (the last known one, or a
+  fresh fix when the phone can read one within a few seconds) goes to every
+  group you are in, and nothing about it is written on this phone. In no group
+  it sends nothing, and the Duress phrase page says so in red until you join one.
 - **SOS.** Hold the red octagon until it fills and confirm: your position goes,
-  end-to-end encrypted, to your groups.
-  Location is read at that moment and at no other time.
+  end-to-end encrypted, to your groups, and the app then says how many people
+  it reached; anyone the relay could not take is tried again for about eight
+  minutes while the app runs. With no Clairix number, or no group with anyone
+  else in it, the button says nobody would receive it instead of sending.
+  A timeline entry records the count. Location is read at that moment and at
+  no other time.
 - **Fake call.** Rings the phone with its real ringtone and a real-looking
   call screen, so you can walk away.
 - **App lock.** A passcode for Clairix itself, with optional biometrics.
