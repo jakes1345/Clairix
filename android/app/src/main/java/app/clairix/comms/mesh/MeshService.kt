@@ -12,6 +12,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import app.clairix.MainActivity
+import app.clairix.R
+import app.clairix.security.NotificationPresentation
+import app.clairix.security.PlatformAlerts
 
 /**
  * Keeps the mesh running with the app closed: a connected-device foreground service,
@@ -55,9 +58,12 @@ class MeshService : Service() {
         return NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("Offline mesh on")
             .setContentText("Carrying messages phone to phone over Bluetooth")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setSmallIcon(R.drawable.ic_stat_clairix)
             .setOngoing(true).setContentIntent(open)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            // On the lock screen: the app's name and that it runs, nothing of what.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL, NotificationPresentation.RUNNING))
             .build()
     }
 

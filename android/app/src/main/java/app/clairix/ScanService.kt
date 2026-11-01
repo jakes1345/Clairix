@@ -65,8 +65,12 @@ import app.clairix.detect.SurveillanceHardware
 import app.clairix.detect.VehicleTrips
 import app.clairix.nav.CameraFeed
 import app.clairix.nav.KnownCamera
+import app.clairix.security.AppLock
 import app.clairix.security.BluetoothExposure
 import app.clairix.security.HistoryRetention
+import app.clairix.security.NotificationPresentation
+import app.clairix.security.NotificationText
+import app.clairix.security.PlatformAlerts
 import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -386,7 +390,7 @@ class ScanService : LifecycleService() {
 
         try {
             ServiceCompat.startForeground(
-                this, NOTIFICATION_ID, buildOngoing(0, 0),
+                this, NOTIFICATION_ID, buildOngoing(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             )
         } catch (e: Exception) {
@@ -662,9 +666,9 @@ class ScanService : LifecycleService() {
                 )
                 Registry.update { it.copy(nearbyCount = all.size) }
                 Registry.publish(list)
-                // The ongoing notification counts what the user would act on, which
-                // excludes anything they have already marked as their own.
-                updateOngoing(list.filter { it.address !in trusted })
+                // The ongoing notification says only that the scanner runs (the counts
+                // are on the Scan hub); this re-posts it only when that text changes.
+                updateOngoing()
 
                 val trail = synchronized(gpsTrail) { ArrayList(gpsTrail) }
                 // Ordered by key, not by the sighting-sorted `list`: the map only cares
@@ -1152,17 +1156,27 @@ class ScanService : LifecycleService() {
 
     private fun createChannels() {
         val manager = getSystemService(NotificationManager::class.java)
+        // The alert channels are secret on the lock screen. A channel's lock-screen
+        // visibility is fixed once it exists, so these are new channels; the old
+        // ones are deleted, and their notifications with them.
+        for (old in LEGACY_CHANNELS) runCatching { manager.deleteNotificationChannel(old) }
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ONGOING, "Scanning", NotificationManager.IMPORTANCE_LOW)
                 .apply { description = "Shown while the detector is running" }
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ALERT, "Tracker alerts", NotificationManager.IMPORTANCE_HIGH)
-                .apply { description = "A device has been confirmed as following you" }
+                .apply {
+                    description = "A device has been confirmed as following you"
+                    lockscreenVisibility = Notification.VISIBILITY_SECRET
+                }
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_CELL, "Cell alerts", NotificationManager.IMPORTANCE_HIGH)
-                .apply { description = "Potential cellular anomaly detected" }
+                .apply {
+                    description = "Potential cellular anomaly detected"
+                    lockscreenVisibility = Notification.VISIBILITY_SECRET
+                }
         )
     }
 
@@ -1177,34 +1191,38 @@ class ScanService : LifecycleService() {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
-    private fun ongoingText(watching: Int, following: Int) = when {
-        running && !scanActive -> "Scan paused — retrying"
-        following > 0 -> "$following confirmed following you"
-        watching > 0 -> "Watching $watching device${if (watching == 1) "" else "s"}"
-        else -> "Scanning for trackers"
-    }
+    /**
+     * The ongoing notification says that the scanner runs, or that it is retrying,
+     * never what it has heard: how many devices are watched and whether one is
+     * following are on the Scan hub, behind the lock. See [NotificationPresentation.ongoing].
+     */
+    private fun ongoing(): NotificationText = NotificationPresentation.ongoing(paused = running && !scanActive)
 
-    private fun buildOngoing(watching: Int, following: Int): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ONGOING)
-            .setContentTitle("Clairix").setContentText(ongoingText(watching, following))
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+    private fun buildOngoing(): Notification {
+        val shown = ongoing()
+        return NotificationCompat.Builder(this, CHANNEL_ONGOING)
+            .setContentTitle(shown.title).setContentText(shown.text)
+            .setSmallIcon(R.drawable.ic_stat_clairix)
             .setOngoing(true).setContentIntent(contentIntent())
             .addAction(0, "Stop scanning", stopIntent())
-            .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            // On the lock screen: the app's name and that it scans.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_ONGOING, NotificationPresentation.SCANNING))
+            .build()
+    }
 
     /**
      * The publish loop runs every 1.5 s; re-posting the notification that often gets
      * the app rate-limited by the system and costs battery for no visible change. Post
-     * only when the text actually differs.
+     * only when the text actually differs, which it does only as the scan pauses and resumes.
      */
-    private fun updateOngoing(list: List<Detection>) {
+    private fun updateOngoing() {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
-        val following = list.count { it.following }
-        val text = ongoingText(list.size, following)
+        val text = ongoing().text
         if (text == lastOngoingText) return
         lastOngoingText = text
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildOngoing(list.size, following))
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildOngoing())
     }
 
     /** A recognised tracker "is following you"; anything else is only known to be travelling with you. */
@@ -1228,26 +1246,43 @@ class ScanService : LifecycleService() {
                 "so if you are alone, check the car: OBD-II port, under the dash, wheel wells, bumpers. " +
                 "Mark it as yours in Clairix if you recognise it."
         }
+        // Named only while the app is unlocked and the owner asked for details in
+        // the shade; otherwise "Unlock to read", and the finding is on the Scan hub.
+        val shown = alertText(followingTitle(detection), short, long) ?: return
         val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
-            .setContentTitle(followingTitle(detection))
-            .setContentText(short)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(long))
-            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
+            .apply { shown.bigText?.let { setStyle(NotificationCompat.BigTextStyle().bigText(it)) } }
+            .setSmallIcon(if (shown.detailed) android.R.drawable.stat_notify_error else R.drawable.ic_stat_clairix)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(if (tracker) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
-            .setAutoCancel(true).setContentIntent(contentIntent()).build()
+            .setAutoCancel(true).setContentIntent(contentIntent())
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_ALERT))
+            .build()
         getSystemService(NotificationManager::class.java).notify(detection.key.hashCode(), n)
     }
 
+    /** What an alert notification may say right now; see [NotificationPresentation.alert]. */
+    private fun alertText(title: String, text: String, bigText: String? = null): NotificationText? =
+        NotificationPresentation.alert(
+            title = title, text = text, bigText = bigText,
+            locked = AppLock.isLocked(this), showDetails = AppSettings.showAlertDetails
+        )
+
     private fun notifyCatcher(title: String) {
         if (!granted(Manifest.permission.POST_NOTIFICATIONS)) return
+        val shown = alertText("Cell anomaly detected", title) ?: return
         val n = NotificationCompat.Builder(this, CHANNEL_CELL)
-            .setContentTitle("Cell anomaly detected")
-            .setContentText(title)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
+            .setSmallIcon(if (shown.detailed) android.R.drawable.stat_sys_warning else R.drawable.ic_stat_clairix)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true).setContentIntent(contentIntent()).build()
+            .setAutoCancel(true).setContentIntent(contentIntent())
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_CELL))
+            .build()
         getSystemService(NotificationManager::class.java).notify(NOTIF_CELL, n)
     }
 
@@ -1316,8 +1351,10 @@ class ScanService : LifecycleService() {
         /** Discoverable for this long and the owner is told the settings page is still open. */
         private const val DISCOVERABLE_ALERT_MS = 3 * 60_000L
         private const val CHANNEL_ONGOING = "scanning"
-        private const val CHANNEL_ALERT = "alerts"
-        private const val CHANNEL_CELL = "cell_alerts"
+        /** Secret on the lock screen (see [createChannels]); the ids they replace are in [LEGACY_CHANNELS]. */
+        const val CHANNEL_ALERT = "alerts_secret"
+        const val CHANNEL_CELL = "cell_alerts_secret"
+        private val LEGACY_CHANNELS = listOf("alerts", "cell_alerts")
         private const val NOTIFICATION_ID = 1
         private const val NOTIF_CELL = 2
         private const val APPLE_COMPANY = 0x004C

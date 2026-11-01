@@ -58,6 +58,7 @@ object AppSettings {
     private const val KEY_RESUME_AFTER_REBOOT = "resume_after_reboot"
     private const val KEY_THEME = "theme"
     private const val KEY_INFRASTRUCTURE_ALERTS = "infrastructure_alerts"
+    private const val KEY_SHOW_ALERT_DETAILS = "show_alert_details"
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
     const val DEFAULT_PERSISTENCE_THRESHOLD_MIN = 10f
@@ -71,6 +72,7 @@ object AppSettings {
     @Volatile private var _scanEnabled = false
     @Volatile private var _resumeAfterReboot = false
     @Volatile private var _infrastructureAlerts = true
+    @Volatile private var _showAlertDetails = false
     private val _theme = MutableStateFlow(ClairixThemeName.ACID)
 
     /**
@@ -79,6 +81,15 @@ object AppSettings {
      * row. On by default: it is the one radio signal of a plate reader the phone can hear.
      */
     val infrastructureAlerts: Boolean get() = _infrastructureAlerts
+
+    /**
+     * Whether an alert notification (a tracker, a cell anomaly, a platform
+     * monitor) may name what it found while Clairix is unlocked. Off by default:
+     * every alert then says only "Unlock to read" and the finding waits in the
+     * app. While Clairix is locked an alert says only that, whatever this is set
+     * to; see [app.clairix.security.NotificationPresentation].
+     */
+    val showAlertDetails: Boolean get() = _showAlertDetails
 
     /**
      * The colour theme the user picked in Settings > Appearance. Acid, the brand's
@@ -120,6 +131,7 @@ object AppSettings {
         _scanEnabled = p.getBoolean(KEY_SCAN_ENABLED, false)
         _resumeAfterReboot = p.getBoolean(KEY_RESUME_AFTER_REBOOT, false)
         _infrastructureAlerts = p.getBoolean(KEY_INFRASTRUCTURE_ALERTS, true)
+        _showAlertDetails = p.getBoolean(KEY_SHOW_ALERT_DETAILS, false)
         // A name from a later version that this one does not know reads as the default.
         val savedTheme = p.getString(KEY_THEME, null)
         _theme.value = ClairixThemeName.entries.firstOrNull { it.name == savedTheme } ?: ClairixThemeName.ACID
@@ -147,6 +159,12 @@ object AppSettings {
         _infrastructureAlerts = value
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_INFRASTRUCTURE_ALERTS, value).apply()
+    }
+
+    fun setShowAlertDetails(context: Context, value: Boolean) {
+        _showAlertDetails = value
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SHOW_ALERT_DETAILS, value).apply()
     }
 
     fun setAggressiveScan(context: Context, value: Boolean) {
@@ -183,6 +201,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     var aggressiveScan by remember { mutableStateOf(AppSettings.aggressiveScan) }
     var infrastructureAlerts by remember { mutableStateOf(AppSettings.infrastructureAlerts) }
+    var showAlertDetails by remember { mutableStateOf(AppSettings.showAlertDetails) }
     var followThreshold by remember { mutableFloatStateOf(AppSettings.followThresholdM) }
     var persistenceThreshold by remember { mutableFloatStateOf(AppSettings.persistenceThresholdMin) }
     var showClearDialog by remember { mutableStateOf(false) }
@@ -644,6 +663,32 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         context = context,
                         onDone = { hasDuress = AppLock.hasDuress(context); showDuressRemove = false },
                         onCancel = { showDuressRemove = false }
+                    )
+                }
+            }
+
+            // ── Notifications ────────────────────────────────────────────────
+            //
+            // What an alert may say in the shade of the unlocked phone. The lock
+            // screen is not up to this switch: the alert channels are secret there.
+
+            if (BuildConfig.FULL_ACCESS) item(key = "§notif-hdr") { SectionHeader("Notifications") }
+
+            if (BuildConfig.FULL_ACCESS) item(key = "§notif-toggles") {
+                ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                    ToggleRow(
+                        title = "Show alert details in notifications",
+                        subtitle = if (showAlertDetails)
+                            "While Clairix is unlocked, an alert names what it found; locked, it says only " +
+                                "\"Unlock to read\". Alerts never appear on the lock screen either way."
+                        else
+                            "Every alert says only \"Unlock to read\"; what was found waits in the app. " +
+                                "Alerts never appear on the lock screen either way.",
+                        checked = showAlertDetails,
+                        onCheckedChange = { v ->
+                            showAlertDetails = v
+                            AppSettings.setShowAlertDetails(context, v)
+                        }
                     )
                 }
             }

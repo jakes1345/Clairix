@@ -280,7 +280,13 @@ data class Alert(
     val dedupeKey: String? = null,
     /** Where the phone was, for alerts about a place rather than about the phone; shown on the map. */
     val lat: Double? = null,
-    val lon: Double? = null
+    val lon: Double? = null,
+    /**
+     * True for an alert raised on the screen the owner is looking at (an optical
+     * or magnetic camera finding can only happen on the sweep screen): it goes on
+     * the timeline and [Registry.alerts] like any other, and raises no notification.
+     */
+    val silent: Boolean = false
 )
 
 /**

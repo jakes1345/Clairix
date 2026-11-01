@@ -14,6 +14,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import app.clairix.security.NotificationPresentation
+import app.clairix.security.PlatformAlerts
 
 /**
  * Keeps the process in the foreground while drive mode is on, so the SDR stream, scanner
@@ -77,13 +79,16 @@ class DriveService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setSmallIcon(R.drawable.ic_stat_clairix)
             .setContentTitle("Drive mode active")
             .setContentText("SDR, scanner and OBD-II running")
             .setContentIntent(open)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // On the lock screen: the app's name and that it runs, nothing of what.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_ID, NotificationPresentation.RUNNING))
             .build()
     }
 

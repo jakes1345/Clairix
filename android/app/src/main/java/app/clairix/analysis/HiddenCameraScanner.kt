@@ -308,8 +308,9 @@ class LensGlintAnalyzer(
  *
  * Findings from all six methods land on [findings], newest first, and anything at
  * or above [ALERT_CONFIDENCE] also goes through [Registry.publishAlert] so it reaches
- * the timeline and the notification shade. Each method keeps its own live state
- * flow for the tab that drives it.
+ * the timeline, and the notification shade when the owner is not on the sweep
+ * screen to see it ([Alert.silent], [sweepScreenResumed]). Each method keeps its
+ * own live state flow for the tab that drives it.
  */
 object HiddenCameraScanner {
 
@@ -341,6 +342,24 @@ object HiddenCameraScanner {
     private val alerted = Collections.synchronizedSet(HashSet<String>())
 
     /**
+     * The methods whose findings can only be made with the sweep screen up: the
+     * camera is bound to the screen's lifecycle and the magnetometer stops when
+     * the guided tab goes. Their alerts are always [Alert.silent].
+     */
+    private val ON_SCREEN_METHODS = setOf(CameraFindMethod.LENS_GLINT, CameraFindMethod.IR_ILLUMINATOR, CameraFindMethod.MAGNETIC)
+
+    /** Whether the sweep screen is resumed; see [sweepScreenResumed]. */
+    @Volatile private var screenResumed = false
+
+    /**
+     * The sweep screen says when it is resumed and when it is paused or gone. A
+     * finding made while it is up (a network sweep or a wireless listen that
+     * finishes while the owner is looking at it) is shown there and raises no
+     * notification; one that lands after they have left the screen does.
+     */
+    fun sweepScreenResumed(resumed: Boolean) { screenResumed = resumed }
+
+    /**
      * Adds or replaces (by id) a finding; alerts once when it is strong enough and
      * [mayAlert]. Each method keeps at most [FINDINGS_PER_METHOD], so a stream of one
      * kind cannot push the others off the list.
@@ -358,7 +377,8 @@ object HiddenCameraScanner {
                     severity = if (f.confidence >= 0.85f) Severity.HIGH else Severity.MEDIUM,
                     title = "Possible hidden camera — ${methodLabel(f.method)}",
                     detail = "${f.location}. ${f.detail}",
-                    kind = EventKind.PLATFORM, dedupeKey = "camera|${f.id}"
+                    kind = EventKind.PLATFORM, dedupeKey = "camera|${f.id}",
+                    silent = f.method in ON_SCREEN_METHODS || screenResumed
                 ),
                 dedupeWindowMs = 6 * 60 * 60_000L
             )

@@ -297,6 +297,9 @@ class MainActivity : AppCompatActivity() {
 
         CommsRepository.init(applicationContext)
         CommsNotifications.ensureChannels(this)
+        // The alert channel is secret on the lock screen; made now so an existing
+        // install drops the old channel at once, not at its next alert.
+        app.clairix.security.PlatformAlerts.ensureChannel(this)
 
         handleOpenThreadIntent(intent)
 

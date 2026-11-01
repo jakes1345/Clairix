@@ -99,6 +99,13 @@ fun CameraSweepScreen(onBack: (() -> Unit)? = null) {
     val findings by HiddenCameraScanner.findings.collectAsStateWithLifecycle()
     val strong = findings.count { it.confidence >= 0.7f }
 
+    // A finding made while this screen is up is shown here and raises no
+    // notification; once the screen is paused or gone, findings notify again.
+    LifecycleResumeEffect(Unit) {
+        HiddenCameraScanner.sweepScreenResumed(true)
+        onPauseOrDispose { HiddenCameraScanner.sweepScreenResumed(false) }
+    }
+
     Column(Modifier.fillMaxSize().background(ClairixTheme.colors.base)) {
         // Shown on its own screen it brings its own bar; under the shell it has one already.
         if (onBack != null) ClairixTopBar(title = "Hidden cameras", onBack = onBack)

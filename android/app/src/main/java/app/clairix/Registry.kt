@@ -287,9 +287,10 @@ object Registry {
     /**
      * Raises [alert]: onto [alerts], onto the timeline as an event of [Alert.kind]
      * (deduplicated by [Alert.dedupeKey] within [dedupeWindowMs]), and as a
-     * notification when it is MEDIUM or worse. Safe to call from any thread; the
-     * timeline and the notification need [bindTrustStore] to have run in this
-     * process, which the activity and the service both do on create.
+     * notification when it is MEDIUM or worse and not [Alert.silent]. Safe to
+     * call from any thread; the timeline and the notification need
+     * [bindTrustStore] to have run in this process, which the activity and the
+     * service both do on create.
      */
     fun publishAlert(alert: Alert, dedupeWindowMs: Long = 30 * 60_000L) {
         _alerts.update { current -> (listOf(alert) + current.filter { it.id != alert.id }).take(ALERT_CAP) }
@@ -307,7 +308,7 @@ object Registry {
                 if (ok) publishTimeline(log.snapshot())
                 ok
             }.getOrDefault(true)
-            if (recorded && alert.severity.ordinal >= Severity.MEDIUM.ordinal) {
+            if (recorded && !alert.silent && alert.severity.ordinal >= Severity.MEDIUM.ordinal) {
                 runCatching { PlatformAlerts.notify(ctx, alert) }
             }
         }

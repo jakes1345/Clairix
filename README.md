@@ -74,12 +74,18 @@ copy of the app's files is ciphertext. The app lock wipes after a run of wrong
 passcodes (three by default; you can choose the number, or none), a separate
 duress passcode wipes at once and shows nothing unusual, and the "Wipe
 Clairix" page wipes on demand; a wipe deletes the keys first, so cutting it
-short leaves only ciphertext. Locking collapses every notification into
-"Unlock to read", stops read receipts, disarms a card armed for NFC readers,
-and hides the app from accessibility services as well as the eye; it locks the
-moment the screen goes off. On a locked phone notifications show only that
-something came (previews are hidden by default), and every screen is kept out
-of screenshots and the recents thumbnail. History
+short leaves only ciphertext. Locking collapses every message notification
+into "Unlock to read" and every alert (a tracker, a cell anomaly, a
+phone-security warning) into one "Unlock to see alerts", stops read receipts,
+disarms a card armed for NFC readers, and hides the app from accessibility
+services as well as the eye; it locks the moment the screen goes off. An alert
+names what it found only while Clairix is unlocked and only if you turn "Show
+alert details in notifications" on (it is off by default), and the ongoing
+scanner, drive-mode, mesh and navigation notifications say only that they run.
+On a locked phone the alert and connection notifications do not appear at all,
+message notifications show only that something came (previews are hidden by
+default), and every screen is kept out of screenshots and the recents
+thumbnail. History
 older than the retention you choose (30 days by default) is deleted, so there
 is less to give up in the first place.
 

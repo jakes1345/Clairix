@@ -59,7 +59,7 @@ class CommsService : Service() {
                     runCatching {
                         getSystemService(NotificationManager::class.java)?.notify(
                             CommsNotifications.LINK_NOTIFICATION_ID,
-                            CommsNotifications.linkNotification(this@CommsService, connected, CommsRepository.number())
+                            CommsNotifications.linkNotification(this@CommsService, connected)
                         )
                     }
                 }
@@ -75,7 +75,7 @@ class CommsService : Service() {
      * the service; the app starts it again the next time it is opened.
      */
     private fun promote(connected: Boolean): Boolean = try {
-        val notification = CommsNotifications.linkNotification(this, connected, CommsRepository.number())
+        val notification = CommsNotifications.linkNotification(this, connected)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
         } else {

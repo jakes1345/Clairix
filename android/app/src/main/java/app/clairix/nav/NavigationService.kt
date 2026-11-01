@@ -14,6 +14,9 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.clairix.BuildConfig
 import app.clairix.MainActivity
+import app.clairix.R
+import app.clairix.security.NotificationPresentation
+import app.clairix.security.PlatformAlerts
 
 /**
  * Keeps the process in the foreground while turn-by-turn navigation runs, so fused location keeps
@@ -61,13 +64,16 @@ class NavigationService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_directions)
+            .setSmallIcon(R.drawable.ic_stat_clairix)
             .setContentTitle("Navigating")
             .setContentText("Turn-by-turn guidance is running")
             .setContentIntent(open)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // On the lock screen: the app's name and that it runs, nothing of where to.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_ID, NotificationPresentation.RUNNING))
             .build()
     }
 

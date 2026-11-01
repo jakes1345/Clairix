@@ -173,6 +173,14 @@ object AppLock {
         runCatching { prefs(context).contains(K_VERIFIER) }.getOrDefault(false)
 
     /**
+     * Whether the app is behind the lock right now, for code that may run in a
+     * process the activity has not opened: the scanner started at boot, say.
+     * There [init] has not run and [locked] still reads false, so a passcode on
+     * disk counts as locked, since nobody has entered it yet.
+     */
+    fun isLocked(context: Context): Boolean = _locked.value || (!initialised && isEnabled(context))
+
+    /**
      * Whether a duress passcode is set. A phone with a passcode always holds a
      * duress salt and verifier, random ones when none is set, so the file does
      * not say whether one is; what tells them apart is [K_DURESS_TAG], a MAC under
@@ -278,7 +286,7 @@ object AppLock {
         if (Wiper.isActive || !_biometricEnabled.value || cipher == null) return false
         val proven = runCatching { cipher.doFinal(ByteArray(16)); true }.getOrDefault(false)
         if (!proven) return false
-        _locked.value = false
+        unlocked()
         return true
     }
 
@@ -313,9 +321,10 @@ object AppLock {
     /**
      * Puts the app behind the lock screen, if a passcode is set. Nothing that
      * could be read or used without the passcode outlives this: the card vault
-     * closes, an armed card stops answering readers, and message notifications
-     * collapse to "unlock to read". The conversation screens watch [locked]
-     * and stop marking messages read while it is up.
+     * closes, an armed card stops answering readers, message notifications
+     * collapse to "unlock to read" and the scanner's and the platform monitors'
+     * alerts to one "unlock to see alerts". The conversation screens watch
+     * [locked] and stop marking messages read while it is up.
      */
     fun lock() {
         if (!_enabled.value) return
@@ -324,8 +333,19 @@ object AppLock {
         appContext?.let { app ->
             EmulationGuard.disarm(app)
             runCatching { CommsNotifications.redact(app) }
+            runCatching { PlatformAlerts.redact(app) }
             CommsMedia.dropPlayCopies(app)
         }
+    }
+
+    /**
+     * The lock has been passed. The one notification that stood in for the
+     * alerts goes; the alerts themselves are not posted again (the owner is in
+     * the app, and the timeline has them), just as Comms leaves what it collapsed.
+     */
+    private fun unlocked() {
+        _locked.value = false
+        appContext?.let { app -> runCatching { PlatformAlerts.unlocked(app) } }
     }
 
     private var screenOffReceiver: android.content.BroadcastReceiver? = null
@@ -458,7 +478,7 @@ object AppLock {
         return when {
             isMain -> {
                 p.edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()
-                if (unlockOnSuccess) _locked.value = false
+                if (unlockOnSuccess) unlocked()
                 Verdict.Accepted
             }
             isDuress -> {

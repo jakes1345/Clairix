@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import app.clairix.CallActivity
 import app.clairix.MainActivity
 import app.clairix.security.AppLock
+import app.clairix.security.NotificationPresentation
 
 /**
  * Notifications for the comms module: one per conversation for new messages,
@@ -34,7 +35,12 @@ object CommsNotifications {
      * is a new channel; the old one ("messages") is deleted.
      */
     const val CHANNEL_MESSAGES = "messages_private"
-    const val CHANNEL_LINK = "comms_link"
+    /**
+     * The connection's own notification: secret on the lock screen, since even
+     * "Comms online" says something about the phone. A new channel for the same
+     * reason as above; the old one ("comms_link") is deleted.
+     */
+    const val CHANNEL_LINK = "comms_link_secret"
     const val CHANNEL_CALLS = "calls"
     /**
      * Incoming calls. The original calls channel had vibration off, so a ring
@@ -73,7 +79,7 @@ object CommsNotifications {
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        for (old in listOf("messages", "group_sos")) runCatching { manager.deleteNotificationChannel(old) }
+        for (old in listOf("messages", "group_sos", "comms_link")) runCatching { manager.deleteNotificationChannel(old) }
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH)
                 .apply {
@@ -86,6 +92,7 @@ object CommsNotifications {
                 .apply {
                     description = "Shown while Clairix keeps its connection to your relay open"
                     setShowBadge(false)
+                    lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
         manager.createNotificationChannel(
@@ -713,8 +720,13 @@ object CommsNotifications {
         manager.cancel(missedCallId(peer))
     }
 
-    /** The ongoing notification behind the relay connection service. */
-    fun linkNotification(context: Context, connected: Boolean, number: String?): Notification {
+    /**
+     * The ongoing notification behind the relay connection service. It never
+     * carries the Clairix number, and with previews hidden it says only that
+     * Clairix is connected (see [NotificationPresentation.link]); on the lock
+     * screen its channel is secret and its public version names nothing.
+     */
+    fun linkNotification(context: Context, connected: Boolean): Notification {
         ensureChannels(context)
         val open = Intent(context, MainActivity::class.java)
             .setAction("app.clairix.OPEN_COMMS")
@@ -729,19 +741,26 @@ object CommsNotifications {
             Intent(context, CommsService::class.java).setAction(CommsService.ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val shown = NotificationPresentation.link(connected, previewsHidden = hidePreviews(context))
+        val lockScreen = NotificationPresentation.link(connected, previewsHidden = true)
         return NotificationCompat.Builder(context, CHANNEL_LINK)
             .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
-            .setContentTitle(if (connected) "Comms online" else "Comms reconnecting")
-            .setContentText(
-                number?.let { "Clairix number ${formatClairixNumber(it)} · encrypted messages arrive instantly" }
-                    ?: "Connecting to your relay"
-            )
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(contentIntent)
             .addAction(0, "Go offline", stop)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_LINK)
+                    .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
+                    .setContentTitle(lockScreen.title)
+                    .setContentText(lockScreen.text)
+                    .build()
+            )
             .build()
     }
 
