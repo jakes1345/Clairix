@@ -33,3 +33,22 @@ regexTarget = "secret"
 regexes = [
   '''(?i)^(x?chacha20-poly1305|aes-(128|256)-gcm|(x|ed|curve)25519|ristretto255(-sha512)?|hkdf-sha(256|512)|hmac-sha(256|512)|sha-?(256|512))$''',
 ]
+
+# The asset key list publishes the Ed25519 public keys Clairix checks offline
+# map and tile packs against (tools/signing/sign.py writes them, raw and base64
+# without padding). The private half never enters the repository.
+[[allowlists]]
+description = "Asset public keys in the asset key list"
+condition = "AND"
+paths = ['''^relays/keys\.json$''']
+regexTarget = "match"
+regexes = ['''key":\s*"[A-Za-z0-9+/]{43}"$''']
+
+# The asset-signature test checks a fixed Ed25519 vector: two public keys of a
+# throwaway pair whose secret half was never kept.
+[[allowlists]]
+description = "Public keys in the asset-signature test vector"
+condition = "AND"
+paths = ['''^android/app/src/test/java/app/clairix/nav/AssetSignatureTest\.kt$''']
+regexTarget = "match"
+regexes = ['''(?i)key\s*=\s*"[A-Za-z0-9+/]{43}"$''']

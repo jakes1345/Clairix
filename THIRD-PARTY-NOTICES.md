@@ -74,7 +74,7 @@ the Android targets the app is built for. Each licence below is the text of
 the crate's own licence file, with its copyright lines; where a crate ships no
 file for the licence it is used under, it is that licence's standard text.
 
-- Apache License 2.0 (Apache-2.0): 333 crates
+- Apache License 2.0 (Apache-2.0): 336 crates
 - MIT License (MIT): 89 crates
 - ISC License (ISC): 21 crates
 - Unicode License v3 (Unicode-3.0): 19 crates
@@ -507,7 +507,7 @@ Used by: deranged 0.5.9
 
 ### Apache License 2.0
 
-Used by: cmov 0.5.4, ctutils 0.4.2, derive-where 1.7.0, serdect 0.4.3, static_assertions 1.1.0, utf8_iter 1.0.4, zeroize 1.9.0, zeroize_derive 1.5.0
+Used by: cmov 0.5.4, ctutils 0.4.7, derive-where 1.7.0, serdect 0.4.3, static_assertions 1.1.0, utf8_iter 1.0.4, zeroize 1.9.0, zeroize_derive 1.5.0
 
 ````
 
@@ -6232,7 +6232,7 @@ limitations under the License.
 
 ### Apache License 2.0
 
-Used by: aes 0.9.3, base16ct 0.2.0, base16ct 1.0.0, base64ct 1.8.3, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.4.2, cbc 0.2.1, chacha20 0.10.2, chacha20 0.9.1, chacha20poly1305 0.10.1, chacha20poly1305 0.11.0, cipher 0.4.4, cipher 0.5.2, const-oid 0.10.2, const-oid 0.9.6, cpubits 0.1.1, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-bigint 0.5.5, crypto-common 0.1.7, crypto-common 0.2.2, ctr 0.10.1, der 0.7.10, digest 0.10.7, digest 0.11.3, elliptic-curve 0.13.8, hmac 0.12.1, hmac 0.13.0, hybrid-array 0.4.15, inout 0.1.4, inout 0.2.2, keccak 0.1.6, keccak 0.2.2, opaque-debug 0.3.1, pem-rfc7468 0.7.0, pkcs1 0.7.5, pkcs8 0.10.2, poly1305 0.8.0, poly1305 0.9.1, polyval 0.7.3, sec1 0.7.3, sha1 0.10.7, sha2 0.10.9, sha2 0.11.0, sha3 0.10.9, sha3 0.12.0, signature 2.2.0, signature 3.0.0, spki 0.7.3, sponge-cursor 0.1.0, ssh-cipher-fork-arti 0.2.0, ssh-encoding-fork-arti 0.2.0, ssh-key-fork-arti 0.6.7, universal-hash 0.5.1, universal-hash 0.6.1
+Used by: aes 0.9.3, argon2 0.5.3, base16ct 0.2.0, base16ct 1.0.0, base64ct 1.8.3, blake2 0.10.6, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.4.2, cbc 0.2.1, chacha20 0.10.2, chacha20 0.9.1, chacha20poly1305 0.10.1, chacha20poly1305 0.11.0, cipher 0.4.4, cipher 0.5.2, const-oid 0.10.2, const-oid 0.9.6, cpubits 0.1.1, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-bigint 0.5.5, crypto-common 0.1.7, crypto-common 0.2.2, ctr 0.10.1, der 0.7.10, digest 0.10.7, digest 0.11.3, elliptic-curve 0.13.8, hmac 0.12.1, hmac 0.13.0, hybrid-array 0.4.15, inout 0.1.4, inout 0.2.2, keccak 0.1.6, keccak 0.2.2, opaque-debug 0.3.1, password-hash 0.5.0, pem-rfc7468 0.7.0, pkcs1 0.7.5, pkcs8 0.10.2, poly1305 0.8.0, poly1305 0.9.1, polyval 0.7.3, sec1 0.7.3, sha1 0.10.7, sha2 0.10.9, sha2 0.11.0, sha3 0.10.9, sha3 0.12.0, signature 2.2.0, signature 3.0.0, spki 0.7.3, sponge-cursor 0.1.0, ssh-cipher-fork-arti 0.2.0, ssh-encoding-fork-arti 0.2.0, ssh-key-fork-arti 0.6.7, universal-hash 0.5.1, universal-hash 0.6.1
 
 ````
                               Apache License
