@@ -295,6 +295,53 @@ class GnssIntegrityTest {
     }
 
     @Test
+    fun aGainAlarmDoesNotOutliveTheMeasurements() {
+        // Passive in the background, raw measurements stop whenever no other app asks
+        // for them. A gain alarm left standing from the last of them used to go on
+        // corroborating any other failing check: one wrong satellite time read as spoofing.
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 40.0)); g.onSky(realSky(now)); now += 1_000L }
+        repeat(6) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); g.onSky(realSky(now)); now += 1_000L }
+        assertEquals(CheckState.WARN, state(g.assess(now), "agc"))
+        // While the alarm is live it corroborates a failing check.
+        g.onGnssFix(fix(now, satTime = now + 2 * 3_600_000L))
+        assertEquals(GnssVerdict.SPOOFED, g.assess(now).verdict)
+        // The measurements stop; the sky goes on.
+        feed(g, 40, ::realSky)
+        g.onGnssFix(fix(now, satTime = now + 2 * 3_600_000L))
+        val a = g.assess(now)
+        assertEquals(CheckState.NO_DATA, state(a, "agc"))
+        assertEquals(CheckState.NO_DATA, state(a, "clock"))
+        assertEquals(GnssVerdict.SUSPECT, a.verdict)
+    }
+
+    @Test
+    fun aTunnelAfterTheMeasurementsStoppedIsOnlyLost() {
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 40.0)); g.onSky(realSky(now)); now += 1_000L }
+        repeat(6) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); g.onSky(realSky(now)); now += 1_000L }
+        // The measurements stop with the alarm standing; the fix carries on, then drops at a tunnel.
+        feed(g, 40, ::realSky)
+        feed(g, 10) { t -> SkyEpoch(t, listOf(GnssSat(Gnss.GPS, 3, 11f, false))) }
+        val a = g.assess(now)
+        assertEquals(CheckState.WARN, state(a, "jamming"))
+        assertEquals(GnssVerdict.NO_FIX, a.verdict)
+    }
+
+    @Test
+    fun aRunOfLoudGainReadingsStartsAgainAfterAGap() {
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 40.0)); now += 1_000L }
+        repeat(4) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); now += 1_000L }
+        now += 60_000L
+        g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); now += 1_000L
+        // Five loud readings, but not five in a row: no alarm yet.
+        assertEquals(CheckState.PASS, state(g.assess(now), "agc"))
+        repeat(4) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); now += 1_000L }
+        assertEquals(CheckState.WARN, state(g.assess(now), "agc"))
+    }
+
+    @Test
     fun noDataSaysSoInsteadOfClaimingClean() {
         val a = GnssIntegrity().assess(now)
         assertEquals(GnssVerdict.NO_DATA, a.verdict)

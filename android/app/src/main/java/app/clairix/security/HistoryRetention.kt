@@ -49,8 +49,10 @@ object HistoryRetention {
     /**
      * Deletes what is older than the cutoff from the location log, the vehicle
      * trips, the unlock ledger and the timeline. Runs when the setting changes,
-     * at each start of the app and every quarter hour while the scanner runs.
-     * File I/O; call off the main thread.
+     * at each start of the app and every hour while the scanner runs
+     * ([app.clairix.analysis.ScanPacing.RETENTION_EVERY_MS]); the location log and
+     * the tile cache look at their oldest entry first and stop there when it is
+     * inside the retention. File I/O; call off the main thread.
      */
     fun apply(context: Context) {
         val cutoff = cutoff(context) ?: return

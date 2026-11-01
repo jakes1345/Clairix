@@ -435,9 +435,11 @@ class Tracker(
      * kept far longer — trackers sleep between reports and forgetting one would throw
      * away the only evidence that matters — but not forever: a follower silent for a
      * week is gone, and keeping its row would only leave a permanent CRITICAL ghost.
+     * Returns how many devices were dropped, so the scanner knows when its list changed.
      */
     @Synchronized
-    fun prune(now: Long, maxAgeMs: Long = 30 * 60 * 1000L) {
+    fun prune(now: Long, maxAgeMs: Long = 30 * 60 * 1000L): Int {
+        val before = entries.size
         val cutoff = now - maxAgeMs
         val followingCutoff = now - FOLLOWING_RETENTION_MS
         entries.entries.removeAll { (_, entry) ->
@@ -456,6 +458,7 @@ class Tracker(
                 .take(entries.size - MAX_ENTRIES)
                 .forEach { entries.remove(it.key) }
         }
+        return before - entries.size
     }
 
     /**

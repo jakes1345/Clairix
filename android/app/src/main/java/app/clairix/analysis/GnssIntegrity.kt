@@ -226,6 +226,13 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
          * environment, not an attack worth a run-long warning.
          */
         const val AGC_RESEED_SAMPLES = 600
+        /**
+         * Raw measurements older than this say nothing about now. In the background they
+         * are passive (see [GnssRequestPolicy]) and stop whenever no other app asks for
+         * them, so the clock and gain checks are judged only on a recent sample: a gain
+         * alarm frozen when they stopped must not go on corroborating other checks.
+         */
+        const val MEASUREMENT_FRESH_MS = 30_000L
     }
 
     private val epochs = ArrayDeque<SkyEpoch>()
@@ -249,6 +256,8 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
     private var agcStreak = 0
     /** The warm-up samples; the baseline is their median until there are [AGC_LEARNED]. */
     private val agcWarmup = ArrayList<Double>(AGC_LEARNED)
+    /** When the latest gain reading arrived, or 0; see [MEASUREMENT_FRESH_MS]. */
+    private var lastAgcAt = 0L
     private var multiConstellationAt = 0L
     private var healthyAt = 0L
 
@@ -307,6 +316,11 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
         lastClock = sample
         clockSamples++
         val agc = sample.agcDb ?: return
+        // Out-of-band readings count as a run only without a gap between them: after
+        // one (passive measurements stop whenever no other app asks for them) the run
+        // starts again rather than carrying on from readings minutes old.
+        if (lastAgcAt != 0L && sample.timeMs - lastAgcAt > MEASUREMENT_FRESH_MS) agcStreak = 0
+        lastAgcAt = sample.timeMs
         // Warm-up: the baseline is the median of the first AGC_LEARNED samples, so a
         // receiver still settling, or a first sample taken indoors, cannot set a level
         // every later sample then "deviates" from. The old code took the first sample
@@ -432,21 +446,29 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
             else -> GnssCheck("mock", "Mock locations", CheckState.NO_DATA, "No fix yet.")
         }
 
-        // 7. Receiver clock.
+        // 7. Receiver clock. A drift jump is remembered for MEMORY_MS like a position
+        // jump; "steady" is said only of a clock heard in the last half minute.
+        val clockFresh = lastClock?.let { now - it.timeMs <= MEASUREMENT_FRESH_MS } == true
         checks += when {
             clockSamples == 0 -> GnssCheck("clock", "Receiver clock", CheckState.NO_DATA,
                 "This phone has not reported raw satellite measurements; many do only while a fix is running.")
             driftJumpAt != 0L && now - driftJumpAt <= MEMORY_MS -> GnssCheck("clock", "Receiver clock", CheckState.WARN,
                 "The receiver's clock drift jumped without a reset, as it does when a stronger signal captures the receiver.")
+            !clockFresh -> GnssCheck("clock", "Receiver clock", CheckState.NO_DATA,
+                "No raw satellite measurements in the last half minute. In the background they arrive only when another app asks for them.")
             else -> GnssCheck("clock", "Receiver clock", CheckState.PASS, "The receiver's clock is drifting steadily.")
         }
 
         // 8. Front-end gain. Judged only once the warm-up is over: until then the
         // baseline is still being learned and a streak against it means nothing. The
-        // alarm arm used to come before the "still learning" arm.
-        val agcAlarm = agcSamples >= AGC_LEARNED && agcStreak >= WINDOW_EPOCHS
+        // alarm arm used to come before the "still learning" arm. Judged only on a
+        // recent reading, too: an alarm left standing when measurements stopped used to
+        // go on corroborating every other check, and turning a tunnel into jamming.
+        val agcFresh = lastAgcAt != 0L && now - lastAgcAt <= MEASUREMENT_FRESH_MS
+        val agcAlarm = agcFresh && agcSamples >= AGC_LEARNED && agcStreak >= WINDOW_EPOCHS
         checks += when {
             agcBaseline == null -> GnssCheck("agc", "Band energy", CheckState.NO_DATA, "This phone does not report its GPS gain control.")
+            !agcFresh -> GnssCheck("agc", "Band energy", CheckState.NO_DATA, "No gain readings in the last half minute.")
             agcSamples < AGC_LEARNED -> GnssCheck("agc", "Band energy", CheckState.NO_DATA, "Learning this phone's normal gain level.")
             agcAlarm -> GnssCheck("agc", "Band energy", CheckState.WARN,
                 "The GPS band's gain control has moved %.0f dB from normal: something loud is transmitting on it.".format(agcDeviation ?: 0.0))
@@ -543,6 +565,7 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
         networkStreak = 0; lastComparison = null; jump = null; jumpTimes.clear(); spreadFlatEpochs = 0
         mockAt = 0L; driftJumpAt = 0L
         clockSamples = 0; agcBaseline = null; agcSamples = 0; agcDeviation = null; agcStreak = 0; agcWarmup.clear()
+        lastAgcAt = 0L
         multiConstellationAt = 0L; healthyAt = 0L; comparedNetworkAt = 0L
     }
 

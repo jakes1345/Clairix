@@ -84,12 +84,17 @@ object LocationHistory {
 
     fun size(context: Context): Int = store(context).json.optJSONArray(KEY)?.length() ?: 0
 
-    /** Deletes fixes before [cutoff] and writes the log; returns how many. File I/O; call off the main thread. */
+    /**
+     * Deletes fixes before [cutoff] and writes the log; returns how many. Rows are kept
+     * oldest first, so when the first is inside the retention nothing is older and the
+     * walk over up to [CAP] rows is skipped. File I/O; call off the main thread.
+     */
     fun pruneOlderThan(context: Context, cutoff: Long): Int {
         synchronized(lock) {
             val s = store(context)
             val root = s.json
             val arr = root.optJSONArray(KEY) ?: return 0
+            if (!ScanPacing.holdsOlderThan(oldestTime(arr), cutoff)) return 0
             val kept = JSONArray()
             for (i in 0 until arr.length()) {
                 val row = arr.optJSONArray(i) ?: continue
@@ -103,6 +108,16 @@ object LocationHistory {
             }
             return removed
         }
+    }
+
+    /**
+     * The time of the first, oldest, row of a log array, or null when it has none. A
+     * malformed first row reads as older than any cutoff, so the walk runs and drops
+     * it, as it drops every row it cannot read.
+     */
+    internal fun oldestTime(arr: JSONArray): Long? {
+        if (arr.length() == 0) return null
+        return arr.optJSONArray(0)?.optLong(0) ?: Long.MIN_VALUE
     }
 
     fun clear(context: Context) {

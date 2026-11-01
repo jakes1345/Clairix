@@ -671,6 +671,24 @@ class PhoneHealthMonitor(private val context: Context) {
         return out.ifEmpty { null }
     }
 
+    /**
+     * `which su`, started once per process as each boot property is read once: what is
+     * on the PATH does not change while the app runs, and the health check runs every
+     * thirty seconds and started a process each time. An empty answer (nothing found) is
+     * an answer and is kept; a lookup that could not run is tried again next pass. The
+     * su paths in [rootEvidence] are still looked at on every pass.
+     */
+    private object WhichSu {
+        val onPath = OncePerProcess {
+            runCatching {
+                val p = ProcessBuilder("which", "su").redirectErrorStream(true).start()
+                val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
+                p.waitFor(1, TimeUnit.SECONDS); p.destroy()
+                out
+            }.getOrNull()
+        }
+    }
+
     private fun rootEvidence(): List<String> {
         val evidence = ArrayList<String>(4)
         val su = SU_PATHS.filter { runCatching { File(it).exists() }.getOrDefault(false) }
@@ -679,12 +697,7 @@ class PhoneHealthMonitor(private val context: Context) {
         if (magisk.isNotEmpty()) evidence += "Magisk files at ${magisk.first()}"
         if (prop("ro.debuggable") == "1") evidence += "ro.debuggable=1"
         if (prop("ro.secure") == "0") evidence += "ro.secure=0"
-        val which = runCatching {
-            val p = ProcessBuilder("which", "su").redirectErrorStream(true).start()
-            val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
-            p.waitFor(1, TimeUnit.SECONDS); p.destroy()
-            out
-        }.getOrNull()
+        val which = WhichSu.onPath.get()
         if (!which.isNullOrBlank() && which.startsWith("/") && su.isEmpty()) evidence += "su on PATH ($which)"
         for (pkg in ROOT_MANAGER_PACKAGES) {
             if (runCatching { context.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)) {

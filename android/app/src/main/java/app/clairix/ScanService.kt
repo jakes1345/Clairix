@@ -55,6 +55,7 @@ import app.clairix.analysis.LocationTrack
 import app.clairix.analysis.MotionPolicy
 import app.clairix.analysis.Tracker
 import app.clairix.analysis.PhoneHealthMonitor
+import app.clairix.analysis.ScanPacing
 import app.clairix.analysis.ScanRecord
 import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.TlsCanary
@@ -109,9 +110,8 @@ class ScanService : LifecycleService() {
     /** Links address rotations the payload cannot prove, by the rhythm of the radio. */
     private val cadence = CadenceFingerprinter()
     private lateinit var vehicleTrips: VehicleTrips
-    /** When history older than the owner's retention was last deleted; see [HistoryRetention]. */
+    /** When history older than the owner's retention was last deleted; see [HistoryRetention] and [ScanPacing.retentionDue]. */
     private var lastRetentionAt = 0L
-    private val retentionEveryMs = 15 * 60_000L
 
     /** Logical devices already asked over DULT — one exchange each, answered or refused. */
     private val dultAsked = HashSet<String>()
@@ -143,6 +143,9 @@ class ScanService : LifecycleService() {
     @Volatile
     private var scanActive = false
 
+    /** The mode and batch delay of the scan registered last; see [blePlan]. Main thread. */
+    private var activeBleScan: ScanPacing.BleScan? = null
+
     /** Screen state decides which filter strategy the scan can use — see [startScanning]. */
     @Volatile
     private var screenOn = true
@@ -152,11 +155,13 @@ class ScanService : LifecycleService() {
 
     /**
      * The plate readers on the map lists this phone holds, so hardware heard over radio
-     * can be matched to a mapped camera or reported as one the map lacks. Reloaded
-     * from the signed caches every [KNOWN_CAMERAS_REFRESH_MS].
+     * can be matched to a mapped camera or reported as one the map lacks. The signed
+     * caches are looked at every [KNOWN_CAMERAS_REFRESH_MS] and re-read only when one
+     * of them changed on disk ([CameraFeed.cacheStamp]).
      */
     @Volatile private var knownCameras: List<KnownCamera> = emptyList()
     private var knownCamerasAt = 0L
+    private var knownCamerasStamp: String? = null
 
     /** Running while the phone is discoverable; fires an alert if it stays so. */
     private var discoverableJob: Job? = null
@@ -584,19 +589,18 @@ class ScanService : LifecycleService() {
             Registry.update { it.copy(scanning = false, error = "Nearby devices permission not granted") }
             return
         }
-        // The first minutes of a drive get the intensive sweep — see [beginTrip].
-        val mode = if (System.currentTimeMillis() < intensiveUntil) ScanSettings.SCAN_MODE_LOW_LATENCY
-        else AppSettings.scanMode
-        // With the screen off nobody is watching the list, so the controller may hold
+        // The first minutes of a drive get the intensive sweep — see [beginTrip]. With
+        // the screen off nobody is watching the list, so the controller may hold
         // results and hand them over in batches: the CPU sleeps between them instead of
         // waking for every advert. Not during a drive, where a few seconds' delay puts
-        // a roadside camera hundreds of metres from where it was heard.
-        val batch = !screenOn && !vehicleTrips.inTrip &&
-            runCatching { adapter.isOffloadedScanBatchingSupported }.getOrDefault(false)
+        // a roadside camera hundreds of metres from where it was heard. Settled with
+        // the screen off, the scan drops to low power with a batch a minute; see
+        // [ScanPacing.bleScan].
+        val plan = blePlan(adapter)
         val settings = ScanSettings.Builder()
-            .setScanMode(mode)
+            .setScanMode(plan.mode)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-            .setLegacy(false).setReportDelay(if (batch) SCREEN_OFF_BATCH_MS else 0L).build()
+            .setLegacy(false).setReportDelay(plan.reportDelayMs).build()
 
         // Android 8.1+ suspends an *unfiltered* scan once the screen goes off, so a
         // filter list is the price of scanning with the phone in a pocket. But any
@@ -610,6 +614,7 @@ class ScanService : LifecycleService() {
         try {
             scanner?.startScan(filters, settings, scanCallback)
             scanActive = true
+            activeBleScan = plan
             scanStartedAt = System.currentTimeMillis()
             Registry.update { it.copy(scanning = true, bluetoothOn = true, error = null, stoppedBySystem = false, stoppedAt = 0L) }
         } catch (e: SecurityException) {
@@ -618,6 +623,16 @@ class ScanService : LifecycleService() {
             Registry.update { it.copy(scanning = false, error = "Bluetooth unavailable: ${e.message}") }
         }
     }
+
+    /** The scan [startScanning] registers now, from the drive, the screen and the pace; see [ScanPacing.bleScan]. */
+    private fun blePlan(adapter: BluetoothAdapter?): ScanPacing.BleScan = ScanPacing.bleScan(
+        configuredMode = AppSettings.scanMode,
+        intensive = System.currentTimeMillis() < intensiveUntil,
+        screenOn = screenOn,
+        still = motion.pace == MotionPolicy.Pace.STILL,
+        inTrip = vehicleTrips.inTrip,
+        batchingSupported = adapter != null && runCatching { adapter.isOffloadedScanBatchingSupported }.getOrDefault(false)
+    )
 
     private fun startLocation() {
         if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
@@ -642,6 +657,14 @@ class ScanService : LifecycleService() {
     private fun applyPace(pace: MotionPolicy.Pace) {
         // The phone settling ends a journey; see [summariseRiders].
         if (pace == MotionPolicy.Pace.STILL) summariseRiders(System.currentTimeMillis())
+        // The Bluetooth scan follows the pace while the screen is off: settled, it drops
+        // to low power with a batch a minute, and moving brings the usual scan back.
+        // Registered afresh only when its settings change; see [ScanPacing.bleScan].
+        if (running && scanActive && !screenOn &&
+            blePlan(getSystemService(BluetoothManager::class.java)?.adapter) != activeBleScan
+        ) restartScan()
+        // Moving ends an idle spell: the publish loop leaves its minute-long wait now.
+        if (pace == MotionPolicy.Pace.MOVING) publishKick.trySend(Unit)
         if (!running || !granted(Manifest.permission.ACCESS_FINE_LOCATION)) return
         val request = when (pace) {
             MotionPolicy.Pace.MOVING -> LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 15_000L)
@@ -730,18 +753,29 @@ class ScanService : LifecycleService() {
                     }
                 }
                 // The modem is asked for a fresh reading each time. While the phone is
-                // in use or on the move cells change quickly; settled in a pocket,
-                // thirty seconds still gives the five-minute checks ten readings.
-                delay(if (screenOn || motion.pace == MotionPolicy.Pace.MOVING) 15_000L else 30_000L)
+                // in use or on the move cells change quickly; screen off, every thirty
+                // seconds; settled with a recent fix to show it, once a minute. See
+                // [ScanPacing.cellPollMs].
+                delay(
+                    ScanPacing.cellPollMs(
+                        screenOn = screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING,
+                        confirmedStill = motion.confirmedStill(System.currentTimeMillis())
+                    )
+                )
             }
         }
     }
 
     private fun startPublishing() {
         lifecycleScope.launch(Dispatchers.Default + loopGuard) {
+            // The latest packet the last published list is known to hold, or null to
+            // publish on the next cycle; see [ScanPacing.publishDue].
+            var publishedHeard: Long? = null
             while (isActive) guarded("publish", PUBLISH_FAILURE_PAUSE_MS) {
                 val now = System.currentTimeMillis()
-                tracker.prune(now)
+                val pruned = tracker.prune(now)
+                // Screen off, settled and no drive: see [ScanPacing].
+                val idle = ScanPacing.idle(screenOn, still = motion.pace == MotionPolicy.Pace.STILL, inTrip = vehicleTrips.inTrip)
                 // Whether the scan can hear at all: Location off hides every result, and
                 // an unfiltered scan that has heard nothing for five minutes is not
                 // listening. The cause goes on the status (the hub reads it as "Scanner
@@ -766,14 +800,21 @@ class ScanService : LifecycleService() {
                     lastHeartbeatAt = now
                     ScanRecord.heartbeat(this@ScanService, now)
                 }
-                if (now - lastRetentionAt > retentionEveryMs) {
+                if (ScanPacing.retentionDue(lastRetentionAt, now)) {
                     lastRetentionAt = now
                     withContext(Dispatchers.IO) { runCatching { HistoryRetention.apply(this@ScanService) } }
                 }
                 if (now - knownCamerasAt > KNOWN_CAMERAS_REFRESH_MS) {
                     knownCamerasAt = now
                     withContext(Dispatchers.IO) {
-                        knownCameras = runCatching { CameraFeed.loadCached(this@ScanService) }.getOrDefault(emptyList())
+                        // Re-read, and gunzip, only when a list or its signature record
+                        // changed on disk: the lists are refreshed once a day at most.
+                        val stamp = runCatching { CameraFeed.cacheStamp(this@ScanService) }.getOrNull()
+                        if (stamp == null || stamp != knownCamerasStamp) {
+                            val loaded = runCatching { CameraFeed.loadCached(this@ScanService) }
+                            knownCameras = loaded.getOrDefault(emptyList())
+                            knownCamerasStamp = if (loaded.isSuccess) stamp else null
+                        }
                     }
                 }
                 // Fused location goes quiet once the car is parked (25 m minimum
@@ -784,45 +825,55 @@ class ScanService : LifecycleService() {
                 // window, or the same device comes back as a stranger and the original
                 // row is orphaned as a permanent "following" ghost.
                 identities.prune(now, keep = tracker.followingKeys())
-                val all = tracker.snapshot(now)
                 val trusted = Registry.trusted.value
-                // Only surface devices worth the user's attention; transient single-sighting
-                // signals from people walking by are tracked internally but not listed.
-                val list = all.filter { d ->
-                    d.following || d.persistent ||
-                        (d.tracker != null && d.sightings >= 3) ||
-                        d.sightings >= 5
-                }.sortedWith(
-                    compareByDescending<Detection> { it.following }
-                        .thenByDescending { it.persistent }
-                        .thenByDescending { it.identified }
-                        .thenByDescending { it.sightings }
-                )
-                Registry.update { it.copy(nearbyCount = all.size) }
-                Registry.publish(list)
+                // Idle, the list and the map are rebuilt only when a packet was handled or
+                // a device aged out since the last publish: nothing else changes them, and
+                // the screen coming on ends the idle spell. See [ScanPacing.publishDue].
+                val list: List<Detection>
+                if (ScanPacing.publishDue(idle, heard, publishedHeard, pruned)) {
+                    publishedHeard = ScanPacing.publishedMark(heard, System.currentTimeMillis())
+                    val all = tracker.snapshot(now)
+                    // Only surface devices worth the user's attention; transient single-sighting
+                    // signals from people walking by are tracked internally but not listed.
+                    list = all.filter { d ->
+                        d.following || d.persistent ||
+                            (d.tracker != null && d.sightings >= 3) ||
+                            d.sightings >= 5
+                    }.sortedWith(
+                        compareByDescending<Detection> { it.following }
+                            .thenByDescending { it.persistent }
+                            .thenByDescending { it.identified }
+                            .thenByDescending { it.sightings }
+                    )
+                    Registry.update { it.copy(nearbyCount = all.size) }
+                    Registry.publish(list)
+
+                    val trail = synchronized(gpsTrail) { ArrayList(gpsTrail) }
+                    // Ordered by key, not by the sighting-sorted `list`: the map only cares
+                    // where each device is, and sightings change on nearly every advert, so
+                    // the sighting order made every 1.5 s MapData compare unequal. Each one
+                    // then re-ran the map's overlay effect and invalidated the MapView, and
+                    // every redraw re-requests any expired tile from the tile server.
+                    // With a stable order the StateFlow drops publishes that change nothing.
+                    val deviceTrails = list.filter { it.points.isNotEmpty() }.map {
+                        DeviceTrail(it.key, it.name, it.threat, it.following, it.points, it.lastHeardAt)
+                    }.sortedBy { it.key }
+                    val cellNow = Registry.cell.value
+                    val cellMarkers = if (cellNow.level.ordinal >= Threat.MEDIUM.ordinal && cellNow.cell != null) {
+                        val fix = track.current
+                        if (fix != null) listOf(
+                            CellMarker("${cellNow.cell.rat.label} ${cellNow.cell.cellId}",
+                                LatLon(fix.lat, fix.lon), cellNow.level)
+                        ) else emptyList()
+                    } else emptyList()
+                    Registry.publishMap(MapData(trail, deviceTrails, cellMarkers))
+                } else {
+                    // Unchanged since it was published; the correlation check below reads it.
+                    list = Registry.detections.value
+                }
                 // The ongoing notification says only that the scanner runs (the counts
                 // are on the Scan hub); this re-posts it only when that text changes.
                 updateOngoing()
-
-                val trail = synchronized(gpsTrail) { ArrayList(gpsTrail) }
-                // Ordered by key, not by the sighting-sorted `list`: the map only cares
-                // where each device is, and sightings change on nearly every advert, so
-                // the sighting order made every 1.5 s MapData compare unequal. Each one
-                // then re-ran the map's overlay effect and invalidated the MapView, and
-                // every redraw re-requests any expired tile from the tile server.
-                // With a stable order the StateFlow drops publishes that change nothing.
-                val deviceTrails = list.filter { it.points.isNotEmpty() }.map {
-                    DeviceTrail(it.key, it.name, it.threat, it.following, it.points, it.lastHeardAt)
-                }.sortedBy { it.key }
-                val cellNow = Registry.cell.value
-                val cellMarkers = if (cellNow.level.ordinal >= Threat.MEDIUM.ordinal && cellNow.cell != null) {
-                    val fix = track.current
-                    if (fix != null) listOf(
-                        CellMarker("${cellNow.cell.rat.label} ${cellNow.cell.cellId}",
-                            LatLon(fix.lat, fix.lon), cellNow.level)
-                    ) else emptyList()
-                } else emptyList()
-                Registry.publishMap(MapData(trail, deviceTrails, cellMarkers))
 
                 // Phone health: at once, then every 30 s while the screen is on, every
                 // five minutes while it is off: what it reads changes when someone
@@ -839,14 +890,12 @@ class ScanService : LifecycleService() {
                     withContext(Dispatchers.IO) { runCatching { UnlockLedger.refresh(this@ScanService) } }
                 }
 
-                // Wi-Fi anomaly scan: at once, then every minute while the screen is on;
-                // with it off, every two minutes on the move and every ten settled,
-                // where the networks around do not change.
-                val wifiEvery = when {
-                    screenOn -> 60_000L
-                    motion.pace == MotionPolicy.Pace.MOVING -> 2 * 60_000L
-                    else -> 10 * 60_000L
-                }
+                // Wi-Fi anomaly scan: at once, then every two minutes while the screen is
+                // on or the phone moves, and every ten settled with the screen off, where
+                // the networks around do not change. The Wi-Fi tab shows these results
+                // while the scanner runs and asks for no scans of its own; see
+                // [ScanPacing.wifiScanEveryMs].
+                val wifiEvery = ScanPacing.wifiScanEveryMs(screenOn, moving = motion.pace == MotionPolicy.Pace.MOVING)
                 if (publishCycle == 1 || now - lastWifiAt >= wifiEvery) {
                     lastWifiAt = now
                     // The picture the WIFI tab shows, then the judgement on it. The
@@ -931,9 +980,11 @@ class ScanService : LifecycleService() {
                 motion.tick(now)?.let { pace -> withContext(Dispatchers.Main) { applyPace(pace) } }
 
                 // The list and the map are for someone looking at them: every 1.5 s
-                // while the screen is on, every 10 s while it is off. Alerts do not
-                // wait for this; they are raised as packets arrive.
-                withTimeoutOrNull(if (screenOn) 1_500L else 10_000L) { publishKick.receive() }
+                // while the screen is on, every 10 s while it is off, and once a minute
+                // at most once the phone has settled. Alerts do not wait for this; they
+                // are raised as packets arrive. See [ScanPacing.publishWaitMs].
+                val idleNext = ScanPacing.idle(screenOn, still = motion.pace == MotionPolicy.Pace.STILL, inTrip = vehicleTrips.inTrip)
+                withTimeoutOrNull(ScanPacing.publishWaitMs(screenOn, idleNext)) { publishKick.receive() }
             }
         }
     }
@@ -1608,8 +1659,6 @@ class ScanService : LifecycleService() {
         private const val INTENSIVE_SWEEP_MS = 5 * 60_000L
         /** Allowance past the interrogator's own budget before its collector is cancelled. */
         private const val DULT_GRACE_MS = 5_000L
-        /** How long the controller may hold results while the screen is off. */
-        private const val SCREEN_OFF_BATCH_MS = 5_000L
         /** A Wi-Fi/cell fix this often once the phone has settled. */
         private const val SETTLED_FIX_MS = 3 * 60_000L
         /** A hardware sighting reuses its nearest-camera lookup for this long. */

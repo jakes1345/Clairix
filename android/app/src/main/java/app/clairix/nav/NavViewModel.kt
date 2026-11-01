@@ -225,6 +225,8 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
 
     private val fused = LocationServices.getFusedLocationProviderClient(app)
     private var locationActive = false
+    /** Whether the Drive screen is in front, as [setLocationActive] is told; the minute loop waits on it. */
+    private val screenResumed = MutableStateFlow(false)
 
     private var loadJob: Job? = null
     private var downloadJob: Job? = null
@@ -244,15 +246,23 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
             // A region chosen or downloaded meanwhile wins over the remembered one.
             if (pick != null && _graph.value == GraphState.None) load(pick.slug)
         }
-        // While not navigating, keep incidents on the map current; the navigator refreshes them itself while driving.
+        // While not navigating, keep incidents on the map current while the Drive screen is
+        // in front; in the background the loop waits for it to return instead of waking
+        // every minute. The navigator refreshes traffic itself while driving. See [DriveRefresh].
         viewModelScope.launch {
+            val awake = combine(navState, screenResumed) { st, resumed -> DriveRefresh.awake(st is NavState.Navigating, resumed) }
             while (isActive) {
+                awake.first { it }
                 val s = session.value
-                val navigating = navState.value is NavState.Navigating
-                val previewing = _options.value != null
-                if (s != null && !navigating && locationActive) s.traffic.refreshLive()
-                if (s != null && previewing && !navigating) s.traffic.refreshProviders(PROVIDER_PREVIEW_INTERVAL_MS)
-                if (s != null && (navigating || previewing)) s.workZones.refreshIfStale()
+                val plan = DriveRefresh.plan(
+                    hasSession = s != null, navigating = navState.value is NavState.Navigating,
+                    previewing = _options.value != null, resumed = screenResumed.value
+                )
+                if (s != null) {
+                    if (plan.live) s.traffic.refreshLive()
+                    if (plan.providers) s.traffic.refreshProviders(PROVIDER_PREVIEW_INTERVAL_MS)
+                    if (plan.workZones) s.workZones.refreshIfStale()
+                }
                 delay(IDLE_TRAFFIC_INTERVAL_MS)
             }
         }
@@ -459,9 +469,10 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Location updates for the map while the screen is visible. */
+    /** Location updates for the map while the screen is visible, and the minute loop's refreshes; see [DriveRefresh]. */
     @SuppressLint("MissingPermission") // checked just before
     fun setLocationActive(active: Boolean) {
+        screenResumed.value = active
         if (active == locationActive) return
         if (!active) {
             locationActive = false

@@ -75,6 +75,7 @@ import app.clairix.CatcherFinding
 import app.clairix.analysis.CardVault
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.NfcScanner
+import app.clairix.analysis.ScanPacing
 import app.clairix.analysis.ScanRecord
 import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.WifiScanner
@@ -632,8 +633,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Refreshes the scan and reads the connected network and what is in range for the WIFI tab. */
+    /**
+     * Refreshes the scan and reads the connected network and what is in range for the
+     * WIFI tab while the scanner is off. While it is on, the service asks for a scan
+     * every two minutes with the screen on and publishes what the tab shows; this must
+     * not ask Android for more of them.
+     */
     private fun refreshWifi() {
+        if (Registry.status.value.scanning) return
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 // The snapshot requests a scan and waits for its results itself.
@@ -1134,6 +1141,27 @@ private fun rememberNow(periodMs: Long = 1000L): Long {
         }
     }
     return now
+}
+
+/**
+ * Calls [refresh] at once and then every [periodMs] while the screen is started, and
+ * stops when the app goes to the background; a null period refreshes nothing. A plain
+ * LaunchedEffect loop outlived ON_STOP until its composition was disposed, so a tab
+ * left open kept reading the modem, the phone's settings or the Wi-Fi for nobody.
+ */
+@Composable
+private fun RefreshWhileStarted(periodMs: Long?, refresh: () -> Unit) {
+    val current by rememberUpdatedState(refresh)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(periodMs, lifecycle) {
+        if (periodMs == null) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                current()
+                delay(periodMs)
+            }
+        }
+    }
 }
 
 // ── Threat explainer target ─────────────────────────────────────────────────
@@ -2647,13 +2675,9 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
     val now = rememberNow(5_000L)
 
     // With the scanner off, the tab takes its own reading every 15 s while it is on
-    // screen; with it on, the service's judged readings arrive on the same cadence.
-    LaunchedEffect(status.scanning) {
-        while (true) {
-            onShown()
-            delay(15_000L)
-        }
-    }
+    // screen and in front; with it on, the service's judged readings arrive on the
+    // same cadence while the screen is on. See [ScanPacing.tabRefreshMs].
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.CELL, status.scanning), onShown)
 
     val radio = cell.radio
     val c = cell.cell
@@ -2684,7 +2708,8 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
                 item(key = "§no-indicators") {
                     Notice(
                         Tone.Safe,
-                        "Twelve checks run every 15 s against your baseline: forced 2G/3G downgrades, a tower in the " +
+                        "Twelve checks run against your baseline with every reading, every 15 s while the phone is in use " +
+                            "or moving and up to a minute apart while it rests: forced 2G/3G downgrades, a tower in the " +
                             "wrong area, area changes while you stand still, signal above the area's record, unknown " +
                             "cells in familiar places, towers that appear and vanish, rapid switching, no neighbours, " +
                             "a transmitter within 78 m, signal spikes and technology flip-flopping.",
@@ -3433,16 +3458,13 @@ private fun NfcTagRow(
 internal fun DeviceScreen(onShown: () -> Unit) {
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
-    // Live microphone and camera monitoring only runs inside the scanner service;
-    // the static findings are re-checked by the Activity whenever this tab appears,
-    // and every 30 s while it stays up so battery, USB and VPN rows stay current.
+    // Live microphone and camera monitoring only runs inside the scanner service. With
+    // the scanner off, the static findings are re-checked by the Activity whenever this
+    // tab appears and every 30 s while it stays in front, so battery, USB and VPN rows
+    // stay current; with it on, the service re-checks them every 30 s while the screen
+    // is on. See [ScanPacing.tabRefreshMs].
     val liveMonitoring = status.scanning
-    LaunchedEffect(Unit) {
-        while (true) {
-            onShown()
-            delay(30_000L)
-        }
-    }
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.DEVICE, status.scanning), onShown)
     val problems = health.problems
     val checked = health.facts.size
     val issues = health.findings.size + problems.size
@@ -3659,19 +3681,17 @@ private fun wifiReason(reason: String): String = when (reason) {
 internal fun WifiScreen(onShown: () -> Unit = {}) {
     val anomalies by Registry.wifi.collectAsStateWithLifecycle()
     val wifi by Registry.wifiStatus.collectAsStateWithLifecycle()
+    val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(5_000L)
     val sorted = remember(anomalies) {
         anomalies.sortedWith(compareByDescending<WifiAnomaly> { it.threat.ordinal }.thenByDescending { it.ts })
     }
 
-    // Android allows four scan requests per two minutes in the foreground; every
-    // 30 s uses that budget exactly while the screen is open.
-    LaunchedEffect(Unit) {
-        while (true) {
-            onShown()
-            delay(30_000L)
-        }
-    }
+    // While the scanner runs the tab shows the scanner's own results, from the scan it
+    // asks for every two minutes while the screen is on, and requests none itself. With
+    // the scanner off it asks for one a minute while it is in front: Android allows four
+    // in two minutes. See [ScanPacing.tabRefreshMs].
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.WIFI, status.scanning), onShown)
 
     val conn = wifi.connection
     val flagged = wifi.nearby.count { it.flags.isNotEmpty() }
@@ -3797,7 +3817,11 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
             if (wifi.nearby.isEmpty()) {
                 item(key = "§none-nearby") {
                     Text(
-                        "No scan results yet. Android hands out cached results first; a fresh scan has been asked for and the list fills in within a few seconds.",
+                        if (status.scanning) {
+                            "Nothing in range when the scanner last looked, ${fmtAgo(now, wifi.scannedTs)}. It looks again every two minutes while the screen is on."
+                        } else {
+                            "No scan results yet. Android hands out cached results first; a fresh scan has been asked for and the list fills in within a few seconds."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )

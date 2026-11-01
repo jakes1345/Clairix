@@ -3,6 +3,7 @@ package app.clairix.nav
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import app.clairix.BuildConfig
+import app.clairix.analysis.ScanPacing
 import java.io.File
 import org.osmdroid.config.Configuration as OsmConfig
 
@@ -53,15 +54,26 @@ object MapTiles {
      * Deletes tiles fetched before [cutoff]. A tile's row keeps when it expires,
      * which is when it was fetched plus the server's lifetime plus
      * [EXTRA_LIFETIME_MS]; one that expired before [cutoff] plus that week was
-     * fetched before [cutoff] at the latest. File I/O; off the main thread.
+     * fetched before [cutoff] at the latest. The oldest expiry is read first, from
+     * the index osmdroid keeps on it, and the delete runs only when that tile is
+     * past the cutoff; on most passes none is. File I/O; off the main thread.
      */
     fun prune(context: Context, cutoff: Long) {
         val db = File(File(base(context.applicationContext), "tiles"), "cache.db")
         if (!db.isFile) return
         runCatching {
             SQLiteDatabase.openDatabase(db.path, null, SQLiteDatabase.OPEN_READWRITE).use {
-                it.delete("tiles", "expires < ?", arrayOf((cutoff + EXTRA_LIFETIME_MS).toString()))
+                val oldest = it.rawQuery("SELECT MIN(expires) FROM tiles", null).use { c ->
+                    if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+                }
+                if (pruneDue(oldest, cutoff)) {
+                    it.delete("tiles", "expires < ?", arrayOf((cutoff + EXTRA_LIFETIME_MS).toString()))
+                }
             }
         }
     }
+
+    /** Whether a cache whose oldest tile expires at [oldestExpires] (null when it holds none) has any to delete for [cutoff]. */
+    internal fun pruneDue(oldestExpires: Long?, cutoff: Long): Boolean =
+        ScanPacing.holdsOlderThan(oldestExpires, cutoff + EXTRA_LIFETIME_MS)
 }
