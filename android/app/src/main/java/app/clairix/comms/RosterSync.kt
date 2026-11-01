@@ -39,6 +39,21 @@ object RosterSync {
      */
     fun confirmed(memberRv: Long, version: Long, seen: Long): Boolean = !stale(version, seen) || memberRv >= seen
 
+    /**
+     * [confirmed], for a phone that may have no admin to ask ([askable] false: this
+     * phone is the group's only admin, or the group has none left). Only an admin
+     * numbers a roster, so with nobody else who could have made a newer one, a newer
+     * number is a member's claim that no roster can ever settle: holding rows for it
+     * would hold an SOS for everyone except the member who made the claim, for the
+     * whole of its thirty minutes. Everyone the roster lists is then confirmed.
+     */
+    fun confirmed(memberRv: Long, version: Long, seen: Long, askable: Boolean): Boolean =
+        !askable || confirmed(memberRv, version, seen)
+
+    /** Whether [members] has an admin other than [me] to ask for a newer roster. */
+    fun askable(members: List<GroupMember>, me: String?): Boolean =
+        members.any { it.role == OrgRole.ADMIN && it.number != me }
+
     /** The number an admin gives the change it makes now: past everything it has heard of, so it is newer for everyone. */
     fun next(version: Long, seen: Long): Long = maxOf(version, seen) + 1
 

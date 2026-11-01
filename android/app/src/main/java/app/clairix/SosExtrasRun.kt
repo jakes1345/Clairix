@@ -61,15 +61,19 @@ import kotlinx.coroutines.withContext
 internal object SosExtrasRun {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val _text = MutableStateFlow<SosExtras.TextOutcome?>(null)
+    private val textSlot = SosOutcomeSlot<SosExtras.TextOutcome>()
     private val _call = MutableStateFlow<SosExtras.CallOutcome?>(null)
 
-    val text: StateFlow<SosExtras.TextOutcome?> = _text.asStateFlow()
+    val text: StateFlow<SosExtras.TextOutcome?> = textSlot.value
     val call: StateFlow<SosExtras.CallOutcome?> = _call.asStateFlow()
 
-    /** Forgets the last SOS's outcomes; called as a new SOS sheet opens. */
+    /**
+     * Forgets the last SOS's outcomes; called as a new SOS sheet opens. A text the last
+     * SOS is still finding a position for or sending carries on, but what it comes to is
+     * no longer this sheet's to say, and it does not stop this SOS's text from going.
+     */
     fun reset() {
-        _text.value = null
+        textSlot.reset()
         _call.value = null
     }
 
@@ -80,17 +84,17 @@ internal object SosExtrasRun {
      * under way, or after it went, does nothing.
      */
     fun sendText(context: Context, number: String) {
-        if (_text.value != null) return
+        val ticket = textSlot.claim(SosExtras.TextOutcome.Finding(number)) ?: return
         val app = context.applicationContext
-        _text.value = SosExtras.TextOutcome.Finding(number)
         scope.launch {
             val lookup = withContext(Dispatchers.IO) { SosLocation.locate(app) }
             val at = (lookup as? SosLocation.Lookup.Found)?.at
             val body = SosExtras.smsBody(at)
-            _text.value = when (SosExtras.route(DirectSms.available, DirectSms.permitted(app))) {
+            val outcome = when (SosExtras.route(DirectSms.available, DirectSms.permitted(app))) {
                 SosExtras.TextRoute.DIRECT -> withContext(Dispatchers.IO) { DirectSms.send(app, number, body, at != null) }
                 SosExtras.TextRoute.COMPOSER -> compose(app, number, body, at != null)
             }
+            textSlot.post(ticket, outcome)
         }
     }
 
@@ -294,5 +298,39 @@ internal fun SosExtrasSettingsCard(modifier: Modifier = Modifier) {
                 SosExtras.setCall(context, v)
             }
         )
+    }
+}
+
+/**
+ * One SOS's text outcome. A new SOS sheet [reset]s it; work started for an earlier SOS
+ * holds the ticket [claim] gave it, and what it [post]s once that SOS is gone is dropped,
+ * so it can neither be shown as this SOS's text nor keep this SOS's text from going.
+ */
+internal class SosOutcomeSlot<T : Any> {
+    private val _value = MutableStateFlow<T?>(null)
+    private var generation = 0L
+
+    val value: StateFlow<T?> = _value.asStateFlow()
+
+    @Synchronized
+    fun reset() {
+        generation++
+        _value.value = null
+    }
+
+    /** Takes the slot with [start] when this SOS has nothing in it yet: the ticket to [post] with, or null. */
+    @Synchronized
+    fun claim(start: T): Long? {
+        if (_value.value != null) return null
+        _value.value = start
+        return generation
+    }
+
+    /** Puts [outcome] in the slot when [ticket] is still this SOS's; false (and nothing changes) when a newer SOS reset it. */
+    @Synchronized
+    fun post(ticket: Long, outcome: T): Boolean {
+        if (ticket != generation) return false
+        _value.value = outcome
+        return true
     }
 }

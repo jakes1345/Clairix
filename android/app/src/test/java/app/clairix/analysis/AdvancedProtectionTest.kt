@@ -39,6 +39,16 @@ class AdvancedProtectionTest {
     }
 
     @Test
+    fun bothAnswersSayASideloadedClairixCannotBeUpdatedWhileTheModeIsOn() {
+        for (on in listOf(true, false)) {
+            val detail = AdvancedProtection.fact(State.Answered(on)).detail!!
+            assertTrue(detail, detail.contains(AdvancedProtection.SIDELOAD))
+            // Memory tagging is hardware the phone may not have: never claimed outright.
+            assertTrue(detail, !detail.contains("memory tagging is on"))
+        }
+    }
+
+    @Test
     fun anAndroid16PhoneWithoutTheModeSaysSo() {
         // The SDK these tests run against has no AdvancedProtectionManager, like an Android 16 build
         // whose maker left the mode out.

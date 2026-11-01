@@ -696,7 +696,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             // ── SOS ──────────────────────────────────────────────────────────
             //
             // The SOS sheet's optional text and emergency call, in both editions
-            // (SosExtrasUi.kt). Both off until turned on.
+            // (SosExtrasRun.kt). Both off until turned on.
             item(key = "§sos-hdr") { SectionHeader("SOS") }
             item(key = "§sos") { SosExtrasSettingsCard() }
 

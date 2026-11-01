@@ -2991,11 +2991,13 @@ object CommsRepository {
         val blocked = store.blockedKeys()
         val g = ctx.group
         var skipped = 0
+        // With no admin to ask for a newer roster, a newer number can never be settled: nobody is held for it.
+        val askable = RosterSync.askable(ctx.members, ctx.me)
         val rows = ArrayList<GroupOutbox.Row>(members.size)
         for (m in members) {
             val contact = groupRecipient(m.number, m.ed25519)
             val knownAs = contact != null && isGroupMember(contact, m.ed25519)
-            val confirmed = RosterSync.confirmed(m.rv, g.rosterVersion, g.rosterSeen)
+            val confirmed = RosterSync.confirmed(m.rv, g.rosterVersion, g.rosterSeen, askable)
             val status = when (val plan = GroupOutbox.plan(m, ctx.me, contact, knownAs, blocked, confirmed)) {
                 GroupOutbox.Plan.Skip -> {
                     if (m.number != ctx.me) skipped++
@@ -3204,7 +3206,8 @@ object CommsRepository {
             }
             val group = store.group(r.gid)
             val member = if (group != null) store.groupMember(r.gid, r.recipient) else null
-            val confirmed = group != null && member != null && RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen)
+            val confirmed = group != null && member != null &&
+                RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen, RosterSync.askable(store.groupMembers(r.gid), config.number))
             val next = GroupOutbox.release(r, member, confirmed)
             when {
                 next == null -> dropRow(r, Dropped.REMOVED)
@@ -3258,7 +3261,7 @@ object CommsRepository {
             val member = store.groupMember(row.gid, row.recipient) ?: return Tried.Drop(Dropped.REMOVED)
             if (row.recipientEd.isNotBlank() && member.ed25519.isNotBlank() && member.ed25519 != row.recipientEd) return Tried.Drop(Dropped.REMOVED)
             if (GroupOutbox.blockedRecipient(member.number, member.ed25519, blocked)) return Tried.Drop(Dropped.BLOCKED)
-            if (!RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen)) {
+            if (!RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen, RosterSync.askable(store.groupMembers(row.gid), config.number))) {
                 askForRoster(group, urgent = row.kind == GroupOutbox.Kind.SOS, quiet = quiet)
                 return Tried.Done(GroupOutbox.Outcome.Hold)
             }

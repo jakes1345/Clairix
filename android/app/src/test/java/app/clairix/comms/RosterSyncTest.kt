@@ -120,4 +120,50 @@ class RosterSyncTest {
         val next = members.values.map { GroupOutbox.plan(it, b, contact(it), true, emptyList(), RosterSync.confirmed(it.rv, version, seen)) }
         assertEquals(listOf(Plan.Queue(false), Plan.Skip, Plan.Queue(false)), next)
     }
+
+    /**
+     * The owner made the group and is its only admin. Member M sends a group
+     * message numbered far past any roster. With no other admin, no newer roster
+     * can exist and nobody can answer the request for one: the owner's SOS must
+     * still go to everyone, not to M alone.
+     */
+    @Test
+    fun aMembersNumberNoAdminCanSettleHoldsNobodyBack() {
+        val me = "100000001"
+        var version = 2L
+        var seen = 2L
+        val members = linkedMapOf(
+            me to GroupMember("g", me, "Me", OrgRole.ADMIN, "ed-me", me, 0L, rv = 2L),
+            "200000002" to GroupMember("g", "200000002", "Helper", OrgRole.MEMBER, "ed-h", me, 0L, rv = 2L),
+            "300000003" to GroupMember("g", "300000003", "M", OrgRole.MEMBER, "ed-m", me, 0L, rv = 2L)
+        )
+        RosterSync.heard(version, seen, 1_000_000L).let { (v, s) -> version = v; seen = s }
+        members["300000003"] = members.getValue("300000003").copy(rv = 1_000_000L)
+        assertTrue(RosterSync.stale(version, seen))
+
+        val askable = RosterSync.askable(members.values.toList(), me)
+        assertFalse("this phone is the only admin", askable)
+        val helper = members.getValue("200000002")
+        assertFalse("the plain rule would hold the helper", RosterSync.confirmed(helper.rv, version, seen))
+        assertTrue(RosterSync.confirmed(helper.rv, version, seen, askable))
+        val plan = GroupOutbox.plan(helper, me, null, knownAs = false, blocked = emptyList(), confirmed = RosterSync.confirmed(helper.rv, version, seen, askable))
+        assertEquals("planned on reachability alone, not held", Plan.Fail(GroupOutbox.NOT_A_CONTACT), plan)
+
+        // A group whose only admin left: nobody to ask either.
+        val noAdmin = members.values.map { it.copy(role = OrgRole.MEMBER) }
+        assertFalse(RosterSync.askable(noAdmin, "200000002"))
+    }
+
+    @Test
+    fun withAnotherAdminToAskTheRosterRuleStands() {
+        val members = listOf(
+            GroupMember("g", "100000001", "A", OrgRole.ADMIN, "ed-a", "100000001", 0L),
+            GroupMember("g", "200000002", "B", OrgRole.MEMBER, "ed-b", "100000001", 0L)
+        )
+        assertTrue(RosterSync.askable(members, "200000002"))
+        assertFalse(RosterSync.confirmed(3L, 3L, 4L, askable = true))
+        assertTrue(RosterSync.confirmed(4L, 3L, 4L, askable = true))
+        // An admin with no other admin is nobody's answer but its own.
+        assertFalse(RosterSync.askable(members, "100000001"))
+    }
 }

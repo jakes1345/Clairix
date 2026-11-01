@@ -76,12 +76,14 @@ internal object AdvancedProtection {
         )
         is State.Answered -> if (state.on) HealthFact(
             ID, CATEGORY, LABEL, "On",
-            detail = "Sideloading, 2G, insecure Wi-Fi and USB data while locked are all blocked by the platform, and memory tagging is on."
+            detail = "The platform blocks apps installed from outside an app store and 2G connections, and turns on the " +
+                "rest of its hardened profile as far as this phone supports it (insecure Wi-Fi, USB data while " +
+                "locked, memory tagging). $SIDELOAD"
         ) else HealthFact(
             ID, CATEGORY, LABEL, "OFF", Severity.HIGH,
             "Android 16's one-switch hardened mode is off. Turning it on blocks sideloaded apps, 2G connections " +
-                "(the IMSI-catcher downgrade path), insecure Wi-Fi, USB data while the phone is locked, and enables " +
-                "memory tagging against exploits. $WHERE.",
+                "(the IMSI-catcher downgrade path), insecure Wi-Fi and, on phones that support them, USB data while " +
+                "the phone is locked and memory tagging against exploits. $SIDELOAD $WHERE.",
             fixAction = Settings.ACTION_SECURITY_SETTINGS
         )
         is State.NoAnswer -> HealthFact(
@@ -94,4 +96,12 @@ internal object AdvancedProtection {
     private const val CATEGORY = "Protection"
     private const val LABEL = "Advanced Protection"
     private const val WHERE = "Settings → Security & privacy → Advanced Protection"
+
+    /**
+     * What the mode does to an app installed from a file, said wherever it is suggested: Clairix Full
+     * is such an app, and the owner should know before turning the mode on that its next update waits
+     * until the mode is off again.
+     */
+    internal const val SIDELOAD = "While it is on, an app installed from a file rather than an app store " +
+        "(Clairix too, unless it came from Google Play) cannot be installed or updated: turn it off for the update."
 }
