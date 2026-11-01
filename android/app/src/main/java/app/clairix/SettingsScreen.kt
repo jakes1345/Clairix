@@ -208,7 +208,8 @@ object AppSettings {
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}, onGetHelp: () -> Unit = {}) {
     val context = LocalContext.current
-    val trusted by Registry.trusted.collectAsStateWithLifecycle()
+    // One row per device the owner marked, whatever addresses the scanner has linked to it.
+    val trusted by Registry.trustBook.collectAsStateWithLifecycle()
 
     var aggressiveScan by remember { mutableStateOf(AppSettings.aggressiveScan) }
     var infrastructureAlerts by remember { mutableStateOf(AppSettings.infrastructureAlerts) }
@@ -567,9 +568,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
                 // ── Trusted devices ──────────────────────────────────────────────
                 item(key = "§trusted-hdr") {
-                    SectionHeader("Trusted devices", supporting = if (trusted.isEmpty()) null else "${trusted.size}")
+                    SectionHeader("Trusted devices", supporting = if (trusted.devices.isEmpty()) null else "${trusted.devices.size}")
                 }
-                if (trusted.isEmpty()) {
+                if (trusted.devices.isEmpty()) {
                     item(key = "§trusted-empty") {
                         EmptyState(
                             title = "No trusted devices yet",
@@ -580,14 +581,27 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                 } else {
                     item(key = "§trusted") {
                         ListGroup {
-                            trusted.sorted().forEachIndexed { i, addr ->
+                            trusted.devices.sortedBy { it.addresses.first() }.forEachIndexed { i, device ->
                                 if (i > 0) Hairline()
                                 Row(
-                                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp),
+                                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(addr, style = MaterialTheme.typography.mono, color = c.textMuted, modifier = Modifier.weight(1f))
-                                    GhostButton("Remove", onClick = { Registry.untrust(addr) }, tone = Tone.Danger)
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        device.label?.let { Text(it, style = MaterialTheme.typography.titleSmall, color = c.text) }
+                                        Text(device.addresses.joinToString("\n"), style = MaterialTheme.typography.mono, color = c.textMuted)
+                                        // A device that changes its address is trusted a day at a time.
+                                        if (device.until != 0L) {
+                                            Text(
+                                                "Changes its address; trusted until " +
+                                                    java.text.SimpleDateFormat("MMM d HH:mm", java.util.Locale.US).format(java.util.Date(device.until)) +
+                                                    ", then Clairix asks again",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = c.textSubtle
+                                            )
+                                        }
+                                    }
+                                    GhostButton("Remove", onClick = { Registry.untrust(device.addresses.first()) }, tone = Tone.Danger)
                                 }
                             }
                         }

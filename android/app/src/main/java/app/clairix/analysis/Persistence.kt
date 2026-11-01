@@ -7,6 +7,7 @@ import app.clairix.Threat
 import app.clairix.TrackerType
 import app.clairix.detect.BleNames
 import app.clairix.detect.DultResult
+import app.clairix.detect.Signatures
 import kotlin.math.max
 import kotlin.math.min
 
@@ -33,13 +34,17 @@ const val FOLLOWING_RETENTION_MS = 7 * 24 * 3600_000L
 private const val MAX_SERVICES = 8
 
 /**
- * Suffix of the ids of the "owner nearby" readings of a Find My tracker
- * ([app.clairix.detect.Signatures.AIRTAG_NEAR_OWNER] and its Find My sibling).
+ * A device the owner marked found that then goes unheard for longer than this, and
+ * is heard again, is watched afresh — see [Tracker.observe].
  */
-private const val NEAR_OWNER_SUFFIX = "_near"
+const val REARM_AFTER_MS = 60 * 60_000L
 
-/** Whether this reading is of a tracker still within range of its owner's phone. */
-private val TrackerType.nearOwner: Boolean get() = id.endsWith(NEAR_OWNER_SUFFIX)
+/**
+ * Whether this reading is of a tracker still within range of its owner's phone, or
+ * not yet known to have left it: the Find My "owner nearby" readings and Find Hub's
+ * ordinary frame ([Signatures.withOwner]).
+ */
+private val TrackerType.nearOwner: Boolean get() = Signatures.withOwner(this)
 
 /**
  * The classification an entry should hold given what it held and what a packet
@@ -135,6 +140,12 @@ class Tracker(
         var lastHeardAt: LatLon? = null
         /** The tracker's own account of itself over DULT, once it has been asked. */
         var dult: DultResult? = null
+        /**
+         * When the owner marked this device found ([resolve]), or 0. A found device
+         * raises nothing while it is resolved; heard again after [REARM_AFTER_MS] of
+         * silence it starts over ([observe]).
+         */
+        var resolvedAt = 0L
 
         /**
          * Folds [other] into this entry when two keys turn out to be one device. The
@@ -161,7 +172,9 @@ class Tracker(
          * exception: when the stitch is uncertain and indistinguishable, the address
          * now on the row is not necessarily the device that earned it, and carrying
          * the verdict over would send the locator after the wrong physical tracker.
-         * The row then keeps only what the newer address earned for itself.
+         * The row then keeps only what the newer address earned for itself. The
+         * owner's "I found it" ([resolvedAt]) follows the same rule: a found tag's
+         * next address is still the found tag, another unit of its product is not.
          */
         fun absorb(other: Entry, certain: Boolean, indistinguishable: Boolean) {
             if (address.isEmpty()) address = other.address
@@ -193,6 +206,7 @@ class Tracker(
             rotations = rotations + other.rotations + 1
             addresses = addresses + other.addresses
             var inherited = earliest(confirmedAt, other.confirmedAt)
+            var found = max(resolvedAt, other.resolvedAt)
             if (certain) {
                 firstSeen = if (firstSeen == 0L) other.firstSeen else min(firstSeen, other.firstSeen)
                 sightings += other.sightings
@@ -203,6 +217,9 @@ class Tracker(
             } else {
                 // Restart the presence clock at the later of the two starts.
                 val newer = if (other.firstSeen != 0L && (firstSeen == 0L || other.firstSeen >= firstSeen)) other else this
+                // Read before the newer side's figures are copied over this entry's.
+                val newerConfirmed = newer.confirmedAt
+                val newerFound = newer.resolvedAt
                 if (newer === other) {
                     firstSeen = other.firstSeen
                     sightings = other.sightings
@@ -211,9 +228,13 @@ class Tracker(
                     score = other.score
                     area.replaceWith(other.area)
                 }
-                if (indistinguishable) inherited = newer.confirmedAt
+                if (indistinguishable) {
+                    inherited = newerConfirmed
+                    found = newerFound
+                }
             }
             confirmedAt = inherited
+            resolvedAt = found
             if (confirmedAt != 0L) following = true
             lastSeen = max(lastSeen, other.lastSeen)
             name = BleNames.displayName(advertisedName, tracker, manufacturer, address)
@@ -256,6 +277,22 @@ class Tracker(
     ): Observation {
         val entry = entries.getOrPut(key) {
             Entry(key).apply { firstSeen = now }
+        }
+
+        // Marked found, unheard for over an hour, and now heard again: it is back on
+        // you, or it is somewhere new, and either way it starts over. Its presence
+        // clock, its places and its verdict restart, so it is raised again only if it
+        // travels with you again, while a found tag kept within earshot (heard all
+        // along) stays found.
+        if (entry.resolvedAt != 0L && entry.lastSeen != 0L && now - entry.lastSeen > REARM_AFTER_MS) {
+            entry.resolvedAt = 0L
+            entry.firstSeen = now
+            entry.sightings = 0
+            entry.area.clear()
+            entry.confirmedAt = 0L
+            entry.following = false
+            entry.persistent = false
+            entry.criticalReported = false
         }
 
         val wasFollowing = entry.following
@@ -328,11 +365,13 @@ class Tracker(
 
         val threat = threatOf(entry)
         val criticalFollower = entry.following && threat == Threat.CRITICAL
-        val escalated = wasFollowing && criticalFollower && !entry.criticalReported
-        if (criticalFollower) entry.criticalReported = true
+        // A device the owner has found raises nothing until it starts over (above).
+        val resolved = entry.resolvedAt != 0L
+        val escalated = wasFollowing && criticalFollower && !entry.criticalReported && !resolved
+        if (criticalFollower && !resolved) entry.criticalReported = true
         return Observation(
             detection = detectionOf(entry, threat),
-            becameFollowing = entry.following && !wasFollowing,
+            becameFollowing = entry.following && !wasFollowing && !resolved,
             escalated = escalated
         )
     }
@@ -392,23 +431,42 @@ class Tracker(
         radio = entry.radio,
         addressKind = entry.addressKind,
         dult = entry.dult,
-        separatedAt = entry.separatedAt
+        separatedAt = entry.separatedAt,
+        resolvedAt = entry.resolvedAt
     )
 
     /**
      * Attaches what a tracker said over DULT to its row. Partial results arrive as
      * the exchange proceeds; a later one always replaces an earlier one, except that
-     * a final "refused" must not erase answers already received.
+     * a later exchange that is refused must not erase answers already received: the
+     * row keeps what the tracker said and takes the new exchange's outcome and times.
      */
     @Synchronized
     fun attachDult(key: String, result: DultResult) {
         val entry = entries[key] ?: return
         val current = entry.dult
         if (current != null && current.answered && !result.answered) {
-            entry.dult = current.copy(complete = result.complete, error = result.error)
+            entry.dult = current.copy(
+                complete = result.complete, error = result.error, refused = result.refused,
+                askedAt = result.askedAt, attempt = result.attempt, retryAt = result.retryAt
+            )
             return
         }
         entry.dult = result
+    }
+
+    /**
+     * The owner found [key] and dealt with it ([found]), or takes that back. A found
+     * device stays on the list, the timeline and the report, marked found, but no
+     * longer counts as on you and raises nothing; heard again after [REARM_AFTER_MS]
+     * of silence it is watched afresh. Returns the device as it now stands, or null
+     * when nothing is recorded under [key].
+     */
+    @Synchronized
+    fun resolve(key: String, found: Boolean, now: Long): Detection? {
+        val entry = entries[key] ?: return null
+        entry.resolvedAt = if (found) now else 0L
+        return detectionOf(entry, threatOf(entry))
     }
 
     /**

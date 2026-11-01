@@ -266,9 +266,12 @@ exists for, which is the unbranded box wired into a wheel well.
 
 So it runs both. Screen on, the scan is unfiltered and anything advertising at all
 can be discovered, including hardware with no known signature. Screen off, it falls
-back to filters covering the known tracker manufacturers and service UUIDs, which is
-what keeps it running at all. A device first seen while the screen was on stays
-tracked either way.
+back to filters covering the known tracker manufacturers, Find My and iBeacon frames
+and service UUIDs, which is what keeps it running at all, plus an address filter for
+each device already under watch that those would miss (up to sixteen: confirmed
+following, keeping a persistence pattern, or a GPS module recognised by its name),
+re-registered at most once a minute as that set changes. A device under watch keeps
+a filter of its own with the screen off for as long as it keeps its address.
 
 The practical consequence: leave the screen on for a minute or two when you first
 start a sweep, so unknown hardware gets a chance to be discovered.
@@ -276,11 +279,14 @@ start a sweep, so unknown hardware gets a chance to be discovered.
 ## What it detects
 
 AirTag, Apple Find My items, Tile, Samsung SmartTag and SmartTag2, Chipolo,
-Pebblebee, Orbit/KeySmart, Nut, Eddystone beacons, and standalone GPS trackers
-that advertise a Bluetooth configuration interface.
+Pebblebee, Google Find Hub tags, trackers announcing themselves under DULT,
+Orbit/KeySmart, Nut, Invoxia, Eddystone beacons, tags in Apple's iBeacon format,
+and standalone GPS trackers that advertise a Bluetooth configuration interface.
 
-AirPods, iBeacons, Apple Handoff and Microsoft devices are filtered out, because
-otherwise every coffee shop sets off an alert.
+AirPods, Apple Handoff and Microsoft devices are filtered out, because otherwise
+every coffee shop sets off an alert. iBeacons are not: a shop's beacon stays on its
+wall and the follow check leaves it alone, while an anti-lost tag in the same format
+never changes its address and is exactly what the follow check catches.
 
 ## What it cannot detect
 

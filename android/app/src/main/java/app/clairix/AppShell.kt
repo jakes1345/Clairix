@@ -205,8 +205,9 @@ internal fun trackerStatus(
     /** An app is supplying the phone's positions ([app.clairix.analysis.PositionState.faking]). */
     faking: Boolean = false
 ): CategoryStatus {
-    val following = detections.count { it.following && it.address !in trusted && it.threat == Threat.CRITICAL }
-    val travelling = detections.count { it.following && it.address !in trusted && it.threat != Threat.CRITICAL }
+    // Marked as the owner's, or found and dealt with: neither is following anyone.
+    val following = detections.count { FollowerStatus.withYou(it) && it.address !in trusted && it.threat == Threat.CRITICAL }
+    val travelling = detections.count { FollowerStatus.withYou(it) && it.address !in trusted && it.threat != Threat.CRITICAL }
     return when {
         following > 0 -> CategoryStatus("${count(following, "tracker")} following you", StatusTone.ALERT)
         travelling > 0 -> CategoryStatus("${count(travelling, "device")} travelling with you", StatusTone.CAUTION)

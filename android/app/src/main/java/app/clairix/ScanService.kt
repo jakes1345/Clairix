@@ -26,6 +26,7 @@ import android.hardware.TriggerEvent
 import android.hardware.TriggerEventListener
 import android.location.Location
 import android.location.LocationManager
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
@@ -57,14 +58,19 @@ import app.clairix.analysis.ScanRecord
 import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.StalkwareWatch
 import app.clairix.analysis.TlsCanary
+import app.clairix.analysis.TrustedIdentities
 import app.clairix.analysis.WifiScanner
 import app.clairix.analysis.haversine
 import app.clairix.analysis.toFix
+import app.clairix.detect.Advert
 import app.clairix.detect.BleCanary
 import app.clairix.detect.BleNames
 import app.clairix.detect.CadenceFingerprinter
 import app.clairix.detect.DultInterrogator
+import app.clairix.detect.DultResult
+import app.clairix.detect.DultSchedule
 import app.clairix.detect.KarmaCanary
+import app.clairix.detect.ScreenOffWatch
 import app.clairix.detect.Signatures
 import app.clairix.detect.SurveillanceHardware
 import app.clairix.detect.VehicleTrips
@@ -112,10 +118,17 @@ class ScanService : LifecycleService() {
     /** When history older than the owner's retention was last deleted; see [HistoryRetention] and [ScanPacing.retentionDue]. */
     private var lastRetentionAt = 0L
 
-    /** Logical devices already asked over DULT — one exchange each, answered or refused. */
-    private val dultAsked = HashSet<String>()
+    /** When each logical device is asked over DULT: on qualifying, on separating, every 15 min, on request. */
+    private val dultSchedule = DultSchedule()
     /** One GATT exchange at a time; the stack handles parallel connections badly. */
     private val dultGate = Mutex()
+
+    /** The logical devices behind the owner's trusted addresses, this run; see [TrustedIdentities]. */
+    private val trustedIdentities = TrustedIdentities()
+
+    /** The addresses the screen-off scan was last registered with a filter for, and when; see [ScreenOffWatch]. */
+    @Volatile private var watchedFilterAddresses: Set<String> = emptySet()
+    @Volatile private var watchedFilterAt = 0L
 
     /** Wall time until which the scan runs at low latency: the first minutes of a drive. */
     @Volatile
@@ -381,10 +394,11 @@ class ScanService : LifecycleService() {
                     val address = BleNames.formatMac(raw)
                     Registry.setBluetoothConnected(address, connected)
                     // A connection made mid-drive rides along too; the name is read off the
-                    // bonded record, which needs the Nearby devices permission.
+                    // bonded record, which needs the Nearby devices permission. A car kit
+                    // shows the journey is in the owner's car.
                     if (connected && vehicleTrips.inTrip && granted(Manifest.permission.BLUETOOTH_CONNECT)) {
                         BluetoothExposure.accessory(this@ScanService, device, setOf(address))
-                            ?.let { vehicleTrips.noteAccessory(it.address, it.name) }
+                            ?.let { vehicleTrips.noteAccessory(it.address, it.name, car = it.car) }
                     }
                 }
             }
@@ -475,6 +489,16 @@ class ScanService : LifecycleService() {
                 // them straight back out on the next flush.
                 clearAllData()
                 if (!running) { stopSelf(); return START_NOT_STICKY }
+                return START_STICKY
+            }
+            // The tracker lives in this service, so the screens' actions on one device
+            // come here. With no scan running there is no tracker to act on, and the
+            // request must not start one.
+            ACTION_RESOLVE, ACTION_DULT_ASK -> {
+                if (!running) { stopSelf(); return START_NOT_STICKY }
+                val key = intent.getStringExtra(EXTRA_KEY) ?: return START_STICKY
+                if (intent.action == ACTION_RESOLVE) markFound(key, intent.getBooleanExtra(EXTRA_FOUND, true))
+                else intent.getStringExtra(EXTRA_ADDRESS)?.let { askDult(key, it) }
                 return START_STICKY
             }
         }
@@ -628,8 +652,9 @@ class ScanService : LifecycleService() {
         // hardwired GPS/LTE box that advertises nothing anyone has catalogued —
         // scanning only for Apple, Samsung and Tile made the headline case
         // undetectable. So: no filters while the screen is on, which is when unknown
-        // devices can be discovered, and the known-tracker filters while it is off,
-        // which is when the scan would otherwise stop entirely.
+        // devices can be discovered, and while it is off, when the scan would otherwise
+        // stop entirely, the known-tracker filters plus one for each device already
+        // under watch that they would miss ([ScreenOffWatch]).
         val filters = if (screenOn) emptyList() else buildScanFilters()
         try {
             scanner?.startScan(filters, settings, scanCallback)
@@ -844,6 +869,8 @@ class ScanService : LifecycleService() {
                 // window, or the same device comes back as a stranger and the original
                 // row is orphaned as a permanent "following" ghost.
                 identities.prune(now, keep = tracker.followingKeys())
+                // Trust in a device that rotates its address lasts a day; then it is asked about again.
+                Registry.expireTrust(now)
                 val trusted = Registry.trusted.value
                 // Idle, the list and the map are rebuilt only when a packet was handled or
                 // a device aged out since the last publish: nothing else changes them, and
@@ -874,8 +901,11 @@ class ScanService : LifecycleService() {
                     // then re-ran the map's overlay effect and invalidated the MapView, and
                     // every redraw re-requests any expired tile from the tile server.
                     // With a stable order the StateFlow drops publishes that change nothing.
+                    // A device the owner marked as theirs, or as found, is no longer drawn
+                    // (or counted on the map's banner) as moving with them.
                     val deviceTrails = list.filter { it.points.isNotEmpty() }.map {
-                        DeviceTrail(it.key, it.name, it.threat, it.following, it.points, it.lastHeardAt)
+                        val withYou = it.following && !it.resolved && it.address !in trusted
+                        DeviceTrail(it.key, it.name, it.threat, withYou, it.points, it.lastHeardAt)
                     }.sortedBy { it.key }
                     val cellNow = Registry.cell.value
                     val cellMarkers = if (cellNow.level.ordinal >= Threat.MEDIUM.ordinal && cellNow.cell != null) {
@@ -886,6 +916,8 @@ class ScanService : LifecycleService() {
                         ) else emptyList()
                     } else emptyList()
                     Registry.publishMap(MapData(trail, deviceTrails, cellMarkers))
+                    // Screen off: a device that has become worth watching gets a filter of its own.
+                    if (!screenOn) refreshWatchedFilters(all, trusted, now)
                 } else {
                     // Unchanged since it was published; the correlation check below reads it.
                     list = Registry.detections.value
@@ -1021,12 +1053,13 @@ class ScanService : LifecycleService() {
         // stream; neither needs a scan of its own.
         Registry.publishScan(result)
         val record = result.scanRecord
-        // Our own fake AirTag: the canary has just been told; it must not become a
-        // detection or get interrogated.
+        // Our own fake AirTag: the canary has just been told (and runs the record through
+        // the tracker signatures itself); it must not become a detection or get interrogated.
         if (BleCanary.isCanary(record)) return
-        if (Signatures.isBenign(record)) return
+        // Read off the record once, for the benign check here and the signatures below.
+        val advert = record?.let { Advert.of(it) }
+        if (advert != null && Signatures.isBenign(advert)) return
 
-        // Skip devices the user has explicitly marked as their own.
         val now = System.currentTimeMillis()
         val device = result.device
         val address = device.address?.let { BleNames.formatMac(it) } ?: return
@@ -1035,7 +1068,6 @@ class ScanService : LifecycleService() {
         // it "mine" makes no sense) and without leaving the tracker pipeline: a camera
         // on a trailer that keeps turning up is still a device following the car.
         SurveillanceHardware.match(record, device, address)?.let { onInfrastructure(it, address, result.rssi, now) }
-        if (Registry.trusted.value.contains(address)) return
         val fingerprint = Fingerprint.of(record)
         val resolution = identities.resolve(address, result.rssi, fingerprint, now)
         // The identity resolver links a rotation when the payload matches. When it does
@@ -1055,7 +1087,17 @@ class ScanService : LifecycleService() {
             resolution.identity.id
         }
         cadence.supersededKey(address)?.let { tracker.merge(it, key, certain, indistinguishable) }
-        val tracked = Signatures.match(record)
+        // Skip the owner's own devices: by the address they marked, or by the logical
+        // device it belongs to, so an address change the scanner links stays theirs.
+        // Checked after the resolvers on purpose: a trusted device's packets keep its
+        // identity and cadence current, which is what links its next address to it.
+        val trust = trustedIdentities.check(key, address, Registry.trusted.value)
+        if (trust.trusted) {
+            val known = trust.knownAddress
+            trust.learned?.let { if (known != null) Registry.extendTrust(it, known) }
+            return
+        }
+        val tracked = advert?.let { Signatures.match(it) }
         val txPower = record?.txPowerLevel?.takeIf { it != Int.MIN_VALUE }
 
         // Identification is display-only and resolved here, once per packet, from the
@@ -1116,7 +1158,8 @@ class ScanService : LifecycleService() {
 
         val detection = observation.detection
         if (vehicleTrips.inTrip) {
-            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now)
+            // Drive mode on is one of the signs the journey is in the owner's car.
+            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now, driveMode = DriveService.active)
                 ?.let(::publishVehicleFinding)
         }
         maybeInterrogate(key, device, detection)
@@ -1195,29 +1238,111 @@ class ScanService : LifecycleService() {
     }
 
     /**
-     * Asks a tracker who it is over DULT, once per logical device, the first time it is
-     * recognised as a type whose maker ships the protocol or is confirmed as following.
-     * Runs on the service scope, never on the scan callback; the exchange has its own
-     * budget and the collector a slightly longer one in case the stack never answers.
-     * Making the tracker sound is left to the user — [DultInterrogator.sound].
+     * Asks a tracker who it is over DULT when [DultSchedule] says so: once it qualifies
+     * (a type whose maker ships the protocol that has stayed around, or anything
+     * confirmed following), again as soon as it separates from its owner, and every
+     * fifteen minutes while it still qualifies and has not answered, six times at
+     * most. Making the tracker sound is left to the user — [DultInterrogator.sound].
      */
     private fun maybeInterrogate(key: String, device: BluetoothDevice, detection: Detection) {
-        val known = detection.tracker?.id?.let { it in DultInterrogator.SUPPORTED } == true
-        // A tag that has stayed around, not every one passing in the street: each
-        // exchange is a Bluetooth connection, and a busy pavement is dozens an hour.
-        if (!(known && detection.persistent) && !detection.following) return
-        synchronized(dultAsked) { if (key in dultAsked) return }
+        val qualifies = DultSchedule.qualifies(detection)
+        // Every packet passes here: nothing to decide for a device that neither
+        // qualifies nor has separated.
+        if (!qualifies && detection.separatedAt == 0L) return
+        val claim = dultSchedule.claim(key, qualifies, detection.separatedAt, System.currentTimeMillis()) ?: return
+        if (!canAskDult()) {
+            dultSchedule.abandoned(key)
+            return
+        }
+        interrogate(key, device, claim)
+    }
+
+    /** Bluetooth is on and the Nearby devices permission allows a connection. */
+    private fun canAskDult(): Boolean {
         val adapter = getSystemService(BluetoothManager::class.java)?.adapter
-        if (adapter == null || !adapter.isEnabled) return
-        if (!granted(Manifest.permission.BLUETOOTH_CONNECT)) return
-        synchronized(dultAsked) { if (!dultAsked.add(key)) return }
+        return adapter != null && adapter.isEnabled && granted(Manifest.permission.BLUETOOTH_CONNECT)
+    }
+
+    /**
+     * Runs one DULT exchange with [device] for [key] on the service scope, never on the
+     * scan callback, one GATT exchange at a time. Every result is stamped with when the
+     * exchange began and which it was, so the locator can say "Asked 12:04 — refused";
+     * the exchange is recorded with the schedule only once it has ended. It has its own
+     * budget, and the collector a slightly longer one in case the stack never answers.
+     */
+    private fun interrogate(key: String, device: BluetoothDevice, claim: DultSchedule.Claim) {
         lifecycleScope.launch(Dispatchers.IO) {
             dultGate.withLock {
-                withTimeoutOrNull(DultInterrogator.TIMEOUT_MS + DULT_GRACE_MS) {
-                    DultInterrogator.interrogate(device, this@ScanService).collect { tracker.attachDult(key, it) }
+                val startedAt = System.currentTimeMillis()
+                var last = DultResult(BleNames.formatMac(device.address ?: ""), askedAt = startedAt, attempt = claim.attempt)
+                try {
+                    withTimeoutOrNull(DultInterrogator.TIMEOUT_MS + DULT_GRACE_MS) {
+                        DultInterrogator.interrogate(device, this@ScanService).collect { r ->
+                            last = r.copy(askedAt = startedAt, attempt = claim.attempt)
+                            if (!r.complete) tracker.attachDult(key, last)
+                        }
+                    }
+                } finally {
+                    val ended = if (last.complete) last
+                    else last.copy(complete = true, error = last.error ?: "No answer within ${(DultInterrogator.TIMEOUT_MS + DULT_GRACE_MS) / 1000} s")
+                    val retryAt = dultSchedule.finished(key, claim, startedAt, ended.answered)
+                    tracker.attachDult(key, ended.copy(retryAt = retryAt))
                 }
             }
         }
+    }
+
+    /**
+     * "Ask it who it is" from the locator: one exchange now, whatever the schedule has
+     * done so far, unless one with this device is already under way.
+     */
+    private fun askDult(key: String, address: String) {
+        val now = System.currentTimeMillis()
+        if (!canAskDult()) {
+            tracker.attachDult(
+                key,
+                DultResult(address, complete = true, askedAt = now, error = "Bluetooth is off or the Nearby devices permission is not granted")
+            )
+            return
+        }
+        val device = runCatching { getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address) }.getOrNull() ?: return
+        val separatedAt = Registry.detections.value.firstOrNull { it.key == key }?.separatedAt ?: 0L
+        val claim = dultSchedule.claimManual(key, separatedAt) ?: return
+        interrogate(key, device, claim)
+        publishKick.trySend(Unit)
+    }
+
+    /**
+     * "I found it" (or taking that back) from the device's row. A found device stops
+     * counting as on you; it is not announced again unless it starts over, which it
+     * does when it is heard after an hour away ([Tracker.observe]). The timeline keeps
+     * a row saying when it was marked.
+     */
+    private fun markFound(key: String, found: Boolean) {
+        val now = System.currentTimeMillis()
+        val d = tracker.resolve(key, found, now) ?: return
+        if (found) {
+            followAlerts.forget(key)
+            alerted.remove(key)
+            // Its alert has been dealt with; the shade need not keep it.
+            runCatching { getSystemService(NotificationManager::class.java)?.cancel(key.hashCode()) }
+        }
+        val fix = track.current
+        recordEvent(
+            TimelineEvent(
+                id = "found@$key@$now",
+                kind = EventKind.FOLLOWING,
+                ts = now,
+                title = if (found) "Marked found: ${d.name}" else "No longer marked found: ${d.name}",
+                detail = if (found) {
+                    "Marked found on this phone (${d.address}). It no longer counts as on you; if it is heard " +
+                        "again after an hour away, Clairix watches it afresh."
+                } else "Counted again as ${if (d.following) "moving with you" else "nearby"} (${d.address}).",
+                severity = Severity.LOW,
+                lat = fix?.lat, lon = fix?.lon
+            )
+        )
+        publishKick.trySend(Unit)
     }
 
     /**
@@ -1254,8 +1379,9 @@ class ScanService : LifecycleService() {
 
     /**
      * The owner's accessories connected as a drive begins, remembered on the trip so
-     * the Bluetooth page can say which fixed address announces the car. Bonded records
-     * need the Nearby devices permission; without it the trip simply records none.
+     * the Bluetooth page can say which fixed address announces the car, and so a car
+     * kit among them shows the trip is in the owner's car. Bonded records need the
+     * Nearby devices permission; without it the trip simply records none.
      */
     private fun noteConnectedAccessories() {
         if (!vehicleTrips.inTrip || !granted(Manifest.permission.BLUETOOTH_CONNECT)) return
@@ -1265,7 +1391,7 @@ class ScanService : LifecycleService() {
         val bonded = runCatching { adapter.bondedDevices }.getOrNull() ?: return
         for (d in bonded) {
             val a = BluetoothExposure.accessory(this, d, connected) ?: continue
-            if (a.connected) vehicleTrips.noteAccessory(a.address, a.name)
+            if (a.connected) vehicleTrips.noteAccessory(a.address, a.name, car = a.car)
         }
     }
 
@@ -1285,14 +1411,20 @@ class ScanService : LifecycleService() {
         summariseRiders(now)
     }
 
-    /** A device that has ridden along on enough separate drives, through the shared alert path. */
+    /**
+     * A device that has ridden along on enough separate journeys, through the shared
+     * alert path, at the severity trip memory gave it (an address in the owner's car is
+     * critical, a shared signature or a journey nothing ties to the car is not) and with
+     * its own dedupe window (a day for a shared signature).
+     */
     private fun publishVehicleFinding(finding: VehicleTrips.Finding) {
         Registry.publishAlert(
             Alert(
-                id = finding.id, ts = System.currentTimeMillis(), severity = Severity.HIGH,
+                id = finding.id, ts = System.currentTimeMillis(), severity = finding.severity,
                 title = finding.title, detail = finding.detail,
                 kind = EventKind.FOLLOWING, dedupeKey = finding.dedupeKey
-            )
+            ),
+            dedupeWindowMs = finding.dedupeWindowMs
         )
     }
 
@@ -1350,7 +1482,8 @@ class ScanService : LifecycleService() {
         identities.clear()
         cadence.clear()
         vehicleTrips.clear()
-        synchronized(dultAsked) { dultAsked.clear() }
+        dultSchedule.clear()
+        trustedIdentities.clear()
         synchronized(infrastructureAlertedAt) { infrastructureAlertedAt.clear() }
         synchronized(nearestCameraCache) { nearestCameraCache.clear() }
         GnssMonitor.clear()
@@ -1374,15 +1507,17 @@ class ScanService : LifecycleService() {
 
     /**
      * Filters covering the tracker manufacturer IDs and service UUIDs worth keeping a
-     * scan alive for while the screen is off. These are a whitelist — anything not
-     * listed is invisible — which is why they are only used in that one case, and the
-     * screen-on scan runs unfiltered.
+     * scan alive for while the screen is off, and the addresses of the devices already
+     * under watch that those would miss ([ScreenOffWatch]). These are a whitelist —
+     * anything not listed is invisible — which is why they are only used in that one
+     * case, and the screen-on scan runs unfiltered.
      */
     private fun buildScanFilters(): List<ScanFilter> {
         // Apple's ID alone matches every iPhone, Watch and pair of AirPods in range,
         // each advertising several times a second, and every one woke the phone to
-        // be thrown away by Signatures.isBenign. Only Find My (message type 0x12) can
-        // be a tracker, so the filter masks to it. Samsung's 0x0075 and the two IDs
+        // be thrown away by Signatures.isBenign. Only Find My (message type 0x12) and
+        // iBeacon (0x02, the format cheap anti-lost tags use) can be a tracker, so the
+        // filters mask to those. Samsung's 0x0075 and the two IDs
         // once listed for Tile matched phones, watches and earbuds and nothing the
         // detector uses: SmartTags and Tiles are recognised by their service UUIDs,
         // which are below.
@@ -1416,11 +1551,13 @@ class ScanService : LifecycleService() {
             SurveillanceHardware.ACCESSORY_SERVICE,
         )
         val filters = ArrayList<ScanFilter>()
-        filters.add(
-            ScanFilter.Builder()
-                .setManufacturerData(APPLE_COMPANY, byteArrayOf(FIND_MY_TYPE), byteArrayOf(0xFF.toByte()))
-                .build()
-        )
+        for (type in listOf(FIND_MY_TYPE, IBEACON_TYPE)) {
+            filters.add(
+                ScanFilter.Builder()
+                    .setManufacturerData(APPLE_COMPANY, byteArrayOf(type), byteArrayOf(0xFF.toByte()))
+                    .build()
+            )
+        }
         manufacturerIds.forEach { id ->
             filters.add(ScanFilter.Builder().setManufacturerData(id, byteArrayOf()).build())
         }
@@ -1433,7 +1570,42 @@ class ScanService : LifecycleService() {
             if (uuid in SERVICE_DATA_UUIDS) builder.setServiceData(parcel, ByteArray(0)) else builder.setServiceUuid(parcel)
             filters.add(builder.build())
         }
+        // The devices already under watch that none of the above hears: a GPS box found
+        // while the screen was on would otherwise go unheard the moment it went off.
+        val now = System.currentTimeMillis()
+        val watched = ScreenOffWatch.watched(tracker.snapshot(now), Registry.trusted.value)
+        val registered = HashSet<String>()
+        for (w in watched) {
+            val filter = runCatching { addressFilter(w) }.getOrNull() ?: continue
+            filters.add(filter)
+            registered.add(w.address)
+        }
+        watchedFilterAddresses = registered
+        watchedFilterAt = now
         return filters
+    }
+
+    /**
+     * A filter on one device's address. The public SDK takes the address alone (the
+     * overload that also takes its type is not public at compileSdk 35), so whether a
+     * controller filtering in hardware matches a device with a random address this
+     * way is for a device to show; the type filters still catch every recognised
+     * tracker family whatever its address.
+     */
+    private fun addressFilter(w: ScreenOffWatch.Watched): ScanFilter =
+        ScanFilter.Builder().setDeviceAddress(w.address).build()
+
+    /**
+     * With the screen off, registers the scan afresh when the devices under watch are
+     * no longer the ones it has address filters for ([ScreenOffWatch.refreshDue]), so a
+     * device that became worth watching gets one: at most once a minute, since Android
+     * throttles an app that starts scans often. [all] is this cycle's snapshot.
+     */
+    private suspend fun refreshWatchedFilters(all: List<Detection>, trusted: Set<String>, now: Long) {
+        if (!scanActive) return
+        val watched = ScreenOffWatch.watched(all, trusted).mapTo(HashSet()) { it.address }
+        if (!ScreenOffWatch.refreshDue(watched, watchedFilterAddresses, watchedFilterAt, now)) return
+        withContext(Dispatchers.Main) { if (running && !screenOn) restartScan() }
     }
 
     private fun granted(permission: String) =
@@ -1648,7 +1820,36 @@ class ScanService : LifecycleService() {
     companion object {
         const val ACTION_STOP = "app.clairix.STOP"
         const val ACTION_CLEAR = "app.clairix.CLEAR"
+        /** "I found it" on a device's row ([EXTRA_KEY]; [EXTRA_FOUND] false takes it back). */
+        private const val ACTION_RESOLVE = "app.clairix.RESOLVE"
+        /** "Ask it who it is" in the locator ([EXTRA_KEY], [EXTRA_ADDRESS]). */
+        private const val ACTION_DULT_ASK = "app.clairix.DULT_ASK"
+        private const val EXTRA_KEY = "key"
+        private const val EXTRA_ADDRESS = "address"
+        private const val EXTRA_FOUND = "found"
         private const val TRIPS_FILE = "vehicle_trips.json"
+
+        /**
+         * Marks the device the running scanner knows as [key] found ([found]) or takes
+         * that back. Plain startService, as the screen asking is in the foreground; with
+         * no scan running the service does nothing and stops again.
+         */
+        fun sendFound(context: Context, key: String, found: Boolean) = command(context, ACTION_RESOLVE) {
+            putExtra(EXTRA_KEY, key)
+            putExtra(EXTRA_FOUND, found)
+        }
+
+        /** Asks the device the running scanner knows as [key], now at [address], who it is over DULT. */
+        fun sendDultAsk(context: Context, key: String, address: String) = command(context, ACTION_DULT_ASK) {
+            putExtra(EXTRA_KEY, key)
+            putExtra(EXTRA_ADDRESS, address)
+        }
+
+        private fun command(context: Context, action: String, extras: Intent.() -> Unit) {
+            runCatching {
+                context.startService(Intent(context, ScanService::class.java).setAction(action).apply(extras))
+            }
+        }
 
         /**
          * The live service's trips, so [HistoryRetention] can prune them in
@@ -1704,6 +1905,8 @@ class ScanService : LifecycleService() {
         )
         /** Apple's Find My message type, the first byte after the company ID. */
         private const val FIND_MY_TYPE: Byte = 0x12
+        /** Apple's iBeacon message type, in the same place. */
+        private const val IBEACON_TYPE: Byte = 0x02
 
         // Not exposed as constants on ScanCallback before API 33 / 34, so spelled out.
         private const val SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES = 5

@@ -8,8 +8,55 @@ private const val APPLE = 0x004C
 private const val MICROSOFT = 0x0006
 private const val FIND_MY_TYPE = 0x12
 private const val FIND_MY_SEPARATED_LENGTH = 0x19
+/** Apple's iBeacon frame: type 0x02, length 0x15, then a 16-byte UUID, major, minor and power. */
+private const val IBEACON_TYPE = 0x02
+private const val IBEACON_LENGTH = 0x15
+/** Find Hub frame types in Google's 0xFEAA service data; 0x41 is unwanted-tracking protection mode. */
+private const val FIND_HUB_FRAME = 0x40
+private const val FIND_HUB_SEPARATED_FRAME = 0x41
 private val DULT_UUID = android.os.ParcelUuid.fromString("0000fcb2-0000-1000-8000-00805f9b34fb")
 private val EDDYSTONE_UUID = android.os.ParcelUuid.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
+
+/**
+ * The parts of one advertisement the signatures read, taken out of [ScanRecord] so
+ * the classification can run, and be tested, without the Bluetooth stack.
+ */
+internal class Advert(
+    /** Apple's manufacturer data (company 0x004C), after the company id; null when absent. */
+    val apple: ByteArray? = null,
+    /** Whether the advertisement carries manufacturer data under Microsoft's company id (0x0006). */
+    val microsoft: Boolean = false,
+    /** Every 16-bit UUID in the service UUID list or among the service data keys. */
+    val shorts: Set<Int> = emptySet(),
+    /** Service data under the DULT UUID (0xFCB2). */
+    val dult: ByteArray? = null,
+    /** Service data under Google's UUID (0xFEAA): Eddystone beacons and Find Hub tags. */
+    val google: ByteArray? = null,
+    /** The advertising flags byte, or -1 when the advertisement has none. */
+    val flags: Int = -1,
+    /** The advertised name, when there is one. */
+    val name: String? = null
+) {
+    companion object {
+        fun of(record: ScanRecord): Advert {
+            val shorts = HashSet<Int>()
+            record.serviceUuids?.forEach { short(it.uuid.toString())?.let(shorts::add) }
+            record.serviceData?.keys?.forEach { short(it.uuid.toString())?.let(shorts::add) }
+            return Advert(
+                apple = record.getManufacturerSpecificData(APPLE),
+                microsoft = record.getManufacturerSpecificData(MICROSOFT) != null,
+                shorts = shorts,
+                dult = record.getServiceData(DULT_UUID),
+                google = record.getServiceData(EDDYSTONE_UUID),
+                flags = record.advertiseFlags,
+                name = record.deviceName
+            )
+        }
+
+        /** The four hex digits a 16-bit UUID occupies in its 128-bit form, as a number. */
+        private fun short(uuid: String): Int? = if (uuid.length >= 8) uuid.substring(4, 8).toIntOrNull(16) else null
+    }
+}
 
 /**
  * Tracker signatures based on public reverse engineering — OpenHaystack,
@@ -55,9 +102,18 @@ object Signatures {
     )
 
     val GOOGLE_FIND_HUB = TrackerType(
-        "google_find_hub", "Google Find Hub tracker", "Google / third party", Threat.HIGH,
+        "google_find_hub", "Google Find Hub tracker", "Google / third party", Threat.MEDIUM,
         "A tag on Google's Find Hub network (Chipolo Point, Pebblebee for Android, Motorola Moto " +
-            "Tag and others). Any Android phone nearby reports where it is."
+            "Tag and others), sending the frame a tag uses until it has been away from its owner's " +
+            "phone for a while. Any Android phone nearby reports where it is. The follow check still " +
+            "applies: one that goes everywhere you go is travelling with someone who is."
+    )
+
+    val GOOGLE_FIND_HUB_SEPARATED = TrackerType(
+        "google_find_hub_separated", "Google Find Hub tracker (away from owner)", "Google / third party", Threat.HIGH,
+        "A tag on Google's Find Hub network in its unwanted-tracking protection mode, which it " +
+            "switches to once it has been away from its owner's phone: Chipolo Point, Pebblebee for " +
+            "Android, Motorola Moto Tag and others. Any Android phone nearby reports where it is."
     )
 
     val DULT_TRACKER = TrackerType(
@@ -123,6 +179,40 @@ object Signatures {
         "Proximity beacon. Usually retail analytics, occasionally repurposed for tracking."
     )
 
+    val IBEACON = TrackerType(
+        "ibeacon", "iBeacon", "Apple format / generic", Threat.MEDIUM,
+        "Proximity beacon in Apple's iBeacon format. Shops and museums fix them to walls; cheap " +
+            "anti-lost tags and home-made trackers send the same frame, and they do not change " +
+            "their address."
+    )
+
+    /**
+     * Readings of a tracker still with its owner, or not yet known to have left them:
+     * Find My's "owner nearby" frames, and Find Hub's ordinary frame (0x40), which a tag
+     * sends until it has been away from its owner's phone for a while and switches to
+     * the unwanted-tracking frame (0x41). One that moves with you is travelling with
+     * someone who is ([app.clairix.analysis.Tracker] calls it that, not a tracker
+     * following you), and a higher-severity separated reading replaces it.
+     */
+    private val WITH_OWNER: Set<String> = setOf(AIRTAG_NEAR_OWNER.id, FINDMY_NEAR_OWNER.id, GOOGLE_FIND_HUB.id)
+
+    /** Whether [type] is a reading of a tracker with its owner nearby; see [WITH_OWNER]. */
+    fun withOwner(type: TrackerType?): Boolean = type != null && type.id in WITH_OWNER
+
+    /**
+     * Tracker types that change their Bluetooth address as a matter of course: every
+     * Find My and Find Hub item, SmartTags, and anything announcing itself under DULT.
+     * Marking one as yours holds for a day at a time ([app.clairix.TrustBook]): it is
+     * recognised across the address changes the scanner links, and then asked about again.
+     */
+    private val ROTATING: Set<String> = setOf(
+        AIRTAG.id, AIRTAG_NEAR_OWNER.id, FINDMY.id, FINDMY_NEAR_OWNER.id, AIRPODS_FINDMY.id,
+        GOOGLE_FIND_HUB.id, GOOGLE_FIND_HUB_SEPARATED.id, SMARTTAG.id, DULT_TRACKER.id
+    )
+
+    /** Whether [type] rotates its address by design; see [ROTATING]. */
+    fun rotates(type: TrackerType?): Boolean = type != null && type.id in ROTATING
+
     private val GPS_NAME_HINTS = listOf(
         "gps", "tracker", "tk102", "tk103", "tk303", "gt02", "gt06", "gl300", "gl500",
         "st-9", "st901", "coban", "concox", "sinotrack", "meitrack", "queclink",
@@ -130,34 +220,27 @@ object Signatures {
         "spytec", "americaloc", "vyncs", "linxup", "samsara", "geotab"
     )
 
-    /** Matches a 16-bit service UUID in either the UUID list or the service data. */
-    private fun ScanRecord.hasShortUuid(short: Int): Boolean {
-        val hex = "%04x".format(short)
-        serviceUuids?.forEach {
-            if (it.uuid.toString().regionMatches(4, hex, 0, 4, ignoreCase = true)) return true
-        }
-        serviceData?.keys?.forEach {
-            if (it.uuid.toString().regionMatches(4, hex, 0, 4, ignoreCase = true)) return true
-        }
-        return false
-    }
-
     /**
      * Devices that superficially look like trackers but are not. Checked first,
      * because otherwise every pair of AirPods in a coffee shop raises an alert
      * and the app becomes noise.
      */
-    fun isBenign(record: ScanRecord?): Boolean {
-        if (record == null) return false
+    fun isBenign(record: ScanRecord?): Boolean = record != null && isBenign(Advert.of(record))
 
-        record.getManufacturerSpecificData(MICROSOFT)?.let { return true }
+    /**
+     * [isBenign] on an [Advert]. An iBeacon (Apple type 0x02) is not on this list: a
+     * shop's beacon stays on its wall and the follow check leaves it alone, while a
+     * cheap anti-lost tag in the same format, which never changes its address, is
+     * exactly what the follow check exists to catch.
+     */
+    internal fun isBenign(advert: Advert): Boolean {
+        if (advert.microsoft) return true
 
-        val apple = record.getManufacturerSpecificData(APPLE) ?: return false
+        val apple = advert.apple ?: return false
         if (apple.isEmpty()) return false
 
         return when (apple[0].toInt() and 0xFF) {
             0x01, 0x07 -> true                       // AirPods, Beats
-            0x02 -> true                             // iBeacon — fixed infrastructure
             0x05, 0x09, 0x0B, 0x0D, 0x0E, 0x10 -> true // Handoff, Nearby, Watch, AirPlay
             else -> false
         }
@@ -172,11 +255,13 @@ object Signatures {
      * near; bits 4–5 of the status byte (byte 2) say what it is: 0 an Apple phone,
      * tablet or computer, 1 an AirTag, 2 a third-party Find My item, 3 AirPods.
      */
-    fun match(record: ScanRecord?): TrackerType? {
-        if (record == null) return null
+    fun match(record: ScanRecord?): TrackerType? = record?.let { match(Advert.of(it)) }
 
-        record.getManufacturerSpecificData(APPLE)?.let { apple ->
-            if (apple.size >= 2 && (apple[0].toInt() and 0xFF) == FIND_MY_TYPE) {
+    /** [match] on an [Advert]. */
+    internal fun match(advert: Advert): TrackerType? {
+        advert.apple?.let { apple ->
+            val type = if (apple.isNotEmpty()) apple[0].toInt() and 0xFF else -1
+            if (apple.size >= 2 && type == FIND_MY_TYPE) {
                 val separated = (apple[1].toInt() and 0xFF) == FIND_MY_SEPARATED_LENGTH
                 val kind = if (apple.size >= 3) (apple[2].toInt() and 0x30) shr 4 else -1
                 return when (kind) {
@@ -189,36 +274,43 @@ object Signatures {
                     else -> if (separated) FINDMY else FINDMY_NEAR_OWNER
                 }
             }
+            // iBeacon: [0x02][0x15][UUID ×16][major ×2][minor ×2][power].
+            if (type == IBEACON_TYPE && apple.size >= 2 + IBEACON_LENGTH &&
+                (apple[1].toInt() and 0xFF) == IBEACON_LENGTH
+            ) return IBEACON
         }
 
         // DULT's own advertisement: [network ID][flags, bit 0 = near owner]. Sent by
         // compliant trackers of any maker, mandatory once separated.
-        record.getServiceData(DULT_UUID)?.let { data ->
+        advert.dult?.let { data ->
             if (data.size >= 2 && (data[1].toInt() and 0x01) == 0) return DULT_TRACKER
         }
 
-        if (record.hasShortUuid(0xFEED) || record.hasShortUuid(0xFEEC) || record.hasShortUuid(0xFD84)) return TILE
-        if (record.hasShortUuid(0xFD5A)) return SMARTTAG
-        if (record.hasShortUuid(0xFE33) || record.hasShortUuid(0xFE65)) return CHIPOLO
-        if (record.hasShortUuid(0xFA25)) return PEBBLEBEE
+        val shorts = advert.shorts
+        if (0xFEED in shorts || 0xFEEC in shorts || 0xFD84 in shorts) return TILE
+        if (0xFD5A in shorts) return SMARTTAG
+        if (0xFE33 in shorts || 0xFE65 in shorts) return CHIPOLO
+        if (0xFA25 in shorts) return PEBBLEBEE
         // 0xFFE0/0xFFF3 are generic HM-10 UART UUIDs used by countless non-Orbit devices
-        if (record.hasShortUuid(0xFFF3) && record.hasShortUuid(0xFFE0)) return ORBIT
-        if (record.hasShortUuid(0xAA01) || record.hasShortUuid(0xAA02)) return NUT
+        if (0xFFF3 in shorts && 0xFFE0 in shorts) return ORBIT
+        if (0xAA01 in shorts || 0xAA02 in shorts) return NUT
 
         // Google's 0xFEAA carries both Eddystone beacons (frame types 0x00–0x30) and
-        // Find Hub tags (0x40, and 0x41 in unwanted-tracking protection mode). Android
-        // phones advertise Find Hub frames too while switched off; they set the
-        // BR/EDR-capable advertising flags (0x02) where a tag sets 0x06.
-        record.getServiceData(EDDYSTONE_UUID)?.let { data ->
+        // Find Hub tags: 0x40 ordinarily, 0x41 in unwanted-tracking protection mode,
+        // which a tag enters once it has been away from its owner. Android phones
+        // advertise Find Hub frames too while switched off; they set the BR/EDR-capable
+        // advertising flags (0x02) where a tag sets 0x06.
+        advert.google?.let { data ->
             val frame = data.firstOrNull()?.toInt()?.and(0xFF)
-            if (frame == 0x40 || frame == 0x41) {
-                return if (record.advertiseFlags == 0x02) null else GOOGLE_FIND_HUB
+            if (frame == FIND_HUB_FRAME || frame == FIND_HUB_SEPARATED_FRAME) {
+                if (advert.flags == 0x02) return null
+                return if (frame == FIND_HUB_SEPARATED_FRAME) GOOGLE_FIND_HUB_SEPARATED else GOOGLE_FIND_HUB
             }
             if (frame != null && frame <= 0x30) return EDDYSTONE
         }
-        if (record.hasShortUuid(0xFE85)) return INVOXIA
+        if (0xFE85 in shorts) return INVOXIA
 
-        val name = record.deviceName?.lowercase()
+        val name = advert.name?.lowercase()
         if (name != null && GPS_NAME_HINTS.any { name.contains(it) }) return GPS_BLE
 
         return null

@@ -534,13 +534,14 @@ class CadenceFingerprinter(
          * Measured advertising cadences. AirTag: Find My payload, type 0x12, length
          * byte 0x19, every two seconds. Tile: service 0xFEED at 1.5 s with a wide
          * spread between generations. SmartTag: Samsung manufacturer data at 1 s.
-         * Chipolo: 400 ms, distinctive on its own.
+         * Chipolo: 400 ms, distinctive on its own, on Chipolo's two SIG-assigned
+         * service UUIDs (0xFE33, 0xFE65), the pair [Signatures.match] recognises.
          */
         val FAMILIES: List<Family> = listOf(
             Family("airtag", "Apple AirTag", 2000, 200, company = 0x004C, mfrType = 0x12, mfrLen = 0x19),
             Family("tile", "Tile", 1500, 500, serviceShorts = setOf(0xFEED, 0xFD84)),
             Family("smarttag", "Samsung SmartTag", 1000, 150, company = 0x0075),
-            Family("chipolo", "Chipolo", 400, 100, serviceShorts = setOf(0xFEBE, 0xFE2B, 0xFE33))
+            Family("chipolo", "Chipolo", 400, 100, serviceShorts = setOf(0xFE33, 0xFE65))
         )
     }
 }

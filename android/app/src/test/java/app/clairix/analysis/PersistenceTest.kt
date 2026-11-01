@@ -342,6 +342,103 @@ class PersistenceTest {
         for (d in listOf(tag, phone, keys)) assertEquals(d.key, d.threat, listed.getValue(d.key).threat)
     }
 
+    @Test
+    fun aFindHubTagInItsOrdinaryFrameIsTravellingWithYouUntilItSeparates() {
+        val tracker = Tracker()
+        // Frame 0x40 for twelve minutes and two kilometres: it moved with you, but a Find
+        // Hub tag sends that frame while its owner is near, so it is not a tracker verdict.
+        val ordinary = tracker.ride("hub", t0, 12, 170.0, Signatures.GOOGLE_FIND_HUB)
+        assertTrue(ordinary.following)
+        assertEquals(Threat.HIGH, ordinary.threat)
+        assertEquals(0L, ordinary.separatedAt)
+        // Frame 0x41: unwanted-tracking protection mode, away from its owner.
+        val tSep = t0 + 13 * 60_000L
+        val separated = tracker.observe(
+            key = "hub", address = "hub", rssi = -60, tracker = Signatures.GOOGLE_FIND_HUB_SEPARATED, approxMetres = null,
+            rotations = 0, addresses = 1,
+            fix = Fix(lat = 40.0 + 2_300.0 / 111_195.0, lon = -75.0, speed = 12f, time = tSep),
+            hasPosition = true, now = tSep, travelledM = 2_300.0
+        )
+        assertEquals(Signatures.GOOGLE_FIND_HUB_SEPARATED, separated.detection.tracker)
+        assertEquals(Threat.CRITICAL, separated.detection.threat)
+        assertEquals(tSep, separated.detection.separatedAt)
+        assertTrue(separated.escalated)
+        // An ordinary frame afterwards does not take it back.
+        val again = tracker.see("hub", tSep + 10_000L, 2_310.0, Signatures.GOOGLE_FIND_HUB)
+        assertEquals(Signatures.GOOGLE_FIND_HUB_SEPARATED, again.tracker)
+        assertEquals(Threat.CRITICAL, again.threat)
+    }
+
+    @Test
+    fun anIBeaconThatMovesWithYouIsTravellingWithYouNotATracker() {
+        val tracker = Tracker()
+        val beacon = tracker.ride("beacon", t0, 13, 170.0, Signatures.IBEACON)
+        assertTrue(beacon.following)
+        assertEquals(Threat.HIGH, beacon.threat)
+    }
+
+    @Test
+    fun aFoundTrackerStopsCountingAndIsWatchedAfreshAfterAnHourAway() {
+        val tracker = Tracker()
+        val tag = tracker.ride("tag", t0, 13, 170.0, Signatures.AIRTAG)
+        assertTrue(tag.following)
+        val tFound = t0 + 14 * 60_000L
+        val found = tracker.resolve("tag", found = true, now = tFound)!!
+        assertEquals(tFound, found.resolvedAt)
+        assertTrue(found.resolved)
+        // Still heard (in her hand, in the car on the way to the police): it stays found,
+        // and nothing about it is raised.
+        val held = tracker.observe(
+            key = "tag", address = "tag", rssi = -60, tracker = Signatures.AIRTAG, approxMetres = null,
+            rotations = 0, addresses = 1,
+            fix = Fix(lat = 40.0 + 2_500.0 / 111_195.0, lon = -75.0, speed = 12f, time = tFound + 60_000L),
+            hasPosition = true, now = tFound + 60_000L, travelledM = 2_500.0
+        )
+        assertTrue(held.detection.resolved)
+        assertFalse(held.becameFollowing)
+        assertFalse(held.escalated)
+        assertTrue(tracker.snapshot(tFound + 60_000L).single().resolved)
+
+        // Quiet for over an hour, then heard again: it starts over, found no more, and
+        // has to travel with you again before it is raised again.
+        val tBack = tFound + 60_000L + REARM_AFTER_MS + 60_000L
+        val back = tracker.see("tag", tBack, 5_000.0, Signatures.AIRTAG)
+        assertFalse(back.resolved)
+        assertFalse(back.following)
+        assertEquals(tBack, back.firstSeen)
+        val again = tracker.ride("tag", tBack + 30_000L, 13, 170.0, Signatures.AIRTAG)
+        assertTrue(again.following)
+        assertEquals(Threat.CRITICAL, again.threat)
+    }
+
+    @Test
+    fun foundCanBeTakenBack() {
+        val tracker = Tracker()
+        tracker.ride("tag", t0, 13, 170.0, Signatures.AIRTAG)
+        tracker.resolve("tag", found = true, now = t1)
+        val back = tracker.resolve("tag", found = false, now = t1 + 1_000L)!!
+        assertFalse(back.resolved)
+        assertTrue(back.following)
+        assertEquals(null, tracker.resolve("nothing", found = true, now = t1))
+    }
+
+    @Test
+    fun foundCarriesAcrossARotationButNotOntoAnotherUnitOfTheProduct() {
+        fun foundThenRotated(certain: Boolean, indistinguishable: Boolean): Detection {
+            val tracker = Tracker()
+            tracker.ride("old", t0, 11, 0.0, Signatures.AIRTAG)
+            tracker.resolve("old", found = true, now = t0 + 12 * 60_000L)
+            tracker.see("new", t1, 0.0, Signatures.AIRTAG)
+            tracker.see("new", t1 + 30_000L, 0.0, Signatures.AIRTAG)
+            assertTrue(tracker.merge("new", "old", certain, indistinguishable))
+            return tracker.snapshot(t1 + 30_000L).single()
+        }
+        assertTrue(foundThenRotated(certain = true, indistinguishable = false).resolved)
+        assertTrue(foundThenRotated(certain = false, indistinguishable = false).resolved)
+        // Two units of one product only their cadence told apart: the new address may be the other one.
+        assertFalse(foundThenRotated(certain = false, indistinguishable = true).resolved)
+    }
+
     private companion object {
         /** How far each Wi-Fi fix lands from the mislocated spot, metres north. */
         val WIFI_JITTER_M = doubleArrayOf(

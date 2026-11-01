@@ -92,6 +92,7 @@ import app.clairix.security.UnlockLedger
 import app.clairix.analysis.Report
 import app.clairix.detect.BleNames
 import app.clairix.detect.KarmaTrap
+import app.clairix.detect.VehicleTrips
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
 import app.clairix.comms.CommsNotifications
@@ -1214,6 +1215,8 @@ private fun RefreshWhileStarted(periodMs: Long?, refresh: () -> Unit) {
 private sealed class ExplainerTarget {
     data class BleDevice(val detection: Detection) : ExplainerTarget()
     data class CellIndicator(val finding: CatcherFinding) : ExplainerTarget()
+    /** A trip-memory finding nothing tied to the owner's car: "has been on 3 of your journeys". */
+    data class Journeys(val event: TimelineEvent) : ExplainerTarget()
 }
 
 // ── SOS button ────────────────────────────────────────────────────────────
@@ -1715,7 +1718,10 @@ private fun MainApp(
             }
             HomeTab.DRIVE -> DriveScreen()
             HomeTab.ACTIVITY -> when (activitySub) {
-                0 -> TimelineScreen(onResumeScan = resumeScan)
+                0 -> TimelineScreen(
+                    onResumeScan = resumeScan,
+                    onShowExplainer = { e -> explainerTarget = ExplainerTarget.Journeys(e) }
+                )
                 1 -> PatternOfLifePage()
                 else -> UnlockLedgerPage()
             }
@@ -1771,6 +1777,7 @@ internal fun ScanScreen(
             TrackerStatusHero(
                 status = status,
                 live = live,
+                now = now,
                 onToggle = {
                     if (status.scanning) onStop()
                     else if (hasPermissions()) onStart()
@@ -1793,7 +1800,10 @@ internal fun ScanScreen(
             if (status.scanning) item(key = "§empty") {
                 EmptyState(
                     title = "Nothing flagged yet",
-                    body = "Proving something follows you takes 10 minutes of presence and a 300 m move. Leave it running.",
+                    // The thresholds as set in Settings, not the defaults.
+                    body = "Proving something follows you takes " +
+                        FollowerStatus.proof(AppSettings.persistenceThresholdMin, AppSettings.followThresholdM) +
+                        ". Leave it running.",
                     icon = ClairixIcons.BluetoothSearching,
                     tone = Tone.Safe
                 )
@@ -1835,14 +1845,16 @@ internal fun ScanScreen(
 
 /** The verdict the Trackers screen leads with, and the start/stop switch under it. */
 @Composable
-private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggle: () -> Unit) {
+private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, now: Long, onToggle: () -> Unit) {
     val context = LocalContext.current
     // Branch on the threat, not on `following` alone: a recognised tracker that moved
     // with you is a tracker on you; an unidentified device that did is travelling with
-    // you, which a companion's phone also does.
-    val trackers = live.filter { it.following && it.threat == Threat.CRITICAL }
-    val riders = live.filter { it.following && it.threat != Threat.CRITICAL }
-    val persistent = live.count { it.persistent }
+    // you, which a companion's phone also does. Only what was heard in the last half
+    // hour is on you now; a device marked found counts for nothing here.
+    val trackers = live.filter { FollowerStatus.onYouNow(it, now) && it.threat == Threat.CRITICAL }
+    val riders = live.filter { FollowerStatus.onYouNow(it, now) && it.threat != Threat.CRITICAL }
+    val earlier = live.filter { FollowerStatus.followedEarlier(it, now) && it.threat == Threat.CRITICAL }
+    val persistent = live.count { it.persistent && !it.resolved }
     val error = status.error
     val positioning by Registry.positioning.collectAsStateWithLifecycle()
     val faking = positioning.faking(System.currentTimeMillis())
@@ -1884,6 +1896,15 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
             "They were heard in different places while you moved. None is recognised as a tracker away from its " +
                 "owner: companions' phones, watches and keys, or the vehicle's own electronics, look the same. " +
                 "If you are alone, open each one below and check the car.",
+            Tone.Caution
+        )
+        // Confirmed earlier and quiet since: asleep, out of range, or still where it was put.
+        earlier.isNotEmpty() -> Triple(
+            if (earlier.size == 1) "A tracker followed you earlier" else "${earlier.size} trackers followed you earlier",
+            (if (earlier.size == 1) "${earlier[0].name} was last heard ${fmtAgo(now, earlier[0].lastSeen)}. "
+            else "The last was heard ${fmtAgo(now, earlier.maxOf { it.lastSeen })}. ") +
+                "A tracker can sleep or be out of range and still be where it was put, so search the car and your " +
+                "bags. Once you have found one, open it below and tap I found it.",
             Tone.Caution
         )
         // Registered and hearing nothing (Location off, five quiet minutes): a confirmed
@@ -2085,7 +2106,7 @@ private fun DetectionRow(
 
     ClairixCard(
         tone = tone,
-        emphasis = d.following && d.threat == Threat.CRITICAL && !trusted,
+        emphasis = FollowerStatus.withYou(d) && d.threat == Threat.CRITICAL && !trusted,
         onClick = { expanded = !expanded },
         onClickLabel = if (expanded) "Hide details" else "Show details"
     ) {
@@ -2102,8 +2123,11 @@ private fun DetectionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (trusted) StatusPill("Trusted", Tone.Neutral)
-            else StatusPill(if (d.following) followingPill(d) else levelLabel(d.threat.name), d.threat.tone())
+            when {
+                trusted -> StatusPill("Trusted", Tone.Neutral)
+                d.resolved -> StatusPill("Found", Tone.Neutral)
+                else -> StatusPill(if (d.following) followingPill(d) else levelLabel(d.threat.name), d.threat.tone())
+            }
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
@@ -2133,7 +2157,13 @@ private fun DetectionRow(
             RssiBar(d.rssi)
         }
 
-        if (d.following && !trusted) {
+        if (d.resolved && !trusted) {
+            Text(
+                "Marked found at ${fmtClock(d.resolvedAt)}. It no longer counts as on you.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = c.textMuted
+            )
+        } else if (d.following && !trusted) {
             if (d.threat == Threat.CRITICAL) {
                 WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
             } else {
@@ -2174,7 +2204,7 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                 else "It keeps showing up. A position fix is needed to prove it moves with you."
             FollowConfidence.NOT_MOVED_ENOUGH ->
                 "It keeps showing up, but only ${d.displacementM.roundToInt()} m of shared travel so far. " +
-                    "Confirming it needs about 300 m."
+                    "Confirming it needs about ${AppSettings.followThresholdM.roundToInt()} m."
             FollowConfidence.CONFIRMED ->
                 if (d.threat == Threat.CRITICAL) {
                     "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
@@ -2248,6 +2278,8 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
         }
 
         // ── Actions ──
+        val context = LocalContext.current
+        val scanning = Registry.status.collectAsStateWithLifecycle().value.scanning
         if (trusted) {
             SecondaryButton(
                 "Put it back in the threat level",
@@ -2258,14 +2290,45 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
             if (onShowExplainer != null) {
                 PrimaryButton("What is this, and what do I do?", onClick = onShowExplainer, modifier = Modifier.fillMaxWidth())
             }
+            // Found and dealt with: it stops counting as on you, without teaching the
+            // app to ignore it if it comes back. Acts on the running scanner's record.
+            if (d.resolved) {
+                SecondaryButton(
+                    "Not found after all",
+                    onClick = { ScanService.sendFound(context, d.key, found = false) },
+                    enabled = scanning,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else if (d.following || d.persistent) {
+                SecondaryButton(
+                    "I found it",
+                    onClick = { ScanService.sendFound(context, d.key, found = true) },
+                    tone = Tone.Accent,
+                    enabled = scanning,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Once you have found and removed it. It stops counting as on you and stays in the timeline and " +
+                        "the evidence report; if it is heard again after an hour away, Clairix watches it afresh.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSubtle
+                )
+            }
+            val rotating = TrustBook.rotating(d)
             SecondaryButton(
                 "Mark as mine",
-                onClick = { Registry.trust(d.address) },
+                onClick = { Registry.trust(d.address, label = d.name, rotating = rotating) },
                 tone = Tone.Safe,
                 modifier = Modifier.fillMaxWidth()
             )
             Text(
-                "Marking it as yours removes it from the threat level. You can undo this here or in Settings.",
+                if (rotating) {
+                    "Marking it as yours removes it from the threat level. This device changes its Bluetooth address: " +
+                        "Clairix recognises it across the changes it can link for the next 24 hours, then asks you " +
+                        "again. You can undo this here or in Settings."
+                } else {
+                    "Marking it as yours removes it from the threat level. You can undo this here or in Settings."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = c.textSubtle
             )
@@ -2591,8 +2654,12 @@ private fun MapChip(text: String, tone: Tone) {
 
 // ── Timeline screen ──────────────────────────────────────────────────────
 
+/**
+ * The timeline. [onShowExplainer] opens the co-traveller explanation for a trip-memory
+ * finding nothing tied to the owner's car ([VehicleTrips.coTravellerEvent]).
+ */
 @Composable
-internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null) {
+internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer: ((TimelineEvent) -> Unit)? = null) {
     val events by Registry.timeline.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(60_000L)
@@ -2627,7 +2694,12 @@ internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null) {
                 items(list, key = { it.id }) { e ->
                     val resumable = onResumeScan != null && e.id == latestStop?.id &&
                         e.id.startsWith(ScannerHealth.SYSTEM_STOP_ID_PREFIX) && !status.scanning && AppSettings.scanEnabled
-                    TimelineRow(e, status, onResume = if (resumable) onResumeScan else null)
+                    val explain = onShowExplainer?.takeIf { VehicleTrips.coTravellerEvent(e.id) }
+                    TimelineRow(
+                        e, status,
+                        onResume = if (resumable) onResumeScan else null,
+                        onExplain = explain?.let { show -> { show(e) } }
+                    )
                 }
             }
         }
@@ -2657,7 +2729,12 @@ private fun eventTone(e: TimelineEvent): Tone = when (e.kind) {
 }
 
 @Composable
-private fun TimelineRow(e: TimelineEvent, status: ScanStatus, onResume: (() -> Unit)? = null) {
+private fun TimelineRow(
+    e: TimelineEvent,
+    status: ScanStatus,
+    onResume: (() -> Unit)? = null,
+    onExplain: (() -> Unit)? = null
+) {
     var open by remember(e.id) { mutableStateOf(false) }
     val tone = eventTone(e)
     val tag = eventKindTag(e.kind)
@@ -2698,6 +2775,8 @@ private fun TimelineRow(e: TimelineEvent, status: ScanStatus, onResume: (() -> U
         }
         // A scanner the system stopped, still down: "tap to resume" means this row.
         if (onResume != null) GhostButton("Resume scanning", onClick = onResume)
+        // A device on several journeys that nothing tied to her car: the co-traveller explanation.
+        if (onExplain != null) GhostButton("What is this, and what do I do?", onClick = onExplain)
         if (lat != null && lon != null) {
             Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         }
@@ -4205,6 +4284,18 @@ private data class ExplainerContent(
 private fun bleExplainerContent(d: Detection): ExplainerContent {
     val tone = if (d.threat.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
     return when {
+        d.resolved -> ExplainerContent(
+            headline = "Marked found: ${d.name}",
+            whatIsThis = "You marked this device found at ${fmtClock(d.resolvedAt)}. " +
+                (if (d.following) "Before that it was confirmed moving with you, heard at places ${d.displacementM.roundToInt()} metres apart."
+                else "Before that it kept showing up near you.") +
+                (d.tracker?.let { " It identifies itself as ${it.label} (${it.brand})." } ?: ""),
+            whatToDo = "Keep what you found as evidence: photograph it where it was, and do not throw it away. The " +
+                "timeline and the evidence report keep the record. If it is heard again after an hour away, Clairix " +
+                "watches it afresh and tells you if it follows you again. If you marked it by mistake, tap Not found after all.",
+            howCertain = "The record is what was confirmed before you marked it: ${d.sightings} sightings, threat score ${d.score}/100.",
+            tone = Tone.Caution
+        )
         d.following && d.threat == Threat.CRITICAL -> ExplainerContent(
             headline = "Tracker on you: ${d.name}",
             whatIsThis = "A Bluetooth tracker has been verified as following your movements. " +
@@ -4279,7 +4370,7 @@ private fun bleExplainerContent(d: Detection): ExplainerContent {
             whatToDo = "Continue monitoring. The scan needs more time and movement to determine whether " +
                 "this device is following you. Keep the scan running as you travel.",
             howCertain = "Building confidence. Score ${d.score}/100 · ${d.sightings} sightings. " +
-                "GPS confirmation of following requires approximately 300 m of shared movement.",
+                "GPS confirmation of following requires approximately ${AppSettings.followThresholdM.roundToInt()} m of shared movement.",
             tone = tone
         )
     }
@@ -4436,11 +4527,25 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     )
 }
 
+/**
+ * The co-traveller explanation of a trip-memory finding with no sign the journeys were
+ * in the owner's car: probably the bus, the train or a fellow commuter, and what to do
+ * if they were in her car after all.
+ */
+private fun journeysExplainerContent(e: TimelineEvent): ExplainerContent = ExplainerContent(
+    headline = e.title,
+    whatIsThis = VehicleTrips.CO_TRAVELLER_WHAT_IS_THIS,
+    whatToDo = VehicleTrips.CO_TRAVELLER_WHAT_TO_DO,
+    howCertain = VehicleTrips.CO_TRAVELLER_HOW_CERTAIN,
+    tone = Tone.Caution
+)
+
 @Composable
 private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit) {
     val content = when (target) {
         is ExplainerTarget.BleDevice -> bleExplainerContent(target.detection)
         is ExplainerTarget.CellIndicator -> cellExplainerContent(target.finding)
+        is ExplainerTarget.Journeys -> journeysExplainerContent(target.event)
     }
     val c = ClairixTheme.colors
 

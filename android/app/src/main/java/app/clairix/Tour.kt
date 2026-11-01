@@ -82,9 +82,9 @@ internal data class TourStop(
 internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
     ScanCategory.TRACKERS -> "Bluetooth trackers travelling with you: AirTags, Tiles, SmartTags and the GPS boxes hidden on cars." to
         "Nearby lists the devices around you. One is marked FOLLOWING only after it has been heard at places far apart while you " +
-        "moved, about 10 minutes and 300 m by default. Map shows where each was heard. Tap a device to see what it is, or " +
-        "\"Mark as mine\" for your own headphones, watch and car. The buttons above the list open Find a tracker, the " +
-        "Self-test beacon and Bluetooth exposure."
+        "moved, about 10 minutes and 300 m by default. Map shows where each was heard. Tap a device to see what it is, " +
+        "\"Mark as mine\" for your own headphones, watch and car, or \"I found it\" once you have found and removed one. " +
+        "The buttons above the list open Find a tracker, the Self-test beacon and Bluetooth exposure."
     ScanCategory.CAMERAS -> "A sweep for hidden cameras in a room." to
         "Six methods: lens glint with the torch, infrared with the front camera in the dark, a network scan for camera ports, " +
         "camera setup hotspots, Bluetooth setup beacons and a magnetic gauge. The checklist walks you round the room."
@@ -121,10 +121,12 @@ internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
 internal fun trackerToolTour(a: TrackerAction): Pair<String, String> = when (a) {
     TrackerAction.LOCATE -> "Walk to a tracker by its signal." to
         "Pick a device, hold the phone out and turn slowly: the compass marks the direction the signal is strongest, and the " +
-        "warmer-and-colder line shows whether you are getting closer."
-    TrackerAction.SELF_TEST -> "Proves the scanner can hear a tracker." to
-        "The phone briefly pretends to be an AirTag and checks the scanner picks it up. Some phones cannot hear themselves; " +
-        "the test says so instead of passing."
+        "warmer-and-colder line shows whether you are getting closer. The phone pulses faster as you near it, and TalkBack " +
+        "reads the distance out. \"Ask it who it is\" asks a tracker for its maker and serial; one that answers can be made " +
+        "to beep, which anyone nearby will hear."
+    TrackerAction.SELF_TEST -> "Proves the scanner can hear and recognise a tracker." to
+        "The phone briefly pretends to be an AirTag and checks the scanner picks it up and recognises it as one. Some " +
+        "phones cannot hear themselves; the test says so instead of passing."
     TrackerAction.BLUETOOTH -> "What your Bluetooth gives a roadside or in-store sensor." to
         "Your phone's name (one tap to swap a personal one for the model name), whether it is discoverable, every paired " +
         "accessory with whether its address is fixed for life, which rode along on your drives, and any Flock camera battery, " +

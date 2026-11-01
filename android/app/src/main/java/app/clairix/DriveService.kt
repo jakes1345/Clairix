@@ -29,7 +29,7 @@ class DriveService : Service() {
     override fun onCreate() {
         super.onCreate()
         // startForeground must come first: startForegroundService gives us only a few seconds.
-        if (!enterForeground()) stopSelf()
+        if (enterForeground()) active = true else stopSelf()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -43,6 +43,7 @@ class DriveService : Service() {
     }
 
     override fun onDestroy() {
+        active = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -96,6 +97,14 @@ class DriveService : Service() {
         private const val CHANNEL_ID = "drive_mode"
         private const val NOTIFICATION_ID = 0x0D21
         private const val ACTION_STOP = "app.clairix.DRIVE_STOP"
+
+        /**
+         * Whether drive mode is on in this process (the service holds the foreground).
+         * The scanner's trip memory reads it as a sign the journey is in the owner's own car.
+         */
+        @Volatile
+        var active: Boolean = false
+            private set
 
         fun start(context: Context) {
             runCatching {

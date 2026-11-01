@@ -61,9 +61,18 @@ data class Detection(
      * from its owner, or 0: the moment, for a tag riding along, it stopped being
      * somebody's keys.
      */
-    val separatedAt: Long = 0L
+    val separatedAt: Long = 0L,
+    /**
+     * When the owner marked it found ("I found it"), or 0. A found device no longer
+     * counts as on you anywhere (the Trackers hero, the hub, the map); it stays on the
+     * list, the timeline and the evidence report. See [app.clairix.analysis.Tracker.resolve].
+     */
+    val resolvedAt: Long = 0L
 ) {
     val identified: Boolean get() = tracker != null
+
+    /** Marked found by the owner; see [resolvedAt]. */
+    val resolved: Boolean get() = resolvedAt != 0L
 
     /** "Apple AirTag · serial 3f9a1c2e…" when the tracker identified itself over DULT. */
     val dultLabel: String? get() {

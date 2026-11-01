@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 
 /** Shared state between the scanning service, the NFC reader and the UI. */
@@ -92,16 +91,21 @@ object Registry {
 
     // --- Trusted devices -----------------------------------------------------
     //
-    // Keyed on the Bluetooth address, which is what the scanner has in hand when it
-    // decides whether to skip a device. It used to be keyed on the identity id
-    // instead — a counter handed out fresh on every service start — so marking
-    // something safe silenced nothing, and after a restart the saved id belonged to
-    // whatever device happened to be seen seventh.
-    //
-    // Addresses on a rotating device are not stable by design, but the devices worth
-    // trusting are the user's own headphones, watch and car, and those keep one.
+    // Kept as devices, each a set of Bluetooth addresses ([TrustBook]); [trusted] is
+    // every address of every device, which is what the screens and the scanner check.
+    // An address is what the owner sees when marking a device, and the scanner carries
+    // that trust on to the addresses it links to the same device ([extendTrust]), so a
+    // tracker or earbuds that rotate their address stay the owner's for the day the
+    // trust lasts. (It used to be keyed on the identity id instead, a counter handed
+    // out fresh on every service start, so marking something safe silenced nothing.)
 
     private const val TRUSTED_KEY = "trusted_addresses"
+    private const val TRUSTED_DEVICES_KEY = "trusted_devices"
+
+    private val trustLock = Any()
+
+    private val _trustBook = MutableStateFlow(TrustBook.EMPTY)
+    internal val trustBook: StateFlow<TrustBook> = _trustBook.asStateFlow()
 
     private val _trusted = MutableStateFlow<Set<String>>(emptySet())
     val trusted: StateFlow<Set<String>> = _trusted.asStateFlow()
@@ -114,24 +118,55 @@ object Registry {
     fun bindTrustStore(context: Context) {
         val app = context.applicationContext
         appContext = app
-        _trusted.value = app
-            .getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)
-            .getStringSet(TRUSTED_KEY, emptySet())
-            ?.toSet() ?: emptySet()
+        val prefs = app.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)
+        val book = TrustBook.from(
+            prefs.getString(TRUSTED_DEVICES_KEY, null),
+            prefs.getStringSet(TRUSTED_KEY, emptySet())?.toSet() ?: emptySet()
+        )
+        synchronized(trustLock) {
+            _trustBook.value = book
+            _trusted.value = book.addresses
+        }
+        // Trust that lapsed while nothing was running goes now, on disk too.
+        expireTrust()
     }
 
-    fun trust(address: String) = setTrusted { it + address }
+    /**
+     * Marks [address] as the owner's. When the device [rotating]ly changes its address
+     * ([TrustBook.rotating]) the trust holds for a day, carried across the changes the
+     * scanner links, and then lapses so the owner is asked again; otherwise for good.
+     */
+    fun trust(address: String, label: String? = null, rotating: Boolean = false) =
+        setTrust { it.trust(address, label, rotating, System.currentTimeMillis()) }
 
-    fun untrust(address: String) = setTrusted { it - address }
+    /** Takes trust back from the device [address] belongs to, every address of it included. */
+    fun untrust(address: String) = setTrust { it.untrust(address) }
 
-    private fun setTrusted(change: (Set<String>) -> Set<String>) {
-        val next = _trusted.updateAndGet(change)
+    /**
+     * The scanner linked [address] to a trusted device it knows by [knownAddress]: the
+     * owner's device under a new address. Keeps that device's expiry.
+     */
+    fun extendTrust(address: String, knownAddress: String) = setTrust { it.extend(address, knownAddress) }
+
+    /** Drops trust that has lapsed by [now]; the scanner calls this as it publishes. */
+    fun expireTrust(now: Long = System.currentTimeMillis()) = setTrust { it.expire(now) }
+
+    private fun setTrust(change: (TrustBook) -> TrustBook) {
+        val next: TrustBook
+        synchronized(trustLock) {
+            val current = _trustBook.value
+            next = change(current)
+            if (next === current) return
+            _trustBook.value = next
+            _trusted.value = next.addresses
+        }
         appContext
             ?.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)
             ?.edit()
-            // A defensive copy: SharedPreferences must not be handed a set that is
-            // later mutated, and callers keep a reference to the flow's value.
-            ?.putStringSet(TRUSTED_KEY, HashSet(next))
+            // A fresh set: SharedPreferences must not be handed one that is later
+            // mutated. The plain set stays alongside the devices for older versions.
+            ?.putStringSet(TRUSTED_KEY, HashSet(next.addresses))
+            ?.putString(TRUSTED_DEVICES_KEY, next.toJson())
             ?.apply()
     }
 

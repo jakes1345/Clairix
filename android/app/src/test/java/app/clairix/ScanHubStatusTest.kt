@@ -40,6 +40,14 @@ class ScanHubStatusTest {
     }
 
     @Test
+    fun aTrackerMarkedFoundNoLongerAlerts() {
+        val found = listOf(detection("A", true).copy(resolvedAt = 1_000L))
+        val s = trackerStatus(ScanStatus(scanning = true, nearbyCount = 1), found, emptySet())
+        assertEquals("1 device nearby, none following", s.text)
+        assertFalse(s.alert)
+    }
+
+    @Test
     fun anUnidentifiedDeviceMovingWithYouIsACautionNotATracker() {
         val s = trackerStatus(ScanStatus(scanning = true, nearbyCount = 5), listOf(detection("B", true, Threat.HIGH)), emptySet())
         assertEquals("1 device travelling with you", s.text)

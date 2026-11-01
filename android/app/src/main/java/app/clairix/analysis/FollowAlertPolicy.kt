@@ -89,6 +89,18 @@ class FollowAlertPolicy {
         }
     }
 
+    /**
+     * Forgets [key]: the owner marked it found. If it is heard again after an hour away
+     * and travels with you again ([Tracker.observe]), it is announced, held or summed up
+     * afresh instead of counting as already done.
+     */
+    @Synchronized
+    fun forget(key: String) {
+        held.remove(key)
+        trackers.remove(key)
+        summarised.remove(key)
+    }
+
     /** Forgets everything. Used by "clear all data". */
     @Synchronized
     fun clear() {

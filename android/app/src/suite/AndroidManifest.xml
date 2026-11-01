@@ -17,10 +17,6 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <!-- Vehicle context: the scanner switches to an intensive sweep when the phone
-         is detected to be in a vehicle, and compares what rides along across trips.
-         A runtime permission; without it the scanner simply never knows. -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <!-- Stalkerware scan: Android 11+ hides most installed apps from a package
          listing without this, and an app hiding on the phone is the whole point. -->

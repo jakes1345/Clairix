@@ -131,6 +131,7 @@ object Report {
             appendLine("    Sightings: ${d.sightings}  Places: ${d.places}  Displacement: ${d.displacementM.toInt()} m")
             if (d.tracker != null) appendLine("    Type    : ${d.tracker.label} (${d.tracker.brand})")
             if (d.separatedAt != 0L) appendLine("    Separated from owner since: ${sdfMinute.format(Date(d.separatedAt))}")
+            if (d.resolvedAt != 0L) appendLine("    Marked found by the owner: ${sdfMinute.format(Date(d.resolvedAt))}")
             if (d.rotations > 0) appendLine("    MAC rotations: ${d.rotations}")
             appendLine("    ${d.addresses} address rotation${if (d.addresses == 1) "" else "s"}")
             if (d.points.isNotEmpty()) {
@@ -223,6 +224,7 @@ object Report {
                 it.put("score", d.score)
                 it.put("following", d.following)
                 it.put("persistent", d.persistent)
+                if (d.resolvedAt != 0L) it.put("resolved_at", d.resolvedAt)
                 d.tracker?.let { t -> it.put("tracker", t.label); it.put("brand", t.brand) }
             })
         }

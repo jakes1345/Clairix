@@ -44,7 +44,22 @@ data class DultResult(
     val serialHash: String? = null,
     val soundStarted: Boolean = false,
     val complete: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    /**
+     * The tracker turned the connection down or offered no non-owner service, which
+     * is what a tracker with its owner nearby does (see [DultInterrogator]). Set only
+     * on a final result that answered nothing.
+     */
+    val refused: Boolean = false,
+    /** When the scanner began the exchange this comes from (wall clock); 0 when not stamped. */
+    val askedAt: Long = 0L,
+    /** Which exchange with this device it was, counting from 1; 0 when not stamped. */
+    val attempt: Int = 0,
+    /**
+     * When the scanner will ask again on its own, if the device still qualifies; 0 when
+     * it will not (it answered, or the automatic attempts are used up). See [DultSchedule].
+     */
+    val retryAt: Long = 0L
 ) {
     /** True once at least one query was answered — the tracker really is in separated mode. */
     val answered: Boolean
@@ -119,11 +134,14 @@ object DultInterrogator {
 
     /**
      * Tracker signature ids ([app.clairix.TrackerType.id]) whose makers ship or have
-     * announced DULT firmware. Generic GPS boxes and Eddystone beacons never will.
+     * announced DULT firmware. Generic GPS boxes and beacons never will. Readings of a
+     * tracker with its owner nearby (Find My "owner nearby", Find Hub's ordinary frame)
+     * are left out: the non-owner service is not offered then, so a tag that merely
+     * stays around is asked once it separates, or once it is confirmed following.
      */
     val SUPPORTED: Set<String> = setOf(
         "airtag", "findmy", "tile", "chipolo", "chipolo_spot",
-        "pebblebee", "motorola_tag", "smarttag", "google_find_hub", "dult"
+        "pebblebee", "motorola_tag", "smarttag", "google_find_hub_separated", "dult"
     )
 
     /**
@@ -154,7 +172,8 @@ object DultInterrogator {
      * [DultResult] after every answer and a final one with [DultResult.complete] set.
      * With [startSound] the tracker is also asked to make a sound at the end, so the
      * user can find it by ear — off by default, because the service runs this on
-     * every newly seen tracker and a café full of beeping AirTags helps nobody.
+     * every tracker that stays around (see [DultSchedule]) and a café full of beeping
+     * AirTags helps nobody.
      */
     fun interrogate(
         device: BluetoothDevice,
@@ -196,11 +215,15 @@ object DultInterrogator {
         var gattRef: BluetoothGatt? = null
         var controlPoint: BluetoothGattCharacteristic? = null
 
-        fun finish(error: String?) {
+        /** Ends the session; [refused] marks the owner-nearby kind of failure ([DultResult.refused]). */
+        fun finish(error: String?, refused: Boolean = false) {
             synchronized(lock) {
                 if (finished) return
                 finished = true
-                result = result.copy(complete = true, error = error ?: result.error)
+                result = result.copy(
+                    complete = true, error = error ?: result.error,
+                    refused = refused && !result.answered
+                )
             }
             trySend(result)
             close()
@@ -246,7 +269,7 @@ object DultInterrogator {
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         val why = if (result.answered) null
                         else "Tracker refused the connection (status $status) — it is probably still with its owner"
-                        finish(why)
+                        finish(why, refused = true)
                     }
                 }
             }
@@ -262,7 +285,7 @@ object DultInterrogator {
                 if (status != BluetoothGatt.GATT_SUCCESS) { finish("Service discovery failed (status $status)"); return }
                 val service = gatt.getService(NON_OWNER_SERVICE)
                 if (service == null) {
-                    finish("No DULT non-owner service — the tracker is with its owner, or predates the spec")
+                    finish("No DULT non-owner service — the tracker is with its owner, or predates the spec", refused = true)
                     return
                 }
                 val cp = service.getCharacteristic(CONTROL_POINT)
