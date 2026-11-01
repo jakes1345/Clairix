@@ -1,9 +1,11 @@
 # Clairix — Android
 
-A real BLE tracker detector, not a port. The Node tool in this repo is a
-terminal application and does not run on Android, so this is a native Kotlin
-app that reuses the parts that actually matter: the tracker signature database,
-the MAC-rotation fingerprinting, and the geo-correlation rule.
+A real BLE tracker detector, written for Android in Kotlin. The tracker
+signatures are in `detect/Signatures.kt`; a device that changes its Bluetooth
+address is followed across the change by its advertisement content
+(`analysis/Identity.kt`) and by the rhythm of its radio
+(`detect/CadenceFingerprinter.kt`); and the rule below is in `analysis/Geo.kt`
+and `analysis/Persistence.kt`.
 
 ## The rule that makes it worth installing
 
@@ -111,9 +113,9 @@ edition twice, on two machines, and fails unless the two builds agree
 (`reproducible-build` and `compare-builds` in
 `.github/workflows/android.yml`): the debug APK entry for entry, since each
 machine signs it with a debug key it makes for itself, and the release APK,
-built unsigned, byte for byte. A release build refuses to run until
-`asset-signing.pub` is committed, so until then the debug build alone is
-compared. What makes the builds agree:
+built unsigned, byte for byte. (A release build refuses to run without
+`asset-signing.pub`; that file has been committed since 0ff171b5, see
+`docs/KEYS.md`, so both are compared.) What makes the builds agree:
 
 - The Rust compiler, `1.97.0`, named in `comms-crypto/rust-toolchain.toml`
   and in both workflows; bump both together. The absolute paths of the
@@ -143,9 +145,10 @@ files and the signing block and changes nothing else.
 
 The NDK (`27.2.12479018`) and `cargo-ndk` (`4.1.2`) are pinned from 3.0.0
 Beta 6; the build checks both. Releases up to Beta 5 used the runner's latest
-NDK, so a rebuild of one may differ in the native library. No published
-release has yet been rebuilt and matched; until one has, the check is a
-check, not a promise.
+NDK, so a rebuild of one may differ in the native library. 3.0.0 Beta 7 is
+the first published release rebuilt from its tag and matched, and
+`.github/workflows/verify-release.yml` now rebuilds and compares every release
+as it is published (`tools/reproducible/README.md`).
 
 ## Release signing
 
@@ -197,16 +200,20 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 
 ## Cutting a release
 
-Before the first release, make the asset signing key (`tools/signing/README.md`):
-`python3 tools/signing/keygen.py` writes `android/asset-signing.pub` and
-`android/asset-signing.pem` (commit both) and prints the secret for the
-`ASSET_SIGNING_KEY` repository secret. The maps, work zones and the release
+The asset signing key exists: its public half is committed as
+`android/asset-signing.pub` and `android/asset-signing.pem`, its secret half is
+the `ASSET_SIGNING_KEY` repository secret, and `docs/KEYS.md` records it. The
+maps, the work zones, the relay and stalkerware lists and the release
 checksums are signed with it, and the app refuses downloads it cannot verify;
-a release build fails without the public key file.
+a release build fails without the public key file. Replacing it takes
+`tools/signing/keygen.py --force` and a new app release
+(`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 
 1. Set `versionName` and raise `versionCode` in `app/build.gradle.kts`
    (3.0.0-beta.1 is versionCode 21). The workflow refuses a tag that does not
-   match `versionName`.
+   match `versionName`. In the same commit, change the supported version in
+   `SECURITY.md` ("currently 3.0.0 Beta 9" for `3.0.0-beta.9`) and bring
+   `docs/OPEN-ISSUES.md` up to date.
 2. Commit, then start `.github/workflows/release.yml` in one of three ways:
    push a tag `v3.0.0-beta.1`; push a branch `release/v3.0.0-beta.1` (the tag is
    created at its head); or Actions → Release → Run workflow with the tag.
@@ -278,6 +285,9 @@ otherwise every coffee shop sets off an alert.
 ## What it cannot detect
 
 - A tracker with no Bluetooth radio — a hardwired GPS/LTE box only transmits on
-  cellular uplink. Finding those needs an SDR; see the Node tool in this repo.
+  cellular uplink, and Clairix does not listen for that. Drive mode's SDR
+  support (an RTL-SDR dongle on USB, `SdrUsbDriver.kt`) decodes aircraft
+  transponders (`AdsbDecoder.kt`) and plays the voice channels you set; it does
+  not look for a modem's uplink. A physical search is the way to find one.
 - Anything currently asleep. Physical search still finds things RF never will.
 - Carrier-side location. Nothing near you transmits, so there is nothing to hear.

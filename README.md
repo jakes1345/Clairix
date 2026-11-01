@@ -156,8 +156,9 @@ Read this part twice.
   envelope arrive and leave, on a quiet relay there is little to mix with,
   and someone watching both ends for weeks can still correlate by volume. The relay's
   operator, or the platform under it, could capture live requests and see the
-  address each one came from. None of this is written down, but it is
-  possible while a request is in flight. From 3.0.0 Beta 6 the tokens a send
+  address each one came from. The relay writes none of this down; what the
+  platform keeps (Cloudflare's edge, for the project's relay) is under the
+  platform's own policy, which we cannot check. From 3.0.0 Beta 6 the tokens a send
   spends are blind (RFC 9497, as Privacy Pass): the phone makes each one and
   the relay signs it without seeing it, so not even a relay that recorded
   every request can tell which account a send's token came from. If your IP address matters, use Tor or a VPN. A call hands your
@@ -219,8 +220,10 @@ Per Clairix number: the public keys; envelopes waiting for the phone, deleted
 when collected or after 30 days, each marked if it came without a contact's
 pass; the pass key your contacts' passes are made with; a UnifiedPush endpoint
 if you set one;
-unused invite codes for 7 days; the hashes of unspent tokens for about 14
-days; a note that each key belongs to that number, so nobody else can
+unused invite codes for 7 days; the hashes of the old kind of token, which
+apps from before Beta 6 fetch, for about 14 days while unspent; the hashes of
+spent blind tokens, so none is spent twice, until the key they were made with
+is retired, 14 to 28 days; a note that each key belongs to that number, so nobody else can
 register it. For traffic: anonymous speed samples for 2 hours, learned
 road-segment positions for 30 days, incidents until they expire. For
 ClairixCoin, in Clairix Full on a relay that offers it: the balance, until

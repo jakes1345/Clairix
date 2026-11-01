@@ -16,6 +16,10 @@ Also read:
 - [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md): every finding from our
   own reviews, what was done about it, and what is still open. Please do not
   report those again unless the fix is wrong.
+- [`../OPEN-ISSUES.md`](../OPEN-ISSUES.md): the findings that are not closed,
+  in one table.
+- [`../KEYS.md`](../KEYS.md): the keys that sign the app's downloads, the
+  release checksums and the APKs, and how to check them.
 - [`../../README.md`](../../README.md), "Who it is built against": the claims
   as users read them.
 - [`../../comms-worker/README.md`](../../comms-worker/README.md): what the

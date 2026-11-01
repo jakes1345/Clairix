@@ -71,7 +71,7 @@ To connect directly, the two phones exchange their network addresses, as WebRTC 
 ### On your phone
 Your Olm account, sealing key and sessions are serialised under a random 32-byte key. That key is wrapped by a key in Android's hardware-backed keystore. The Comms database (contacts, messages, groups, receipts) is SQLCipher, every page encrypted under a random key wrapped by the keystore, and message bodies inside it are encrypted once more; the Comms settings (your relay, number, name and push endpoint) are sealed the same way, and so are the scanner's records (location history, timeline, cell-tower baseline, trips) and the unlock ledger. The app-lock passcode is never stored; only an HMAC verifier made with a hardware key is, so it cannot be brute-forced from a copy of the files. A biometric unlock key is destroyed by Android whenever a fingerprint or face is added or removed.
 
-Two limits. The keys that seal these are not bound to the phone being unlocked, because the scanner has to write while the keyguard is up, so code running as the app on an unlocked phone can read what the app can. And the remaining settings files (detection thresholds, the sleep window, the passcode's verifier, TLS pins) are not encrypted; they hold settings, not records of your life.
+Two limits. The scanner has to write while the keyguard is up, so the keys that seal its records and the unlock ledger work while the phone is locked. Comms is different: since Beta 7, what reads your conversations (your identity, the key to the Comms database, stored photos and videos, the duress phrase and the Comms log) needs the phone unlocked, and what arrives while it is locked waits sealed until then; only what the phone needs to keep collecting it, such as your relay and number, stays readable. On a phone with no secure lock screen there is no locked state, and those keys work at any time. Either way, code running as the app on an unlocked phone can read what the app can. And the remaining settings files (detection thresholds, the sleep window, the passcode's verifier, TLS pins) are not encrypted; they hold settings, not records of your life.
 
 ## What the relay stores, and for how long {#relay}
 
@@ -110,7 +110,7 @@ There is nothing in Clairix that reports back to us. No usage events, no device 
 
 ## Responsible disclosure {#disclosure}
 
-If you find a vulnerability in the app, the relay or this website, please tell us first.
+If you find a vulnerability in the app, the relay, this website or anything else [SECURITY.md lists as in scope](https://github.com/jakes1345/Clairix/blob/main/SECURITY.md#in-scope), please tell us first.
 
 - Email **security@clairix.app**.
 - Give us enough to reproduce the issue. A proof of concept is welcome; stolen data is not.

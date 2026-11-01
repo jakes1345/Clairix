@@ -160,7 +160,8 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
   checks, and plate-reader maps. They are best-effort by design.
 - Navigation, maps, traffic and incidents (`nav/`, `comms-worker/src/traffic*`,
   `incidents*`), except where they share the relay's authentication and tokens.
-- The website (`website/`) and the older desktop tool (`src/`).
+- The website (`website/`) and the older desktop tool (`src/` in the tagged
+  releases; removed from the repository after 3.0.0 Beta 8).
 - ClairixCoin's economics. The payment protocol's idempotency and refunds are
   in scope as part of the relay; finding 25 (coin farming) is known.
 - vodozemac itself, Arti, SQLCipher and Android. Report misuse of them, not

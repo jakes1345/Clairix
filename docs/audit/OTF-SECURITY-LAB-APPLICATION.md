@@ -117,9 +117,8 @@ findings are resolved.
 - vodozemac, the Olm library Clairix uses, was audited by Least Authority in
   2022 ([announcement](https://matrix.org/blog/2022/05/16/independent-public-audit-of-vodozemac-a-native-rust-reference-implementation-of-matrix-end-to-end-encryption/)).
 - Clairix has had two internal security reviews. Every finding, fixed or open,
-  is published in `docs/SECURITY-FINDINGS.md`. The open ones include:
-  - coin farming;
-  - release signing on the CI runner.
+  is published in `docs/SECURITY-FINDINGS.md`, and the open ones are listed,
+  with what remains of each, in `docs/OPEN-ISSUES.md`.
 
 ## Project maturity
 

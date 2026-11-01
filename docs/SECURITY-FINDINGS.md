@@ -28,8 +28,9 @@ read", disarms HCE, and FLAG_SECURE is on for every screen; a reachable wipe
 ("Wipe Clairix") that also cancels notifications, clears the clipboard,
 unregisters push and drops the device-admin role, with the relay call bounded
 to four seconds; a hide-previews setting; sensitive-marked clipboard copies;
-the duress phrase's no-group warning; releases, map graphs and work zones
-signed with a project Ed25519 key and verified in the app; every action
+the duress phrase's no-group warning; map graphs and work zones signed with
+a project Ed25519 key and verified in the app, and the release checksums
+signed with it for anyone to check (`docs/KEYS.md`); every action
 commit-pinned, the release dispatch guarded, the Geofabrik extract checked
 against its MD5, pip pinned; the crate refuses to rebind a Curve25519 key to a
 second identity and keeps a session whose first message fails padding; the
@@ -232,8 +233,10 @@ twice on two machines in CI, which fails unless the two builds agree.
     checksum; the work-zones workflow signs every per-region file and the app
     verifies before parsing, and drops a cached copy an earlier version kept
     unverified. A release build fails without the public key; the workflows
-    fail without the secret. **Operator action:** run `keygen.py`, commit
-    the two public files, set the secret, before the next release.
+    fail without the secret. **Operator action, since done:** the two public
+    files were committed in `0ff171b5` and the secret set; every release from
+    3.0.0 Beta 3 on carries a checksum signature that verifies against them
+    (`docs/KEYS.md`).
 17. **Release `SHA256SUMS.txt` is unsigned** (`release.yml:208`). *Reported.*
     **Done:** signed by the same key into `SHA256SUMS.txt.sig`, published
     with the release; the notes say how to check it with `openssl` against
@@ -414,16 +417,19 @@ ClairixCoin is.
 ## Suggested order
 
 1. Encrypt scanner stores with an unlock-bound key (6, 7). *Done for the
-   stores; the key is not unlock-bound (7), the unlock ledger and prefs are
-   still clear (6).*
+   stores, the unlock ledger and the Comms preferences; the remaining
+   settings files are plain (6). The scanner's key is not unlock-bound; what
+   reads conversations has been since Beta 7 (7).*
 2. Target number out of lookup URLs; drop `lastFetchAt` and bucket
    timestamps; unsign probes (1, 2, 3). *Done.*
 3. Pin the relay certificate; system-only trust elsewhere (15). *Done.*
 4. Sign graphs, work zones and release sums; SHA-pin actions (16, 17, 18).
-   *Done; the operator still has to generate the key and set the secret.*
+   *Done; the public key was committed in `0ff171b5` and the secret set
+   (`docs/KEYS.md`). Release signing still runs on the CI runner (18).*
 5. One-tap wipe with notification, admin and push cleanup; disarm HCE on
-   lock; gate `openPeer`/`markRead` on the lock (8, 9, 10). *Done; HCE on
-   screen-off and vault lock (10) remains.*
+   lock; gate `openPeer`/`markRead` on the lock (8, 9, 10). *Done, and the
+   card is disarmed on screen-off too; a vault re-lock still leaves it armed
+   (10).*
 6. OTK-burn ordering and curve-rebind refusal in the crate (19, 20). *Done.*
 7. README with an explicit threat model. *Done.*
 
@@ -729,13 +735,26 @@ Known and not fixed:
   The second review above was internal; nothing here has had an independent
   audit.
 
-Still open after PR #15: 4, 5, 7 (by decision), 23 (since done, Beta 8), 25 (coin farming, on a relay that grants a starting balance),
-30 (since done, Beta 8), and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
-matched (since done: Beta 7 rebuilt from its tag matches both published APKs,
-and `verify-release.yml` checks every release as it is published), an audit.
+## What is still open
 
-## Not re-tested
+[`OPEN-ISSUES.md`](OPEN-ISSUES.md) is the list: every finding above that is
+not closed, in one table with what remains of each, brought up to date with
+each release. Of what this paragraph used to list as still open, 23 and 30
+were done in Beta 8, and a published release has been rebuilt from its tag
+and matched: Beta 7 by hand, Beta 8 by `verify-release.yml` as it was
+published, which it now does for every release.
 
-No Gradle, cargo or wrangler run was possible in the audit environment. The
-minify change in this PR is the one edit that can fail a release build;
-check the first release build's R8 output for missing-class warnings.
+## Testing
+
+When this log was begun, against 3.0.0 Beta 2, no Gradle, cargo or wrangler
+run was possible where it was written. CI now runs all three on every change
+to the code each covers: `android.yml` tests the crypto crate (`cargo test`),
+builds every debug variant, runs the Kotlin unit tests, and builds the full
+edition twice on two machines and requires the two to agree; `relay.yml`
+type-checks, tests and bundles the relay (`wrangler deploy --dry-run`) and
+tests its token module; `emulator.yml` drives every screen and runs the
+end-to-end tests against two local relays on Android 12, 13, 14 and 15;
+`release.yml` builds each release, minified, and `verify-release.yml`
+rebuilds it from its tag and compares. The minify change this section once
+warned about has been through the release build of every release from Beta 3
+on.

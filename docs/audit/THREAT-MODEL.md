@@ -170,7 +170,6 @@ credentials and can replay them.
 
 ## Known open issues
 
-See the "Still open" items in [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md):
-among them, on a relay whose operator grants a starting balance, new
-registrations can farm ClairixCoin (25), and release signing
-runs on the CI runner.
+[`../OPEN-ISSUES.md`](../OPEN-ISSUES.md) lists every finding that is not
+closed, with what remains of each; [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md)
+tells each in full.
