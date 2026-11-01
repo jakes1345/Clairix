@@ -2514,7 +2514,8 @@ object CommsRepository {
             bump()
             CommsLog.add("Paid $amount $COIN_SYMBOL to ${formatClairixNumber(contact.number)}")
             // The notice is what carries the note; only the amount reached the relay.
-            when (val d = deliver(contact, CommsWire.payment(id, result.txid, ts, amount, text))) {
+            // It names the id the payee's record keeps the credit under, which only this notice tells them.
+            when (val d = deliver(contact, CommsWire.payment(id, result.credit, ts, amount, text))) {
                 Deliver.Sent -> Unit
                 is Deliver.Failed -> CommsLog.add("Payment notice to ${formatClairixNumber(contact.number)} failed: ${d.reason}; the coins have been transferred")
                 is Deliver.TooLarge -> CommsLog.add("Payment notice to ${formatClairixNumber(contact.number)} failed: ${d.reason}; the coins have been transferred")

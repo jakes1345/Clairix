@@ -73,7 +73,10 @@ giving them your real number or your identity key.
 - Where its operator has turned ClairixCoin on (see "ClairixCoin"), each
   account's balance and its own record of the transfers it made and received:
   the id, the amount, the hour and which way it went, for 30 days and a
-  hundred deep. Never who paid whom. A payment is signed by the payer and
+  hundred deep. Never who paid whom: the payer's record and the payee's
+  record of one transfer carry different ids, both chosen by the payer's
+  phone, so they cannot be joined by id; the same amount in the same hour on
+  two accounts can still hint at a pair. A payment is signed by the payer and
   names the payee, so the relay sees the pair while it moves the coins, and
   writes down neither.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
@@ -628,7 +631,11 @@ amount.
 Each mailbox keeps a record of its own transfers: the id, the amount, the
 hour and whether it came in or went out, the 100 most recent and none older
 than 30 days. It names nobody: not the other party, not a note, and for a
-mint not who minted it (the record says "Minted by the relay"). A ledger
+mint not who minted it (the record says "Minted by the relay"). Nor does it
+share an id with the other side's record: the payer's phone names the payment
+twice, `txid` for its own record and `credit` for the payee's, and tells the
+payee the second only inside the encrypted notice. What the two records still
+have in common is the amount and the hour. A ledger
 written by an earlier version, which named both parties and the moment, is
 rewritten the first time the mailbox's coin is touched, or by the mailbox's
 daily cleanup, whichever comes first.
@@ -794,7 +801,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat with `next` (the most milliseconds until the following one: two minutes, or with `X-Clairix-Heartbeat: <ms>` on the upgrade, two minutes for ten minutes after an envelope or an ack and that pace otherwise; see "The live connection"), and `pong` for a client's `{"type":"ping"}` |
 | GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured (503 when a key is configured and minting fails) |
 | GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin. Every coin route answers 404 while `COIN` is off |
-| POST | `/v1/coin/pay` | `{to, pin, amount, txid?}` → `{txid, balance, ok}`: pays a contact; `pin` is the payee's key fingerprint, and a number that does not exist or a pin that does not match is "Payment refused" before any coin moves; 30 a minute |
+| POST | `/v1/coin/pay` | `{to, pin, amount, txid?, credit?}` → `{txid, credit, balance, ok}`: pays a contact; `pin` is the payee's key fingerprint, and a number that does not exist or a pin that does not match is "Payment refused" before any coin moves; the payer's record keeps `txid`, the payee's `credit` (a request that names `txid` must name a different `credit`; one that names neither gets two fresh ids); 30 a minute |
 | GET | `/v1/coin/history` | `{txs: [{id, amount, ts, direction, note?}]}`: the last transfers, newest first (`?limit=`, up to 100), each dated to the hour; `note` only on a mint |
 | POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `COIN` is on and `ADMIN_SECRET` is set |
 | DELETE | `/v1/admin/accounts/:number` | With `X-Admin-Secret` and no signature → `{ok, number}`: deletes the account as `DELETE /v1/me` does, for a deletion requested by email (`scripts/delete-account.mjs`, see above); 404 for no such account; off unless `ADMIN_SECRET` is set; a few tries a minute per address |

@@ -630,9 +630,8 @@ class MainActivity : AppCompatActivity() {
             Registry.cancelVaultCapture()
             Registry.addNfc(capture.tag)
             runCatching { recordNfc(capture.tag) }
-            Registry.setPendingVaultCapture(
-                PendingVaultCapture(capture.tag.uid, capture.tag.profile, capture.tag.type, capture.apduPairs)
-            )
+            // A payment card held to the phone instead stages nothing: it is never savable.
+            Registry.setPendingVaultCapture(NfcScanner.stagedCapture(capture))
         } else {
             val parsed = try {
                 NfcScanner.parse(tag, mifare)
@@ -891,6 +890,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun addToVault(tag: NfcTag, label: String, replace: Boolean) {
         if (!BuildConfig.CARD_VAULT) return
+        // A payment card is never stored or emulated, however the save was reached.
+        if (NfcScanner.isPaymentProfile(tag.profile)) return
         // Emulation pairs come only from a matching "Record for vault" re-tap, held in
         // the pending capture; a card saved without one (e.g. MIFARE Classic, kept for
         // identification) stores none.
@@ -3651,8 +3652,7 @@ private fun NfcTagRow(
     val namingCard = captureReady || addingLabel
     val c = ClairixTheme.colors
 
-    val isPayment = t.profile in setOf(CardProfile.EMV_VISA, CardProfile.EMV_MASTERCARD,
-        CardProfile.EMV_AMEX, CardProfile.EMV_OTHER)
+    val isPayment = NfcScanner.isPaymentProfile(t.profile)
     val tone = when {
         t.suspicious -> Tone.Danger
         isPayment    -> Tone.Caution

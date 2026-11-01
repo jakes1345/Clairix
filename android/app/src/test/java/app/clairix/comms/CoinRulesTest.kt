@@ -1,9 +1,12 @@
 package app.clairix.comms
 
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.test.assertFailsWith
 
 /**
  * ClairixCoin on the phone: the balance and the Pay button only where the relay
@@ -66,5 +69,32 @@ class CoinRulesTest {
         // The relay no longer says who paid, so a second contact naming the same
         // payment (its id leaked, or the two together) is not thanked for it too.
         assertFalse(CoinRules.confirms(history, txid, 7, alreadyCounted = true))
+    }
+
+    private val credit = "0f0e0d0c-0b0a-4908-8706-0504030201ff"
+
+    @Test
+    fun aPaymentRequestNamesTheCreditUnderASecondIdSoTheTwoRecordsShareNone() {
+        val body = CoinRules.payRequest("123456789", "pinpinpinpinpinp", 7, txid, credit)
+        assertEquals("123456789", body.getString("to"))
+        assertEquals("pinpinpinpinpinp", body.getString("pin"))
+        assertEquals(7L, body.getLong("amount"))
+        assertEquals(txid, body.getString("txid"))
+        assertEquals(credit, body.getString("credit"))
+        assertNotEquals(body.getString("txid"), body.getString("credit"))
+    }
+
+    @Test
+    fun aCreditIdEqualToThePaymentIdIsRefused() {
+        assertFailsWith<IllegalArgumentException> { CoinRules.payRequest("123456789", "pin", 1, txid, txid) }
+        assertFailsWith<IllegalArgumentException> { CoinRules.payRequest("123456789", "pin", 1, txid, txid.uppercase()) }
+    }
+
+    @Test
+    fun theNoticeNamesTheCreditTheRelayKeptOrThePaymentIdOnAnOlderRelay() {
+        assertEquals(credit, CoinRules.creditId(JSONObject().put("txid", txid).put("credit", credit).put("balance", 3), txid))
+        // A relay from before the split ids credited the payee under the payment id itself.
+        assertEquals(txid, CoinRules.creditId(JSONObject().put("txid", txid).put("balance", 3), txid))
+        assertEquals(txid, CoinRules.creditId(JSONObject().put("txid", txid).put("credit", ""), txid))
     }
 }
