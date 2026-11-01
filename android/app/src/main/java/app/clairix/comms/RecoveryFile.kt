@@ -244,16 +244,28 @@ internal sealed interface RelayProbe {
     data object Gone : RelayProbe
     /** The relay could not be asked: no network, or it did not answer. */
     data class Unreachable(val reason: String) : RelayProbe
+    /**
+     * The mailbox is there and took this identity's signature, but the relay's
+     * operator suspended the number ([reason], the relay's own words, with how
+     * to appeal). The keys are still that account's, so they cannot be
+     * registered again on this relay.
+     */
+    data class Suspended(val reason: String) : RelayProbe
 
     companion object {
         /**
          * The probe's outcome from the relay's answer: [code] is the HTTP
-         * status of a refusal, or 0 when no answer came at all. 401 and 403
-         * are what the relay says when no mailbox there takes these keys at
-         * that number; 404 is a relay with no such route or mailbox.
+         * status of a refusal, or 0 when no answer came at all. 401 is what
+         * the relay says when no mailbox there takes these keys at that
+         * number; 404 is a relay with no such route or mailbox. 403, to a
+         * request signed with the identity key, is a suspended account
+         * (comms-worker src/index.ts, after authenticate), not a missing one.
          */
-        fun fromRefusal(code: Int, reason: String): RelayProbe =
-            if (code == HTTP_UNAUTHORIZED || code == HTTP_FORBIDDEN || code == HTTP_NOT_FOUND) Gone else Unreachable(reason)
+        fun fromRefusal(code: Int, reason: String): RelayProbe = when (code) {
+            HTTP_UNAUTHORIZED, HTTP_NOT_FOUND -> Gone
+            HTTP_FORBIDDEN -> Suspended(reason)
+            else -> Unreachable(reason)
+        }
 
         private const val HTTP_UNAUTHORIZED = 401
         private const val HTTP_FORBIDDEN = 403
@@ -287,6 +299,13 @@ internal sealed interface RestorePlan {
     /** Nothing can be decided: the relay did not answer. Nothing was changed. */
     data class Retry(val reason: String) : RestorePlan
 
+    /**
+     * The number is suspended on its relay ([reason], as the relay put it).
+     * Nothing was changed: the same keys cannot register there again while
+     * that account holds them; an invite to another relay can take them.
+     */
+    data class Suspended(val relayUrl: String, val reason: String) : RestorePlan
+
     companion object {
         /**
          * The plan for [record], given what its relay said ([probe]) and, when
@@ -297,12 +316,15 @@ internal sealed interface RestorePlan {
         fun of(record: RecoveryRecord, probe: RelayProbe, inviteRelay: String? = null): RestorePlan = when (probe) {
             RelayProbe.Found -> Resume(record.relayUrl, record.number)
             RelayProbe.Gone -> Reregister(inviteRelay ?: record.relayUrl, record.number)
-            is RelayProbe.Unreachable -> if (inviteRelay != null && RelayClient.originOf(inviteRelay) != RelayClient.originOf(record.relayUrl)) {
-                Reregister(inviteRelay, record.number)
-            } else {
-                Retry(record.relayUrl.removePrefix("https://") + " did not answer: " + probe.reason)
-            }
+            is RelayProbe.Unreachable -> elsewhere(record, inviteRelay)?.let { Reregister(it, record.number) }
+                ?: Retry(record.relayUrl.removePrefix("https://") + " did not answer: " + probe.reason)
+            is RelayProbe.Suspended -> elsewhere(record, inviteRelay)?.let { Reregister(it, record.number) }
+                ?: Suspended(record.relayUrl, probe.reason)
         }
+
+        /** [inviteRelay] when it is a relay other than [record]'s own; null otherwise. */
+        private fun elsewhere(record: RecoveryRecord, inviteRelay: String?): String? =
+            inviteRelay?.takeIf { RelayClient.originOf(it) != RelayClient.originOf(record.relayUrl) }
     }
 }
 
@@ -324,6 +346,14 @@ sealed interface RestoreOutcome {
      * the same keys are registered under a new number.
      */
     data class Unreachable(val relayUrl: String, val reason: String) : RestoreOutcome
+
+    /**
+     * The number is suspended on [relayUrl] by its operator ([reason], the
+     * relay's words, with how to appeal). Nothing on the phone changed: appeal
+     * to the operator, or bring an invite to another relay, where the same
+     * keys are registered under a new number.
+     */
+    data class Suspended(val relayUrl: String, val reason: String) : RestoreOutcome
 
     /** It did not work ([reason]); nothing on the phone changed. */
     data class Failed(val reason: String) : RestoreOutcome

@@ -90,6 +90,7 @@ internal class RecoveryRestorer(
     private fun bringBack(identity: Identity, record: RecoveryRecord, secret: String, invite: PairingCode?): RestoreOutcome =
         when (val plan = RestorePlan.of(record, probe(identity, record), invite?.relayUrl)) {
             is RestorePlan.Retry -> RestoreOutcome.Unreachable(record.relayUrl, plan.reason)
+            is RestorePlan.Suspended -> RestoreOutcome.Suspended(plan.relayUrl, plan.reason)
             is RestorePlan.Resume -> {
                 resume(identity, plan)
                 commit(identity, record, plan.relayUrl, plan.number, moved = false)

@@ -8,10 +8,11 @@ package app.clairix.security
  * counter-surveillance app is itself the discovery. Discreet mode makes Clairix
  * less obvious at a glance: a neutral launcher entry where the edition allows it,
  * notifications that say only that something runs, generic notification channel
- * names, a neutral device-admin request and a lock screen without the logo or the
- * word LOCKED. What it cannot change is Android's own record of the package:
- * Settings → Apps and the device-admin list still name Clairix, because an app's
- * name in the package cannot change at run time.
+ * names, a neutral explanation on the device-admin request and a lock screen
+ * without the logo or the word LOCKED. What it cannot change is Android's own
+ * record of the package: Settings → Apps, the device-admin list and the heading
+ * and icon of the device-admin request still name Clairix, because an app's name
+ * in the package cannot change at run time.
  */
 
 /**

@@ -36,6 +36,7 @@ import app.clairix.comms.KeepOffScreen
 import app.clairix.comms.PairingCode
 import app.clairix.comms.RestoreOutcome
 import app.clairix.comms.formatClairixNumber
+import app.clairix.security.DiscreetMode
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.ClairixDialog
 import app.clairix.ui.components.GhostButton
@@ -192,7 +193,8 @@ internal fun RecoveryFileCard() {
                 onConfirm = {
                     pendingCode = s.code
                     step = null
-                    createDocument.launch("clairix-recovery-${java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(Date())}.clxr")
+                    val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(Date())
+                    createDocument.launch(recoveryFileName(DiscreetMode.on(context), day))
                 },
                 confirmEnabled = matches,
                 dismissLabel = "Cancel"
@@ -218,6 +220,15 @@ internal fun RecoveryFileCard() {
         }
     }
 }
+
+/**
+ * The name the save picker suggests for a recovery file made on [day]. In
+ * discreet mode it names neither Clairix nor recovery, since the file may sit
+ * in a shared Downloads folder, computer or cloud drive that someone else looks
+ * through; the restore picker opens any file, whatever its name.
+ */
+internal fun recoveryFileName(discreet: Boolean, day: String): String =
+    if (discreet) "backup-$day.bin" else "clairix-recovery-$day.clxr"
 
 /** A code is 28 symbols and up to six separators; anything longer is not one. */
 private const val MAX_CODE_INPUT = 48
@@ -307,9 +318,18 @@ internal fun RestoreFromFileCard(modifier: Modifier = Modifier) {
                         is RestoreOutcome.Unreachable ->
                             "${need.reason}. Nothing has changed on this phone. Try again later, or paste an invite someone on " +
                                 "another relay sent you: the same keys are registered there under a new number, and your contacts' phones are told it."
+                        is RestoreOutcome.Suspended ->
+                            "${need.relayUrl.removePrefix("https://")} said: ${need.reason} Nothing has changed on this phone. " +
+                                "Your keys still belong to that number there, so they cannot be registered on that relay again. " +
+                                "Paste an invite someone on another relay sent you: the same keys are registered there under a new " +
+                                "number, and your contacts' phones are told it."
                         else -> ""
                     },
-                    title = if (gone) "The old number is gone" else "The relay did not answer"
+                    title = when (need) {
+                        is RestoreOutcome.NeedsAdmission -> "The old number is gone"
+                        is RestoreOutcome.Suspended -> "This number is suspended on its relay"
+                        else -> "The relay did not answer"
+                    }
                 )
                 if (gone) {
                     OutlinedTextField(
@@ -351,7 +371,7 @@ internal fun RestoreFromFileCard(modifier: Modifier = Modifier) {
                                     Toast.LENGTH_LONG
                                 ).show()
                             }
-                            is RestoreOutcome.NeedsAdmission, is RestoreOutcome.Unreachable -> admission = outcome
+                            is RestoreOutcome.NeedsAdmission, is RestoreOutcome.Unreachable, is RestoreOutcome.Suspended -> admission = outcome
                             is RestoreOutcome.Failed -> error = outcome.reason
                         }
                     }
