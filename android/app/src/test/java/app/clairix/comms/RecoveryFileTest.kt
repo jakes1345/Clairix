@@ -133,10 +133,25 @@ class RecoveryFileTest {
     }
 
     @Test
+    fun aSuspendedNumberIsNotTakenForAGoneOne() {
+        // The relay answers a signed request from a suspended account with 403 and its operator's words.
+        val said = "This Clairix number is suspended on this relay by its operator. To appeal, write to abuse@relay.example.org."
+        assertEquals(RelayProbe.Suspended(said), RelayProbe.fromRefusal(403, said))
+        // Nothing is registered again on that relay, where the keys still belong to the suspended number.
+        assertEquals(RestorePlan.Suspended(relay, said), RestorePlan.of(record(), RelayProbe.Suspended(said)))
+        assertEquals(RestorePlan.Suspended(relay, said), RestorePlan.of(record(), RelayProbe.Suspended(said), "$relay/"))
+        // An invite to another relay takes the same keys under a new number.
+        assertEquals(
+            RestorePlan.Reregister("https://elsewhere.example.com", "900100200"),
+            RestorePlan.of(record(), RelayProbe.Suspended(said), "https://elsewhere.example.com")
+        )
+    }
+
+    @Test
     fun onlyTheRelaysNoMailboxAnswersCountAsGone() {
         assertEquals(RelayProbe.Gone, RelayProbe.fromRefusal(401, "Signature rejected"))
-        assertEquals(RelayProbe.Gone, RelayProbe.fromRefusal(403, "Forbidden"))
         assertEquals(RelayProbe.Gone, RelayProbe.fromRefusal(404, "Not found"))
+        assertFalse(RelayProbe.fromRefusal(403, "suspended") == RelayProbe.Gone)
         // A relay in trouble, a rate limit or no answer at all is not a reason to give up the number.
         for (code in listOf(0, 429, 500, 502, 503)) {
             assertTrue("$code", RelayProbe.fromRefusal(code, "x") is RelayProbe.Unreachable)

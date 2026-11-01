@@ -8,11 +8,13 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import app.clairix.security.DiscreetMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -60,9 +62,12 @@ class CommsService : Service() {
         LinkWatchdog.schedule(this)
         if (watcher?.isActive != true) {
             // Later changes only update the notification; going foreground again
-            // could be refused from the background and would gain nothing.
+            // could be refused from the background and would gain nothing. Discreet
+            // mode switched on or off rewords it at once: this notification stays up
+            // for as long as Comms is online, and would otherwise keep naming Comms
+            // and the relay until the connection next changed.
             watcher = scope.launch {
-                LiveLink.connected.collect { connected ->
+                combine(LiveLink.connected, DiscreetMode.state) { connected, _ -> connected }.collect { connected ->
                     runCatching {
                         getSystemService(NotificationManager::class.java)?.notify(
                             CommsNotifications.LINK_NOTIFICATION_ID,

@@ -29,20 +29,21 @@ internal fun discreetModeSubtitle(on: Boolean, disguiseAllowed: Boolean, disguis
     val rest = if (on) {
         "Alerts say only \"New notification\" and running services only \"Running\", never what was found, whatever " +
             "the alert details setting says; messages and incoming and missed calls name no one and quote nothing; notification categories " +
-            "have plain names; the lock screen shows a plain prompt and the keypad, no logo; and the device-admin " +
-            "request does not name Clairix. An SOS from your group still shows as an SOS."
+            "have plain names; the lock screen shows a plain prompt and the keypad, no logo; and Clairix's own " +
+            "explanation on the device-admin request does not name it. An SOS from your group still shows as an SOS."
     } else {
         "Alerts would say only \"New notification\" and running services only \"Running\", messages and incoming calls would " +
             "name no one, notification categories would have plain names, the lock screen would show a plain prompt and " +
-            "the keypad, no logo, and the device-admin request would not name Clairix."
+            "the keypad, no logo, and Clairix's own explanation on the device-admin request would not name it."
     }
     return icon + rest
 }
 
 /** What discreet mode cannot hide, said under the switch in every edition. */
 internal const val DISCREET_LIMITS =
-    "Android's own lists still name Clairix: Settings, Apps, the device-admin list and the notification " +
-        "settings page all show the package's name, which no app can change. When the icon changes, the old one " +
+    "Android's own screens still name Clairix: Settings, Apps, the device-admin list, the device-admin " +
+        "request (its heading and icon, above Clairix's explanation) and the notification settings page all show " +
+        "the package's name, which no app can change. When the icon changes, the old one " +
         "may disappear from the home screen: add the new one from the app list. Notifications already showing change " +
         "when they next update."
 
