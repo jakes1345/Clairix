@@ -3,6 +3,7 @@ package app.clairix
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.graphics.Point
 import android.net.Uri
 import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -133,19 +134,42 @@ class SmokeTest {
 
     /**
      * Scrolls the main list until [t] is on screen, then taps it. Settings is a
-     * long list (its About section, with "Take the tour", is near the bottom),
-     * so this goes up to 30 swipes.
+     * long list (its About section, with "Take the tour", is near the bottom).
+     * Each swipe is a drag of a third of the screen that holds still before it
+     * lets go, so the list stops where the finger stops: a quick swipe flings,
+     * and a fling carried the About card past between two looks once Settings
+     * grew (run 41267307169). It goes down until a swipe no longer moves the
+     * list, then back up the same way.
      */
     private fun tapScrolling(t: String) {
-        repeat(30) {
-            ui.find(By.text(t))?.let {
-                try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
+        val x = device.displayWidth / 2
+        val upper = device.displayHeight / 3
+        val lower = device.displayHeight * 2 / 3
+        for (down in listOf(true, false)) {
+            var before = onScreen()
+            for (swipe in 0 until 60) {
+                ui.find(By.text(t))?.let {
+                    try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
+                }
+                val (from, to) = if (down) lower to upper else upper to lower
+                // 40 steps of about 5 ms to move, then 40 in place: no speed left to fling with.
+                device.swipe(arrayOf(Point(x, from), Point(x, to), Point(x, to)), 40)
+                device.waitForIdle(1_000)
+                val now = onScreen()
+                if (now == before) break
+                before = now
             }
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
-            device.waitForIdle(1_000)
+        }
+        ui.find(By.text(t))?.let {
+            try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
         }
         shot("MISSING-$t"); fail("Could not find \"$t\" by scrolling")
     }
+
+    /** What Clairix's screen says now, to tell when a swipe has stopped moving the list. */
+    private fun onScreen(): List<String> = runCatching {
+        ui.findAll(By.pkg(pkg).text(java.util.regex.Pattern.compile(".+"))).mapNotNull { runCatching { it.text }.getOrNull() }
+    }.getOrDefault(emptyList())
 
     private fun back(step: String) { device.pressBack(); alive("back from $step") }
 
