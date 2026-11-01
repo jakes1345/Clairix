@@ -21,13 +21,14 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | **B** | Someone nearby with a Bluetooth radio, while the offline mesh is on | Join the mesh, carry and inspect bundles, flood it |
 | **P** | An intimate partner or family member with household access: knows or has watched the phone's PIN, handles the phone unlocked, may have installed a monitoring app or placed a tracker, and may make the owner unlock it | Read the lock screen and the notification shade; open any app on the unlocked phone and see which apps are installed; read the call log, messages, browser history and clipboard; add a fingerprint or face; change the PIN; demand the phone and the app be unlocked in front of them; notice when a tracker or a monitoring app stops reporting |
 | **Q** | The phone's location provider: Google Play services on most phones, or whoever compels Google | Learn where the phone is each time Clairix asks Android for a position: one worked out from Wi-Fi and cell towers sends it the identifiers of the networks and towers around the phone, with the phone's IP address |
+| **W** | The push service behind a phone's UnifiedPush endpoint, when the owner set up push wake-ups: the server the phone's distributor app uses (for ntfy, ntfy.sh unless its owner chose another, such as one the relay's operator runs; for Conversations, up.conversations.im), and whoever compels it | Learn the relay's address and when each wake was sent, which is when something arrived for the phone while its live connection was down (one wake covers everything until the phone fetches, or 30 seconds); learn the phone's network address and when its distributor app is connected; withhold or delay wakes, or send false ones, which only make the phone fetch over its signed channel. Never what arrived or from whom: the relay posts only the word "wake" |
 
 ## What Clairix protects, and against whom
 
 | Asset | Goal | Against | How (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 |---|---|---|---|
-| Message, voice note, photo, call content | Confidential and authentic; forward secrecy and post-compromise security | R, F, N, U, B | Olm double ratchet (vodozemac) per contact; calls DTLS-SRTP between the phones |
-| Who sent an envelope | Not learnable by the relay, nor later from a seized phone | R, F, N, L | Sealed envelopes; no sender in the request; blind delivery tokens; sealing prekeys rotated weekly and deleted (format 3) |
+| Message, voice note, photo, call content | Confidential and authentic; forward secrecy and post-compromise security | R, F, N, U, B, W | Olm double ratchet (vodozemac) per contact; calls DTLS-SRTP between the phones; a push wake carries only the word "wake" |
+| Who sent an envelope | Not learnable by the relay, nor later from a seized phone | R, F, N, L, W | Sealed envelopes; no sender in the request; blind delivery tokens; sealing prekeys rotated weekly and deleted (format 3); nothing about a sender reaches the push service |
 | The sender claim inside an envelope | Convinces the recipient only; proves nothing to anyone else | R, L, anyone the recipient shows it to | HMAC keyed by X25519 between the sender's sealing key and the recipient's prekey (format 3) |
 | Who looks up whom | Not in URLs or logs; lookups and one-time keys rate-limited | R, U | Lookups in signed bodies; per-account and per-relay limits |
 | That a number exists | Not learnable by sending, paying or flooding, here or through other relays | U, F | A send to a number that does not exist is accepted and dropped; federated limits answer the same either way; a payment must name the fingerprint of the payee's identity key, as a lookup of an unlisted number must, and a number that does not exist and a fingerprint that does not match are refused alike before any coin moves |
@@ -90,6 +91,12 @@ These are stated to users in the README and are not findings:
   shuffled batches) and cover traffic is optional, but it is one relay, not a
   mix network, and it sees each envelope's recipient, size and time.
 - Hiding the recipient of an envelope from the relay that holds their mailbox.
+- Hiding from the push service (W), once push wake-ups are set up, when
+  something arrived for the phone while its live connection was down. The
+  wake carries nothing else, and a relay's operator can trust only a push
+  server they run themselves (`PUSH_HOSTS` with `PUSH_HOSTS_ONLY`, see the
+  relay's README); which server a phone's distributor uses is its owner's
+  choice in that app.
 - Linking: both relays involved in a move see the same keys registered on
   each, which ties the old number to the new one for whoever can read both.
 - That ClairixCoin is anything more than a relay-local ledger, on unless the

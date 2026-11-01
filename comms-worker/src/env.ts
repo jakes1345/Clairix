@@ -54,6 +54,11 @@ export interface Env {
    */
   PUSH_HOSTS?: string;
   /**
+   * Optional: "on" (or "true") makes PUSH_HOSTS the only trusted push hosts,
+   * so ntfy.sh and up.conversations.im are checked like any other host.
+   */
+  PUSH_HOSTS_ONLY?: string;
+  /**
    * Other addresses this same relay answers at (a second domain, the
    * workers.dev name), comma-separated https origins. Phones keep them and
    * try them when the address they registered at stops answering.

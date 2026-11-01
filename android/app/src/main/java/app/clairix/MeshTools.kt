@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.comms.mesh.Mesh
+import app.clairix.comms.mesh.MeshPacing
 import app.clairix.comms.mesh.MeshProtocol
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.KeyValueRow
@@ -73,10 +74,13 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                     status.running -> "Starting"
                     else -> "Not running"
                 })
+                if (on && status.running) KeyValueRow("Pace", if (status.fullPace) "Full" else "Low power: nothing to carry")
                 KeyValueRow("Long range", when {
                     !on || !status.running -> "Off"
                     status.longRange -> "On"
-                    else -> "This phone's Bluetooth does not have it"
+                    !status.longRangeSupported -> "This phone's Bluetooth does not have it"
+                    status.still -> "Paused while the phone is still"
+                    else -> "Not running"
                 })
                 KeyValueRow("Meetings", "${status.meetings}")
                 KeyValueRow("Last meeting", if (status.lastMeetingAt == 0L) "None yet" else "${(now - status.lastMeetingAt) / 60_000} min ago")
@@ -85,6 +89,16 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                 KeyValueRow("Handed on", "${status.handedOn}")
                 status.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution) }
             }
+        }
+        item(key = "§battery") {
+            Notice(
+                Tone.Info, title = "Battery",
+                text = "While it is on, the mesh uses Bluetooth all day, and Android shows that it runs. With nothing to carry, " +
+                    "no conversation open and no phone met in the last ${MeshPacing.AFTER_MEETING_MS / 60_000} minutes, it listens " +
+                    "and advertises at low power, and other phones still find it, a little more slowly; otherwise it runs at full pace. " +
+                    "The long-range advertisement, the costliest part, pauses while the phone is still. Turn the mesh off when " +
+                    "you no longer need it."
+            )
         }
         item(key = "§limits") {
             Notice(

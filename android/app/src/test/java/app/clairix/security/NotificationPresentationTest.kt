@@ -94,6 +94,22 @@ class NotificationPresentationTest {
     }
 
     @Test
+    fun androidStoppingTheConnectionIsSaidPlainlyAndWithPreviewsHiddenNamesNoConnection() {
+        assertEquals(
+            NotificationText("Android stopped Clairix's connection", "Tap to allow it to run"),
+            NotificationPresentation.linkStopped(previewsHidden = false)
+        )
+        // Hidden previews or a locked Clairix: the app's name, and that Android stopped it.
+        val hidden = NotificationPresentation.linkStopped(previewsHidden = true)
+        assertEquals("Clairix", hidden.title)
+        assertFalse(hidden.detailed)
+        assertFalse(hidden.text, hidden.text.contains("connection", ignoreCase = true))
+        assertFalse(hidden.text, hidden.text.contains("relay", ignoreCase = true))
+        assertFalse(hidden.text, hidden.text.contains("message", ignoreCase = true))
+        assertTrue(hidden.text, hidden.text.contains("Tap to allow"))
+    }
+
+    @Test
     fun theOngoingNotificationSaysOnlyThatItScans() {
         assertEquals(NotificationText("Clairix", "Scanning"), NotificationPresentation.ongoing(paused = false))
         assertEquals(NotificationText("Clairix", "Scan paused — retrying"), NotificationPresentation.ongoing(paused = true))

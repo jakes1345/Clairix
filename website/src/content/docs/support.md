@@ -28,9 +28,9 @@ Android's battery optimisation can cut Clairix's connection to the relay while t
 
 1. In Clairix, open **Comms > Settings** and look for the battery row. If it says "optimised", tap **Allow**.
 2. Android shows a one-tap dialog. Choose **Allow**. On phones that do not offer the dialog, Clairix opens the battery optimisation list instead; find Clairix and set it to **Don't optimise** or **Unrestricted**.
-3. Turn on **Keep Comms online in the background** in the same settings. A quiet notification stays up while the connection is held.
+3. Turn on **Online** in the same settings. A quiet notification stays up while the connection is held.
 
-A connection watchdog checks the link every few minutes and reconnects when the relay has gone quiet, but it can only do that if Android lets Clairix run.
+A connection watchdog checks the link about every ten minutes and reconnects when the relay has gone quiet, but it can only do that if Android lets Clairix run. When Android refuses twice in a row to start the connection again, Clairix posts one notification, "Android stopped Clairix's connection" (just "Android stopped it in the background" while notification previews are hidden), which opens the setting that lets it run, and the Comms screen shows the steps for your phone, including the maker's own switch on Samsung and Xiaomi phones.
 
 ### Samsung phones
 

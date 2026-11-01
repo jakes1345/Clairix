@@ -328,7 +328,14 @@ export function tokenBatchExpiry(now: number, random: () => number = Math.random
 
 // ── Push endpoints ──────────────────────────────────────────────────────────
 
-/** Push hosts trusted without a check: ntfy's public server and Conversations' push service. */
+/**
+ * Push hosts trusted without a check unless the operator says otherwise:
+ * ntfy's public server and Conversations' push service. Either learns when a
+ * wake is sent for a phone, which is when something arrived for it while its
+ * live connection was down. PUSH_HOSTS adds to them; with PUSH_HOSTS_ONLY on,
+ * PUSH_HOSTS replaces them, so a relay whose operator runs its own ntfy can
+ * trust that one alone and check every other host first.
+ */
 export const DEFAULT_PUSH_HOSTS: readonly string[] = ["ntfy.sh", "up.conversations.im"];
 export const PUSH_ENDPOINT_MAX = 2048;
 /** How long the code sent through an unknown push host can be echoed back. */
@@ -347,9 +354,19 @@ function isIpLiteral(host: string): boolean {
   return /^[0-9.]+$/.test(host) || /^0x[0-9a-f]+$/i.test(host);
 }
 
-/** The trusted push hosts: the defaults plus the operator's PUSH_HOSTS. */
-export function trustedPushHosts(extra: string | undefined): Set<string> {
-  const hosts = new Set(DEFAULT_PUSH_HOSTS);
+/** Whether PUSH_HOSTS_ONLY asks for PUSH_HOSTS to replace the built-in hosts: "on" or "true". */
+export function pushHostsOnly(raw: string | undefined): boolean {
+  const mode = (raw ?? "").trim().toLowerCase();
+  return mode === "on" || mode === "true";
+}
+
+/**
+ * The trusted push hosts: the defaults plus the operator's PUSH_HOSTS, or
+ * PUSH_HOSTS alone when [only] (PUSH_HOSTS_ONLY), which may leave none: then
+ * every endpoint is checked first.
+ */
+export function trustedPushHosts(extra: string | undefined, only = false): Set<string> {
+  const hosts = new Set<string>(only ? [] : DEFAULT_PUSH_HOSTS);
   for (const raw of (extra ?? "").split(",")) {
     const h = raw.trim().toLowerCase().replace(/\.$/, "");
     if (/^[a-z0-9.-]+\.[a-z0-9-]+$/.test(h)) hosts.add(h);
@@ -361,8 +378,9 @@ export function trustedPushHosts(extra: string | undefined): Set<string> {
  * Whether [raw] may be used as a push endpoint. It must be an https URL to a
  * public DNS name, without credentials. On a trusted host it is used at once;
  * anywhere else ([trusted] false) only after the phone echoes a code sent to it.
+ * [onlyExtra] is PUSH_HOSTS_ONLY: the operator's hosts are the only trusted ones.
  */
-export function checkPushEndpoint(raw: unknown, extraHosts: string | undefined): PushCheck {
+export function checkPushEndpoint(raw: unknown, extraHosts: string | undefined, onlyExtra = false): PushCheck {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > PUSH_ENDPOINT_MAX || /\s/.test(raw)) {
     return { ok: false, reason: "endpoint must be an https URL" };
   }
@@ -379,7 +397,7 @@ export function checkPushEndpoint(raw: unknown, extraHosts: string | undefined):
   if (!host.includes(".") || host === "localhost" || PRIVATE_SUFFIXES.some((s) => host.endsWith(s))) {
     return { ok: false, reason: "endpoint must be on a public host" };
   }
-  const trusted = trustedPushHosts(extraHosts).has(host) && (url.port === "" || url.port === "443");
+  const trusted = trustedPushHosts(extraHosts, onlyExtra).has(host) && (url.port === "" || url.port === "443");
   return { ok: true, url: url.toString(), trusted };
 }
 

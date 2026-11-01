@@ -99,6 +99,7 @@ import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
 import app.clairix.comms.STATUS_SYSTEM
 import app.clairix.comms.KIND_NOTE
+import app.clairix.comms.LinkHealth
 import app.clairix.comms.ttlLabel
 import app.clairix.comms.TIMER_CHOICES
 import androidx.compose.material3.RadioButton
@@ -131,12 +132,14 @@ import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.ui.graphics.toArgb
 import app.clairix.ui.theme.ClairixBrand
 import app.clairix.ui.components.*
+import app.clairix.ui.makerBackgroundSteps
 import app.clairix.ui.openBatterySettings
 import app.clairix.ui.rememberBatteryUnrestricted
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
 import app.clairix.security.AppLock
+import app.clairix.security.NotificationPresentation
 import app.clairix.ui.components.setSensitiveText
 
 // ── Colour tokens local to this file ──────────────────────────────────────────
@@ -750,13 +753,28 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
             )
         }
         val batteryFree by rememberBatteryUnrestricted()
-        if (state.online && !batteryFree) {
+        // Android refused twice in a row to restart the background connection (LinkHealth).
+        val linkStopped by LinkHealth.stopped.collectAsStateWithLifecycle()
+        if (state.online && (!batteryFree || linkStopped)) {
             val context = LocalContext.current
+            // The maker's own switch where Clairix knows its path; otherwise where such switches are.
+            val makerSteps = remember { makerBackgroundSteps(Build.MANUFACTURER) }
             Spacer(Modifier.height(6.dp))
             Notice(
                 Tone.Caution,
-                "Battery saving can cut Clairix off in the background, and then calls don't ring. Let Clairix run unrestricted.",
-                action = { GhostButton("Allow", onClick = { openBatterySettings(context) }) }
+                text = buildString {
+                    append(
+                        if (linkStopped) "Android refused twice in a row to restart Clairix's connection in the background, so calls may not ring and messages may wait until Clairix is opened. "
+                        else "Battery saving can cut Clairix off in the background, and then calls don't ring. "
+                    )
+                    if (!batteryFree) append("Let Clairix run unrestricted. ")
+                    append(makerSteps)
+                },
+                title = if (linkStopped) NotificationPresentation.LINK_STOPPED_TITLE else null,
+                action = {
+                    if (!batteryFree) GhostButton("Allow", onClick = { openBatterySettings(context) })
+                    else GhostButton("App info", onClick = { openAppDetails(context) })
+                }
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -2551,24 +2569,31 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 title = "Online",
                 checked = state.online,
                 onCheckedChange = { CommsRepository.setOnline(it) },
-                subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way."
+                subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. " +
+                    "The relay sends a small heartbeat every two to five minutes (two while messages are moving); this phone sends no keep-alive of its own unless one is overdue. " +
+                    "Uses some battery. If Android stops the connection, Clairix tells you. While Clairix is on screen it is connected either way."
             )
             var tor by remember { mutableStateOf(TorTransport.enabled) }
             val torState by TorTransport.state.collectAsStateWithLifecycle()
+            // Read now rather than at Tor's next once-a-minute look.
+            LaunchedEffect(tor) { if (tor) TorTransport.refreshStatus() }
             ToggleRow(
                 title = "Connect through Tor",
                 checked = tor,
                 onCheckedChange = { on -> tor = on; TorTransport.setEnabled(on) },
                 subtitle = "Everything Clairix says to relays goes through Tor, so no relay, this one or another, learns this " +
                     "phone's network address, and the network it is on does not learn which relay it uses. Nothing goes out " +
-                    "directly while Tor is connecting. Slower, and uses more data. Calls do not go through Tor: during a call " +
-                    "the relay's call server sees this phone's address (and so does the contact, unless Relay-only calls is on)."
+                    "directly while Tor is connecting. Slower, and uses more data. With Online off, Tor sleeps when nothing has " +
+                    "needed it for five minutes and starts again with the next request, which then waits a few seconds. Calls do " +
+                    "not go through Tor: during a call the relay's call server sees this phone's address (and so does the " +
+                    "contact, unless Relay-only calls is on)."
             )
             if (tor) {
                 val (line, tone) = when (val s = torState) {
                     TorTransport.State.Off -> "Off" to ClairixTheme.colors.textSubtle
                     is TorTransport.State.Starting -> "Connecting to Tor… ${s.percent}%" to ClairixTheme.colors.textMuted
                     TorTransport.State.Ready -> "Connected through Tor" to ClairixTheme.colors.accent
+                    TorTransport.State.Asleep -> "Tor is asleep until Clairix next talks to a relay" to ClairixTheme.colors.textSubtle
                     is TorTransport.State.Blocked -> "Tor is stuck at ${s.percent}%: ${s.reason}" to ClairixTheme.colors.danger
                     is TorTransport.State.Failed -> "Tor did not start: ${s.reason}" to ClairixTheme.colors.danger
                 }
@@ -2611,8 +2636,8 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Push wake-ups", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text(
-                        if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing."
-                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap Set up. No Google services are used.",
+                        if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing, but the push server your distributor uses learns when one was sent."
+                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap Set up. No Google services are used. The push server it uses learns when something arrives for you, not what or from whom.",
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.textSubtle
                     )

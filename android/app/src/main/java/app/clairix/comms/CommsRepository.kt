@@ -23,6 +23,7 @@ import app.clairix.analysis.TlsCanary
 import app.clairix.security.AppLock
 import app.clairix.security.DuressPhrase
 import app.clairix.security.RelayClock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -137,7 +138,6 @@ object CommsRepository {
     /** How long a shared threat stays on members' maps; a catcher sits still, a follower moves on. */
     private const val THREAT_TTL_MS = 3600_000L
     private const val CATCHER_TTL_MS = 24 * 3600_000L
-    private const val THREAT_EXPIRE_INTERVAL_MS = 3600_000L
     private const val MAX_PANIC_NOTE = 280
     /** Why a blocked identity is not added again: it is unblocked on the blocked list only. */
     private const val BLOCKED_ADD = "You blocked this person. To talk to them again, unblock them under Blocked in Comms settings first."
@@ -246,9 +246,6 @@ object CommsRepository {
     @Volatile private var retryAtMs = 0L
     @Volatile private var retryBackoffMs = RETRY_MIN_MS
     private const val RETRY_MIN_MS = 5_000L
-    /** The disappearing-messages sweep looks at least this often, and never sooner than [EXPIRY_MIN_WAIT_MS] apart. */
-    private const val EXPIRY_POLL_MS = 60_000L
-    private const val EXPIRY_MIN_WAIT_MS = 250L
     private const val RETRY_MAX_MS = 5 * 60_000L
     /** A key refresh after tokens came for keys not yet pinned: half a minute to five minutes later, at random. */
     private const val KEY_REFRESH_MIN_MS = 30_000L
@@ -348,6 +345,11 @@ object CommsRepository {
         RelayClock.bind(appContext)
         relay.clockListener = { serverMs, localMs -> RelayClock.record(serverMs, localMs) }
         LiveLink.init(appContext)
+        LinkHealth.init(appContext)
+        // Tor runs while this phone keeps its connection or the link is held (the
+        // app on screen, a call); otherwise it sleeps once nothing has used it for
+        // a while, and wakes for the next request (see TorTransport).
+        TorTransport.keepRunningWhile { isRegistered() && state.value.online || LiveLink.held() }
         CallManager.init(appContext)
         // Identities registered before the background connection became the default
         // kept it off, so calls to them could only ring while Clairix was on screen.
@@ -359,7 +361,9 @@ object CommsRepository {
         }
         initialised = true
         watchVault()
-        startExpirySweep()
+        // Messages whose time came while no process ran go now; with nothing
+        // counting down (or no identity) no sweep runs at all.
+        wakeExpiry()
         syncCoverTraffic()
         refreshAlternates()
         // Every entry point that initialises comms also arms the duress phrase.
@@ -374,13 +378,6 @@ object CommsRepository {
         watchNetwork()
         if (config.isRegistered) scope.launch { pruneSessions() }
         scope.launch { runCatching { store.purgeChunks(System.currentTimeMillis() - CHUNK_TTL_MS) } }
-        // Shared threats on the map are forgotten as their time runs out: now, and every hour.
-        scope.launch {
-            while (true) {
-                runCatching { expireSharedThreats() }.onFailure { CommsLog.add("Could not tidy shared threats: ${it.message}") }
-                delay(THREAT_EXPIRE_INTERVAL_MS)
-            }
-        }
         // An SOS (the button, or the duress phrase in an outgoing text) goes to
         // every group this phone is in, with the last known position, and the
         // flag is lowered once that has been tried. What came of it is
@@ -595,6 +592,13 @@ object CommsRepository {
             // push wake, say) or stopped by Android since. The app on screen may
             // always start it, and starting it again is harmless.
             if (config.isRegistered && config.online) CommsService.start(appContext)
+            if (config.isRegistered) {
+                // A phone without a screen lock never seals the vault, so no
+                // unlock wakes the sweep: the app coming up does. Its timer stops
+                // while the phone sleeps, and a message due meanwhile goes now.
+                wakeExpiry()
+                tidySharedThreats()
+            }
         } else {
             LiveLink.release(HOLD_FOREGROUND)
         }
@@ -2447,7 +2451,11 @@ object CommsRepository {
     /** The newest [limit] messages in [gid], oldest first, as the conversation shows them. */
     fun groupMessages(gid: String, limit: Int = 100): List<ChatMessage> = unlockedOr(emptyList()) { store.groupMessages(gid, limit).asReversed() }
 
-    fun sharedThreats(gid: String? = null): List<SharedThreat> = unlockedOr(emptyList()) { store.sharedThreats(gid) }
+    /** Threats shared in [gid] (in every group when null) whose time has not run out. */
+    fun sharedThreats(gid: String? = null): List<SharedThreat> = unlockedOr(emptyList()) {
+        val now = System.currentTimeMillis()
+        store.sharedThreats(gid).filter { it.expiresAt > now }
+    }
 
     /** Every group with its last message, unread count and size, most recently active first. */
     fun groupThreads(): List<GroupThread> = unlockedOr(emptyList()) {
@@ -2916,6 +2924,18 @@ object CommsRepository {
         Registry.publishSharedThreats(store.sharedThreats(null))
     }
 
+    /**
+     * [expireSharedThreats] in the background, whenever the app comes to the
+     * front; a threat arriving runs it too. Not on a timer: the map and the
+     * group page leave out an expired threat in between.
+     */
+    private fun tidySharedThreats() {
+        scope.launch {
+            if (Vault.sealed.value) return@launch
+            runCatching { expireSharedThreats() }.onFailure { CommsLog.add("Could not tidy shared threats: ${it.message}") }
+        }
+    }
+
     /** A number's name as this phone knows it: the roster's, then the contact's, then the number. */
     private fun memberName(gid: String, number: String): String =
         store.groupMember(gid, number)?.name?.takeIf { it.isNotBlank() }
@@ -2994,7 +3014,8 @@ object CommsRepository {
                 val detail = json.optString(CommsWire.F_DETAIL).trim().take(MAX_THREAT_TEXT)
                 val fromName = memberName(gid, from)
                 store.insertSharedThreat(SharedThreat(id, gid, from, fromName, ts, kind, severity, lat, lon, title, detail, expiresAt))
-                Registry.publishSharedThreats(store.sharedThreats(null))
+                // Arrival is when the list is tidied: what ran out goes, the rest is published.
+                expireSharedThreats()
                 CommsLog.add("Threat \"$title\" shared by $fromName in \"${group.name}\"")
                 val event = TimelineEvent(
                     id = "shared_threat@$id", kind = EventKind.SHARED_THREAT, ts = ts,
@@ -3789,6 +3810,8 @@ object CommsRepository {
             onScreen -> store.queueReceipt(contact.number, store.markRead(contact.number), CommsWire.STATUS_READ)
             else -> store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
         }
+        // Read on screen, a disappearing photo's clock has started.
+        if (onScreen) wakeExpiry()
         if (!onScreen) {
             if (contact.request) CommsNotifications.notifyRequest(appContext)
             else CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
@@ -4176,30 +4199,72 @@ object CommsRepository {
     }
 
     private val expiryWake = Channel<Unit>(Channel.CONFLATED)
+    /** Guards [expiryJob], so a wake never falls between the sweep deciding to stop and stopping. */
+    private val expiryLock = Any()
+    private var expiryJob: Job? = null
 
-    /** Has the sweep look again now: a message's clock started or a new one is counting down. */
+    /**
+     * Has the sweep look again now: a message's clock started, a new one is
+     * counting down, the vault opened or the app came to the front. Starts the
+     * sweep when none runs; it stops by itself while nothing counts down.
+     */
     private fun wakeExpiry() {
-        expiryWake.trySend(Unit)
+        if (!isRegistered()) return
+        synchronized(expiryLock) {
+            if (expiryJob?.isActive == true) {
+                expiryWake.trySend(Unit)
+                return
+            }
+            expiryJob = scope.launch { runExpirySweep() }
+        }
     }
 
     /**
-     * Deletes disappearing messages as their time comes, for as long as the
-     * process lives: at the moment the next one is due, and at least once a
-     * minute. What is past its time is never shown even before this runs (the
-     * store's reads leave it out), and a process that was not running sweeps
-     * the moment it starts.
+     * Deletes disappearing messages as their time comes ([ExpirySchedule]):
+     * sleeps exactly until the next one is due, and stops when nothing counts
+     * down, so a phone with no timed message runs no timer for them at all.
+     * What is past its time is never shown even before this runs (the store's
+     * reads leave it out), and a process that was not running sweeps the
+     * moment it starts.
      */
-    private fun startExpirySweep() {
-        scope.launch {
-            while (true) {
-                // Locked, the database is closed: what is due goes the moment it opens.
-                val next = if (Vault.sealed.value) null else runCatching { sweepExpired() }
-                    .onFailure { CommsLog.add("Deleting disappearing messages failed: ${it.message}") }
-                    .getOrNull()
-                val wait = next?.let { (it - System.currentTimeMillis()).coerceIn(EXPIRY_MIN_WAIT_MS, EXPIRY_POLL_MS) } ?: EXPIRY_POLL_MS
-                withTimeoutOrNull(wait) { expiryWake.receive() }
+    private suspend fun runExpirySweep() {
+        while (true) {
+            var failed = false
+            // Locked, the database is closed: the sweep stops, and the vault
+            // opening wakes it, so what is due goes the moment it opens.
+            val next = if (Vault.sealed.value) null else try {
+                sweepIfDue()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultSealedException) {
+                null
+            } catch (e: Exception) {
+                CommsLog.add("Deleting disappearing messages failed: ${e.message}")
+                failed = true
+                null
             }
+            val wait = ExpirySchedule.waitMs(next, failed, System.currentTimeMillis())
+            if (wait == null) {
+                val stop = synchronized(expiryLock) {
+                    // A wake that came while this pass found nothing: look again.
+                    if (expiryWake.tryReceive().isSuccess) {
+                        false
+                    } else {
+                        expiryJob = null
+                        true
+                    }
+                }
+                if (stop) return
+                continue
+            }
+            withTimeoutOrNull(wait) { expiryWake.receive() }
         }
+    }
+
+    /** Deletes what is due, if anything is; returns when the next message is due, or null when none counts down. */
+    private suspend fun sweepIfDue(): Long? {
+        val next = lock.withLock { store.nextExpiry() }
+        return if (ExpirySchedule.due(next, System.currentTimeMillis())) sweepExpired() else next
     }
 
     /** Deletes what is due now, with its files and notifications; returns when the next is due. */

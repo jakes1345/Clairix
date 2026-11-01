@@ -64,12 +64,25 @@ internal fun makerBackgroundHint(manufacturer: String?): String? =
     when (manufacturer?.trim()?.lowercase(Locale.US)) {
         "samsung" ->
             "On this Samsung phone also open Settings > Battery > Background usage limits and add Clairix to " +
-                "Never sleeping apps."
+                "Never sleeping apps (older One UI versions put Battery under Battery and device care, and the names " +
+                "vary a little between versions)."
         "xiaomi", "redmi", "poco" ->
             "On this Xiaomi phone also turn on Autostart for Clairix under Settings > Apps > Manage apps > Clairix, " +
                 "and set its Battery saver to No restrictions."
         else -> null
     }
+
+/**
+ * What else to set beyond Android's own exemption, for the Comms screen: the
+ * maker's switch where Clairix knows its path ([makerBackgroundHint]), and
+ * otherwise where such switches are kept, without guessing at what a maker
+ * calls them.
+ */
+internal fun makerBackgroundSteps(manufacturer: String?): String =
+    makerBackgroundHint(manufacturer)
+        ?: ("Some phone makers add a battery manager of their own on top of Android's, with menus of their own: " +
+            "look on Clairix's App info page and in the phone's battery settings for anything about background " +
+            "activity, starting automatically or sleeping apps, and allow it for Clairix.")
 
 /**
  * Asks the owner to let Clairix run unrestricted: Android's one-tap dialog, and

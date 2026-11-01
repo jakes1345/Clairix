@@ -642,6 +642,25 @@ test("PUSH_HOSTS adds the operator's own push host to the trusted ones", async (
   }
 });
 
+test("PUSH_HOSTS_ONLY trusts the operator's push host alone: an endpoint on ntfy.sh then gets the check", async () => {
+  const relay = makeRelay({ PUSH_HOSTS: "ntfy.example.net", PUSH_HOSTS_ONLY: "on" });
+  const fetches = mockFetch(() => new Response("ok"));
+  try {
+    const alice = await makePhone(relay);
+    const own = await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.example.net/up/x" });
+    assert.equal(own.json.verified, true);
+    assert.equal(fetches.calls.length, 0);
+    const third = await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/up/y" });
+    assert.equal(third.status, 202);
+    assert.equal(third.json.verified, false);
+    assert.equal(fetches.calls.length, 1);
+    assert.equal(fetches.calls[0].url, "https://ntfy.sh/up/y");
+    assert.ok(fetches.calls[0].body.startsWith(PUSH_CHALLENGE_PREFIX));
+  } finally {
+    fetches.restore();
+  }
+});
+
 test("push endpoint changes are rate limited", async () => {
   const relay = makeRelay();
   const fetches = mockFetch(() => new Response("ok"));

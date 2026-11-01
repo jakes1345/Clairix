@@ -23,6 +23,7 @@ import {
   DELIVERY_TOKEN_TTL_MS,
   tokenBatchExpiry,
   parseIceServers,
+  pushHostsOnly,
   randomToken,
   REPORT_REASONS,
   summariseReports,
@@ -124,6 +125,23 @@ test("PUSH_HOSTS is read leniently and only as host names", () => {
   assert.ok(hosts.has("push.example.org"));
   assert.ok(hosts.has("ntfy.example.net"));
   assert.ok(![...hosts].some((h) => h.includes("/") || h.includes(" ")));
+});
+
+test("PUSH_HOSTS_ONLY makes the operator's push hosts the only trusted ones", () => {
+  assert.equal(pushHostsOnly(undefined), false);
+  assert.equal(pushHostsOnly(""), false);
+  assert.equal(pushHostsOnly("off"), false);
+  assert.equal(pushHostsOnly(" ON "), true);
+  assert.equal(pushHostsOnly("true"), true);
+  assert.deepEqual([...trustedPushHosts("Push.Example.org", true)], ["push.example.org"]);
+  // Nothing left to trust: every endpoint is checked first.
+  assert.equal(trustedPushHosts(undefined, true).size, 0);
+  assert.equal(checkPushEndpoint("https://push.example.org/up", "push.example.org", true).trusted, true);
+  // The built-in hosts still work, after the check.
+  assert.deepEqual(checkPushEndpoint("https://ntfy.sh/up", "push.example.org", true), { ok: true, url: "https://ntfy.sh/up", trusted: false });
+  assert.equal(checkPushEndpoint("https://up.conversations.im/up", undefined, true).trusted, false);
+  // Without it, PUSH_HOSTS adds to them as before.
+  assert.equal(checkPushEndpoint("https://ntfy.sh/up", "push.example.org").trusted, true);
 });
 
 test("ICE servers are read from either shape of the provider's answer", () => {

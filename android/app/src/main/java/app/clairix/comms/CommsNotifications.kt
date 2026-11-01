@@ -8,7 +8,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -78,6 +81,8 @@ object CommsNotifications {
     const val SOS_OUTCOME_NOTIFICATION_ID = 0x5C00_0008
     /** The one notification for every message request: "Someone new wrote to you", naming no one. */
     const val REQUEST_NOTIFICATION_ID = 0x5C00_0009
+    /** Android refused, twice in a row, to restart the background connection ([LinkHealth]). */
+    const val LINK_STOPPED_NOTIFICATION_ID = 0x5C00_000A
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -92,7 +97,7 @@ object CommsNotifications {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_LINK, "Comms connection", NotificationManager.IMPORTANCE_LOW)
                 .apply {
-                    description = "Shown while Clairix keeps its connection to your relay open"
+                    description = "Shown while Clairix keeps its connection to your relay open, and when Android stops it"
                     setShowBadge(false)
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
@@ -800,6 +805,59 @@ object CommsNotifications {
                     .build()
             )
             .build()
+    }
+
+    /**
+     * Android refused, twice in a row, to restart the background connection
+     * ([LinkHealth]): the one notification that says so. Tapping it opens the
+     * setting that lets Clairix run: Android's one-tap battery exemption while
+     * Clairix does not have it, otherwise Clairix's App info page, where
+     * Android's battery choice and a phone maker's own switches are. With
+     * previews hidden or Clairix locked it says only that Android stopped
+     * Clairix ([NotificationPresentation.linkStopped]); on the lock screen its
+     * channel shows nothing.
+     */
+    fun linkStopped(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val exempt = runCatching {
+            context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
+        }.getOrDefault(false)
+        val packageUri = Uri.parse("package:${context.packageName}")
+        val appInfo = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
+        // A phone that does not offer the one-tap request (or does not let Clairix
+        // see that it does) gets App info, which every phone has.
+        val target = if (!exempt && direct.resolveActivity(context.packageManager) != null) direct else appInfo
+        val contentIntent = PendingIntent.getActivity(
+            context, LINK_STOPPED_NOTIFICATION_ID, target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val shown = NotificationPresentation.linkStopped(previewsHidden = previewsHidden(context))
+        val lockScreen = NotificationPresentation.linkStopped(previewsHidden = true)
+        val notification = NotificationCompat.Builder(context, CHANNEL_LINK)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_LINK)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle(lockScreen.title)
+                    .setContentText(lockScreen.text)
+                    .build()
+            )
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(LINK_STOPPED_NOTIFICATION_ID, notification)
+    }
+
+    /** The connection runs again: the notification that said Android stopped it goes. */
+    fun cancelLinkStopped(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(LINK_STOPPED_NOTIFICATION_ID)
     }
 
     private fun notificationId(peer: String) = 0x5A00_0000 or (peer.hashCode() and 0x00FF_FFFF)

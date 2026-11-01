@@ -29,7 +29,7 @@ If you choose to use Comms, your phone registers with the Clairix relay server. 
 
 - **Your Clairix number and public keys.** These let other people send you encrypted messages. The Clairix number is a random nine-digit identifier assigned by the relay. It is not your phone number and is not linked to your name, email or any other identity.
 - **Encrypted message envelopes waiting to be delivered.** These are deleted when your phone collects them, or after 30 days if they are never collected.
-- **Your push endpoint, if you set one up.** This is the UnifiedPush address your phone can be woken through. The push itself carries only the word "wake".
+- **Your push endpoint, if you set one up.** This is the UnifiedPush address your phone can be woken through. The push itself carries only the word "wake". The push service behind it, the one your distributor app uses, learns when each wake was sent, which is when something arrived for you, not what or from whom.
 - **Unused invite codes you created.** These expire after 7 days.
 - **Hashes of the single-use tokens your phone fetched ahead of time** to send messages and traffic reports with. They are kept until spent, or 14 days, and do not record which account they were issued to. From Beta 6 the tokens are blind: the relay keeps nothing when it issues them and, once one is spent, a hash of it until the key it was made with is retired (14 to 28 days), so it cannot be spent twice. Neither says which account it was issued to.
 - **A note that your keys belong to your number**, so that nobody else can register them.

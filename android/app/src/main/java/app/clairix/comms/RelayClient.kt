@@ -231,20 +231,34 @@ class RelayClient(
      * Through Tor a connection waits for a circuit before its first byte, and
      * to an onion address for a rendezvous as well; Tor gives up on its own
      * within a minute. Connecting and reading get that long while Tor is on.
+     * Each request also counts as using Tor, as it starts and as it ends, so
+     * Tor does not go to sleep under one riding a connection already open
+     * (see [TorTransport.noteUse]).
      */
     private val torTimeouts = Interceptor { chain ->
         if (!TorTransport.enabled) return@Interceptor chain.proceed(chain.request())
-        chain.withConnectTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .withReadTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .proceed(chain.request())
+        TorTransport.noteUse()
+        try {
+            chain.withConnectTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+                .withReadTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+                .proceed(chain.request())
+        } finally {
+            TorTransport.noteUse()
+        }
     }
 
-    /** The live socket's client: no overall call timeout, which would cut the socket itself. */
+    /**
+     * The live socket's client: no overall call timeout, which would cut the
+     * socket itself, and no ping on a timer. The relay's heartbeat carries the
+     * socket's liveness, and LiveLink pings only when that is overdue (see
+     * [LinkTiming]); a ping every 45 seconds brought the radio up on top of
+     * the heartbeat whenever the phone was awake.
+     */
     val http: OkHttpClient = RelayTls.pinned(OkHttpClient.Builder(), pin)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
-        .pingInterval(45, TimeUnit.SECONDS)
+        .pingInterval(0, TimeUnit.SECONDS)
         // Signed requests carry identity headers and the registration body carries
         // the enrollment secret; neither may be re-sent to wherever a redirect points.
         .followRedirects(false)
@@ -904,8 +918,11 @@ class RelayClient(
     /** Opens the live-delivery socket. The caller owns the returned socket. */
     fun openSocket(listener: WebSocketListener): WebSocket {
         // OkHttp runs no network interceptors for a WebSocket upgrade, so it is
-        // signed here, once; a refused upgrade is retried by the caller.
+        // signed here, once; a refused upgrade is retried by the caller. The
+        // header tells the relay how long a quiet socket may go without a
+        // heartbeat; a relay from before it sends one every two minutes anyway.
         val builder = signedRequest("GET", "/v1/ws", null)
+            .header(LinkTiming.HEARTBEAT_HEADER, LinkTiming.HEARTBEAT_MS.toString())
         val signing = builder.build().tag(Signing::class.java) ?: throw RelayException("Not registered with a relay")
         if (signing.transport == null) return http.newWebSocket(sign(builder, signing).build(), listener)
         // A refused upgrade signed with the transport key means the relay does not

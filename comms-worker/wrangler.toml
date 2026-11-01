@@ -33,6 +33,8 @@
 #   PUSH_HOSTS           Optional: comma-separated push hosts (a self-hosted ntfy, say) trusted like
 #                        ntfy.sh and up.conversations.im; an endpoint on any other host is used only
 #                        after the phone echoes a one-time code pushed through it
+#   PUSH_HOSTS_ONLY      Optional: "on" makes PUSH_HOSTS the only trusted push hosts, so ntfy.sh and
+#                        up.conversations.im are checked like any other (README.md, Push wake-ups)
 #   WZDX_FEEDS           Optional, for navigation: comma-separated URLs of WZDx v4 GeoJSON
 #                        feeds (state DOT work-zone feeds). The cron below fetches them every
 #                        10 minutes and adds work zones as traffic incidents to every region

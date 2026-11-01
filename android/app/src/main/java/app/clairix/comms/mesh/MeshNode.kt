@@ -22,9 +22,14 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorManager
+import android.hardware.TriggerEvent
+import android.hardware.TriggerEventListener
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
+import app.clairix.analysis.MotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.concurrent.Executors
@@ -43,6 +48,12 @@ data class MeshStatus(
     val handedOn: Int = 0,
     /** Whether this phone also advertises and listens on Bluetooth's long-range (coded) radio mode. */
     val longRange: Boolean = false,
+    /** Whether this phone's Bluetooth has the long-range mode at all. */
+    val longRangeSupported: Boolean = false,
+    /** Whether the phone is taken to be still, which pauses the long-range advertisement ([MeshPacing]). */
+    val still: Boolean = false,
+    /** Whether the radio runs at full pace (something to carry, a conversation open, a meeting lately) or at low power. */
+    val fullPace: Boolean = false,
     val error: String? = null
 )
 
@@ -60,6 +71,12 @@ data class MeshStatus(
  * several times as far, at an eighth of the speed. The ordinary advertisement stays, so
  * phones without the mode still meet this one, and this one still meets them.
  *
+ * It does not run flat out for nothing ([MeshPacing]): with nothing to carry, no
+ * conversation open and no meeting lately it listens and advertises at low power, and
+ * the long-range set pauses while the phone is still. The pace is looked at again
+ * whenever a bundle is added or a meeting ends, when the phone starts moving, and every
+ * [MeshPacing.REVIEW_MS] while the phone is awake.
+ *
  * All Bluetooth callbacks are handed to one thread, which owns every map here.
  * Needs BLUETOOTH_SCAN, BLUETOOTH_CONNECT and BLUETOOTH_ADVERTISE; the caller checks.
  */
@@ -70,7 +87,9 @@ class MeshNode(
     private val ownTags: () -> Set<String>,
     private val onDeliver: (ByteArray) -> Unit,
     /** Where the node reports what it is doing; owned by [Mesh] so the page can watch it before the node exists. */
-    private val _status: MutableStateFlow<MeshStatus>
+    private val _status: MutableStateFlow<MeshStatus>,
+    /** Whether a conversation is open on screen, when a message may be about to need the mesh. */
+    private val conversationOpen: () -> Boolean = { false }
 ) {
     companion object {
         private const val TAG = "MeshNode"
@@ -95,6 +114,33 @@ class MeshNode(
     private val longRange: Boolean = manager?.adapter?.let {
         runCatching { it.isLeCodedPhySupported && it.isLeExtendedAdvertisingSupported }.getOrDefault(false)
     } ?: false
+
+    /**
+     * Whether the phone is going anywhere, from the significant-motion sensor alone:
+     * still once it has not fired for [MeshPacing.STILL_AFTER_MS]. The sensor is armed
+     * while the phone is still, as the scanner arms it, and its firing ends the spell.
+     * Touched on [exec] only.
+     */
+    private val motion = MotionPolicy(MeshPacing.STILL_AFTER_MS)
+    private val sensors: SensorManager? = app.getSystemService(SensorManager::class.java)
+    private val motionSensor: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
+    private val motionTrigger = object : TriggerEventListener() {
+        override fun onTrigger(event: TriggerEvent?) {
+            exec.execute {
+                // One-shot: Android cancelled it as it fired.
+                motionArmed = false
+                motion.onMotion(System.currentTimeMillis())
+                review()
+            }
+        }
+    }
+    private var motionArmed = false
+
+    /** What the radio runs now; null while it is not running. Touched on [exec] only. */
+    private var plan: MeshPacing.Plan? = null
+    private var reviews: ScheduledFuture<*>? = null
+    /** A bundle added (the owner's, or one handed over) brings the full pace back at once. */
+    private val onStoreChange: () -> Unit = { exec.execute { review() } }
 
     /** One side of one meeting: its session, its reassembler, and its outgoing chunk queue. */
     private inner class Conn(val device: BluetoothDevice, val initiator: Boolean) {
@@ -132,22 +178,63 @@ class MeshNode(
             s.addService(svc)
             server = s
             characteristic = ch
-            _status.update { it.copy(running = true, error = null, carrying = store.size) }
-            advertise(true)
-            scan(true)
+            _status.update { it.copy(running = true, error = null, carrying = store.size, longRangeSupported = longRange) }
+            motion.start(System.currentTimeMillis())
+            store.onChange = onStoreChange
+            review()
+            reviews = exec.scheduleWithFixedDelay({ review() }, MeshPacing.REVIEW_MS, MeshPacing.REVIEW_MS, TimeUnit.MILLISECONDS)
         } catch (e: SecurityException) {
             _status.update { it.copy(error = "Nearby devices permission is needed") }
         }
     }
 
     fun stop() = exec.execute {
-        advertise(false)
-        scan(false)
+        reviews?.cancel(false)
+        reviews = null
+        // Only this node's: a node started since has its own.
+        if (store.onChange === onStoreChange) store.onChange = null
+        motionSensor?.let { sensor -> runCatching { sensors?.cancelTriggerSensor(motionTrigger, sensor) } }
+        motionArmed = false
+        advertiseOrdinary(false, AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+        advertiseLongRange(false)
+        scan(false, ScanSettings.SCAN_MODE_BALANCED)
+        plan = null
         (serverConns.values + clientConns.values).forEach { end(it) }
         serverConns.clear(); clientConns.clear()
         runCatching { server?.close() }
         server = null
-        _status.update { it.copy(running = false, advertising = false, scanning = false, longRange = false) }
+        _status.update { it.copy(running = false, advertising = false, scanning = false, longRange = false, still = false, fullPace = false) }
+    }
+
+    // ── Pace ──────────────────────────────────────────────────────────────
+
+    /**
+     * Looks at what the mesh has to do and how the phone is moving, and changes the
+     * radio when the plan changed ([MeshPacing]). Runs on [exec].
+     */
+    private fun review() {
+        if (!_status.value.running) return
+        val now = System.currentTimeMillis()
+        motion.tick(now)
+        val sensor = motionSensor
+        // Without the sensor nothing would ever say the phone moved again: never still.
+        val still = sensor != null && motion.pace == MotionPolicy.Pace.STILL
+        if (sensor != null && still != motionArmed) {
+            // Armed while still, so moving ends the spell; one-shot, so armed afresh each time.
+            motionArmed = if (still) runCatching { sensors?.requestTriggerSensor(motionTrigger, sensor) == true }.getOrDefault(false)
+            else false.also { runCatching { sensors?.cancelTriggerSensor(motionTrigger, sensor) } }
+        }
+        val carrying = store.carrying(now)
+        val busy = MeshPacing.busy(carrying, runCatching { conversationOpen() }.getOrDefault(false), _status.value.lastMeetingAt, now)
+        val next = MeshPacing.plan(busy, still, longRange)
+        val current = plan
+        if (next != current) {
+            if (current == null || current.scanMode != next.scanMode) scan(true, next.scanMode)
+            if (current == null || current.advertiseMode != next.advertiseMode) advertiseOrdinary(true, next.advertiseMode)
+            if (current == null || current.longRange != next.longRange) advertiseLongRange(next.longRange)
+            plan = next
+        }
+        _status.update { it.copy(carrying = carrying, still = still, fullPace = busy) }
     }
 
     // ── Advertising and scanning ──────────────────────────────────────────
@@ -168,9 +255,13 @@ class MeshNode(
     private fun serviceOnly(): AdvertiseData = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
         .addServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID)).build()
 
-    private fun advertise(on: Boolean) {
+    /** The long-range set: started or stopped as [MeshPacing] says (never on a phone without the mode). */
+    private var longRangeOn = false
+
+    private fun advertiseLongRange(on: Boolean) {
         val adv = manager?.adapter?.bluetoothLeAdvertiser ?: return
-        if (longRange) runCatching {
+        if (!longRange || on == longRangeOn) return
+        runCatching {
             if (!on) adv.stopAdvertisingSet(longRangeCallback)
             else adv.startAdvertisingSet(
                 // Extended, connectable, coded on both channels, as loud as the phone allows.
@@ -180,11 +271,19 @@ class MeshNode(
                     .build(),
                 serviceOnly(), null, null, null, longRangeCallback
             )
+            longRangeOn = on
         }.onFailure { e -> Log.i(TAG, "Long-range advertising refused: ${e.message}") }
+    }
+
+    /** The ordinary advertisement, at [mode]: started, restarted at another mode, or stopped. */
+    private fun advertiseOrdinary(on: Boolean, mode: Int) {
+        val adv = manager?.adapter?.bluetoothLeAdvertiser ?: return
         runCatching {
-            if (!on) { adv.stopAdvertising(advertiseCallback); _status.update { it.copy(advertising = false) }; return }
+            // A running advertisement keeps its settings: a new mode means stopping it first.
+            adv.stopAdvertising(advertiseCallback)
+            if (!on) { _status.update { it.copy(advertising = false) }; return }
             adv.startAdvertising(
-                AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+                AdvertiseSettings.Builder().setAdvertiseMode(mode)
                     .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM).setConnectable(true).build(),
                 // The service only: no name, no manufacturer data, the address the stack rotates.
                 serviceOnly(),
@@ -199,14 +298,17 @@ class MeshNode(
         override fun onScanFailed(errorCode: Int) { _status.update { it.copy(scanning = false, error = "Scan failed ($errorCode)") } }
     }
 
-    private fun scan(on: Boolean) {
+    /** The scan, at [mode]: started, restarted at another mode, or stopped. */
+    private fun scan(on: Boolean, mode: Int) {
         val sc = manager?.adapter?.bluetoothLeScanner ?: return
         runCatching {
-            if (!on) { sc.stopScan(scanCallback); _status.update { it.copy(scanning = false) }; return }
+            // A running scan keeps its settings: a new mode means stopping it first.
+            sc.stopScan(scanCallback)
+            if (!on) { _status.update { it.copy(scanning = false) }; return }
             // Filtered on the service, so the scan keeps running with the screen off.
             sc.startScan(
                 listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID)).build()),
-                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).apply {
+                ScanSettings.Builder().setScanMode(mode).apply {
                     // Extended and coded advertisements as well as ordinary ones.
                     if (longRange) setLegacy(false).setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
                 }.build(),
@@ -391,6 +493,8 @@ class MeshNode(
         }
         // The side that connected hangs up; the other just forgets the meeting.
         if (c.initiator) end(c) else { c.timeout?.cancel(false); serverConns.remove(c.device.address) }
+        // Other phones are about: full pace for a while.
+        review()
     }
 
     private fun end(c: Conn) {

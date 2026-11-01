@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -39,12 +40,17 @@ import org.json.JSONObject
  * ([CommsPushReceiver]) and to syncing when the app opens.
  *
  * A socket kept open by the background service has to survive a phone that
- * sleeps. The relay sends a heartbeat every couple of minutes, which also
- * wakes the phone long enough to notice a dead connection; reconnecting and
- * handling a delivery run under short wake locks so the phone does not fall
- * asleep halfway; a ping that gets no answer replaces a socket that only
- * looks open; and [LinkWatchdog] checks on it every few minutes in case all
- * of that went quiet.
+ * sleeps, without waking it more than it must. The app sends no pings on a
+ * timer: the relay sends a heartbeat every two minutes while envelopes move
+ * and every five once the connection is quiet ([LinkTiming]; a relay from
+ * before that sends one every two minutes throughout), and that frame
+ * also wakes the phone long enough to notice a dead connection. Reconnecting
+ * and handling a delivery run under short wake locks so the phone does not
+ * fall asleep halfway; a ping goes out only when a heartbeat is overdue, when
+ * the screen comes up or a call starts, or after a minute's silence while one
+ * of those lasts, and one that gets no answer replaces a socket that only
+ * looks open; and [LinkWatchdog] checks on it every ten minutes or so in case
+ * all of that went quiet.
  */
 object LiveLink {
 
@@ -60,11 +66,8 @@ object LiveLink {
     private const val AWAKE_BACKOFF_MAX_MS = 8_000L
     /** Upper bound on handling one delivered envelope with the phone kept awake. */
     private const val ENVELOPE_AWAKE_MS = 20_000L
-    /**
-     * Nothing from the relay for this long means the socket is dead: the relay
-     * sends a heartbeat every two minutes (comms-worker HEARTBEAT_MS).
-     */
-    const val SILENT_MS = 5 * 60_000L
+    /** The background service's hold ([CommsService]); every other hold means Clairix is in use (on screen, a call). */
+    internal const val SERVICE_HOLD = "service"
 
     private var appContext: Context? = null
 
@@ -88,8 +91,14 @@ object LiveLink {
     }
 
     /** When the relay last sent anything on the current socket, by the clock that keeps running in sleep. */
+    private val frames = FrameMark()
+
+    /**
+     * The most the relay said it would wait before its next heartbeat on this
+     * socket (`next` in its `hb`); until it has said, the pace this app asks for.
+     */
     @Volatile
-    private var lastFrameAt = 0L
+    private var gapMs = LinkTiming.HEARTBEAT_MS
 
     private val crashGuard = CoroutineExceptionHandler { _, e ->
         Log.e(TAG, "relay connection failed", e)
@@ -169,17 +178,22 @@ object LiveLink {
             if (loop?.isActive != true) loop = scope.launch { connectLoop() }
         }
         kicks.trySend(Unit)
-        if (tag != "service") probe(tag)
+        if (tag != SERVICE_HOLD) probe(tag)
     }
 
     /** Whether something holds the socket open. */
     fun held(): Boolean = synchronized(this) { holders.isNotEmpty() }
 
+    /** Whether Clairix is in use: on screen, or a call up (any hold but the background service's). */
+    private fun inUse(): Boolean = synchronized(this) { holders.any { it != SERVICE_HOLD } }
+
     /**
      * Checks that the socket really reaches the relay: a ping that gets no
      * answer within a few seconds means it only looks open (the phone changed
      * network, a carrier dropped the mapping), and it is replaced. A socket
-     * that is not connected is reconnected straight away instead.
+     * that is not connected is reconnected straight away instead. The phone is
+     * kept awake only until the answer (any frame from the relay after the
+     * ping) arrives, or the few seconds run out.
      */
     fun probe(why: String) {
         if (!held()) return
@@ -195,8 +209,8 @@ object LiveLink {
             probeWake?.acquire(PROBE_TIMEOUT_MS + 4_000L)
             probeJob = scope.launch {
                 try {
-                    delay(PROBE_TIMEOUT_MS)
-                    if (lastFrameAt < sentAt && socket === ws) {
+                    val answered = withTimeoutOrNull(PROBE_TIMEOUT_MS) { frames.await(sentAt) } != null
+                    if (!answered && socket === ws) {
                         CommsLog.add("Relay connection did not answer ($why); reconnecting")
                         ws.cancel()
                         kicks.trySend(Unit)
@@ -211,21 +225,59 @@ object LiveLink {
     private var probeJob: Job? = null
 
     /**
-     * The watchdog's periodic check: a socket the relay has been silent on for
-     * longer than its heartbeat allows is dead and replaced; otherwise it is
-     * probed. Keeps the phone awake until the answer or the reconnect is in.
+     * The watchdog's periodic check ([LinkTiming.check]). A socket that heard
+     * from the relay within its heartbeat window is left alone, so the phone
+     * can sleep again at once; one that has gone quiet past it is probed; one
+     * the relay has missed two heartbeats on is dead and replaced, and so is
+     * no socket at all. Null when nothing holds the link.
      */
-    fun checkAlive() {
-        if (!held()) return
-        val silentFor = SystemClock.elapsedRealtime() - lastFrameAt
+    internal fun checkAlive(): LinkTiming.Check? {
+        if (!held()) return null
         val ws = socket
-        if (ws != null && _connected.value && silentFor > SILENT_MS) {
-            CommsLog.add("Relay connection silent for ${silentFor / 60_000} min; reconnecting")
-            ws.cancel()
+        if (ws == null || !_connected.value) {
             kicks.trySend(Unit)
-            return
+            return LinkTiming.Check.REPLACE
         }
-        probe("watchdog")
+        val silentFor = SystemClock.elapsedRealtime() - frames.at
+        return when (val verdict = LinkTiming.check(silentFor, gapMs)) {
+            LinkTiming.Check.FRESH -> verdict
+            LinkTiming.Check.PROBE -> verdict.also { probe("watchdog") }
+            LinkTiming.Check.REPLACE -> verdict.also {
+                CommsLog.add("Relay connection silent for ${silentFor / 60_000} min; reconnecting")
+                ws.cancel()
+                kicks.trySend(Unit)
+            }
+        }
+    }
+
+    /**
+     * Suspends until the relay has sent something at or after [since] (by
+     * [SystemClock.elapsedRealtime]): the answer to a probe sent then, a
+     * heartbeat, or a socket opened since. The watchdog waits on this, under
+     * its own time limit, instead of a fixed pause.
+     */
+    suspend fun awaitFrame(since: Long) = frames.await(since)
+
+    /**
+     * While a socket is connected: pings when it has been quiet longer than
+     * [LinkTiming.quietLimitMs] allows (the relay's heartbeat overdue, or a
+     * minute's silence while Clairix is in use). Each frame starts the count
+     * again, so a socket the relay keeps talking on is never pinged. Timers do
+     * not run while the phone sleeps; [LinkWatchdog] covers that.
+     */
+    private suspend fun watchQuiet(ws: WebSocket) {
+        while (socket === ws) {
+            val heard = frames.at
+            val limit = LinkTiming.quietLimitMs(inUse(), gapMs)
+            val wait = heard + limit - SystemClock.elapsedRealtime()
+            if (wait > 0) {
+                withTimeoutOrNull(wait) { frames.await(heard + 1) }
+                continue
+            }
+            probe("quiet")
+            // Its answer, or the probe giving up and replacing the socket.
+            withTimeoutOrNull(PROBE_TIMEOUT_MS + 1_000L) { frames.await(heard + 1) }
+        }
     }
 
     /** Drops one hold; the socket closes shortly after the last one is released. */
@@ -344,6 +396,11 @@ object LiveLink {
                 }
                 socket = ws
                 if (ws != null) {
+                    val quiet = scope.launch {
+                        // From the moment it opens; a handshake that fails ends here too.
+                        _connected.first { it }
+                        watchQuiet(ws)
+                    }
                     val reason = try {
                         closed.receive()
                     } catch (e: CancellationException) {
@@ -351,6 +408,8 @@ object LiveLink {
                         current.alive = false
                         ws.close(1000, "stopped")
                         throw e
+                    } finally {
+                        quiet.cancel()
                     }
                     current.alive = false
                     socket = null
@@ -382,7 +441,9 @@ object LiveLink {
                 return
             }
             CommsRepository.relayClient().noteServerTime(response)
-            lastFrameAt = SystemClock.elapsedRealtime()
+            // A new socket: the relay has not said its pace on it yet.
+            gapMs = LinkTiming.HEARTBEAT_MS
+            frames.mark(SystemClock.elapsedRealtime())
             CommsLog.add("Connected to the relay (${holdersText()})")
             setConnected(true)
         }
@@ -390,9 +451,11 @@ object LiveLink {
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (!current.alive) return
             // Anything at all from the relay, heartbeats and pongs included, shows the socket is alive.
-            lastFrameAt = SystemClock.elapsedRealtime()
+            frames.mark(SystemClock.elapsedRealtime())
             val json = runCatching { JSONObject(text) }.getOrNull() ?: return
             when (json.optString("type")) {
+                // How long until the next heartbeat at most; a relay from before saying so sends one every two minutes.
+                "hb" -> gapMs = LinkTiming.announcedGap(json.optLong("next", -1L).takeIf { it > 0L })
                 "envelope" -> {
                     val envelope = runCatching { CommsRepository.relayClient().parseEnvelope(json.getJSONObject("envelope")) }.getOrNull()
                     if (envelope == null) {

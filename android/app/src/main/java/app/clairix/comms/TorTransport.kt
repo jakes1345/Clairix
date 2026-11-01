@@ -2,6 +2,7 @@ package app.clairix.comms
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import uniffi.clairix_comms_crypto.TorProxy
+import uniffi.clairix_comms_crypto.TorStatus
 import java.io.File
 import java.io.IOException
 import java.net.Authenticator
@@ -41,6 +43,13 @@ import java.util.concurrent.CopyOnWriteArrayList
  * directly. Names are resolved by the Tor exit: OkHttp hands a SOCKS proxy
  * the host name unresolved.
  *
+ * Arti does not run for nothing ([TorPacing]). Its state is read every second
+ * while it bootstraps, then before each new connection and once a minute. With
+ * the background connection off and nothing holding the link, it sleeps once
+ * nothing has gone through it for five minutes; the next connection starts it
+ * again on the spot and waits for it, so the first request after a sleep is a
+ * few seconds slower and none ever goes out directly.
+ *
  * What does not go through Tor: call audio and video (WebRTC sends UDP, which
  * Tor cannot carry), so the relay's TURN server sees this phone's address
  * during a call, and a contact does too unless "Relay-only calls" is on; and
@@ -65,6 +74,8 @@ object TorTransport {
         data object Off : State
         data class Starting(val percent: Int, val summary: String) : State
         data object Ready : State
+        /** Stopped because nothing needed it for a while; the next connection starts it again. */
+        data object Asleep : State
         data class Blocked(val percent: Int, val reason: String) : State
         data class Failed(val reason: String) : State
     }
@@ -79,9 +90,21 @@ object TorTransport {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
 
+    /** Guards starting, stopping and putting Arti to sleep. Held across a start, which blocks briefly. */
+    private val life = Any()
+
     @Volatile private var proxy: TorProxy? = null
     @Volatile private var port: Int = 0
     private var watcher: Job? = null
+
+    /** Stopped for want of use ([TorPacing.shouldSleep]); the next connection starts it again. */
+    @Volatile private var asleep = false
+
+    /** When something last went through Tor: a new connection, or a request starting or ending. */
+    @Volatile private var lastUseAt = 0L
+
+    /** Whatever keeps Tor running whether or not anything uses it; see [keepRunningWhile]. */
+    @Volatile private var keepRunning: () -> Boolean = { true }
 
     // The proxy's login, made for each process: other apps on the phone can
     // reach 127.0.0.1 too, and must not use (or be seen to use) Clairix's Tor.
@@ -115,6 +138,15 @@ object TorTransport {
         if (enabled) start()
     }
 
+    /**
+     * What keeps Tor running whether or not anything has used it lately: for
+     * comms, the background connection being on or the link being held (the
+     * app on screen, a call). Until this is set, Tor never sleeps.
+     */
+    fun keepRunningWhile(rule: () -> Boolean) {
+        keepRunning = rule
+    }
+
     /** Turns it on or off. Connections already open are dropped, so none keeps going around (or through) Tor. */
     fun setEnabled(on: Boolean) {
         synchronized(this) {
@@ -134,62 +166,152 @@ object TorTransport {
         for (l in listeners) runCatching { l() }
     }
 
+    /**
+     * Something is going through Tor: a request starting or ending. It keeps
+     * Tor from sleeping under a request that rides a connection already open,
+     * where [proxySelector] is not asked.
+     */
+    fun noteUse() {
+        lastUseAt = SystemClock.elapsedRealtime()
+    }
+
+    /** Reads Arti's state now, for the Comms settings line, rather than at the next minute. */
+    fun refreshStatus() {
+        val p = proxy ?: return
+        runCatching { p.status() }.getOrNull()?.let { publish(it) }
+    }
+
+    private fun publish(s: TorStatus) {
+        val next = when {
+            s.ready -> State.Ready
+            s.blocked != null -> State.Blocked(s.percent.toInt(), s.blocked!!)
+            else -> State.Starting(s.percent.toInt(), s.summary)
+        }
+        if (_state.value != next) _state.value = next
+    }
+
+    /** Starts Tor in the background, off the caller's thread. */
     private fun start() {
         if (proxy != null) return
+        asleep = false
         _state.value = State.Starting(0, "Starting")
+        scope.launch {
+            // Connections refused while the proxy came up can go now.
+            if (startNow()) changed()
+        }
+    }
+
+    /**
+     * Starts Arti and its proxy on this thread, which must not be the main
+     * one, and follows its state. False when it did not start (or the setting
+     * went off meanwhile).
+     */
+    private fun startNow(): Boolean = synchronized(life) {
+        if (proxy != null) return true
+        if (!enabled) return false
+        _state.value = State.Starting(0, "Starting")
+        val started = try {
+            stateDir.mkdirs()
+            cacheDir.mkdirs()
+            TorProxy.start(appDir.absolutePath, stateDir.absolutePath, cacheDir.absolutePath, username, password)
+        } catch (e: Exception) {
+            Log.w(TAG, "Tor did not start", e)
+            _state.value = State.Failed(e.message ?: "Tor did not start")
+            return false
+        }
+        if (!enabled) {
+            started.stop()
+            return false
+        }
+        proxy = started
+        port = started.socksPort().toInt()
+        asleep = false
+        lastUseAt = SystemClock.elapsedRealtime()
+        watch(started)
+        true
+    }
+
+    /**
+     * Follows [started]'s state: every second while it bootstraps, then once
+     * a minute, putting it to sleep when nothing needs it ([TorPacing]).
+     * Caller holds [life].
+     */
+    private fun watch(started: TorProxy) {
         watcher?.cancel()
         watcher = scope.launch {
-            val started = try {
-                stateDir.mkdirs()
-                cacheDir.mkdirs()
-                TorProxy.start(appDir.absolutePath, stateDir.absolutePath, cacheDir.absolutePath, username, password)
-            } catch (e: Exception) {
-                Log.w(TAG, "Tor did not start", e)
-                _state.value = State.Failed(e.message ?: "Tor did not start")
-                return@launch
-            }
-            synchronized(this@TorTransport) {
-                if (!enabled) { started.stop(); return@launch }
-                proxy = started
-                port = started.socksPort().toInt()
-            }
-            // Connections refused while the proxy came up can go now.
-            changed()
             var wasReady = false
             while (isActive) {
                 val s = runCatching { started.status() }.getOrNull() ?: break
-                val next = when {
-                    s.ready -> State.Ready
-                    s.blocked != null -> State.Blocked(s.percent.toInt(), s.blocked!!)
-                    else -> State.Starting(s.percent.toInt(), s.summary)
-                }
-                if (_state.value != next) _state.value = next
+                publish(s)
                 if (s.ready && !wasReady) CommsLog.add("Tor connected")
                 wasReady = s.ready
-                delay(if (s.ready) 5_000 else 1_000)
+                if (s.ready && sleepIfIdle(started)) break
+                delay(TorPacing.pollMs(s.ready))
             }
         }
     }
 
+    /**
+     * Stops [started] when nothing keeps Tor running and nothing has gone
+     * through it for a while; [proxySelector] starts it again for the next
+     * connection. True when it is no longer running (put to sleep now, or
+     * stopped or replaced already), so its watcher ends.
+     */
+    private fun sleepIfIdle(started: TorProxy): Boolean {
+        // Asked outside [life]: the rule reads comms and the link, which never wait on Tor.
+        val needed = runCatching { keepRunning() }.getOrDefault(true)
+        synchronized(life) {
+            if (proxy !== started) return true
+            if (!TorPacing.shouldSleep(needed, lastUseAt, SystemClock.elapsedRealtime())) return false
+            proxy = null
+            port = 0
+            asleep = true
+            runCatching { started.stop() }
+            _state.value = State.Asleep
+        }
+        CommsLog.add("Tor asleep: nothing has needed it for ${TorPacing.IDLE_SLEEP_MS / 60_000} min; it starts again with the next request")
+        // Pooled connections went through the proxy just stopped.
+        changed()
+        return true
+    }
+
+    /** A new connection is about to go through Tor: it counts as use, wakes Tor if it sleeps, and gets the port (0 when none). */
+    private fun portForConnection(): Int {
+        noteUse()
+        if (asleep) synchronized(life) {
+            if (asleep && enabled) {
+                asleep = false
+                CommsLog.add("Tor waking for a request")
+                startNow()
+            }
+        }
+        refreshStatus()
+        return port
+    }
+
     private fun stop() {
-        watcher?.cancel()
-        watcher = null
-        val p = proxy
-        proxy = null
-        port = 0
-        runCatching { p?.stop() }
-        _state.value = State.Off
+        synchronized(life) {
+            watcher?.cancel()
+            watcher = null
+            val p = proxy
+            proxy = null
+            port = 0
+            asleep = false
+            runCatching { p?.stop() }
+            _state.value = State.Off
+        }
     }
 
     /**
      * The proxy for every relay connection: Tor's while the setting is on (or
      * a closed port while Tor is not up yet), none while it is off. OkHttp
      * asks for each new connection and never falls back to a direct one when
-     * the proxy fails.
+     * the proxy fails. A Tor put to sleep is started again here, on the
+     * connection's own thread, and the connection waits for it.
      */
     val proxySelector: ProxySelector = object : ProxySelector() {
         override fun select(uri: URI?): List<Proxy> =
-            if (enabled) listOf(Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, port.takeIf { it > 0 } ?: CLOSED_PORT)))
+            if (enabled) listOf(Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, portForConnection().takeIf { it > 0 } ?: CLOSED_PORT)))
             else listOf(Proxy.NO_PROXY)
 
         override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) {
@@ -200,7 +322,7 @@ object TorTransport {
     /** For tests: stops the proxy as a crash would, leaving the setting on. */
     @androidx.annotation.VisibleForTesting
     fun killProxyForTest() {
-        synchronized(this) {
+        synchronized(life) {
             watcher?.cancel()
             val p = proxy
             proxy = null

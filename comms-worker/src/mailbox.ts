@@ -55,7 +55,10 @@ export type { SignedKey } from "./comms-logic";
  * What it does not know is when its owner was last here. Nothing about a
  * request is written beyond its nonce (kept five minutes, to the minute), and
  * the allowances that have to be stored remember the hour they were drawn on,
- * not the moment, and only until they have refilled (see comms-logic.ts).
+ * not the moment, and only until they have refilled (see comms-logic.ts). A
+ * live socket carries, in memory and for as long as it is open, when an
+ * envelope or an ack last went over it, which sets the heartbeat's pace
+ * ([SocketPace]); it goes with the socket.
  *
  * The same class also serves a few objects that are not mailboxes, each named
  * after what it holds: "invite:<code>", "register-guard:<address>" and the
@@ -193,12 +196,90 @@ const CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
 /** How long a live socket has to ack an envelope before the owner is also woken by push. */
 const UNACKED_WAKE_MS = 8_000;
 /**
- * A connected phone hears from the relay at least this often. The heartbeat
+ * A connected phone hears from the relay at least this often while envelopes
+ * are moving, and always when its app asks for nothing else. The heartbeat
  * keeps carrier NAT from forgetting an idle connection, and briefly wakes a
  * sleeping phone, which lets it notice a connection that has died; the app
  * reconnects when it has heard nothing for a few heartbeats.
  */
-const HEARTBEAT_MS = 120_000;
+export const HEARTBEAT_ACTIVE_MS = 120_000;
+/**
+ * How long after the last envelope or ack on a socket the heartbeat keeps the
+ * two-minute pace: a reply is likeliest then, and a dead connection is worth
+ * noticing quickly.
+ */
+export const HEARTBEAT_ACTIVE_WINDOW_MS = 10 * 60_000;
+/** The longest quiet pace an app may ask for. */
+export const HEARTBEAT_IDLE_MAX_MS = 10 * 60_000;
+/**
+ * Sent by the app on the WebSocket upgrade: the most milliseconds it may go
+ * without a frame on a quiet connection (the app sends no pings of its own and
+ * judges the link by these heartbeats). Apps that do not send it, every app
+ * before this, keep a heartbeat every two minutes, which is what their own
+ * silence rule expects.
+ */
+export const HEARTBEAT_HEADER = "x-clairix-heartbeat";
+
+/**
+ * What the relay keeps with each live socket, in memory and only for as long
+ * as the socket lives (a hibernated socket keeps it; nothing goes to storage):
+ * the quiet pace its app asked for, or null for an app that asked for none,
+ * and when an envelope or an ack last went over it.
+ */
+export interface SocketPace {
+  idle: number | null;
+  trafficAt: number;
+}
+
+/** The quiet pace in an app's heartbeat header, kept between two and ten minutes; null when it sent none. */
+export function heartbeatPreference(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const value = raw.trim();
+  if (!/^[0-9]{1,9}$/.test(value)) return null;
+  const ms = Number(value);
+  if (ms <= 0) return null;
+  return Math.min(HEARTBEAT_IDLE_MAX_MS, Math.max(HEARTBEAT_ACTIVE_MS, ms));
+}
+
+/**
+ * How long until the next heartbeat on a socket: two minutes for an app that
+ * asked for no other pace, and for ten minutes after the last envelope or ack;
+ * the pace the app asked for once the connection has gone quiet.
+ */
+export function heartbeatGap(pace: SocketPace, now: number): number {
+  if (pace.idle === null) return HEARTBEAT_ACTIVE_MS;
+  return now - pace.trafficAt < HEARTBEAT_ACTIVE_WINDOW_MS ? HEARTBEAT_ACTIVE_MS : pace.idle;
+}
+
+/** The pace kept with [ws]; a socket with none (accepted before this, or a test's stand-in) keeps two minutes. */
+function paceOf(ws: WebSocket): SocketPace {
+  try {
+    const kept = ws.deserializeAttachment?.() as Partial<SocketPace> | null | undefined;
+    if (kept && typeof kept.trafficAt === "number") {
+      return { idle: typeof kept.idle === "number" ? kept.idle : null, trafficAt: kept.trafficAt };
+    }
+  } catch {
+    // nothing kept
+  }
+  return { idle: null, trafficAt: 0 };
+}
+
+/**
+ * An envelope or an ack went over [ws] at [now]: the two-minute pace again for
+ * the next ten minutes. Returns true when that brings the next heartbeat
+ * closer (the socket had gone quiet), so the alarm must be brought forward.
+ */
+function noteTraffic(ws: WebSocket, now: number): boolean {
+  const pace = paceOf(ws);
+  const next: SocketPace = { idle: pace.idle, trafficAt: now };
+  try {
+    ws.serializeAttachment?.(next);
+  } catch {
+    // a socket that has closed keeps nothing
+    return false;
+  }
+  return heartbeatGap(next, now) < heartbeatGap(pace, now);
+}
 /** Durable Object storage deletes at most this many keys per call. */
 const DELETE_BATCH = 128;
 /** How long an invite can be used. */
@@ -1163,19 +1244,27 @@ export class Mailbox extends DurableObject<Env> {
   private async handOver(envelopes: Envelope[], fromRequest: boolean): Promise<void> {
     if (envelopes.length === 0) return;
     const sockets = this.ctx.getWebSockets();
-    let delivered = false;
+    const reached = new Set<WebSocket>();
     for (const envelope of envelopes) {
       for (const ws of sockets) {
         try {
           ws.send(JSON.stringify({ type: "envelope", envelope }));
-          delivered = true;
+          reached.add(ws);
         } catch {
           // a dead socket; the owner will fetch on reconnect
         }
       }
     }
+    const delivered = reached.size > 0;
+    // Traffic: the heartbeat goes back to every two minutes for a while.
+    let quickened = false;
+    const now = Date.now();
+    for (const ws of reached) if (noteTraffic(ws, now)) quickened = true;
     const endpoint = await this.ctx.storage.get<string>("push");
-    if (!endpoint) return;
+    if (!endpoint) {
+      if (quickened) await this.scheduleAlarm();
+      return;
+    }
     if (delivered) {
       // A socket whose phone lost its network still accepts a send without
       // error, so "delivered" only means handed over. If the phone has not
@@ -1246,13 +1335,14 @@ export class Mailbox extends DurableObject<Env> {
   /**
    * Sets the alarm for whichever comes first: the next held envelope's
    * release, the unacked-delivery check, the next heartbeat while a phone is
-   * connected, or the daily cleanup.
+   * connected (see [heartbeatGap]), or the daily cleanup.
    */
   private async scheduleAlarm(rearm = false): Promise<void> {
     const cleanupAt = (await this.ctx.storage.get<number>("cleanupAt")) ?? Date.now() + CLEANUP_INTERVAL_MS;
     const check = await this.ctx.storage.get<WakeCheck>("wakeCheck");
     let next = check ? Math.min(cleanupAt, check.due) : cleanupAt;
-    if (this.ctx.getWebSockets().length > 0) next = Math.min(next, Date.now() + HEARTBEAT_MS);
+    const now = Date.now();
+    for (const ws of this.ctx.getWebSockets()) next = Math.min(next, now + heartbeatGap(paceOf(ws), now));
     const release = await this.nextRelease();
     if (release !== null) next = Math.min(next, release);
     // From inside alarm() the alarm being handled may still read as set, so the
@@ -1343,7 +1433,9 @@ export class Mailbox extends DurableObject<Env> {
     }
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(JSON.stringify({ type: "hb", ts: now }));
+        // "next": the most this socket waits for the following heartbeat, so
+        // the app knows how long a silence means a dead connection.
+        ws.send(JSON.stringify({ type: "hb", ts: now, next: heartbeatGap(paceOf(ws), now) }));
       } catch {
         // a dead socket; the phone reconnects when it notices
       }
@@ -1433,6 +1525,9 @@ export class Mailbox extends DurableObject<Env> {
       }
     }
     this.ctx.acceptWebSocket(server);
+    // The pace its app asked for, if any; a new connection starts at the
+    // two-minute pace, as if traffic had just gone over it.
+    server.serializeAttachment({ idle: heartbeatPreference(request.headers.get(HEARTBEAT_HEADER)), trafficAt: Date.now() } satisfies SocketPace);
     // Anything already waiting goes out immediately, a page at a time; the
     // client fetches the rest through /v1/inbox when told there is more.
     const pending = await this.inbox();
@@ -1453,8 +1548,10 @@ export class Mailbox extends DurableObject<Env> {
     if (parsed.type === "ack" && Array.isArray(parsed.ids)) {
       const ids = parsed.ids.filter((x): x is string => typeof x === "string");
       await this.ack(ids);
+      if (noteTraffic(ws, Date.now())) await this.scheduleAlarm();
       ws.send(JSON.stringify({ type: "acked", ids }));
     } else if (parsed.type === "ping") {
+      // A ping is the app checking the link, not traffic: it leaves the pace alone.
       ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
     }
   }

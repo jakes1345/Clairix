@@ -49,6 +49,8 @@ class CommsService : Service() {
             return START_NOT_STICKY
         }
         if (!promote(LiveLink.connected.value)) return START_NOT_STICKY
+        // Running again: whatever the watchdog counted of Android's refusals is over.
+        LinkHealth.onRunning(this)
         LiveLink.hold(HOLD)
         LinkWatchdog.schedule(this)
         if (watcher?.isActive != true) {
@@ -99,7 +101,7 @@ class CommsService : Service() {
 
     companion object {
         private const val TAG = "CommsService"
-        private const val HOLD = "service"
+        private const val HOLD = LiveLink.SERVICE_HOLD
         const val ACTION_STOP = "app.clairix.comms.STOP"
 
         /**
@@ -110,8 +112,20 @@ class CommsService : Service() {
          * when Android allows it.
          */
         fun start(context: Context) {
-            runCatching { context.startForegroundCompat(Intent(context, CommsService::class.java)) }
-                .onFailure { Log.w(TAG, "could not start the relay connection now: ${it.message}") }
+            tryStart(context)
+        }
+
+        /**
+         * [start], saying how it went: null when Android took the start, or what
+         * it threw (ForegroundServiceStartNotAllowedException from the
+         * background) for the watchdog to count ([LinkHealth]).
+         */
+        fun tryStart(context: Context): Exception? = try {
+            context.startForegroundCompat(Intent(context, CommsService::class.java))
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "could not start the relay connection now: ${e.message}")
+            e
         }
 
         fun stop(context: Context) {

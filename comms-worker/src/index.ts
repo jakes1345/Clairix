@@ -11,6 +11,7 @@ import {
   openRegistrationCap,
   parseIceServers,
   PUSH_CHALLENGE_PREFIX,
+  pushHostsOnly,
   randomToken,
   REPORT_REASONS,
   STUN_ONLY,
@@ -395,7 +396,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       await me.setPush(null);
       return json({ ok: true, verified: false });
     }
-    const check = checkPushEndpoint(body.endpoint, env.PUSH_HOSTS);
+    const check = checkPushEndpoint(body.endpoint, env.PUSH_HOSTS, pushHostsOnly(env.PUSH_HOSTS_ONLY));
     if (!check.ok) throw new HttpError(400, check.reason);
     const allowed = await me.allowanceOk("push", Mailbox.PUSH_PER_HOUR, Mailbox.PUSH_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many push endpoints; try again later", allowed.retryAfter);

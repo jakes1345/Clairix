@@ -73,7 +73,10 @@ giving them your real number or your identity key.
   "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
   up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
   host first gets a one-time code the phone must echo back, so the relay cannot
-  be pointed at arbitrary URLs.
+  be pointed at arbitrary URLs (see "Push wake-ups").
+- For each live socket, while it is open and in memory only: when an envelope
+  or an ack last went over it, which sets how often the heartbeat comes (see
+  "The live connection"). It goes when the socket closes.
 
 Authentication is by Ed25519 signature with the same identity key contacts
 verify. There are no passwords or session tokens to leak; a delivery token
@@ -200,6 +203,49 @@ delay hides little. A global observer who watches both ends for weeks can
 still correlate by volume. The app's optional cover traffic (Settings, off by
 default) adds dummy envelopes to random contacts, about one every twenty
 minutes, which blurs volume a little but not against that observer.
+
+### The live connection
+
+A phone kept online holds one WebSocket to its mailbox. The relay sends it a
+small `hb` frame, carrying `next`, the most milliseconds until the following
+one: every two minutes for ten minutes after an envelope or an ack went over
+the socket, and after a reconnect; then at the pace the app asked for on the
+upgrade (`X-Clairix-Heartbeat`, two to ten minutes; the app asks for five). The
+app sends no pings on a timer: it pings when a heartbeat is overdue, when
+Clairix comes on screen or a call starts, and after a minute's silence while
+Clairix is on screen or a call is up. An app that does not send the header,
+every version before it, gets a heartbeat every two minutes, as before. The
+heartbeat keeps carrier NAT from dropping the idle connection and lets a
+sleeping phone notice a dead one.
+
+### Push wake-ups
+
+When a phone has no live socket, or does not ack a delivery within eight
+seconds, the relay POSTs the word "wake" to the UnifiedPush endpoint the phone
+registered, at most once until the phone next fetches or 30 seconds have
+passed. The push service behind that endpoint (the server the phone's
+distributor app uses: ntfy.sh unless its owner picked another) learns the
+relay's address and when each wake was sent, which is when something arrived
+while the phone was not connected; never what, or from whom. It also sees the
+phone's own address, through the distributor's connection to it.
+
+Endpoints on a trusted host are used at once; any other host first gets a
+one-time code the phone must echo back. The trusted hosts are ntfy.sh and
+up.conversations.im, plus any in `PUSH_HOSTS`. An operator who runs a push
+server of their own ([ntfy](https://docs.ntfy.sh/install/) is one program) and
+wants it to be the one their people use puts its host name in `PUSH_HOSTS`
+and sets `PUSH_HOSTS_ONLY` to `on`: then only that host is trusted, and an
+endpoint on ntfy.sh or anywhere else still works, after the check. The relay
+cannot choose the server for anyone: each person points their distributor at
+it (in the ntfy app, the default server in its settings) before setting up
+push in Clairix.
+
+```toml
+# wrangler.toml
+[vars]
+PUSH_HOSTS = "push.example.org"
+PUSH_HOSTS_ONLY = "on"
+```
 
 ### Running your own relay, and reaching other relays
 
@@ -635,7 +681,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |
-| GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat every two minutes, and `pong` for a client's `{"type":"ping"}` |
+| GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat with `next` (the most milliseconds until the following one: two minutes, or with `X-Clairix-Heartbeat: <ms>` on the upgrade, two minutes for ten minutes after an envelope or an ack and that pace otherwise; see "The live connection"), and `pong` for a client's `{"type":"ping"}` |
 | GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured |
 | GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin. Every coin route answers 404 while `COIN` is off |
 | POST | `/v1/coin/pay` | `{to, pin, amount, txid?}` → `{txid, balance, ok}`: pays a contact; `pin` is the payee's key fingerprint, and a number that does not exist or a pin that does not match is "Payment refused" before any coin moves; 30 a minute |

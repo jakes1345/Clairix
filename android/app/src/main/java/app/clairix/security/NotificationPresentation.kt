@@ -15,6 +15,8 @@ package app.clairix.security
  *   no notification.
  * - The ongoing notifications (the scanner, drive mode, the mesh, navigation,
  *   the relay connection) say that something runs, never what it has heard.
+ *   The one that says Android stopped the relay connection ([linkStopped])
+ *   says, with previews hidden, only that Android stopped Clairix.
  * - Whatever the shade shows, the version Android may put on the lock screen
  *   is [neutral]: the app's name and one line that names nothing.
  *
@@ -76,4 +78,17 @@ object NotificationPresentation {
         connected -> NotificationText("Comms online", "Connected to your relay · encrypted messages arrive instantly")
         else -> NotificationText("Comms reconnecting", "Connecting to your relay")
     }
+
+    /** What the notification says when Android has stopped the background connection; with previews hidden, that Android stopped Clairix and nothing about messages. */
+    const val LINK_STOPPED_TITLE = "Android stopped Clairix's connection"
+    const val LINK_STOPPED_TEXT = "Tap to allow it to run"
+    const val LINK_STOPPED_NEUTRAL = "Android stopped it in the background. Tap to allow it to run"
+
+    /**
+     * Android refused, twice in a row, to restart the relay connection. With
+     * previews hidden (the owner's setting, or Clairix locked) it does not say
+     * that it is about a connection; the lock-screen version is always that.
+     */
+    fun linkStopped(previewsHidden: Boolean): NotificationText =
+        if (previewsHidden) neutral(LINK_STOPPED_NEUTRAL) else NotificationText(LINK_STOPPED_TITLE, LINK_STOPPED_TEXT)
 }
