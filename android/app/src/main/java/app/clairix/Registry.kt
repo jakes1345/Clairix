@@ -178,6 +178,18 @@ object Registry {
     val gnss: StateFlow<app.clairix.analysis.GnssAssessment> = _gnss.asStateFlow()
     fun publishGnss(a: app.clairix.analysis.GnssAssessment) { _gnss.value = a }
 
+    /**
+     * Where position fixes come from, whether the GPS check can hold the satellites against
+     * a Wi-Fi/cell position, and whether an app is faking positions; see
+     * [app.clairix.analysis.Positioning]. Written by the location clients, the GPS check and
+     * the scanner, so read-modify-write.
+     */
+    private val _positioning = MutableStateFlow(app.clairix.analysis.PositionState())
+    val positioning: StateFlow<app.clairix.analysis.PositionState> = _positioning.asStateFlow()
+    fun updatePositioning(block: (app.clairix.analysis.PositionState) -> app.clairix.analysis.PositionState) {
+        _positioning.update(block)
+    }
+
     private val _phoneHealth = MutableStateFlow(PhoneHealth())
     val phoneHealth: StateFlow<PhoneHealth> = _phoneHealth.asStateFlow()
     fun publishPhoneHealth(h: PhoneHealth) { _phoneHealth.value = h }

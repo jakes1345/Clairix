@@ -24,9 +24,9 @@ import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.hardware.TriggerEvent
 import android.hardware.TriggerEventListener
+import android.location.Location
 import android.location.LocationManager
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -35,12 +35,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import app.clairix.analysis.AudioRouteMonitor
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.EventLog
@@ -50,8 +44,11 @@ import app.clairix.analysis.GnssMonitor
 import app.clairix.analysis.Fix
 import app.clairix.analysis.IMSICatcher
 import app.clairix.analysis.IdentityResolver
+import app.clairix.analysis.LocationClient
 import app.clairix.analysis.LocationHistory
+import app.clairix.analysis.LocationPolicy
 import app.clairix.analysis.LocationTrack
+import app.clairix.analysis.MockFixes
 import app.clairix.analysis.MotionPolicy
 import app.clairix.analysis.Tracker
 import app.clairix.analysis.PhoneHealthMonitor
@@ -102,7 +99,8 @@ import java.util.concurrent.atomic.AtomicInteger
 class ScanService : LifecycleService() {
 
     private var scanner: BluetoothLeScanner? = null
-    private lateinit var location: FusedLocationProviderClient
+    /** The scanner's position fixes, from Google Play services or Android's own location service; see [LocationClient]. */
+    private lateinit var location: LocationClient
     private var running = false
 
     private lateinit var tracker: Tracker
@@ -303,23 +301,36 @@ class ScanService : LifecycleService() {
         }
     }
 
-    private val locationCallback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) {
-            val fix = result.lastLocation?.toFix() ?: return
-            motion.onFix(fix)?.let { applyPace(it) }
-            LocationHistory.record(this@ScanService, fix)
-            track.update(fix)
-            updateVehicle(fix)
-            synchronized(gpsTrail) {
-                gpsTrail.add(LatLon(fix.lat, fix.lon))
-                if (gpsTrail.size > 500) gpsTrail.removeAt(0)
-            }
-            Registry.update {
-                it.copy(
-                    hasFix = true, moving = track.isMoving(),
-                    lat = fix.lat, lon = fix.lon, travelledM = track.travelledM
-                )
-            }
+    /**
+     * Every position fix, on the main thread, from whichever source serves the scanner.
+     *
+     * A fix Android marks as mock is an app's invention ([MockFixes]): it places no
+     * sighting, moves no odometer, sets no pace and goes into no history, trail or trip,
+     * and the phone's position is unknown until a real fix comes. The status says there
+     * is no fix and keeps the last real position, which an SOS still sends; the Trackers
+     * screen says positions are being faked ([Registry.positioning]).
+     */
+    private fun onFix(loc: Location) {
+        val fix = loc.toFix()
+        val now = System.currentTimeMillis()
+        val real = MockFixes.take(track, fix, mock = loc.isMock)
+        Registry.updatePositioning { it.copy(mockFixAt = if (real) 0L else now) }
+        if (!real) {
+            Registry.update { it.copy(hasFix = false) }
+            return
+        }
+        motion.onFix(fix)?.let { applyPace(it) }
+        LocationHistory.record(this, fix)
+        updateVehicle(fix)
+        synchronized(gpsTrail) {
+            gpsTrail.add(LatLon(fix.lat, fix.lon))
+            if (gpsTrail.size > 500) gpsTrail.removeAt(0)
+        }
+        Registry.update {
+            it.copy(
+                hasFix = true, moving = track.isMoving(),
+                lat = fix.lat, lon = fix.lon, travelledM = track.travelledM
+            )
         }
     }
 
@@ -425,7 +436,8 @@ class ScanService : LifecycleService() {
 
         createChannels()
         getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner.also { scanner = it }
-        location = LocationServices.getFusedLocationProviderClient(this)
+        // A batch of fixes is taken by its newest, as one fix.
+        location = LocationClient(this) { fixes -> fixes.lastOrNull()?.let { onFix(it) } }
         screenOn = getSystemService(PowerManager::class.java)?.isInteractive ?: true
 
         cellStore = Store(this, CELL_FILE)
@@ -659,6 +671,11 @@ class ScanService : LifecycleService() {
      * every few minutes keeps the position fresh for the cell checks that need one,
      * and with no distance filter they get it. The significant-motion sensor, or the
      * next fix that has moved, brings GPS back.
+     *
+     * The same request goes to whichever source serves it ([LocationClient]): Google
+     * Play services where the phone has it, Android's own location service where it
+     * does not or where Google's fails the request, the satellites alone with
+     * Satellite-only positioning on. See [LocationPolicy.scannerFixes].
      */
     private fun applyPace(pace: MotionPolicy.Pace) {
         // The phone settling ends a journey; see [summariseRiders].
@@ -672,15 +689,9 @@ class ScanService : LifecycleService() {
         // Moving ends an idle spell: the publish loop leaves its minute-long wait now.
         if (pace == MotionPolicy.Pace.MOVING) publishKick.trySend(Unit)
         if (!running || !granted(Manifest.permission.ACCESS_FINE_LOCATION)) return
-        val request = when (pace) {
-            MotionPolicy.Pace.MOVING -> LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 15_000L)
-                .setMinUpdateIntervalMillis(10_000L).setMinUpdateDistanceMeters(25f).build()
-            MotionPolicy.Pace.STILL -> LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, SETTLED_FIX_MS)
-                .setMinUpdateIntervalMillis(60_000L).build()
-        }
         try {
-            // The same callback again replaces the earlier request.
-            location.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+            // A request again replaces the earlier one.
+            location.request(LocationPolicy.scannerFixes(pace, SETTLED_FIX_MS))
         } catch (e: SecurityException) {
             Registry.update { it.copy(hasFix = false, error = "Location denied: ${e.message}") }
             return
@@ -1572,7 +1583,7 @@ class ScanService : LifecycleService() {
         val bySystem = running && AppSettings.scanEnabled && !Wiper.isActive
         if (running) {
             try { unregisterReceiver(systemReceiver) } catch (_: IllegalArgumentException) {}
-            location.removeLocationUpdates(locationCallback)
+            location.stop()
             motionSensor?.let { getSystemService(SensorManager::class.java)?.cancelTriggerSensor(motionTrigger, it) }
             GnssMonitor.setSettled(false)
             gnssHandle?.let { GnssMonitor.release(it) }
@@ -1692,7 +1703,7 @@ class ScanService : LifecycleService() {
         private const val INTENSIVE_SWEEP_MS = 5 * 60_000L
         /** Allowance past the interrogator's own budget before its collector is cancelled. */
         private const val DULT_GRACE_MS = 5_000L
-        /** A Wi-Fi/cell fix this often once the phone has settled. */
+        /** A coarse fix this often once the phone has settled: Wi-Fi/cell, or the satellites with Satellite-only positioning on. */
         private const val SETTLED_FIX_MS = 3 * 60_000L
         /** A hardware sighting reuses its nearest-camera lookup for this long. */
         private const val NEAREST_CAMERA_REUSE_MS = 30_000L

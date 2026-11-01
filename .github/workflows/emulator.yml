@@ -17,8 +17,11 @@ name: Emulator smoke test
 # relays (RelayMoveTest), the app over the real Tor network (TorDeviceTest), and last,
 # since they move the app's vault keys, the lock screen tests (VaultLockScreenTest).
 #
-# The APKs are built once (job build) and every step above runs on four emulators,
-# Android 12 (API 31, the oldest Clairix runs on), 13, 14 and 15 (job smoke).
+# The APKs are built once (job build) and every step above runs on five emulators,
+# Android 12 (API 31, the oldest Clairix runs on), 13, 14 and 15 with Google APIs, and
+# Android 15 without them (the plain AOSP image), as a phone without Google Play
+# services is (job smoke). Nothing the tests drive needs Google Play services, so the
+# AOSP emulator runs every step the others do.
 #
 # The emulator is started with the SDK's own tools rather than a third-party action:
 # every action here is pinned to a commit.
@@ -99,6 +102,8 @@ jobs:
   # newest: each runs the smoke test, the end-to-end tests, the soak test, the
   # Tor tests and the lock screen tests on its own emulator.
   smoke:
+    # "smoke (31)" as before for the Google APIs images, "smoke (35, AOSP)" for the other.
+    name: smoke (${{ matrix.api }}${{ matrix.image == 'default' && ', AOSP' || '' }})
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -106,9 +111,17 @@ jobs:
       fail-fast: false
       matrix:
         api: ['31', '33', '34', '35']
+        image: ['google_apis']
+        # And a phone without Google Play services, as GrapheneOS and LineageOS
+        # phones are: the AOSP image. Positions come from Android's own location
+        # service there (analysis/LocationClient.kt), and the smoke test starts
+        # the scanner, the GPS page and the Drive map on that path.
+        include:
+          - api: '35'
+            image: 'default'
     env:
       API: ${{ matrix.api }}
-      IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
+      IMAGE: system-images;android-${{ matrix.api }};${{ matrix.image }};x86_64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -491,7 +504,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: emulator-smoke-api${{ matrix.api }}
+          name: emulator-smoke-api${{ matrix.api }}${{ matrix.image == 'default' && '-aosp' || '' }}
           path: |
             screens/
             instrument.txt

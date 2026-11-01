@@ -20,6 +20,7 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | **S** | The software supply chain: whoever can change a release, a map file, the relay list or a workflow | Ship a modified APK, map or relay list |
 | **B** | Someone nearby with a Bluetooth radio, while the offline mesh is on | Join the mesh, carry and inspect bundles, flood it |
 | **P** | An intimate partner or family member with household access: knows or has watched the phone's PIN, handles the phone unlocked, may have installed a monitoring app or placed a tracker, and may make the owner unlock it | Read the lock screen and the notification shade; open any app on the unlocked phone and see which apps are installed; read the call log, messages, browser history and clipboard; add a fingerprint or face; change the PIN; demand the phone and the app be unlocked in front of them; notice when a tracker or a monitoring app stops reporting |
+| **Q** | The phone's location provider: Google Play services on most phones, or whoever compels Google | Learn where the phone is each time Clairix asks Android for a position: one worked out from Wi-Fi and cell towers sends it the identifiers of the networks and towers around the phone, with the phone's IP address |
 
 ## What Clairix protects, and against whom
 
@@ -43,6 +44,8 @@ and are out of scope for an audit (see [SCOPE.md](SCOPE.md)).
 | Releases, map files, the relay list | Only the project's signed artifacts are accepted | S, N | Ed25519 signatures checked by the app; pinned workflow actions; reproducible builds |
 | Being reachable | Messages keep moving when a relay is blocked | N, R | Alternate relay addresses; onion addresses; moving to another relay with contacts told; the offline mesh |
 | A mailbox's room for contacts | One sender cannot fill it against the people the owner writes to | U, F | Contacts' passes: envelopes without one share a small part of the queue and an hourly allowance |
+| Where the phone is, from the positions Clairix asks for (scanner, navigation, SOS, the GPS check) | Not handed to a location provider when the owner chooses | Q | Satellite-only positioning (Settings, Location): fixes from the satellite receiver alone, no Wi-Fi/cell position asked for, and the GPS check's cross-check off with it; "Cross-check GPS against Wi-Fi/cell position" turns off that one request on its own. Otherwise Google Play services where it is installed, and Android's own location service where it is not or where it fails a request (analysis/LocationClient.kt) |
+| An SOS position, and the follow verdict | Never an app's invented position | P, A | A fix Android marks as mock (an app chosen under Developer options, Select mock location app) never goes in an SOS, never places a sighting and never moves the odometer; the position reads as unknown and the Trackers screen says positions are being faked, so following is neither confirmed nor ruled out until the app is turned off (analysis/LocationSource.kt MockFixes, security/SosLocation.kt) |
 
 ## Assumptions
 
@@ -74,6 +77,14 @@ These are stated to users in the README and are not findings:
 - Protection from a compromised operating system, baseband or system app.
 - Protection of a phone seized while unlocked, beyond what the app lock gives.
 - Hiding the phone's location from its carrier.
+- Hiding it from Google (Q) while Satellite-only positioning is off: on a
+  phone with Google Play services every position fix Clairix asks for goes
+  through it, and one from Wi-Fi and cell towers sends Google their
+  identifiers.
+- That the GPS check can hold the satellites against a Wi-Fi/cell position
+  on every phone: with no Wi-Fi/cell location provider, with the cross-check
+  off or with Satellite-only positioning on, that comparison does not run,
+  and the GPS page says so.
 - Defeating traffic analysis by someone who sees a relay's traffic in and out:
   the relay mixes (it holds each envelope a random few seconds and releases in
   shuffled batches) and cover traffic is optional, but it is one relay, not a

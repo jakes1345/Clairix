@@ -39,7 +39,8 @@ just as plainly, what it cannot do.
 
 Clairix assumes the adversary is a state: one that can compel the companies
 the app depends on (Cloudflare, which runs the relay; GitHub, which hosts the
-releases and the map files; your carrier), watch the network, seize the phone,
+releases and the map files; Google, whose Play services work out the phone's
+position on most phones; your carrier), watch the network, seize the phone,
 and may hold an exploit for the operating system. Everything below is written
 for that case. A jealous partner, an employer or a thief gets the same
 protection with far less effort.
@@ -136,6 +137,13 @@ Read this part twice.
   the law in most countries lets it keep that. Clairix can detect a fake
   tower; it cannot hide you from a real one. Nothing an app can do changes
   this. Airplane mode, or leaving the phone behind, is the only answer.
+- **Where you are, from Google.** On a phone with Google Play services, every
+  position fix Clairix asks for (the scanner, navigation, SOS) goes through
+  it, and one worked out from Wi-Fi and cell towers sends Google their
+  identifiers. "Satellite-only positioning" (Settings, Location) asks the
+  satellite receiver alone, at the cost of slower fixes and often none
+  indoors. A phone without Google Play services uses Android's own location
+  service.
 - **Traffic analysis.** Anyone watching the network sees that your phone
   talks to the relay and when. Envelopes are padded to a few fixed sizes, and
   "Cover traffic" (Comms settings, off by default) sends envelopes nobody
@@ -322,6 +330,14 @@ maintainer on the live service, not in this repository.
   kept, as which towers are usual and not when you were near them, and a tower
   not seen for three times the period is forgotten. An exported evidence
   report is deleted from the phone after a day.
+- **Satellite-only positioning** (Settings → Location): off by
+  default. On, every position fix comes from the satellite receiver alone
+  and Clairix asks for no Wi-Fi/cell position, so no location service
+  (Google Play services, on most phones) is sent the networks and towers
+  around you; fixes are slower, often absent indoors, and cost more battery
+  while the phone sits still. **Cross-check GPS against Wi-Fi/cell position**
+  (Settings → Location, with the scanner): on by default; off, the GPS check
+  asks for no Wi-Fi/cell position and its comparison does not run.
 - **Route around known plate readers** and **Say when one is ahead** (Drive,
   route options): both on by default. The list is what OpenStreetMap has,
   largely from the DeFlock project; a camera nobody has mapped is not on it,
@@ -349,7 +365,10 @@ maintainer on the live service, not in this repository.
   It catches the spoofers that are cheap to build; one that simulates a full
   sky at the right time passes the signal checks, and the Wi-Fi and cell
   comparison is the one it cannot pass while a tower or access point is in
-  range.
+  range. That comparison needs a Wi-Fi/cell location provider on the phone
+  and "Cross-check GPS against Wi-Fi/cell position" on (Settings, Location;
+  it is by default, and Satellite-only positioning turns it off); where it
+  cannot run, the GPS page says why.
 - **2G** (Phone check → Health): Android keeps the "Allow 2G" switch's state
   from apps, so the row says whether the phone has the switch, marks it red if
   the phone has used a 2G tower in the past week, and opens the page where it is
@@ -475,8 +494,9 @@ services libraries (or a modified version of those libraries), containing
 parts covered by the terms of the Android Software Development Kit License
 Agreement, the licensors of this program grant you additional permission to
 convey the resulting work. Every edition includes Google Play services'
-location library, used by the scanner and navigation; messaging uses no Google
-service.
+location library, used for the position fixes of the scanner, navigation and
+SOS on a phone that has Google Play services, unless Satellite-only
+positioning is on; messages and calls use no Google service.
 
 The fonts the app ships with keep their own licence, the SIL Open Font License
 1.1: Archivo ([licenses/OFL-1.1-Archivo.txt](licenses/OFL-1.1-Archivo.txt))

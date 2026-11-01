@@ -1636,8 +1636,8 @@ private fun MainApp(
                             toast(first.headline() + if (findingFix) ". Finding your location…" else "")
                             if (first.retrying) followUp(first, "SOS")
                             if (!findingFix) return@launch
-                            val loc = SosLocation.find(context)
-                            if (loc == null) { toast("No GPS fix to attach to the SOS"); return@launch }
+                            // Never an app's faked position, and the toast says why there is none.
+                            SosLocation.missing(SosLocation.locate(context))?.let { toast(it); return@launch }
                             val second = CommsRepository.sendSos()
                             toast(second.headline("Your location"))
                             if (second.retrying) followUp(second, "Your location")
@@ -1844,6 +1844,8 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
     val riders = live.filter { it.following && it.threat != Threat.CRITICAL }
     val persistent = live.count { it.persistent }
     val error = status.error
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
+    val faking = positioning.faking(System.currentTimeMillis())
     val (headline, body, tone) = when {
         // Wanted on and unable to scan (Bluetooth off, a refused restart): the cause,
         // which is what there is to act on, as the hub puts it first too.
@@ -1887,6 +1889,9 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
         // Registered and hearing nothing (Location off, five quiet minutes): a confirmed
         // follower or rider above still stands, but "nothing following" below would be unproven.
         error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
+        // An app supplies the phone's positions: following can be neither confirmed nor
+        // ruled out, so "nothing following" below would be unproven too.
+        faking -> Triple("Position faked", app.clairix.analysis.PositionText.FAKED, Tone.Caution)
         persistent > 0 -> Triple(
             "Keep watching",
             "${plural(persistent, "device")} keep showing up. Following is only confirmed once you move about " +
@@ -1979,6 +1984,8 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
 /** What the scan is working with: position, filtered noise, trusted devices, errors. */
 @Composable
 private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, trusted: Set<String>, now: Long) {
+    // Where fixes come from, whether the GPS check can compare, whether an app fakes positions.
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
     ClairixCard(spacing = 4.dp) {
         val scanText = when {
             !status.scanning -> "Idle"
@@ -2014,7 +2021,17 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
                 "${if (status.moving) "Moving" else "Still"} · %.1f km".format(Locale.US, status.travelledM / 1000.0)
             )
         } else {
-            WarningLine("No GPS fix. Following can't be confirmed without one.", Tone.Caution)
+            WarningLine(app.clairix.analysis.PositionText.noFix(positioning.source, positioning.faking(now)), Tone.Caution)
+        }
+        // Said when fixes do not come from Google Play services, and when the satellites
+        // cannot be held against a Wi-Fi/cell position here.
+        app.clairix.analysis.PositionText.source(positioning.source)?.let { line ->
+            if (app.clairix.analysis.PositionText.sourceIsProblem(positioning.source)) WarningLine(line, Tone.Caution)
+            else Text(line, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+        }
+        app.clairix.analysis.PositionText.network(positioning.networkCheck)?.let { line ->
+            if (app.clairix.analysis.PositionText.networkIsProblem(positioning.networkCheck)) WarningLine(line, Tone.Caution)
+            else Text(line, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         }
         if (trusted.isNotEmpty()) {
             KeyValueRow("Marked safe", "${plural(trusted.size, "device")}, left out of the threat level", mono = false)
@@ -2136,9 +2153,13 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
 
         // ── Follow assessment first: it is the answer to "is this on me?" ──
         SectionHeader("Is it following you?")
+        // No position because an app supplies fake ones, said as that rather than as no GPS.
+        val positioning by Registry.positioning.collectAsStateWithLifecycle()
+        val faking = positioning.faking(System.currentTimeMillis())
         val (line, lineTone) = when (d.confidence) {
             FollowConfidence.NONE -> "Not enough data yet" to Tone.Neutral
-            FollowConfidence.NO_POSITION -> "No GPS, so movement can't be confirmed" to Tone.Caution
+            FollowConfidence.NO_POSITION ->
+                (if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE else "No position fix, so movement can't be confirmed") to Tone.Caution
             FollowConfidence.NOT_MOVED_ENOUGH -> "Nearby, not following" to Tone.Caution
             FollowConfidence.CONFIRMED ->
                 if (d.threat == Threat.CRITICAL) "Following you" to Tone.Danger else "Travelling with you" to Tone.Caution
@@ -2149,7 +2170,8 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                 if (d.identified) "Known tracker type, but heard too briefly to show a pattern."
                 else "Watching for a pattern of it staying with you."
             FollowConfidence.NO_POSITION ->
-                "It keeps showing up. A GPS fix is needed to prove it moves with you."
+                if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE_DETAIL
+                else "It keeps showing up. A position fix is needed to prove it moves with you."
             FollowConfidence.NOT_MOVED_ENOUGH ->
                 "It keeps showing up, but only ${d.displacementM.roundToInt()} m of shared travel so far. " +
                     "Confirming it needs about 300 m."

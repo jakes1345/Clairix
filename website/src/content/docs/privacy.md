@@ -54,7 +54,7 @@ ClairixCoin is in Clairix Full, on any relay whose operator has not switched it 
 
 ### 2.5 Emergency alerts
 
-When you send an SOS or type your duress phrase, Clairix takes your last known position, or reads a fresh one when the phone can get a fix within a few seconds, and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time.
+When you send an SOS or type your duress phrase, Clairix takes your last known position, or reads a fresh one when the phone can get a fix within a few seconds, and sends it, end-to-end encrypted, to the contacts in your groups (over the offline mesh too, if it is on and the relay cannot be reached). Location is not read for this purpose at any other time. Where that position comes from is in section 2.10.
 
 ### 2.6 Traffic and navigation
 
@@ -77,6 +77,12 @@ Blocking and message requests happen on your phone. When you block someone, Clai
 
 When you report someone, Clairix sends the relay you are registered with their Clairix number, the relay they are on when it is another one, the reason you chose, and a hash (SHA-256) of the last encrypted envelope they sent you, when one has arrived since this version. Nothing you or they wrote is sent. The report spends one of the single-use tokens described in section 2.1, so it does not say who sent it. The relay keeps reports, dated to the day, for at most 90 days, or until its operator closes them, even if the reported account is deleted sooner. The relay's operator reads them; what they do about an account is up to them and their terms.
 
+### 2.10 Your position, and Google Play services
+
+Clairix asks your phone for its position for the tracker scanner, navigation, an SOS and the duress phrase. On a phone with Google Play services installed, that request goes to Google's fused location provider, which works the position out from the satellites and from the Wi-Fi networks and cell towers around you. To use Wi-Fi and cell towers it sends Google their identifiers, under Google's privacy policy (https://policies.google.com/privacy), unless Google Location Accuracy is off in Android's location settings. Clairix itself sends Google nothing. On a phone without Google Play services, Clairix asks Android's own location service instead, and a position from Wi-Fi and cell towers goes to whatever location provider that phone has, if any.
+
+The GPS check also asks Android for a position from Wi-Fi and cell towers, to compare with the satellites; turn "Cross-check GPS against Wi-Fi/cell position" off in Settings and it is not asked for. With "Satellite-only positioning" on in Settings, Clairix asks only the satellite receiver, asks for no Wi-Fi or cell position at all, and the cross-check is off with it.
+
 ## 3. What we do not do
 
 - We do not sell your data.
@@ -88,6 +94,8 @@ When you report someone, Clairix sends the relay you are registered with their C
 ## 4. Service providers
 
 The Clairix relay and call-relay servers run on Cloudflare, which processes this data on our behalf. Like any web host, Cloudflare's network handles your IP address when your phone connects. We use connection addresses only to limit abuse of account registration, and we do not keep them in our records.
+
+Google Play services, where it is installed on your phone, is not a provider of ours: it is Google's own service, run under Google's privacy policy (https://policies.google.com/privacy). It handles the Wi-Fi and cell identifiers described in section 2.10 when it works out your position, and we receive nothing from it. Satellite-only positioning keeps Clairix's requests away from it.
 
 ## 5. Permissions
 

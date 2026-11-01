@@ -48,6 +48,7 @@ Clairix flags Wi-Fi access points that behave like bait, catches "answer everyth
 - Wi-Fi rules can only see networks that broadcast. A hidden rogue network that does not answer the canary is not flagged.
 - The canary works only while the scanner runs and once you have allowed Clairix to suggest networks. Whether the phone sends the probe for a network it is told never to join is up to its Wi-Fi software, and Clairix cannot see its own probes.
 - The GPS checks catch the spoofers that are cheap to build. One that simulates a full sky at the right time passes the signal checks; the comparison with Wi-Fi and cell towers is the one it cannot pass while a tower or access point is in range. That comparison cuts both ways: a Wi-Fi position that is confidently wrong fails it just the same, so a disagreement on its own is reported as unusual, with neither position vouched for, rather than as spoofing.
+- The comparison needs a Wi-Fi and cell location provider on the phone (Google Play services on most phones, which is sent the identifiers of the networks and towers around you to place it) and "Cross-check GPS against Wi-Fi/cell position" on in Settings. On a phone with no such provider, with the cross-check off, or with Satellite-only positioning on, it does not run, and the GPS page says which.
 - Clairix cannot read or change the "Allow 2G" switch, or Android's own cell network protections. It tells you when 2G has been used, takes you to the setting, and takes your word that the switch is off until the phone uses 2G again.
 
 </div>

@@ -215,6 +215,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     var showAlertDetails by remember { mutableStateOf(AppSettings.showAlertDetails) }
     var followThreshold by remember { mutableFloatStateOf(AppSettings.followThresholdM) }
     var persistenceThreshold by remember { mutableFloatStateOf(AppSettings.persistenceThresholdMin) }
+    // Where position fixes come from; stored by the positioning code itself, in both editions.
+    var satelliteOnly by remember { mutableStateOf(app.clairix.analysis.Positioning.satelliteOnly(context)) }
+    var networkCrossCheck by remember { mutableStateOf(app.clairix.analysis.Positioning.networkCrossCheck(context)) }
     var showClearDialog by remember { mutableStateOf(false) }
 
     // ── Passcode state ───────────────────────────────────────────────────────
@@ -592,6 +595,56 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                 }
             }
 
+            // ── Location ─────────────────────────────────────────────────────
+            //
+            // Where position fixes come from, in both editions: the Comms edition reads
+            // a position for an SOS. See app.clairix.analysis.Positioning.
+            item(key = "§location-hdr") { SectionHeader("Location") }
+
+            item(key = "§location") {
+                ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                    ToggleRow(
+                        title = "Satellite-only positioning",
+                        subtitle = if (satelliteOnly)
+                            "Positions come from the satellite receiver alone, and Clairix asks for no Wi-Fi or cell " +
+                                "position. Slower to a first fix, often none indoors, and more battery while the phone sits still."
+                        else
+                            "Positions come from Google Play services where the phone has it, otherwise from Android's " +
+                                "own location service. One worked out from Wi-Fi and cell towers sends their identifiers " +
+                                "to that service: to Google, on most phones.",
+                        checked = satelliteOnly,
+                        onCheckedChange = { v ->
+                            satelliteOnly = v
+                            app.clairix.analysis.Positioning.setSatelliteOnly(context, v)
+                        }
+                    )
+                    if (BuildConfig.FULL_ACCESS) {
+                        Hairline()
+                        ToggleRow(
+                            title = "Cross-check GPS against Wi-Fi/cell position",
+                            subtitle = when {
+                                satelliteOnly ->
+                                    "Off while Satellite-only positioning is on, which asks for no Wi-Fi or cell position."
+                                networkCrossCheck ->
+                                    "The GPS check compares the satellite position with one from Wi-Fi and cell towers, " +
+                                        "the check a careful spoofer cannot pass. Asking for it sends the identifiers of the " +
+                                        "networks and towers around you to the phone's location service: Google Play " +
+                                        "services on most phones."
+                                else ->
+                                    "The satellite position is not compared with Wi-Fi and cell towers, and no such " +
+                                        "position is asked for. The other GPS checks still run."
+                            },
+                            checked = networkCrossCheck && !satelliteOnly,
+                            enabled = !satelliteOnly,
+                            onCheckedChange = { v ->
+                                networkCrossCheck = v
+                                app.clairix.analysis.Positioning.setNetworkCrossCheck(context, v)
+                            }
+                        )
+                    }
+                }
+            }
+
             // ── Passcode lock ────────────────────────────────────────────────
             item(key = "§lock-hdr") { SectionHeader("App passcode") }
 
@@ -919,11 +972,18 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
                                 "work zones and the stalkerware list come signed from GitHub. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
-                                "phone only when you export it."
+                                "phone only when you export it. Positions for the scanner, navigation and SOS come from " +
+                                "Google Play services where the phone has it, otherwise from Android's own location " +
+                                "service; one worked out from Wi-Fi and cell towers sends their identifiers to that " +
+                                "service, which on most phones is Google's, and so does the GPS check's comparison. " +
+                                "Satellite-only positioning, under Location above, asks the satellites alone."
                         else
                             "Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who " +
                                 "sent them. Your keys, contacts and history are stored on this phone only. Location is " +
-                                "read at the moment you press SOS, to attach to that alert, and at no other time.",
+                                "read at the moment you press SOS, to attach to that alert, and at no other time. That " +
+                                "position comes from Google Play services where the phone has it, otherwise from Android's " +
+                                "own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
+                                "to that service. Satellite-only positioning, under Location above, asks the satellites alone.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )

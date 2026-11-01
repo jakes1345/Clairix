@@ -27,6 +27,8 @@ import app.clairix.analysis.CheckState
 import app.clairix.analysis.Gnss
 import app.clairix.analysis.GnssMonitor
 import app.clairix.analysis.GnssVerdict
+import app.clairix.analysis.PositionText
+import app.clairix.analysis.Positioning
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.Hairline
@@ -50,13 +52,16 @@ internal fun GnssScreen() {
     val context = LocalContext.current
     val a by Registry.gnss.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
     val hasLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
 
     // While the screen is open and in front the receiver is switched on, so the
     // checks have data whether or not anything else is using it. Leaving the app
     // switches it off again: a page left open in the background kept GPS running.
+    // Where positions come from is looked up afresh each time, scanner or not.
     LifecycleStartEffect(hasLocation) {
+        Positioning.refresh(context)
         val handle = if (hasLocation) GnssMonitor.acquire(context, foreground = true) else null
         onStopOrDispose { handle?.let { GnssMonitor.release(it) } }
     }
@@ -96,6 +101,18 @@ internal fun GnssScreen() {
         if (!hasLocation) {
             item(key = "§perm") {
                 Notice(Tone.Caution, "Grant precise location to Clairix in Android Settings → Apps → Clairix → Permissions.", title = "No location permission")
+            }
+        }
+
+        // Where the phone's positions come from, when that is not Google Play services.
+        // Why the Wi-Fi/cell comparison cannot run, when it cannot, is said on its row below.
+        PositionText.source(positioning.source)?.let { line ->
+            item(key = "§source") {
+                Notice(
+                    if (PositionText.sourceIsProblem(positioning.source)) Tone.Caution else Tone.Info,
+                    line,
+                    title = "Position source"
+                )
             }
         }
 
@@ -178,8 +195,9 @@ internal fun GnssScreen() {
                 text = "It catches the spoofers that are cheap to build: one transmitter on the ground, a recording replayed, " +
                     "a simulator started at the wrong time, a mock-location app. A careful attacker who simulates a full sky at " +
                     "realistic strengths and the right time passes the signal tests; the Wi-Fi and cell comparison is the one " +
-                    "they cannot pass while a tower or access point is in range. Not every phone reports raw measurements or gain, " +
-                    "and those checks say so instead of passing."
+                    "they cannot pass while a tower or access point is in range. That comparison needs a Wi-Fi/cell position " +
+                    "source on the phone and the cross-check on (Settings, Location); its row says when it cannot run. Not " +
+                    "every phone reports raw measurements or gain, and those checks say so instead of passing."
             )
         }
     }

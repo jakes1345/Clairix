@@ -35,7 +35,7 @@ const requirements: { icon: IconName; title: string; body: string }[] = [
   { icon: 'bluetooth', title: 'Bluetooth Low Energy', body: 'for tracker detection and the offline mesh.' },
   { icon: 'lens', title: 'A rear camera with a torch', body: 'for the lens-glint sweep, and a front camera for the infrared sweep.' },
   { icon: 'compass', title: 'Location', body: 'to confirm that a tracker is moving with you and to read Wi-Fi network names, as Android requires.' },
-  { icon: 'chip', title: 'Google Play services.', body: 'The tracker scanner uses Google’s fused location provider, so a phone without Google Play services may not be able to confirm that a tracker is following you. The rest of the app does not depend on it.' },
+  { icon: 'chip', title: 'Google Play services, if you have it.', body: 'Where it is installed, the tracker scanner takes its position fixes from Google’s fused location provider, and navigation and SOS position also use it, unless Satellite-only positioning is on. A phone without it, such as one running GrapheneOS or LineageOS without Google, uses Android’s own location service for the same fixes.' },
   { icon: 'nfc', title: 'An NFC reader', body: 'for NFC features.' },
   {
     icon: 'comms',

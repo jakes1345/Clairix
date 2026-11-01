@@ -46,7 +46,11 @@ import kotlin.math.abs
  * Otherwise it is asked for only while satellite fixes are arriving, once a minute while
  * the phone is moving and every 15 minutes once the scanner has seen it settle: with no
  * satellite fix there is nothing to hold it against, and each Wi-Fi/cell fix wakes the
- * radios ([GnssRequestPolicy.networkIntervalMs]).
+ * radios ([GnssRequestPolicy.networkIntervalMs]). It is not asked for at all on a phone
+ * with no Wi-Fi/cell provider, with "Cross-check GPS against Wi-Fi/cell position" off, or
+ * with Satellite-only positioning on ([Positioning.networkCheck]): working it out sends the
+ * networks around the phone to its location service, Google Play services on most phones.
+ * The network check then says which of the three it is ([GnssIntegrity.networkUnavailable]).
  *
  * Held by reference count: the scanner service holds it while it runs, the GPS screen
  * while it is open. Everything runs on one thread, which owns the analyzer.
@@ -76,8 +80,12 @@ object GnssMonitor {
     private var measurements: GnssRequestPolicy.Measurements = GnssRequestPolicy.Measurements.Off
     /** [SystemClock.elapsedRealtime] of the latest satellite fix heard, or 0; see [GnssRequestPolicy.networkIntervalMs]. */
     private var lastGnssFixAt = 0L
-    /** Whether the phone has a Wi-Fi/cell location provider at all, looked up once per registration. */
-    private var hasNetworkProvider = false
+    /**
+     * Whether a Wi-Fi/cell position may be asked for: the phone has a provider for it and
+     * the owner allows it. Looked up once per registration and whenever the owner changes
+     * either setting ([settingsChanged]), not on every fix.
+     */
+    private var networkCheck = NetworkCheck.NO_PROVIDER
 
     /** Starts (or joins) monitoring. A [foreground] holder also switches the receiver on. Release the handle when done. */
     fun acquire(context: Context, foreground: Boolean): Handle {
@@ -113,6 +121,20 @@ object GnssMonitor {
         }
     }
 
+    /**
+     * The owner changed Satellite-only positioning or the Wi-Fi/cell cross-check: the
+     * request follows at once, a standing one goes, and the network check says why.
+     */
+    fun settingsChanged() {
+        executor.execute {
+            val ctx = app ?: return@execute
+            if (!registered) return@execute
+            refreshNetworkCheck(ctx)
+            updateNetworkRequest(ctx)
+            maybeAssess(force = true)
+        }
+    }
+
     /** Forgets everything learned, as the scanner's Clear data does. */
     fun clear() {
         executor.execute {
@@ -140,7 +162,7 @@ object GnssMonitor {
             lm.registerGnssStatusCallback(executor, statusCallback)
             lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 0L, 0f, executor, passiveListener)
             registered = true
-            hasNetworkProvider = lm.allProviders.contains(LocationManager.NETWORK_PROVIDER)
+            refreshNetworkCheck(ctx)
             updateRequests(ctx)
         } catch (e: SecurityException) {
             Log.w(TAG, "Location refused: ${e.message}")
@@ -197,10 +219,19 @@ object GnssMonitor {
         return builder.build()
     }
 
+    /** Whether the satellites can be held against a Wi-Fi/cell position here, for the request, the network check and the screens. */
+    private fun refreshNetworkCheck(ctx: Context) {
+        val check = Positioning.networkCheck(ctx)
+        networkCheck = check
+        integrity?.networkUnavailable = PositionText.network(check)
+        Registry.updatePositioning { it.copy(networkCheck = check) }
+    }
+
     /** Runs on every satellite and Wi-Fi/cell fix, so it returns before any platform call when nothing changes. */
     private fun updateNetworkRequest(ctx: Context) {
-        if (!hasNetworkProvider) return
-        val want = GnssRequestPolicy.networkIntervalMs(
+        // No provider, the cross-check off or Satellite-only positioning on: nothing is
+        // asked for, and a request standing from before goes.
+        val want = if (networkCheck != NetworkCheck.AVAILABLE) 0L else GnssRequestPolicy.networkIntervalMs(
             foreground = holders.any { it.foreground }, moving = !settled,
             lastGnssFixAt = lastGnssFixAt, now = SystemClock.elapsedRealtime()
         ) ?: 0L

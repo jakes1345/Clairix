@@ -6,15 +6,11 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
-import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
+import app.clairix.analysis.FixRequest
+import app.clairix.analysis.LocationClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -223,7 +219,8 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
     /** Traffic colouring of the route being driven. */
     val navRuns: StateFlow<List<TrafficRun>> = runsFor(navState.map { (it as? NavState.Navigating)?.route })
 
-    private val fused = LocationServices.getFusedLocationProviderClient(app)
+    /** The map's fixes: Google Play services where the phone has it, Android's own location service otherwise. */
+    private val positionClient = LocationClient(app) { fixes -> fixes.lastOrNull()?.let { _location.value = it } }
     private var locationActive = false
     /** Whether the Drive screen is in front, as [setLocationActive] is told; the minute loop waits on it. */
     private val screenResumed = MutableStateFlow(false)
@@ -451,12 +448,6 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Location ────────────────────────────────────────────────────────
 
-    private val locationCallback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) {
-            result.lastLocation?.let { _location.value = it }
-        }
-    }
-
     private fun checkPermission(): Boolean =
         ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
@@ -476,18 +467,17 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         if (active == locationActive) return
         if (!active) {
             locationActive = false
-            fused.removeLocationUpdates(locationCallback)
+            positionClient.stop()
             return
         }
         locationActive = true
         _hasPermission.value = checkPermission()
         if (!_hasPermission.value) return
         try {
-            fused.lastLocation.addOnSuccessListener { l -> if (l != null && _location.value == null) _location.value = l }
-            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
-                .setMinUpdateIntervalMillis(LOCATION_INTERVAL_MS / 2)
-                .build()
-            fused.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+            positionClient.lastKnown { l -> if (l != null && _location.value == null) _location.value = l }
+            positionClient.request(
+                FixRequest(highAccuracy = true, intervalMs = LOCATION_INTERVAL_MS, minIntervalMs = LOCATION_INTERVAL_MS / 2)
+            )
         } catch (e: SecurityException) {
             _hasPermission.value = false
         }

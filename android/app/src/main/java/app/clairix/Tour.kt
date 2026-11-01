@@ -248,7 +248,7 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     out += TourStop(
         "settings", "Gear, top right", "Settings",
         "Get help (helplines where you are), the app passcode (with biometrics, wipe after wrong passcodes and a " +
-            "duress passcode), how long history is kept, theme" +
+            "duress passcode), how long history is kept, theme, where positions come from (Satellite-only positioning)" +
             (if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.") +
             " Wipe Clairix and Delete identity and number are near the bottom.",
         passcodeFollowUp(passcodeSet, lockOffered) +

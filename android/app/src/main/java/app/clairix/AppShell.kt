@@ -198,7 +198,13 @@ private fun count(n: Int, noun: String): String = if (n == 1) "1 $noun" else "$n
 /** A finding at or above this confidence counts as strong on its own, as the sweep screen counts it. */
 private const val STRONG_CAMERA_CONFIDENCE = 0.7f
 
-internal fun trackerStatus(status: ScanStatus, detections: List<Detection>, trusted: Set<String>): CategoryStatus {
+internal fun trackerStatus(
+    status: ScanStatus,
+    detections: List<Detection>,
+    trusted: Set<String>,
+    /** An app is supplying the phone's positions ([app.clairix.analysis.PositionState.faking]). */
+    faking: Boolean = false
+): CategoryStatus {
     val following = detections.count { it.following && it.address !in trusted && it.threat == Threat.CRITICAL }
     val travelling = detections.count { it.following && it.address !in trusted && it.threat != Threat.CRITICAL }
     return when {
@@ -213,6 +219,8 @@ internal fun trackerStatus(status: ScanStatus, detections: List<Detection>, trus
         status.stoppedBySystem && !status.scanning ->
             CategoryStatus("Stopped by the system at ${ScannerHealth.clock(status.stoppedAt)}", StatusTone.CAUTION)
         !status.scanning -> CategoryStatus("Scanner off", StatusTone.NEUTRAL)
+        // Faked positions confirm nothing and rule nothing out: not an all-clear.
+        faking -> CategoryStatus("Position faked, following unproven", StatusTone.CAUTION)
         else -> CategoryStatus("${count(status.nearbyCount, "device")} nearby, none following", StatusTone.CLEAR)
     }
 }
@@ -294,8 +302,9 @@ internal fun rememberCategoryStatuses(): Map<ScanCategory, CategoryStatus> {
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val cameras by HiddenCameraScanner.findings.collectAsStateWithLifecycle()
     val gnss by Registry.gnss.collectAsStateWithLifecycle()
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
     return mapOf(
-        ScanCategory.TRACKERS to trackerStatus(status, detections, trusted),
+        ScanCategory.TRACKERS to trackerStatus(status, detections, trusted, faking = positioning.faking(System.currentTimeMillis())),
         ScanCategory.CAMERAS to cameraStatus(cameras),
         ScanCategory.CELL to cellStatus(cell),
         ScanCategory.GPS to gnssStatus(gnss, status.scanning),

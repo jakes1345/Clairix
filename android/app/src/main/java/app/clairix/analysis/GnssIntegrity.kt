@@ -235,6 +235,15 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
         const val MEASUREMENT_FRESH_MS = 30_000L
     }
 
+    /**
+     * Why no Wi-Fi/cell position can be had here at all (the phone has no provider for
+     * it, the owner turned the cross-check off, or Satellite-only positioning is on), or
+     * null when one can. Said in the network check in place of "none in the last five
+     * minutes", which would read as a check that ran and found nothing to compare with.
+     * Set by [GnssMonitor]; it is not something learned, so [clear] keeps it.
+     */
+    var networkUnavailable: String? = null
+
     private val epochs = ArrayDeque<SkyEpoch>()
     private val fixes = ArrayDeque<GnssFix>()
     private var lastNetwork: NetworkFix? = null
@@ -420,7 +429,7 @@ class GnssIntegrity(private val wallClockTrusted: () -> Boolean = { true }) {
         val cmp = lastComparison?.takeIf { now - it.first <= 5 * 60_000L }
         checks += when {
             cmp == null -> GnssCheck("network", "Wi-Fi and cell position", CheckState.NO_DATA,
-                "No Wi-Fi or cell position to compare with in the last five minutes.")
+                networkUnavailable ?: "No Wi-Fi or cell position to compare with in the last five minutes.")
             networkStreak >= 2 -> GnssCheck("network", "Wi-Fi and cell position", CheckState.FAIL,
                 "The satellite position is ${km(cmp.second.first)} from where Wi-Fi and cell towers place the phone, again and again. A spoofer moves the first; a mis-mapped access point or a stale cell fix moves the second, so on its own this does not say which is wrong.")
             networkStreak == 1 -> GnssCheck("network", "Wi-Fi and cell position", CheckState.WARN,

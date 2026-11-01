@@ -311,6 +311,17 @@ class LocationTrack {
 
     fun hasFix(): Boolean = current != null
 
+    /**
+     * Where the phone is, is no longer known (an app is supplying fake positions; see
+     * [MockFixes]): [current] goes, so nothing is placed by a fix from before, and
+     * [hasFix] reads false until the next [update]. The odometer and the fixes it counts
+     * from are kept, and the next real fix goes on from them.
+     */
+    fun forget() {
+        previous = null
+        current = null
+    }
+
     fun isMoving(): Boolean {
         val c = current ?: return false
         c.speed?.let { return it >= MOVING_SPEED_MS }

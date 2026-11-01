@@ -6,16 +6,11 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.media.AudioAttributes
-import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
+import app.clairix.analysis.FixRequest
+import app.clairix.analysis.LocationClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -185,7 +180,8 @@ class Navigator(
     private class Projection(val alongM: Double, val offM: Double, val segment: Int, val lat: Double, val lon: Double)
 
     private val appContext = context.applicationContext
-    private val fused: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(appContext)
+    /** Fixes from Google Play services where the phone has it, Android's own location service otherwise. */
+    private val positions = LocationClient(appContext) { fixes -> for (loc in fixes) onLocation(loc) }
     private val matcher = MapMatcher(graph)
 
     private val _state = MutableStateFlow<NavState>(NavState.Idle())
@@ -376,24 +372,16 @@ class Navigator(
 
     // ── Location ────────────────────────────────────────────────────────
 
-    private val callback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) {
-            for (loc in result.locations) onLocation(loc)
-        }
-    }
-
     @SuppressLint("MissingPermission") // checked in start()
     private fun startUpdates() {
         synchronized(sessionLock) {
             if (updatesOn) return
             updatesOn = true
         }
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, FIX_INTERVAL_MS)
-            .setMinUpdateIntervalMillis(FIX_INTERVAL_MS)
-            .setWaitForAccurateLocation(false)
-            .build()
         try {
-            fused.requestLocationUpdates(request, callback, Looper.getMainLooper())
+            positions.request(
+                FixRequest(highAccuracy = true, intervalMs = FIX_INTERVAL_MS, minIntervalMs = FIX_INTERVAL_MS, waitForAccurate = false)
+            )
             // Without a foreground service, Android throttles fused location to a few fixes an
             // hour once Clairix leaves the screen (Drive Mode's own service may not be running).
             NavigationService.start(appContext)
@@ -408,18 +396,11 @@ class Navigator(
             if (!updatesOn) return
             updatesOn = false
         }
-        fused.removeLocationUpdates(callback)
+        positions.stop()
     }
 
-    @SuppressLint("MissingPermission")
-    private suspend fun lastKnownLocation(): Location? = try {
-        suspendCancellableCoroutine { cont ->
-            fused.lastLocation
-                .addOnSuccessListener { cont.resume(it?.takeIf { l -> isRecent(l, 120_000L) }) }
-                .addOnFailureListener { cont.resume(null) }
-        }
-    } catch (e: SecurityException) {
-        null
+    private suspend fun lastKnownLocation(): Location? = suspendCancellableCoroutine { cont ->
+        positions.lastKnown { l -> cont.resume(l?.takeIf { isRecent(it, 120_000L) }) }
     }
 
     private fun isRecent(l: Location, maxAgeMs: Long = 10_000L): Boolean =
