@@ -395,13 +395,25 @@ jobs:
       # (gnss@2.0-service.ranchu) deadlocks when Android stops and restarts
       # measurement collection as an app's foreground state changes, and the
       # system watchdog then kills the whole system (seen on Android 12 and 13
-      # during the soak test). Everything from here on tests messaging, so the
-      # scanner is stopped first; who held the listeners is kept for the record.
-      - name: Stop the scanner the smoke test started
+      # during the soak test). Everything from here on tests messaging and the
+      # lock screens, so the scanner is stopped first; who held the listeners is
+      # kept for the record. Stopping it was not enough: the messaging, soak,
+      # lock screen, duress and denied-permissions tests start the app again
+      # and again, each start brings the scanner's GPS requests back, and the
+      # HAL still deadlocked (Android 12 on 023a525 in native_set_position_mode
+      # during the denied run; the AOSP image on 1153fd6 in native_stop during
+      # the soak test, "Blocked in handler on foreground thread (android.fg)
+      # for 66s"). None of those tests is about location, so location is
+      # switched off for all of them.
+      - name: Stop the scanner the smoke test started, and switch location off
         run: |
           ADB="$ANDROID_HOME/platform-tools/adb"
           "$ADB" shell dumpsys location > location-after-smoke.txt 2>&1 || true
           "$ADB" shell am force-stop app.clairix
+          "$ADB" shell cmd location set-location-enabled false \
+            || "$ADB" shell settings put secure location_mode 0
+          sleep 5
+          "$ADB" shell dumpsys location > location-off.txt 2>&1 || true
 
       - name: Run the end-to-end tests against the two relays
         working-directory: android
@@ -593,26 +605,6 @@ jobs:
           fi
           grep -q "^OK (4 tests)" ../tor.txt || { echo "::error::The Tor tests failed; see tor.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../tor.txt; then echo "::error::Tor tests were skipped"; exit 1; fi
-
-      # The lock screen, card-vault, duress and denied-permissions tests start and
-      # stop the app over and over, and with location on each start brings the
-      # scanner's GPS requests back and each stop takes them away. The
-      # emulator's GNSS HAL deadlocks on that churn (Android 12 on 023a525:
-      # "WATCHDOG KILLING SYSTEM PROCESS: Blocked in handler on foreground thread
-      # (android.fg)" in GnssNative.native_set_position_mode, then "System has
-      # crashed" in the denied run; the AOSP image reached WAITED_UNTIL_PRE_WATCHDOG
-      # after the duress relaunches), the same HAL fault the scanner is stopped
-      # for before the messaging tests. None of these tests is about location,
-      # so location is switched off for them, with the app stopped first.
-      - name: Switch location off for the tests that restart the app
-        run: |
-          ADB="$ANDROID_HOME/platform-tools/adb"
-          "$ADB" shell am force-stop app.clairix
-          "$ADB" shell cmd location set-location-enabled false \
-            || "$ADB" shell settings put secure location_mode 0
-          sleep 5
-          "$ADB" shell dumpsys location > location-before-restarts.txt 2>&1 || true
-          grep -m1 -iE "location setting|Location Enabled|enabled" location-before-restarts.txt || true
 
       - name: Run the lock screen tests
         working-directory: android
@@ -833,7 +825,7 @@ jobs:
             relay-b.log
             tor-onion.log
             location-after-smoke.txt
-            location-before-restarts.txt
+            location-off.txt
             power/
             emulator.log
           if-no-files-found: warn
