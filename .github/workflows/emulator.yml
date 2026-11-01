@@ -198,6 +198,18 @@ jobs:
           yes | "$SDKM" --licenses > /dev/null || true
           "$SDKM" --install emulator "$IMAGE" platform-tools > /dev/null
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n smoke -k "$IMAGE" -d pixel_6 --force
+          # The image's default data partition and the emulator's overhead need
+          # about 7.2 GB free, which a runner did not always have (API 34 on
+          # 6fc3884: "Not enough space to create userdata partition. Available:
+          # 7342.07 MB, need 7372.80 MB"). The app and its tests need far less.
+          CFG="$ANDROID_AVD_HOME/smoke.avd/config.ini"
+          if grep -q '^disk.dataPartition.size' "$CFG"; then
+            sed -i 's/^disk.dataPartition.size=.*/disk.dataPartition.size=4096M/' "$CFG"
+          else
+            echo 'disk.dataPartition.size=4096M' >> "$CFG"
+          fi
+          grep '^disk.dataPartition.size' "$CFG"
+          df -h "$ANDROID_AVD_HOME" | tail -1
           "$ANDROID_HOME/emulator/emulator" -list-avds | tee avds.txt
           grep -qx smoke avds.txt || { echo "::error::The emulator cannot see the AVD just created"; ls -la "$ANDROID_AVD_HOME" "$HOME/.android" || true; exit 1; }
 
