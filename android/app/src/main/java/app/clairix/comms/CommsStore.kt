@@ -540,11 +540,27 @@ class CommsStore(
             db.delete("pass_notices", "peer = ?", arrayOf(number))
             db.delete("move_notices", "peer = ?", arrayOf(number))
             db.delete("quarantine", "peer = ?", arrayOf(number))
+            keepAsRecord(db, number)
             db.setTransactionSuccessful()
         } finally {
             endWrite(db)
         }
     }
+
+    /**
+     * A blocked conversation is kept as a record, so nothing in it disappears
+     * any more: the sender chose each message's timer, and a threat sent on a
+     * five-minute timer must not delete itself from the evidence. Every
+     * message's timer and running clock, and the conversation's timer, go.
+     */
+    private fun keepAsRecord(db: SQLiteDatabase, number: String) {
+        db.execSQL("UPDATE messages SET ttl = 0, expires_at = NULL WHERE peer = ? AND (ttl > 0 OR expires_at IS NOT NULL)", arrayOf(number))
+        db.delete("timers", "peer = ?", arrayOf(number))
+    }
+
+    /** Whether [number]'s row is a blocked contact kept as a record. */
+    private fun isBlockedRow(db: SQLiteDatabase, number: String): Boolean =
+        db.rawQuery("SELECT blocked FROM contacts WHERE number = ?", arrayOf(number)).use { c -> c.moveToFirst() && c.getInt(0) != 0 }
 
     /** Unblocks (or blocks) the contact row [number], keeping everything else about it. */
     fun setBlocked(number: String, blocked: Boolean) {
@@ -694,6 +710,11 @@ class CommsStore(
             if (oldOrigin != newOrigin) {
                 db.execSQL("UPDATE contacts SET relay = ? WHERE relay IS NULL", arrayOf(oldOrigin))
                 db.execSQL("UPDATE contacts SET relay = NULL WHERE relay = ?", arrayOf(newOrigin))
+                // The blocked list names relays the same way (null: this phone's own), so a
+                // number blocked on the old relay stays blocked there, and the same digits
+                // on the new one are not.
+                db.execSQL("UPDATE blocked_keys SET relay = ? WHERE relay IS NULL", arrayOf(oldOrigin))
+                db.execSQL("UPDATE blocked_keys SET relay = NULL WHERE relay = ?", arrayOf(newOrigin))
             }
             if (oldNumber != newNumber) {
                 db.execSQL("UPDATE OR IGNORE group_members SET number = ? WHERE number = ?", arrayOf(newNumber, oldNumber))
@@ -1046,7 +1067,9 @@ class CommsStore(
             for (id in ids) db.execSQL("UPDATE messages SET read = 1 WHERE id = ?", arrayOf(id))
             // Missed-call entries and this phone's own notes are read too, but are not messages to receipt.
             db.execSQL("UPDATE messages SET read = 1 WHERE peer = ? AND direction = 'IN' AND read = 0 AND status != ?", arrayOf(peer, STATUS_RECEIVING))
-            startClocks(db, "peer = ?", peer)
+            // Opening a blocked record starts no clock; one blocked before
+            // records were kept whole loses its timers now.
+            if (isBlockedRow(db, peer)) keepAsRecord(db, peer) else startClocks(db, "peer = ?", peer)
             db.setTransactionSuccessful()
             return ids
         } finally {

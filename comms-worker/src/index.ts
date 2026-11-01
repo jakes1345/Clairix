@@ -1497,7 +1497,7 @@ async function fileReport(env: Env, request: Request, bodyText: string): Promise
   let envelope: string | null = null;
   if (body.envelope !== undefined && body.envelope !== null) {
     if (typeof body.envelope !== "string" || !ENVELOPE_HASH_RE.test(body.envelope)) {
-      throw new HttpError(400, "envelope must be the SHA-256 of an envelope, in lowercase hex");
+      throw new HttpError(400, "envelope must be an envelope's fingerprint: 64 lowercase hex characters");
     }
     envelope = body.envelope;
   }
@@ -1505,7 +1505,12 @@ async function fileReport(env: Env, request: Request, bodyText: string): Promise
   const relay = named !== null && isOwnOrigin(env, request, named) ? null : named;
   // Spent only once the report is well formed, as for a send.
   await spendToken(env, request, "report");
-  await env.MAILBOX.get(env.MAILBOX.idFromName(REPORTS_NAME)).fileReport({ number, relay, envelope, reason, day: dayFloor(Date.now()) });
+  // A number on this relay that nobody holds is not kept: reports about
+  // made-up numbers would otherwise fill the relay's share of reports and
+  // crowd out real ones. The answer is the same either way, so a report tells
+  // nobody whether the number exists.
+  const keep = relay !== null || (await env.MAILBOX.get(env.MAILBOX.idFromName(number)).profile()) !== null;
+  await env.MAILBOX.get(env.MAILBOX.idFromName(REPORTS_NAME)).fileReport({ number, relay, envelope, reason, day: dayFloor(Date.now()) }, keep);
   return json({ ok: true }, 202);
 }
 
@@ -1738,8 +1743,11 @@ async function enqueueFor(
 /**
  * ICE servers for a call. With a Cloudflare Realtime TURN key configured,
  * TURN credentials are minted for every request, live two hours and are never
- * cached or shared; without a key, or when minting fails, calls get STUN only
- * and connect when both phones can reach each other directly. Media is
+ * cached or shared; without a key, calls get STUN only and connect when both
+ * phones can reach each other directly. With a key set but minting failing,
+ * the request is answered 503 rather than with STUN only: the app records
+ * from a 200 whether this relay offers TURN, and a passing failure must not
+ * make it believe the relay offers none and set up a direct call. Media is
  * DTLS-SRTP between the two phones either way: a TURN server forwards packets
  * it cannot decrypt.
  */
@@ -1755,14 +1763,18 @@ async function iceServers(env: Env): Promise<IceServer[]> {
     });
   } catch (e) {
     console.error("TURN credential request threw", e);
-    return STUN_ONLY;
+    throw new HttpError(503, "The relay's call server is not answering; try again in a moment", 30);
   }
   if (!res.ok) {
     console.error("TURN credential request failed", res.status, await res.text());
-    return STUN_ONLY;
+    throw new HttpError(503, "The relay's call server is not answering; try again in a moment", 30);
   }
   const servers = parseIceServers(await res.json().catch(() => null));
-  return servers.length > 0 ? servers : STUN_ONLY;
+  if (!servers.some((s) => s.urls.some((u) => u.startsWith("turn")))) {
+    console.error("TURN credential response held no TURN server");
+    throw new HttpError(503, "The relay's call server is not answering; try again in a moment", 30);
+  }
+  return servers;
 }
 
 /** POSTs [body] to a push endpoint; returns the HTTP status, or 0 when it could not be reached. */

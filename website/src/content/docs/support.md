@@ -102,7 +102,7 @@ Messaging, calls, SOS to your groups and the duress phrase need a Clairix number
 
 If there is nobody you can ask:
 
-- Look under **Relays you can join** in Comms setup. Each relay on the list says how to get on it. A relay whose operator has opened registration takes a limited number of new people a day with no invite and no secret: choose it, leave the enrollment secret empty and tap **Register**. If it says the day's numbers are gone, try again the next day.
+- Look under **Relays you can join** in Comms setup. Each relay on the list says how to get on it. Today the list holds only our relay, which takes invites only, so this way in is not open yet. A relay whose operator has opened registration takes a limited number of new people a day with no invite and no secret: choose it, leave the enrollment secret empty and tap **Register**. If it says the day's numbers are gone, try again the next day.
 - Run a relay of your own, on a server you rent or on a Cloudflare account, as the [relay's README](https://github.com/jakes1345/Clairix/tree/main/comms-worker) describes. You then make the invites yourself.
 
 ### Someone I do not know wrote to me, or someone will not leave me alone
@@ -113,7 +113,7 @@ To stop a contact reaching you, open their page (their name at the top of the co
 
 A report in the app does not say who sent it, so we cannot answer it. To report a number on our relay and hear back, write to support@clairix.app with the number, what happened and when, and screenshots of the conversation that show the number; this is the one time we ask for screenshots. We reply within five business days, the same day for threats of violence, and we may suspend the number: it then cannot sign in on our relay, and nothing sent to it is delivered. A suspended number can appeal at the same address. How we weigh reports and appeals is our [abuse policy](https://github.com/jakes1345/Clairix/blob/main/docs/ABUSE.md).
 
-While your phone is locked it cannot open anything, so a message from a blocked number or a request can still show as "New Clairix message", and a call as "Clairix call", until you unlock it. Then a blocked number's is dropped, and a request's call is noted as missed.
+While your phone is locked it cannot open anything, so a message from a blocked number or a request can still show as "New Clairix message" until you unlock it. Then a blocked number's is dropped, and a request's call is noted as missed. Neither can ring or show an SOS on the locked phone: your relay passes those alerts on only with envelopes from your contacts.
 
 ### I lost my phone, or wiped Clairix. Can you restore my Clairix number?
 

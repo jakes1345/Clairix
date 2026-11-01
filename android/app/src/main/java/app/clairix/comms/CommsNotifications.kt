@@ -556,6 +556,13 @@ object CommsNotifications {
     fun notifyRequest(context: Context) {
         if (!canPost(context)) return
         ensureChannels(context)
+        // With previews hidden or Clairix locked it reads as any other message
+        // does: someone holding the phone must not learn that a new person wrote.
+        if (previewsHidden(context)) {
+            context.getSystemService(NotificationManager::class.java)
+                ?.notify(REQUEST_NOTIFICATION_ID, unlockToRead(context, "New message", "Open Clairix to read", REQUEST_NOTIFICATION_ID))
+            return
+        }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Someone new wrote to you")

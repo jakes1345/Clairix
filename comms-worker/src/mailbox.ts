@@ -1169,9 +1169,12 @@ export class Mailbox extends DurableObject<Env> {
    * about one number, or REPORTS_MAX in all, a new report is not kept; the
    * caller answers the same either way, so a report tells nobody how often a
    * number was reported before. Kept by the day, never the moment, until the
-   * operator closes it or REPORT_TTL_MS has passed.
+   * operator closes it or REPORT_TTL_MS has passed. With [keep] false (a
+   * number on this relay nobody holds) nothing is kept, but the call is made
+   * all the same, so the answer takes as long either way.
    */
-  async fileReport(report: AbuseReport): Promise<void> {
+  async fileReport(report: AbuseReport, keep = true): Promise<void> {
+    if (!keep) return;
     const prefix = reportPrefix(report.number, report.relay);
     const key = `${prefix}${report.envelope ?? crypto.randomUUID()}`;
     if ((await this.ctx.storage.get(key)) !== undefined) return;
@@ -1315,7 +1318,12 @@ export class Mailbox extends DurableObject<Env> {
     if (claim !== null) await this.confirmClaim(claim);
     const now = Date.now();
     const id = `${now.toString(36)}-${crypto.randomUUID()}`;
-    const envelope: Envelope = alert ? { id, ts: now, data, alert } : { id, ts: now, data };
+    // An envelope without the owner's pass (someone blocked, whose pass was
+    // replaced, or a message request, which never had it) keeps no alert: a
+    // locked phone cannot yet tell who sent it, so it must not ring or sound
+    // an SOS for it. It still arrives, and is sorted once the phone unlocks.
+    const kept = stranger ? null : alert;
+    const envelope: Envelope = kept ? { id, ts: now, data, alert: kept } : { id, ts: now, data };
     // A stranger's envelope is marked, so the strangers' share is given back
     // as it is acknowledged or expires.
     const counts: Record<string, number> = stranger ? { queueCount: count + 1, [strangerKey(id)]: 1, strangerCount: strangers + 1 } : { queueCount: count + 1 };

@@ -528,7 +528,7 @@ test("every /v1/turn call gets credentials minted for it alone", async () => {
   }
 });
 
-test("when minting fails a call gets STUN only, never someone else's credentials", async () => {
+test("when minting fails the relay answers 503, never STUN only or someone else's credentials", async () => {
   const relay = makeRelay({ TURN_KEY_ID: "key-id", TURN_KEY_API_TOKEN: "api-token" });
   let fail = false;
   const fetches = mockFetch((call, n) => fail
@@ -539,9 +539,11 @@ test("when minting fails a call gets STUN only, never someone else's credentials
     const bob = await makePhone(relay);
     assert.equal((await alice.signed("GET", "/v1/turn")).json.turn, true);
     fail = true;
-    const res = (await bob.signed("GET", "/v1/turn")).json;
-    assert.equal(res.turn, false);
-    assert.deepEqual(res.iceServers, [{ urls: ["stun:stun.cloudflare.com:3478"] }]);
+    // A passing failure is not "this relay offers no TURN": the app would
+    // record that and set up direct calls, telling the contact its address.
+    const res = await bob.signed("GET", "/v1/turn");
+    assert.equal(res.status, 503);
+    assert.equal(res.json?.iceServers, undefined);
   } finally {
     fetches.restore();
   }
@@ -1414,6 +1416,26 @@ test("a sender's alert travels with the envelope, and nothing else is accepted a
 
 // ── Contacts' passes ───────────────────────────────────────────────────────
 
+test("an envelope without the owner's pass loses its alert, so a blocked sender or a stranger cannot ring a locked phone", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const key = randomKey();
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key })).status, 200);
+  const [m1, m2] = await mallory.tokens(2);
+  const [a1] = await alice.tokens(1);
+  assert.equal((await mallory.send(m1, bob.number, "QUFBQQ==", undefined, { alert: "call" })).status, 202);
+  assert.equal((await mallory.send(m2, bob.number, "QkJCQg==", undefined, { alert: "sos", pass: randomKey() })).status, 202);
+  const envelope = "Q0NDQw==";
+  assert.equal((await alice.send(a1, bob.number, envelope, undefined, { alert: "sos", pass: await passFor(key, bob.number, envelope) })).status, 202);
+  const got = queued(relay, bob.number);
+  assert.equal(got.length, 3);
+  assert.deepEqual(got.filter((e) => e.data !== envelope).map((e) => e.alert ?? null), [null, null]);
+  assert.equal(got.find((e) => e.data === envelope).alert, "sos");
+});
+
+
 /** A pass as the app makes one: HMAC-SHA256 under the recipient's pass key over clairix-pass-v1|number|envelope. */
 async function passFor(keyB64, number, envelope) {
   const key = await crypto.subtle.importKey("raw", Buffer.from(keyB64, "base64"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -1607,41 +1629,63 @@ test("a malformed report is refused before its token is spent", async () => {
   assert.equal((await fileReport(relay, t, { number: "482913605", reason: "spam" })).status, 202);
 });
 
+test("a report about a number on this relay that nobody holds is answered alike and not kept", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const [t1, t2, t3] = await alice.tokens(3, "report");
+  // Made-up numbers cannot fill the relay's share of reports and crowd out real ones.
+  assert.equal((await fileReport(relay, t1, { number: "482913605", envelope: hash("e"), reason: "spam" })).status, 202);
+  assert.equal((await fileReport(relay, t2, { number: mallory.number, envelope: hash("e"), reason: "threats" })).status, 202);
+  // Another relay's numbers are that relay's to know: kept as reported.
+  assert.equal((await fileReport(relay, t3, { number: "482913605", relay: "https://other.example", reason: "spam" })).status, 202);
+  const numbers = (await adminReports(relay)).json.numbers;
+  assert.deepEqual(numbers.map((n) => [n.number, n.relay]).sort(), [["482913605", "https://other.example"], [mallory.number, null]].sort());
+  assert.equal(relay.env.MAILBOX.storageOf("abuse-reports").get("reportCount"), 2);
+});
+
 test("the same envelope counts once, another relay's number is kept apart, and nothing says how often a number was reported", async () => {
   const relay = makeRelay({ ADMIN_SECRET: ADMIN });
   const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const carol = await makePhone(relay);
   const tokens = await alice.tokens(6, "report");
-  assert.equal((await fileReport(relay, tokens[0], { number: "482913605", envelope: hash("b"), reason: "harassment" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[0], { number: bob.number, envelope: hash("b"), reason: "harassment" })).status, 202);
   // The same envelope again (a phone retrying): one report.
-  assert.equal((await fileReport(relay, tokens[1], { number: "482913605", envelope: hash("b"), reason: "harassment" })).status, 202);
-  assert.equal((await fileReport(relay, tokens[2], { number: "482913605", envelope: hash("c"), reason: "spam" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[1], { number: bob.number, envelope: hash("b"), reason: "harassment" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[2], { number: bob.number, envelope: hash("c"), reason: "spam" })).status, 202);
   // The same digits on another relay are someone else; this relay's own address is no other relay.
-  assert.equal((await fileReport(relay, tokens[3], { number: "482913605", relay: "https://other.example", reason: "impersonation" })).status, 202);
-  assert.equal((await fileReport(relay, tokens[4], { number: "111222333", relay: relay.origin, reason: "other" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[3], { number: bob.number, relay: "https://other.example", reason: "impersonation" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[4], { number: carol.number, relay: relay.origin, reason: "other" })).status, 202);
   const numbers = (await adminReports(relay)).json.numbers;
-  assert.deepEqual(numbers.map((n) => [n.number, n.relay, n.reports]), [
-    ["482913605", null, 2],
-    ["111222333", null, 1],
-    ["482913605", "https://other.example", 1],
-  ]);
-  assert.deepEqual(numbers[0].reasons, { harassment: 1, spam: 1 });
-  assert.deepEqual(numbers[0].envelopes.sort(), [hash("b"), hash("c")]);
+  const key = (n) => `${n.number}|${n.relay ?? ""}`;
+  assert.deepEqual(numbers.map((n) => [n.number, n.relay, n.reports]).sort(), [
+    [bob.number, null, 2],
+    [carol.number, null, 1],
+    [bob.number, "https://other.example", 1],
+  ].sort());
+  const bobs = numbers.find((n) => key(n) === `${bob.number}|`);
+  assert.deepEqual(bobs.reasons, { harassment: 1, spam: 1 });
+  assert.deepEqual(bobs.envelopes.sort(), [hash("b"), hash("c")]);
 });
 
 test("the operator closes what was reported about a number, and reports go after 90 days", async () => {
   const relay = makeRelay({ ADMIN_SECRET: ADMIN });
   const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const carol = await makePhone(relay);
+  const dave = await makePhone(relay);
   const [t1, t2, t3] = await alice.tokens(3, "report");
-  await fileReport(relay, t1, { number: "482913605", envelope: hash("d"), reason: "threats" });
-  await fileReport(relay, t2, { number: "111222333", reason: "spam" });
-  const closed = await adminReports(relay, "DELETE", { number: "482913605" });
+  await fileReport(relay, t1, { number: bob.number, envelope: hash("d"), reason: "threats" });
+  await fileReport(relay, t2, { number: carol.number, reason: "spam" });
+  const closed = await adminReports(relay, "DELETE", { number: bob.number });
   assert.equal(closed.status, 200);
   assert.equal(closed.json.closed, 1);
-  assert.deepEqual((await adminReports(relay)).json.numbers.map((n) => n.number), ["111222333"]);
+  assert.deepEqual((await adminReports(relay)).json.numbers.map((n) => n.number), [carol.number]);
   assert.equal((await adminReports(relay, "DELETE", { number: "bad" })).status, 400);
   assert.equal((await adminReports(relay, "POST")).status, 405);
 
-  await fileReport(relay, t3, { number: "999888777", reason: "other" });
+  await fileReport(relay, t3, { number: dave.number, reason: "other" });
   for (let day = 0; day < 92; day++) {
     advance(DAY_MS);
     await relay.env.MAILBOX.runDueAlarms();

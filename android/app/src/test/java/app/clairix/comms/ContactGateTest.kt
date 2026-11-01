@@ -95,6 +95,27 @@ class ContactGateTest {
     }
 
     @Test
+    fun aRequestTheRosterVouchesForStillGetsTheGroupsMessagesAndSos() {
+        // Their first word was private, so they are a request; the roster records exactly their key.
+        assertTrue(ContactGate.rosterVouches(request = true, blocked = false, ed25519 = "ed-bob", rosterEd25519 = "ed-bob"))
+        // Another key on the roster, or none recorded, vouches for nobody.
+        assertFalse(ContactGate.rosterVouches(request = true, blocked = false, ed25519 = "ed-bob", rosterEd25519 = "ed-other"))
+        assertFalse(ContactGate.rosterVouches(request = true, blocked = false, ed25519 = "ed-bob", rosterEd25519 = ""))
+        assertFalse(ContactGate.rosterVouches(request = true, blocked = false, ed25519 = "ed-bob", rosterEd25519 = null))
+        // Someone blocked gets nothing, roster or not.
+        assertFalse(ContactGate.rosterVouches(request = true, blocked = true, ed25519 = "ed-bob", rosterEd25519 = "ed-bob"))
+    }
+
+    @Test
+    fun onlyRemovingOrBlockingAnOrdinaryContactReplacesThePassKey() {
+        assertTrue(ContactGate.mayHoldPass(request = false, blocked = false))
+        // A request was never given the pass; a blocked record lost it when blocked.
+        assertFalse(ContactGate.mayHoldPass(request = true, blocked = false))
+        assertFalse(ContactGate.mayHoldPass(request = false, blocked = true))
+        assertFalse(ContactGate.mayHoldPass(request = true, blocked = true))
+    }
+
+    @Test
     fun someoneWhoJoinedWithThisPhonesInviteComesInAsAContact() {
         val joined = CommsWire.joined("A".repeat(22))
         assertEquals(ContactGate.Admission.CONTACT, ContactGate.admit(joined, "ED-NEW", rosterEd25519 = null, ownRelay = true, invited = true))
@@ -139,7 +160,7 @@ class ContactGateTest {
         ChatMessage(id, "482913605", Direction.IN, "x", 1L, status, read, kind = kind)
 
     @Test
-    fun acceptingOwesAReceiptForEachMessageAsItStandsAndNoneForTheRest() {
+    fun acceptingOwesADeliveryReceiptForEachMessageNeverWhatWasReadAndNoneForTheRest() {
         val messages = listOf(
             inbound("read-1", "received", read = true),
             inbound("unread-1", "received", read = false),
@@ -153,9 +174,9 @@ class ContactGateTest {
             ChatMessage("mine-1", "482913605", Direction.OUT, "x", 1L, "sent", read = true),
         )
         val owed = ContactGate.receiptsOnAccept(messages)
-        assertEquals(setOf(CommsWire.STATUS_READ, CommsWire.STATUS_DELIVERED), owed.keys)
-        assertEquals(listOf("read-1", "payment-1"), owed[CommsWire.STATUS_READ])
-        assertEquals(listOf("unread-1", "voicemail-1", "photo-1"), owed[CommsWire.STATUS_DELIVERED])
+        // What was read while it was a request is not told: the card promised so.
+        assertEquals(setOf(CommsWire.STATUS_DELIVERED), owed.keys)
+        assertEquals(listOf("read-1", "unread-1", "voicemail-1", "payment-1", "photo-1"), owed[CommsWire.STATUS_DELIVERED])
         assertTrue(ContactGate.receiptsOnAccept(emptyList()).isEmpty())
     }
 
@@ -193,6 +214,26 @@ class ContactGateTest {
         val odd = ContactGate.reportBody("482913605", null, "not-a-hash", ContactGate.ReportReason.OTHER)
         assertFalse(odd.has("envelope"))
         assertFalse(ContactGate.reportBody("482913605", null, "A".repeat(64), ContactGate.ReportReason.OTHER).has("envelope"))
+    }
+
+    @Test
+    fun aReportCarriesAFingerprintOfTheEnvelopeNeverItsHash() {
+        val hash = "0123456789abcdef".repeat(4)
+        val secret = ByteArray(32) { it.toByte() }
+        val print = ContactGate.envelopeFingerprint(secret, hash)
+        assertTrue(print != null && Regex("^[0-9a-f]{64}$").matches(print))
+        // The person reported knows the hash of every envelope they sent: the report must not carry it.
+        assertFalse(print == hash)
+        // The same envelope reported twice from this phone gives the same fingerprint, so the relay counts it once.
+        assertEquals(print, ContactGate.envelopeFingerprint(secret, hash))
+        // Another phone's report of the same bytes, or this phone's of another envelope, cannot be matched to it.
+        assertFalse(print == ContactGate.envelopeFingerprint(ByteArray(32) { 7 }, hash))
+        assertFalse(print == ContactGate.envelopeFingerprint(secret, "f".repeat(64)))
+        // Each report has its own key, so revealing one reveals no other.
+        assertFalse(ContactGate.reportKey(secret, hash).contentEquals(ContactGate.reportKey(secret, "f".repeat(64))))
+        // Only an envelope hash is fingerprinted, and what comes out is what reportBody sends.
+        assertEquals(null, ContactGate.envelopeFingerprint(secret, "not-a-hash"))
+        assertEquals(print, ContactGate.reportBody("482913605", null, print, ContactGate.ReportReason.THREATS).getString("envelope"))
     }
 
     @Test

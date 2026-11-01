@@ -102,6 +102,22 @@ class DisappearingMessagesTest {
     }
 
     @Test
+    fun aBlockedConversationKeptAsARecordStopsDisappearing() {
+        store.setTimer(peer, 300, 100)
+        store.insertMessage(msg("threat-read", Direction.IN, 300, read = true).copy(expiresAt = System.currentTimeMillis() + 300_000))
+        store.insertMessage(msg("threat-unread", Direction.IN, 300))
+        store.markBlocked(peer)
+        assertEquals(0, store.timer(peer))
+        assertNull("a running clock stops", store.message("threat-read")!!.expiresAt)
+        // Opening the record later starts no clock either.
+        store.markRead(peer)
+        assertNull(store.message("threat-unread")!!.expiresAt)
+        assertNull(store.nextExpiry())
+        assertTrue(store.expireMessages(Long.MAX_VALUE).isEmpty())
+        assertEquals(setOf("threat-read", "threat-unread"), store.messages(peer).map { it.id }.toSet())
+    }
+
+    @Test
     fun deletedRowsAreOverwrittenInTheFile() {
         val on = store.readableDatabase.rawQuery("PRAGMA secure_delete", null).use { c -> c.moveToFirst(); c.getInt(0) }
         assertEquals(1, on)

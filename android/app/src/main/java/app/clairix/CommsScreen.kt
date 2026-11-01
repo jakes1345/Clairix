@@ -254,6 +254,8 @@ fun CommsScreen(
     inviterToAdd?.let { code ->
         AddInviterDialog(code, onDone = { inviterToAdd = null }, onAdded = { page = CommsPage.Thread(it) })
     }
+    // A call that would share this phone's address waits here for the owner's yes.
+    DirectCallDialog()
     when (val p = page) {
         CommsPage.List -> ThreadListScreen(
             onOpen = { page = CommsPage.Thread(it) },
@@ -1216,6 +1218,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         value = withContext(Dispatchers.IO) { CommsRepository.heldCount(peer) }
     }
     var reviewing by remember(peer) { mutableStateOf(false) }
+    var unblocking by remember(peer) { mutableStateOf(false) }
     var draft by rememberSaveable(peer) { mutableStateOf("") }
     var sendError by remember(peer) { mutableStateOf<String?>(null) }
     var paying by remember(peer) { mutableStateOf(false) }
@@ -1403,10 +1406,18 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 action = {
                     Row {
                         GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
-                        GhostButton("Unblock", onClick = { scope.launch { CommsRepository.unblockContact(c.number) } }, tone = Tone.Neutral)
+                        GhostButton("Unblock", onClick = { unblocking = true }, tone = Tone.Neutral)
                     }
                 }
             )
+            if (unblocking) {
+                UnblockDialog(
+                    who = c.name.ifBlank { formatClairixNumber(c.number) },
+                    kept = true,
+                    onConfirm = { unblocking = false; scope.launch { CommsRepository.unblockContact(c.number) } },
+                    onDismiss = { unblocking = false }
+                )
+            }
         }
         if (c?.keyChanged == true) {
             Spacer(Modifier.height(6.dp))
@@ -2307,7 +2318,9 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
 private enum class ContactAction(val title: String, val explanation: String) {
     BLOCK(
         "Block",
-        "Nothing they send reaches this phone again: no messages, calls, group messages or notifications, and they are not told. " +
+        "Nothing they send reaches this phone again: no messages, calls or group messages, and they are not told. " +
+            "While the phone is locked Clairix cannot yet tell who sent something, so a \"New Clairix message\" notice can still " +
+            "appear until you unlock; it never rings. " +
             "The conversation stays here, read-only, as a record. Unblock them any time under Blocked in Comms settings."
     ),
     BLOCK_AND_DELETE(
@@ -2595,8 +2608,8 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                     "phone's network address, and the network it is on does not learn which relay it uses. Nothing goes out " +
                     "directly while Tor is connecting. Slower, and uses more data. With Online off, Tor sleeps when nothing has " +
                     "needed it for five minutes and starts again with the next request, which then waits a few seconds. Calls do " +
-                    "not go through Tor: during a call the relay's call server sees this phone's address (and so does the " +
-                    "contact, unless Relay-only calls is on)."
+                    "not go through Tor: during a call the relay's call server sees this phone's address. While Tor is on, a call " +
+                    "goes only through the relay's TURN server, and is refused when the relay offers none, so the contact never learns it."
             )
             if (tor) {
                 val (line, tone) = when (val s = torState) {
@@ -2627,10 +2640,10 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 subtitle = "Call audio always goes through the relay's TURN server, so a contact you call, or who calls you, never learns this phone's network address, and neither does anyone holding their phone. Adds a little delay. " +
                     when (relayOnlyChoice) {
                         true -> "You switched it on, so a call cannot connect while the relay has no TURN server."
-                        false -> "You switched it off: calls connect directly when both networks allow it, and the other phone learns this phone's address."
+                        false -> "You switched it off: calls connect directly when both networks allow it, and the other phone learns this phone's address. While Tor is on, calls still go only through the TURN server."
                         null -> when (relayTurn) {
                             true -> "On by default, because your relay offers a TURN server."
-                            false -> "On by default whenever your relay offers a TURN server, and it offered none on the last call, so calls connect directly and the other phone learns this phone's address. Switch it on to refuse calls until it offers one."
+                            false -> "On by default whenever your relay offers a TURN server, and it offered none on the last call. Until you choose, Clairix asks before each call you place whether to call directly, which tells the other phone this phone's address, and a call you answer connects directly. Switch it on to refuse calls until it offers one."
                             null -> "On by default whenever your relay offers a TURN server; Clairix finds out on the first call."
                         }
                     }
@@ -2810,6 +2823,15 @@ private fun BlockedCard(onOpen: (String) -> Unit) {
     val kept by produceState(initialValue = emptyMap<String, Contact>(), version) {
         value = withContext(Dispatchers.IO) { CommsRepository.blockedKept() }
     }
+    var unblocking by remember { mutableStateOf<ContactGate.Blocked?>(null) }
+    unblocking?.let { b ->
+        UnblockDialog(
+            who = b.name.ifBlank { formatClairixNumber(b.number) },
+            kept = kept[b.number]?.let { ContactGate.matches(b, it.ed25519, it.curve25519, null, null) } == true,
+            onConfirm = { unblocking = null; scope.launch { CommsRepository.unblock(b.id) } },
+            onDismiss = { unblocking = null }
+        )
+    }
     ClairixCard {
         Text("Blocked", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
         Text(
@@ -2829,7 +2851,7 @@ private fun BlockedCard(onOpen: (String) -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val record = kept[b.number]?.takeIf { ContactGate.matches(b, it.ed25519, it.curve25519, null, null) }
                 if (record != null) GhostButton("Open conversation", onClick = { onOpen(record.number) }, tone = Tone.Neutral)
-                GhostButton("Unblock", onClick = { scope.launch { CommsRepository.unblock(b.id) } }, tone = Tone.Accent)
+                GhostButton("Unblock", onClick = { unblocking = b }, tone = Tone.Accent)
             }
         }
     }

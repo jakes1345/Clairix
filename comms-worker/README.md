@@ -66,7 +66,7 @@ giving them your real number or your identity key.
   other contact, so a pass taken from that contact stops working. A pass is
   bound to its envelope, so a relay that forwards one cannot reuse it.
 - What phones report about a number (see "Abuse reports"): the number, a
-  reason, an envelope's hash and the day. Never who reported it, and never
+  reason, an envelope's fingerprint and the day. Never who reported it, and never
   anything that was said.
 - Whether its operator suspended a number, and the day the suspension began
   (see "Suspending a number"). Nothing about why.
@@ -453,8 +453,9 @@ to open registrations too. The project's own relay keeps open registration off.
 
 Report, on a contact's page or on a message request in Clairix, sends
 `POST /v1/report`: the number reported, the relay it is on when that is not
-this one, the SHA-256 of the newest envelope it sent (when the phone has
-one) and a reason, one of `harassment`, `threats`, `spam`, `impersonation`
+this one, a fingerprint of the newest envelope it sent (when the phone has
+one: 64 hex characters, an HMAC of the envelope's SHA-256 under a key only
+the reporting phone can make, never the hash itself) and a reason, one of `harassment`, `threats`, `spam`, `impersonation`
 or `other`. The request spends a report token and names nobody, so the relay
 keeps who was reported and why, never who reported it, and never anything
 that was said, which it cannot read. The same envelope reported twice counts
@@ -473,15 +474,19 @@ curl -X DELETE -H "X-Admin-Secret: $ADMIN_SECRET" -d '{"number":"482913605"}' ht
 ```
 
 `reports`, or the first `curl`, lists every reported number with how many
-reports there are, their reasons, the envelope hashes and the first and last
+reports there are, their reasons, the envelope fingerprints and the first and last
 day; `close`, or the second, closes the reports about one number (add
 `"relay"`, or the script's last argument, for a number on another relay) once
 it has been dealt with. A report is
-someone's word: the relay never sees the messages, and an envelope's hash only
-lets a report be matched with a message the person who reported it chooses to
-show you. A number on another relay is that relay's operator's to act on; this
-relay's operator can pass the report on, or stop taking that relay's envelopes
-with `FEDERATION`. A few attempts a minute per address are allowed, so the
+someone's word: the relay never sees the messages, and a fingerprint only
+lets a report be matched with an envelope by someone the reporter's phone
+gives that report's key. The fingerprint is not the envelope's hash because
+the person reported knows every envelope they sent and to whom: from the hash
+they could tell who reported them. A number on another relay is that relay's
+operator's to act on; this relay's operator can tell that operator the number
+and the reasons, or stop taking that relay's envelopes with `FEDERATION`.
+Do not forward the fingerprints or the days: the other relay's operator may be
+the person reported, and needs neither to act. A few attempts a minute per address are allowed, so the
 secret cannot be guessed; without `ADMIN_SECRET` the endpoint is off. What to
 do with a report, start to finish, is [docs/ABUSE.md](../docs/ABUSE.md).
 
@@ -600,7 +605,10 @@ npx wrangler secret put TURN_KEY_API_TOKEN
 
 The Worker then mints TURN credentials for every `GET /v1/turn` request: they
 are valid for two hours, go to that caller alone and are never cached or
-shared. A TURN server forwards encrypted packets it cannot decrypt.
+shared. A TURN server forwards encrypted packets it cannot decrypt. If minting
+fails while a key is set, `GET /v1/turn` answers 503 rather than STUN only, so
+the app does not take a passing failure for a relay without TURN and set up a
+direct call that tells the contact the caller's address.
 
 ### ClairixCoin (off unless you turn it on)
 
@@ -777,14 +785,14 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
 | POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6, refused with 426 from `LEGACY_CUTOFF` (see "Old versions") |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
-| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope. An envelope in format 2 is refused with 426 from `LEGACY_CUTOFF`, whatever the number |
+| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope; an envelope without a good pass, to a mailbox that has a pass key, is delivered without its alert, so someone the owner blocked or has not accepted cannot ring a locked phone. An envelope in format 2 is refused with 426 from `LEGACY_CUTOFF`, whatever the number |
 | POST | `/v1/report` | `{number, relay?, envelope?, reason}` with a report token → 202: an abuse report kept for the operator (see "Abuse reports"); the same answer whatever the number |
 | GET, DELETE | `/v1/admin/reports` | With `X-Admin-Secret` and no identity: every reported number, or (`DELETE {number, relay?}`) close the reports about one; off unless `ADMIN_SECRET` is set |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |
 | GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat with `next` (the most milliseconds until the following one: two minutes, or with `X-Clairix-Heartbeat: <ms>` on the upgrade, two minutes for ten minutes after an envelope or an ack and that pace otherwise; see "The live connection"), and `pong` for a client's `{"type":"ping"}` |
-| GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured |
+| GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured (503 when a key is configured and minting fails) |
 | GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin. Every coin route answers 404 while `COIN` is off |
 | POST | `/v1/coin/pay` | `{to, pin, amount, txid?}` → `{txid, balance, ok}`: pays a contact; `pin` is the payee's key fingerprint, and a number that does not exist or a pin that does not match is "Payment refused" before any coin moves; 30 a minute |
 | GET | `/v1/coin/history` | `{txs: [{id, amount, ts, direction, note?}]}`: the last transfers, newest first (`?limit=`, up to 100), each dated to the hour; `note` only on a mint |

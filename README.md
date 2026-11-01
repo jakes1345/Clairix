@@ -368,10 +368,15 @@ maintainer on the live service, not in this repository.
   nothing.
 - **Relay-only calls** (Comms settings): call audio always goes through the
   relay's TURN server, so a contact never learns your IP address from a
-  call. On by default whenever your relay offers a TURN server, and off
-  while it offers none, so calls still connect directly. Switched on by hand
-  it stays on, and a call cannot connect while the relay has no TURN server;
-  switched off, calls connect directly whenever both networks allow it.
+  call. On by default whenever your relay offers a TURN server. While it
+  offers none and you have not chosen, Clairix asks before each call you
+  place whether to call directly ("Call directly?"), and a call you answer
+  connects directly; if a relay that offers TURN fails to hand it out for a
+  call, the call is not moved to a direct path. Switched on by hand it stays
+  on, and a call cannot connect while the relay has no TURN server; switched
+  off, calls connect directly whenever both networks allow it. While Tor is
+  on, calls go only through the TURN server whatever the setting, and are
+  refused when the relay offers none.
 - **Cover traffic** (Comms settings): envelopes nobody reads, to random
   contacts at random intervals while the background connection is on. Off by
   default; costs a little data and battery.

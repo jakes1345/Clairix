@@ -1,6 +1,8 @@
 package app.clairix.comms
 
 import org.json.JSONObject
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Who reaches this phone: blocked identities, and message requests.
@@ -92,6 +94,25 @@ object ContactGate {
         else -> Admission.REQUEST
     }
 
+    /**
+     * Whether a group's messages for a member go to their row although it is
+     * a message request: only when the roster records a key for them and it
+     * is the one the request holds ([rosterEd25519] equal to [ed25519]), so
+     * the group vouches for exactly this person. Never a blocked row, and an
+     * ordinary contact needs no vouching.
+     */
+    fun rosterVouches(request: Boolean, blocked: Boolean, ed25519: String, rosterEd25519: String?): Boolean =
+        request && !blocked && !rosterEd25519.isNullOrBlank() && rosterEd25519 == ed25519
+
+    /**
+     * Whether a row may hold this phone's current pass, so that removing or
+     * blocking it must replace the key: an ordinary contact. A message request
+     * is given the pass only when accepted, and a blocked contact lost it when
+     * blocked; replacing the key for either would only leave every contact's
+     * pass stale until they hear of the new one.
+     */
+    fun mayHoldPass(request: Boolean, blocked: Boolean): Boolean = !request && !blocked
+
     /** What happens to a payload from a message request until the owner accepts it. */
     enum class RequestAction {
         /** Kept in the request's conversation, with no receipt and only the notification that names nobody. */
@@ -127,15 +148,17 @@ object ContactGate {
 
     /**
      * The receipts a request's conversation is owed once the owner accepts:
-     * by status, a read receipt for each message they have read and a
-     * delivery receipt for each one they have not. Calls, this phone's own
-     * notes and a file still arriving get none, as in any conversation; a file
-     * that completes later is receipted then.
+     * a delivery receipt for each message, read or not. The request card
+     * promises the sender is not told what was read while it was a request,
+     * and accepting to reply "stop" must not tell them every threat was read;
+     * a message read after accepting is receipted as read as usual. Calls,
+     * this phone's own notes and a file still arriving get none, as in any
+     * conversation; a file that completes later is receipted then.
      */
     fun receiptsOnAccept(messages: List<ChatMessage>): Map<String, List<String>> =
         messages
             .filter { it.direction == Direction.IN && it.status !in NO_RECEIPT && it.kind != KIND_NOTE }
-            .groupBy({ if (it.read) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED }, { it.id })
+            .groupBy({ CommsWire.STATUS_DELIVERED }, { it.id })
 
     // ── Reports ──────────────────────────────────────────────────────────
 
@@ -164,17 +187,48 @@ object ContactGate {
     private val ENVELOPE_HASH = Regex("^[0-9a-f]{64}$")
 
     /**
-     * What a report tells the relay: the number reported and the relay it is
-     * on (left out for the relay the report goes to), the hash of an envelope
-     * they sent when one is known, and the reason. Nothing about the phone
-     * that reports, and nothing of what they wrote, which the relay never
-     * sees. The request that carries it spends a token and names nobody.
+     * The key behind one report's fingerprint of the envelope [envelopeHash]:
+     * derived from this phone's report secret ([secret], which never leaves
+     * it) and the envelope, so the same envelope reported twice gives the
+     * same fingerprint, and revealing one report's key reveals no other's.
      */
-    fun reportBody(number: String, relay: String?, envelopeHash: String?, reason: ReportReason): JSONObject =
+    fun reportKey(secret: ByteArray, envelopeHash: String): ByteArray =
+        hmac(secret, "clairix-report-key-v1|$envelopeHash")
+
+    /**
+     * What a report says about the envelope [envelopeHash] (SHA-256 of its
+     * bytes, lowercase hex): an HMAC of it under [reportKey], in the same
+     * 64-hex form, or null when [envelopeHash] is not one. Not the hash
+     * itself: the person reported knows every envelope they sent and to whom,
+     * so the raw hash, passed on to their relay's operator (who may be them),
+     * would say who reported them. The fingerprint matches the envelope only
+     * for someone given the report's key, which only the reporter's phone can
+     * make.
+     */
+    fun envelopeFingerprint(secret: ByteArray, envelopeHash: String): String? {
+        if (!ENVELOPE_HASH.matches(envelopeHash)) return null
+        return hmac(reportKey(secret, envelopeHash), "clairix-report-v1|$envelopeHash").joinToString("") { "%02x".format(it) }
+    }
+
+    private fun hmac(key: ByteArray, message: String): ByteArray =
+        Mac.getInstance("HmacSHA256").run {
+            init(SecretKeySpec(key, "HmacSHA256"))
+            doFinal(message.toByteArray(Charsets.UTF_8))
+        }
+
+    /**
+     * What a report tells the relay: the number reported and the relay it is
+     * on (left out for the relay the report goes to), the [envelopeFingerprint]
+     * of an envelope they sent when one is known, and the reason. Nothing
+     * about the phone that reports, and nothing of what they wrote, which the
+     * relay never sees. The request that carries it spends a token and names
+     * nobody.
+     */
+    fun reportBody(number: String, relay: String?, fingerprint: String?, reason: ReportReason): JSONObject =
         JSONObject().apply {
             put("number", number)
             if (relay != null) put("relay", relay)
-            envelopeHash?.takeIf { ENVELOPE_HASH.matches(it) }?.let { put("envelope", it) }
+            fingerprint?.takeIf { ENVELOPE_HASH.matches(it) }?.let { put("envelope", it) }
             put("reason", reason.wire)
         }
 }

@@ -171,6 +171,43 @@ class CommsConfig(context: Context) {
 
     fun setPassPublished() { prefs.edit().putBoolean(KEY_PASS_PUBLISHED, true).apply() }
 
+    /**
+     * The inviter (their Clairix number) still to be told which of their
+     * invites this phone registered with, and the invite: kept until the
+     * word is sent or refused for good, so a send that found no delivery
+     * token yet is tried again with the outbox.
+     */
+    val pendingJoined: Pair<String, String>?
+        get() {
+            val number = prefs.getString(KEY_JOINED_NUMBER, null) ?: return null
+            val invite = prefs.getString(KEY_JOINED_INVITE, null) ?: return null
+            return number to invite
+        }
+
+    fun setPendingJoined(number: String, invite: String) {
+        prefs.edit().putString(KEY_JOINED_NUMBER, number).putString(KEY_JOINED_INVITE, invite).apply()
+    }
+
+    fun clearPendingJoined() {
+        prefs.edit().remove(KEY_JOINED_NUMBER).remove(KEY_JOINED_INVITE).apply()
+    }
+
+    /**
+     * The secret a report's envelope fingerprint is made under
+     * ([ContactGate.envelopeFingerprint]), 32 random bytes made on first use.
+     * It never leaves the phone.
+     */
+    @Synchronized
+    fun reportSecret(): ByteArray {
+        prefs.getString(KEY_REPORT_SECRET, null)
+            ?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }
+            ?.takeIf { it.size == 32 }
+            ?.let { return it }
+        val made = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        prefs.edit().putString(KEY_REPORT_SECRET, java.util.Base64.getEncoder().encodeToString(made)).apply()
+        return made
+    }
+
     fun saveRegistration(relayUrl: String, number: String, name: String, listed: Boolean) {
         prefs.edit()
             .putString(KEY_RELAY, relayUrl.trimEnd('/'))
@@ -290,6 +327,9 @@ class CommsConfig(context: Context) {
         const val KEY_PASS_PUBLISHED = "pass_published"
         const val KEY_PASS_CREATED = "pass_created"
         const val KEY_RECOVERY_SAVED = "recovery_saved_at"
+        const val KEY_REPORT_SECRET = "report_secret"
+        const val KEY_JOINED_NUMBER = "joined_number"
+        const val KEY_JOINED_INVITE = "joined_invite"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"
