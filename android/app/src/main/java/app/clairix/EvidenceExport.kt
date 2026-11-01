@@ -68,8 +68,9 @@ import java.util.TimeZone
 
 /**
  * Every evidence export goes through here: the Export buttons on the Trackers
- * screen and in Settings (both behind the owner check), the safety card's "Export
- * the evidence first" and the offer before a wipe limit is picked. Each asks for
+ * screen and in Settings, the safety card's "Export the evidence first", Phone
+ * check's stalkerware page and the offer before a wipe limit is picked, all behind
+ * the same owner check in [EvidenceExportHost]. Each asks for
  * the export ([request]); [EvidenceExportHost], drawn once over the app, shows the
  * period picker and the warning, then reads what Clairix holds, writes the report
  * and the photos that go with it and opens the share sheet.
@@ -200,14 +201,13 @@ internal object EvidenceExport {
 }
 
 /**
- * The two Export buttons, text and JSON, side by side with the same owner check:
- * with a passcode set, each asks for it (or a biometric) every time.
+ * The two Export buttons, text and JSON, side by side. The owner check is the
+ * host's ([EvidenceExportHost]), so every way into an export asks for it.
  */
 @Composable
 internal fun EvidenceExportButtons(textLabel: String, modifier: Modifier = Modifier, primary: Boolean = false) {
-    val askOwner = rememberOwnerCheck()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        val exportText = askOwner.guard("export the evidence report") { EvidenceExport.request(ReportFormat.TEXT) }
+        val exportText = { EvidenceExport.request(ReportFormat.TEXT) }
         if (primary) {
             PrimaryButton(textLabel, onClick = exportText, icon = Icons.Filled.Share, modifier = Modifier.fillMaxWidth())
         } else {
@@ -215,7 +215,7 @@ internal fun EvidenceExportButtons(textLabel: String, modifier: Modifier = Modif
         }
         SecondaryButton(
             "Export as JSON",
-            onClick = askOwner.guard("export the evidence report") { EvidenceExport.request(ReportFormat.JSON) },
+            onClick = { EvidenceExport.request(ReportFormat.JSON) },
             modifier = Modifier.fillMaxWidth()
         )
     }
@@ -230,9 +230,23 @@ internal fun EvidenceExportButtons(textLabel: String, modifier: Modifier = Modif
 internal fun EvidenceExportHost() {
     val pending by EvidenceExport.pending.collectAsStateWithLifecycle()
     val locked by AppLock.locked.collectAsStateWithLifecycle()
+    val passcodeSet by AppLock.enabled.collectAsStateWithLifecycle()
     LaunchedEffect(locked) { if (locked) EvidenceExport.dismiss() }
+    // With a passcode set, every export asks for it (or a biometric) first, whichever
+    // button asked for it: the Export buttons, the safety card, Phone check's
+    // stalkerware page or the offer before a wipe limit is picked.
+    var ownerConfirmed by remember { mutableStateOf(false) }
+    LaunchedEffect(pending) { if (pending == null) ownerConfirmed = false }
     val format = pending ?: return
     if (locked) return
+    if (!ownerConfirmed && passcodeSet) {
+        OwnerCheckDialog(
+            purpose = "export the evidence report",
+            onConfirmed = { ownerConfirmed = true },
+            onDismiss = { EvidenceExport.dismiss() }
+        )
+        return
+    }
     EvidenceExportDialog(format, onDone = { EvidenceExport.dismiss() })
 }
 

@@ -244,7 +244,7 @@ private fun OwnerCheckCard(purpose: String, onConfirmed: () -> Unit) {
 }
 
 @Composable
-private fun OwnerCheckDialog(purpose: String, onConfirmed: () -> Unit, onDismiss: () -> Unit) {
+internal fun OwnerCheckDialog(purpose: String, onConfirmed: () -> Unit, onDismiss: () -> Unit) {
     val activity = LocalContext.current as? FragmentActivity
     val biometricEnabled by AppLock.biometricEnabled.collectAsStateWithLifecycle()
     val entry = rememberOwnerCheckEntry(onConfirmed)
