@@ -1251,7 +1251,7 @@ private const val SOS_HOLD_MS = 1500L
  * defaults are for previews and screenshots; the shell passes the real gate.
  *
  * Both dialogs also carry the extras the owner turned on in Settings, SOS
- * (SosExtrasUi.kt): a text to one number, sent with the SOS or, with nobody in
+ * (SosExtrasRun.kt): a text to one number, sent with the SOS or, with nobody in
  * Clairix to send to, on its own; and a button that opens the phone app with the
  * local emergency number. Each says what came of it.
  */
