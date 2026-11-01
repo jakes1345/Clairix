@@ -49,10 +49,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install the converter's YAML parser (hash-pinned) and pytest
-        run: |
-          python -m pip install --require-hashes -r tools/ioc/requirements.txt
-          python -m pip install pytest==9.1.1
+      - name: Install the converter's YAML parser and pytest (hash-pinned)
+        run: python -m pip install --require-hashes -r tools/ioc/requirements.txt -r tools/requirements-test.txt
 
       - name: Test the converter
         run: python -m pytest -q tools/ioc
@@ -97,6 +95,8 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.convert.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # ASSET_SIGNING_KEY is a secret of this environment (docs/PROCESS.md).
+    environment: assets
     permissions:
       contents: write
     steps:
@@ -106,8 +106,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install the signing tool
-        run: python -m pip install -r tools/signing/requirements.txt
+      - name: Install the signing tool (hash-pinned)
+        run: python -m pip install --require-hashes -r tools/signing/requirements.txt
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

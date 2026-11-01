@@ -2,6 +2,12 @@ name: Android APK
 
 on:
   push:
+    # Branches only. A tag, or a release/v* branch, starts the Release
+    # workflow, which runs this one (workflow_call below) before it signs
+    # anything; a push of either would otherwise build the same commit twice.
+    branches:
+      - '**'
+      - '!release/v*'
     paths:
       - 'android/**'
       - 'comms-crypto/**'
@@ -18,6 +24,15 @@ on:
       - 'tools/reproducible/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      record_screenshots:
+        description: 'Record the screenshot goldens on this runner instead of comparing them, and keep them as the recorded-screenshots artifact to commit under android/app/src/test/snapshots/images'
+        type: boolean
+        required: false
+        default: false
+  # Called by release.yml: a release is signed only after every job here has
+  # passed on the commit being released. Path filters do not apply to a call.
+  workflow_call:
 
 # The job only reads the repository; third-party actions get no wider token.
 # Every action is pinned to a commit, not a tag: a tag can be moved to code
@@ -136,6 +151,64 @@ jobs:
           name: clairix-debug-apk
           path: android/app/build/outputs/apk/*/debug/*.apk
           if-no-files-found: error
+
+      # The committed screenshots (src/test/snapshots) are compared, not only
+      # drawn: a plain test run renders each screen and compares nothing, and
+      # verifyPaparazzi is what switches comparison on. Only the screenshot
+      # tests run again; the step above has run every test once.
+      - name: Verify the screenshots
+        if: ${{ !inputs.record_screenshots }}
+        working-directory: android
+        run: |
+          ./gradlew testFullSuiteDebugUnitTest --tests 'app.clairix.screenshots.*' verifyPaparazziFullSuiteDebug \
+            --no-daemon --stacktrace
+
+      - name: Upload the screenshot differences
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: paparazzi-failures
+          path: android/app/build/paparazzi/failures/
+          if-no-files-found: ignore
+
+      # Rendering depends on the JDK and the fonts it finds, so the goldens are
+      # recorded here, on the runner that compares them: run this workflow by
+      # hand with record_screenshots and commit the artifact's PNGs.
+      - name: Record the screenshots
+        if: ${{ inputs.record_screenshots }}
+        working-directory: android
+        run: |
+          ./gradlew testFullSuiteDebugUnitTest --tests 'app.clairix.screenshots.*' recordPaparazziFullSuiteDebug \
+            --no-daemon --stacktrace
+
+      - name: Keep the recorded screenshots
+        if: ${{ inputs.record_screenshots }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recorded-screenshots
+          path: android/app/src/test/snapshots/images/
+          if-no-files-found: error
+
+      # Android Lint and detekt with every warning an error. What each found
+      # when it was switched on is listed in app/lint-baseline.xml and
+      # app/detekt-baseline.xml and tolerated until fixed; anything new fails.
+      - name: Android Lint
+        working-directory: android
+        run: ./gradlew lintFullSuiteDebug --no-daemon --stacktrace
+
+      - name: detekt
+        working-directory: android
+        run: ./gradlew detekt --no-daemon --stacktrace
+
+      - name: Upload the lint and detekt reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lint-reports
+          path: |
+            android/app/build/reports/lint-results-*
+            android/app/build/reports/detekt/
+          if-no-files-found: ignore
 
   # Two builds of one commit on two machines must come out the same, or a
   # published APK can never be checked against the source. Each copy builds

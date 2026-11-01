@@ -102,8 +102,18 @@ is less to give up in the first place.
 
 **What you install and download.** Releases, offline map graphs and work-zone
 files are signed with the project's Ed25519 key, and the app refuses a map or
-work-zone file whose signature does not verify. Every workflow action is pinned
-to a commit. The app trusts only the system's certificate authorities, never a
+work-zone file whose signature does not verify. A signature shows that a file
+was published by this repository's own workflows with that key; it does not
+show that what was signed is right. A map is built from Geofabrik's
+OpenStreetMap extract, which can be checked only against the MD5 published on
+the same server, so the signature cannot show that the roads are
+OpenStreetMap's. The Python tools that build and sign the map and work-zone
+files are installed only if they match hashes recorded in the repository, and
+the job that signs them runs apart from the one that builds them. Each map's
+release names the extract, its MD5 and its dates, and the commit it was built
+from, so a published graph can be traced to what it was made from. Every
+workflow action is pinned to a commit. The app trusts only the system's
+certificate authorities, never a
 certificate someone installed on the phone, and refuses cleartext; the
 Certificates page can pin the relay's key so that a certificate from a
 compelled authority is refused too.
@@ -487,8 +497,11 @@ published release against the source; the relay is in
 **Before the first release** the asset signing key has to exist:
 `python3 tools/signing/keygen.py` writes `android/asset-signing.pub` and
 `android/asset-signing.pem` (commit both) and prints the secret for the
-`ASSET_SIGNING_KEY` repository secret. Without them, release builds and the
-maps and work-zones workflows fail on purpose.
+`ASSET_SIGNING_KEY` secret, which belongs in the `release` and `assets`
+environments ([`docs/PROCESS.md`](docs/PROCESS.md)). Without them, release
+builds and the maps and work-zones workflows fail on purpose. How changes
+reach main and how a release is checked before it is signed are in
+[`docs/PROCESS.md`](docs/PROCESS.md).
 
 ## Requirements
 

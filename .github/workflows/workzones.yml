@@ -19,9 +19,12 @@ on:
   workflow_dispatch:
 
 # Every action is pinned to a commit: this workflow publishes what every
-# navigating phone downloads, and it holds the asset signing key.
+# navigating phone downloads, and it holds the asset signing key. Three jobs, so
+# the key never shares a job with the aggregator, its tests or the feeds it reads:
+# aggregate (no signing key), sign (the key alone, environment `assets`, with the
+# hash-pinned signing tool) and publish. Read-only by default: only publish writes.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: workzones
@@ -31,9 +34,7 @@ concurrency:
 jobs:
   aggregate:
     runs-on: ubuntu-latest
-    # The first run after a format change replaces every file at one write a second, and a
-    # rate limit can add a few minutes of waiting.
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -41,8 +42,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Hash-pinned: pip refuses any file whose hash the requirements files do not list.
       - name: Install pytest and the signing tool
-        run: python -m pip install -r tools/signing/requirements.txt pytest==9.1.1
+        run: python -m pip install --require-hashes -r tools/signing/requirements.txt -r tools/requirements-test.txt
 
       - name: Test aggregator, publisher, signing tool and failure alert
         run: python -m pytest -q tools/workzones tools/signing/test_sign.py .github/scripts/test_report_failure.py
@@ -52,14 +54,101 @@ jobs:
           WZDX_KEYS: ${{ secrets.WZDX_KEYS }}
         run: python tools/workzones/aggregate.py --out dist
 
-      # Every per-region file is signed, and so is the index the app reads the run time
-      # from; the app verifies before it parses.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workzones
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  # Every per-region file is signed, and so is the index the app reads the run time
+  # from; the app verifies before it parses.
+  sign:
+    needs: aggregate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: assets
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/signing
+            android/asset-signing.pub
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the signing tool (hash-pinned)
+        run: python -m pip install --require-hashes -r tools/signing/requirements.txt
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: workzones
+          path: dist
+
       - name: Sign
         env:
           ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
         run: |
           python tools/signing/sign.py dist/workzones-*.json.gz dist/workzones-index.json
           python tools/signing/sign.py --verify android/asset-signing.pub dist/workzones-*.json.gz dist/workzones-index.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workzones-signatures
+          path: dist/*.sig
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-latest
+    # The first run after a format change replaces every file at one write a second, and a
+    # rate limit can add a few minutes of waiting.
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/workzones
+            android/asset-signing.pem
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: workzones
+          path: dist
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: workzones-signatures
+          path: dist
+
+      # As the app will: every file against its signature and the key the app is built with.
+      - name: Check the signatures
+        run: |
+          shopt -s nullglob
+          files=(dist/workzones-*.json.gz dist/workzones-index.json)
+          if [ "${#files[@]}" = 0 ]; then
+            echo "::error::The aggregator wrote nothing to publish"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            sed 's/$/==/' "$f.sig" | base64 -d > "$RUNNER_TEMP/file.sig"
+            openssl pkeyutl -verify -pubin -inkey android/asset-signing.pem -rawin -in "$f" -sigfile "$RUNNER_TEMP/file.sig" > /dev/null \
+              || { echo "::error file=$f::signature does not verify"; exit 1; }
+          done
+          echo "${#files[@]} signatures verified."
 
       # Replaces only the assets whose content changed, one write a second, with a retry
       # and backoff on 403/429; the release is created on the first run.
@@ -80,7 +169,7 @@ jobs:
   # A red scheduled run is otherwise seen by nobody: this opens one issue, or adds the run
   # to the open one (.github/scripts/report-failure.sh).
   alert:
-    needs: aggregate
+    needs: [aggregate, sign, publish]
     if: failure()
     runs-on: ubuntu-latest
     permissions:

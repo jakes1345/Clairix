@@ -1,0 +1,211 @@
+name: Supply chain
+
+# What the dependencies and each change bring in:
+#   cargo-audit        the two Rust lockfiles (comms-crypto, comms-worker/voprf) against
+#                      the RustSec advisory database
+#   npm-audit          the relay's and the website's npm trees against npm's advisories
+#   dependency-review  on a pull request, every dependency it adds or changes, against
+#                      GitHub's advisory database: one with a high or critical advisory fails it
+#   secret-scan        the commits a pull request adds, or a push brings to main, with gitleaks
+#                      (.gitleaks.toml lists the test values that look like secrets and are not)
+#
+# The audits read whole lockfiles, so an advisory published today against a dependency nobody
+# touched shows up in them today. They run every day, and on a push to main or a pull request
+# that changes a manifest or a lockfile. A daily or main-branch audit that finds one fails and
+# opens an issue (alert). On a pull request the audit's findings are shown but do not fail it:
+# what a pull request itself brings in is dependency-review's to judge, so an old advisory that
+# is still being dealt with does not hold up the update that fixes something else.
+# docs/PROCESS.md says what to do with an advisory that has no fix yet.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+
+# Every action is pinned to a commit, as everywhere else; tools come from their own
+# releases at a fixed version (cargo install --locked, a checksum for gitleaks).
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # A pull request is checked out as its merge commit, whose first parent is the base;
+          # a push to main is usually one squashed commit on top of the one before.
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Every day and by hand, always; on a pull request or a push, when it changes what the
+      # audit reads (or when what it changed cannot be told from this checkout).
+      - name: Decide whether this run audits
+        id: scope
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) base=HEAD^1 ;;
+            push) base="$BEFORE" ;;
+            *) base= ;;
+          esac
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null || ! git diff --quiet "$base" HEAD -- \
+              comms-crypto/Cargo.toml comms-crypto/Cargo.lock \
+              comms-worker/voprf/Cargo.toml comms-worker/voprf/Cargo.lock \
+              .cargo/audit.toml .github/workflows/supply-chain.yml; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No Rust manifest or lockfile changed; the daily run audits them."
+          fi
+
+      - name: Set up Rust
+        if: steps.scope.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: 1.97.0
+
+      - name: Install cargo-audit
+        if: steps.scope.outputs.run == 'true'
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      # cargo audit has no --locked flag of its own: given --file, it reads the committed
+      # lockfile as it is and never regenerates it. It runs from the repository root, so
+      # .cargo/audit.toml there is the one place an advisory without a fix is recorded.
+      - name: Audit comms-crypto
+        if: steps.scope.outputs.run == 'true'
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: cargo audit --file comms-crypto/Cargo.lock
+
+      - name: Audit comms-worker/voprf
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: cargo audit --file comms-worker/voprf/Cargo.lock
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Decide whether this run audits
+        id: scope
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) base=HEAD^1 ;;
+            push) base="$BEFORE" ;;
+            *) base= ;;
+          esac
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null || ! git diff --quiet "$base" HEAD -- \
+              comms-worker/package.json comms-worker/package-lock.json \
+              website/package.json website/package-lock.json \
+              .github/workflows/supply-chain.yml; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No npm manifest or lockfile changed; the daily run audits them."
+          fi
+
+      - name: Set up Node
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+
+      # Every package in the relay's tree is listed as a devDependency, yet wrangler bundles and
+      # serves the Worker and workerd, which comes with it, runs every self-hosted and container
+      # relay: --omit=dev would leave nothing to audit, so the relay's tree is audited whole.
+      - name: Audit the relay's npm tree
+        if: steps.scope.outputs.run == 'true'
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        working-directory: comms-worker
+        run: npm audit --audit-level=high
+
+      - name: Audit the website's npm tree
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        working-directory: website
+        run: npm audit --omit=dev --audit-level=high
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Development dependencies count too, for the relay's sake (see npm-audit).
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime, development, unknown
+
+  secret-scan:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/gitleaks" gitleaks
+
+      # A pull request's own commits (its merge commit's second parent, back to the base), or
+      # the commits a push brought to main; what was there before was scanned when it came in.
+      # What is found is redacted from the log, which anyone can read.
+      - name: Scan the new commits
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            range="HEAD^1..HEAD^2"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            range="$BEFORE..$GITHUB_SHA"
+          else
+            range="-1 $GITHUB_SHA"
+          fi
+          echo "Scanning $range"
+          "$RUNNER_TEMP/gitleaks/gitleaks" git --no-banner --redact --log-opts="$range" .
+
+  # A red daily or main-branch run is otherwise seen by nobody: this opens one issue, or adds the
+  # run to the open one (.github/scripts/report-failure.sh). Pull requests show their own result.
+  alert:
+    needs: [cargo-audit, npm-audit, secret-scan]
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_TITLE: Supply chain check failing
+          FAILURE_MEANS: >-
+            A published advisory now applies to a dependency in one of the lockfiles, or a push to main
+            carried something that looks like a secret (the failing job says which). Builds keep the
+            affected version until a dependency update or a fix lands; docs/PROCESS.md says what to do
+            when no fixed version exists yet.
+        run: .github/scripts/report-failure.sh

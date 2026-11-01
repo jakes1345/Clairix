@@ -162,8 +162,10 @@ and come out unsigned otherwise:
 | `ANDROID_KEY_ALIAS` | The key's alias in the keystore |
 | `ANDROID_KEY_PASSWORD` | The key's password (defaults to the keystore password) |
 
-The release workflow reads them from these **repository secrets**
-(Settings → Secrets and variables → Actions):
+The release workflow's `release` job reads them from these secrets of the
+**`release` environment** (Settings → Environments → release), which only that
+job can read, and only from main, a `release/v*` branch or a `v*` tag
+([`docs/PROCESS.md`](../docs/PROCESS.md), Signing keys):
 
 | Secret | What to put in it |
 |---|---|
@@ -202,12 +204,13 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 
 The asset signing key exists: its public half is committed as
 `android/asset-signing.pub` and `android/asset-signing.pem`, its secret half is
-the `ASSET_SIGNING_KEY` repository secret, and `docs/KEYS.md` records it. The
-maps, the work zones, the relay and stalkerware lists and the release
-checksums are signed with it, and the app refuses downloads it cannot verify;
-a release build fails without the public key file. Replacing it takes
-`tools/signing/keygen.py --force` and a new app release
-(`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
+the `ASSET_SIGNING_KEY` secret, and `docs/KEYS.md` records it. The jobs that
+sign name the `release` and `assets` environments, and `docs/PROCESS.md` says
+how to move the secret into them. The maps, the work zones, the relay and
+stalkerware lists and the release checksums are signed with it, and the app
+refuses downloads it cannot verify; a release build fails without the public
+key file. Replacing it takes `tools/signing/keygen.py --force` and a new app
+release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 
 1. Set `versionName` and raise `versionCode` in `app/build.gradle.kts`
    (3.0.0-beta.1 is versionCode 21). The workflow refuses a tag that does not
@@ -217,13 +220,19 @@ a release build fails without the public key file. Replacing it takes
 2. Commit, then start `.github/workflows/release.yml` in one of three ways:
    push a tag `v3.0.0-beta.1`; push a branch `release/v3.0.0-beta.1` (the tag is
    created at its head); or Actions → Release → Run workflow with the tag.
-3. The workflow tests the crypto crate, builds and signs `fullSuite` and
-   `fullComms` APKs and the `playSuite` bundle, checks the Play manifest has no
-   card emulation, checks that every 64-bit native library in them is built
-   for 16 KB pages (`tools/android/check-16k-alignment.sh`: each LOAD segment
-   0x4000-aligned, `zipalign -c -P 16 -v 4` on the APKs), and publishes a
-   GitHub Release with the three files, `SHA256SUMS.txt` and
-   `SHA256SUMS.txt.sig` (the checksums signed by the asset signing key). A tag
+3. The workflow first runs the Android APK workflow on the commit (unit tests,
+   screenshots, lint, detekt, the build on two machines), requires an
+   Emulator smoke test run that passed on the same tree (it waits for one
+   still going, and fails if there is none: start one by hand on the same ref
+   and re-run), and makes CycloneDX bills of materials of the app's libraries
+   and the crypto crate. Then it tests the crypto crate, builds and signs
+   `fullSuite` and `fullComms` APKs and the `playSuite` bundle, checks the Play
+   manifest has no card emulation, checks that every 64-bit native library in
+   them is built for 16 KB pages (`tools/android/check-16k-alignment.sh`: each
+   LOAD segment 0x4000-aligned, `zipalign -c -P 16 -v 4` on the APKs), and
+   publishes a GitHub Release with the three files, the two bills of
+   materials, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed
+   by the asset signing key). A tag
    ending in `-alpha.N`, `-beta.N` or `-rc.N` is marked as a pre-release. A run
    started by hand must start from `main`, a `release/v*` branch or a `v*` tag.
    A failed run, or a rebuild-and-compare check that does not match, opens an

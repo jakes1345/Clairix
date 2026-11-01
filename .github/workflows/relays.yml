@@ -26,11 +26,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Tests the checker and checks the list, on pull requests too. No secrets.
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: write
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -38,8 +39,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install pytest and the signing tool
-        run: python -m pip install -r tools/signing/requirements.txt pytest==9.1.1
+      # Hash-pinned: pip refuses any file whose hash the requirements file does not list.
+      - name: Install pytest
+        run: python -m pip install --require-hashes -r tools/requirements-test.txt
 
       - name: Test the list checker
         run: python -m pytest -q tools/relays/test_check.py
@@ -47,39 +49,64 @@ jobs:
       # Against the list phones have now: a new one must be issued later, and
       # every relay on it must publish the key it is listed with.
       - name: Check the list
+        id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p published dist
+          mkdir -p published
           if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern relays.json --dir published 2>/dev/null; then
             if cmp -s relays/relays.json published/relays.json; then
               echo "relays.json is the list already published"
               if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-                echo "UNCHANGED=1" >> "$GITHUB_ENV"
+                echo "changed=false" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
               # A pull request that leaves the list as published (one that
               # changes only relays/README.md, say) proposes no new list, so
               # there is no later issue date to require: check it as it stands.
               python tools/relays/check.py relays/relays.json --live
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
             else
               python tools/relays/check.py relays/relays.json --published published/relays.json --live
             fi
           else
             python tools/relays/check.py relays/relays.json --live
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+  # Signs and publishes a changed list from main: the only job that reads
+  # ASSET_SIGNING_KEY (environment `assets`), and it never runs for a pull request.
+  publish:
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: assets
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the signing tool (hash-pinned)
+        run: python -m pip install --require-hashes -r tools/signing/requirements.txt
 
       - name: Sign
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.UNCHANGED != '1'
         env:
           ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
         run: |
+          mkdir -p dist
           cp relays/relays.json dist/relays.json
           python tools/signing/sign.py dist/relays.json
           python tools/signing/sign.py --verify android/asset-signing.pub dist/relays.json
 
       - name: Publish
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.UNCHANGED != '1'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: relays

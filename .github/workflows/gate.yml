@@ -1,0 +1,50 @@
+name: Gate
+
+# The check the main ruleset requires from CI (.github/rulesets/main.json, docs/PROCESS.md).
+# Most workflows here run only when a pull request touches their files (the emulator suite
+# takes hours), and GitHub reports nothing at all for a workflow that did not run, so a
+# ruleset that required their jobs by name would hold every other pull request forever.
+# This job runs on every pull request instead: it waits until every other workflow that the
+# pull request started on its head commit has finished, and passes only if each of them
+# succeeded (.github/scripts/wait_for_runs.py). A workflow added later is covered the day it
+# is added, without a change to the ruleset.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  actions: read
+
+# A newer push to the pull request makes this run's commit moot.
+concurrency:
+  group: gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # Longer than the slowest workflow: the emulator suite builds for up to an hour and then
+    # runs for up to two on each emulator, after any wait for runners. A gate that runs out of
+    # time fails; run it again once the others have finished.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      # Its own tests first: a pull request that changes the gate is judged by the gate it
+      # proposes, so that gate has to pass them.
+      - name: Test the gate
+        run: |
+          python -m pip install --require-hashes -r tools/requirements-test.txt
+          python -m pytest -q .github/scripts
+
+      - name: Wait for the other workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python .github/scripts/wait_for_runs.py pull-request --sha "$HEAD_SHA" --wait-minutes 320

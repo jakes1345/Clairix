@@ -5,8 +5,13 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     // JVM screenshot tests of the Compose screens (no device): layoutlib renders
-    // them; recordPaparazziFullSuiteDebug writes the PNGs to src/test/snapshots.
+    // them; recordPaparazziFullSuiteDebug writes the PNGs to src/test/snapshots
+    // and verifyPaparazziFullSuiteDebug compares against them (android.yml).
     id("app.cash.paparazzi")
+    // Kotlin static analysis; see the detekt block below.
+    id("io.gitlab.arturbosch.detekt")
+    // The bill of materials attached to each release; see cyclonedxDirectBom below.
+    id("org.cyclonedx.bom")
 }
 
 // ── COMMS end-to-end encryption: the Rust crate in ../comms-crypto ─────────
@@ -313,6 +318,18 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // Android Lint, run by .github/workflows/android.yml (lintFullSuiteDebug):
+    // every warning is an error and stops the build. What lint found when this
+    // was switched on is listed in lint-baseline.xml and tolerated until it is
+    // fixed; anything new fails. updateLintBaselineFullSuiteDebug rewrites the
+    // list: run it to drop what was fixed, not to hide something new.
+    lint {
+        warningsAsErrors = true
+        abortOnError = true
+        checkDependencies = true
+        baseline = file("lint-baseline.xml")
+    }
+
     sourceSets {
         getByName("main") {
             jniLibs.srcDir(rustJniLibs)
@@ -398,6 +415,50 @@ dependencies {
     testImplementation("org.json:json:20240303")
     // The desktop JNA jar carries the native dispatch library for the build machine.
     testImplementation("net.java.dev.jna:jna:5.19.1")
+}
+
+// detekt, run by .github/workflows/android.yml with its default rules and
+// android/config/detekt.yml over every source set (main, the flavours, the JVM
+// and device tests). What it found when
+// it was switched on is listed in detekt-baseline.xml (written by detektBaseline)
+// and tolerated until it is fixed; anything new fails.
+detekt {
+    buildUponDefaultConfig = true
+    // What differs from detekt's defaults, and why: Compose functions, layout
+    // numbers and line length are house style, not defects.
+    config.setFrom(rootProject.file("config/detekt.yml"))
+    parallel = true
+    source.setFrom("src")
+    baseline = file("detekt-baseline.xml")
+}
+
+// detekt 1.23 is built with Kotlin 2.0 and refuses to run with another Kotlin
+// compiler, which the Kotlin plugin here would hand it. Its own classpath alone
+// gets the version it was built with (detekt's documented remedy); the app is
+// compiled with the Kotlin plugin's version as before.
+configurations.matching { it.name == "detekt" }.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.kotlin") {
+            useVersion(io.gitlab.arturbosch.detekt.getSupportedKotlinVersion())
+        }
+    }
+}
+
+// A CycloneDX bill of materials of the libraries in the release builds, which
+// .github/workflows/release.yml attaches to every release: each library in the
+// runtime classpath, with its version. The three release variants have the
+// same dependencies, so the full edition's classpath stands for all of them.
+// The Rust crates inside the crypto library get a bill of their own from
+// cargo-cyclonedx in the same workflow.
+tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
+    includeConfigs.set(listOf("fullSuiteReleaseRuntimeClasspath"))
+    projectType.set(org.cyclonedx.model.Component.Type.APPLICATION)
+    componentGroup.set("app.clairix")
+    componentName.set("clairix")
+    componentVersion.set(android.defaultConfig.versionName)
+    includeBomSerialNumber.set(false)
+    jsonOutput.set(layout.buildDirectory.file("reports/cyclonedx/clairix-android.cdx.json"))
+    xmlOutput.set(layout.buildDirectory.file("reports/cyclonedx/clairix-android.cdx.xml"))
 }
 
 // The comms-only build is never published on Google Play, so the Play edition

@@ -1,0 +1,91 @@
+# Dependency updates, so that versions pinned to a commit, a lockfile or a hash do not
+# go stale unnoticed. Every Monday, each ecosystem's minor and patch updates come as one
+# pull request per directory; a major version comes on its own, since it is the kind that
+# needs reading. Each update passes the same checks as any other pull request and is read
+# before it is merged (docs/PROCESS.md). Security updates, when Dependabot alerts are on,
+# come as soon as an advisory is published, one pull request each.
+version: 2
+updates:
+  # The actions every workflow uses, each pinned to a commit with its version in a
+  # comment; Dependabot moves both.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:23"
+      timezone: Etc/UTC
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
+  # The crypto crate in the app, and the relay's half of the blind tokens. A
+  # comms-worker/voprf update also changes src/voprf.wasm, which the Relay workflow
+  # requires to be rebuilt and committed (comms-worker/scripts/build-voprf.sh).
+  - package-ecosystem: cargo
+    directories:
+      - /comms-crypto
+      - /comms-worker/voprf
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:23"
+      timezone: Etc/UTC
+    groups:
+      cargo:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  # The relay and the website.
+  - package-ecosystem: npm
+    directories:
+      - /comms-worker
+      - /website
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:23"
+      timezone: Etc/UTC
+    groups:
+      npm:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  # The app's libraries and Gradle plugins (android/build.gradle.kts, app/build.gradle.kts).
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:23"
+      timezone: Etc/UTC
+    groups:
+      gradle:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  # The Python tools, all installed with --require-hashes. The graph builder's, the
+  # signing tool's and the tests' requirements are compiled from their .in files with a
+  # hash for every file (pip-compile --generate-hashes), and Dependabot compiles them
+  # again; tools/ioc/requirements.txt lists its hashes by hand, and Dependabot rewrites them.
+  - package-ecosystem: pip
+    directories:
+      - /tools
+      - /tools/graph-builder
+      - /tools/ioc
+      - /tools/signing
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:23"
+      timezone: Etc/UTC
+    groups:
+      pip:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"

@@ -1,0 +1,35 @@
+# gitleaks, run on every pull request and every push to main by
+# .github/workflows/supply-chain.yml (secret-scan): its built-in rules, and the
+# few values in this repository that look like secrets and are not.
+[extend]
+useDefault = true
+
+# Secrets that exist only in tests and in the throwaway relays CI starts on its
+# own runner (comms-worker/test, .github/workflows/emulator.yml,
+# docs/audit/BUILD-AND-TEST.md). A new test value that follows the pattern
+# passes; one that does not is flagged, so a real secret pasted into a test is
+# still caught.
+[[allowlists]]
+description = "Test secrets, all ending in 0123456789"
+regexTarget = "secret"
+regexes = [
+  '''^[a-z0-9]+(-[a-z0-9]+)*-secret-0123456789$''',
+  '''^0123456789abcdef0123$''',
+]
+
+# The relay list names each relay's published Ed25519 public key.
+[[allowlists]]
+description = "Relay public keys in the relay list"
+condition = "AND"
+paths = ['''^relays/relays\.json$''']
+regexTarget = "match"
+regexes = ['''key":\s*"[A-Za-z0-9+/]{43}="$''']
+
+# Prose about the cryptography reads like an assignment to the generic rule
+# ("the key, ChaCha20-Poly1305"): the names of algorithms are not secrets.
+[[allowlists]]
+description = "Algorithm names after the word key"
+regexTarget = "secret"
+regexes = [
+  '''(?i)^(x?chacha20-poly1305|aes-(128|256)-gcm|(x|ed|curve)25519|ristretto255(-sha512)?|hkdf-sha(256|512)|hmac-sha(256|512)|sha-?(256|512))$''',
+]

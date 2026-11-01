@@ -248,11 +248,35 @@ twice on two machines in CI, which fails unless the two builds agree.
     unchecksummed Geofabrik data and unpinned pip. *Spot-checked.* **Done:**
     every action pinned to a commit (the Rust toolchain action names its
     toolchain explicitly); the Geofabrik extract is checked against the MD5
-    Geofabrik publishes; the builder's and the signing tool's Python
-    dependencies are pinned; `pip install --upgrade pip` is gone; a manual
+    Geofabrik publishes; `pip install --upgrade pip` is gone; a manual
     release run must start from `main`, a `release/v*` branch or a `v*` tag;
     `maps.yml` now triggers on `main` (it named a `master` branch that does
-    not exist). Still open: moving release signing off the CI runner.
+    not exist). The first pass pinned the builder's and the signing tool's
+    Python dependencies by version only, in the same job that held
+    `ASSET_SIGNING_KEY`, so a poisoned PyPI release would have been signed
+    with the project key (gap audit, item 45). **Done since:** every
+    requirements file is compiled with a hash for every file
+    (`pip-compile --generate-hashes`) and installed with `--require-hashes`
+    wherever it is installed (maps, work zones, relay list, stalkerware list,
+    release); Maps and Work zones build in a job without the key and sign in a
+    job of their own that installs only the hash-pinned signing tool and
+    receives only the files to sign; each map release records the extract's
+    URL, MD5 and dates; every job that reads `ASSET_SIGNING_KEY` or the APK
+    keystore names an environment (`release` or `assets`, docs/PROCESS.md).
+    **Operator action:** create the two environments with their branch rules
+    and move the secrets into them; until then they are repository secrets
+    that any workflow run on any branch can read. Still open: moving release
+    signing off the CI runner. The Supply chain workflow's first audit of the
+    lockfiles found three RustSec advisories and four high npm ones. `ctutils`
+    (RUSTSEC-2026-0385) is updated to 0.4.7. `rsa` (RUSTSEC-2023-0071, the
+    Marvin attack) and `crypto-bigint` 0.5 (RUSTSEC-2026-0387) have no fixed
+    version this tree can take, and neither applies: Arti uses `rsa` only to
+    check signatures, and no secret reaches `crypto-bigint`, since the send
+    tokens use Ristretto255 and nothing in Clairix uses a NIST curve.
+    `.cargo/audit.toml` lists both with the reasons and when to look again.
+    The relay's tooling (wrangler's local runtime, miniflare) pinned `undici`
+    7.29.0 and `sharp` 0.35.4; `overrides` in `comms-worker/package.json` take
+    the fixed 7.30.1 and 0.35.5 until a wrangler update carries them.
 
 ## Crypto crate and relay logic
 

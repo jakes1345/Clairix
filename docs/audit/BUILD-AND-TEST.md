@@ -45,6 +45,22 @@ cd android
 
 The build compiles `comms-crypto` for every Android ABI through cargo-ndk.
 
+```sh
+./gradlew testFullSuiteDebugUnitTest --tests 'app.clairix.screenshots.*' verifyPaparazziFullSuiteDebug
+./gradlew lintFullSuiteDebug detekt                   # every warning an error, past the baselines
+```
+
+A plain test run draws the screenshot tests' screens and compares nothing;
+`verifyPaparazziFullSuiteDebug` compares them with the PNGs in
+`app/src/test/snapshots/images/` and leaves any difference in
+`app/build/paparazzi/failures/`. `recordPaparazziFullSuiteDebug` writes new
+PNGs; CI records them on its own runner when the Android APK workflow is run
+by hand with "record_screenshots", since rendering depends on the JDK and its
+fonts. Lint and detekt fail on anything not in `app/lint-baseline.xml` and
+`app/detekt-baseline.xml` (`updateLintBaselineFullSuiteDebug`,
+`detektBaseline`). The same steps run in `.github/workflows/android.yml`
+([`../PROCESS.md`](../PROCESS.md)).
+
 - **Editions:** `fullSuite` (everything), `fullComms` (messaging only) and
   `playSuite` (the Play Store edition).
 - **Variants:** see [`../../android/README.md`](../../android/README.md).

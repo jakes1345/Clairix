@@ -5,7 +5,9 @@ Writes android/asset-signing.pub (raw public key, base64 without padding, as
 the app is built with) and android/asset-signing.pem (the same key as PEM for
 openssl), and hands over the secret seed for the ASSET_SIGNING_KEY secret:
 with --gh-secret OWNER/REPO it goes straight into that repository's secret
-through the GitHub CLI and is never shown; without it, it is printed once.
+through the GitHub CLI and is never shown, or, with --gh-env NAME as well, into
+the secret of each environment named (the `release` and `assets` environments
+docs/PROCESS.md describes); without --gh-secret it is printed once.
 Refuses to overwrite an existing public key unless --force is given.
 
 Run this yourself, in your own terminal. The seed must not pass through a
@@ -38,7 +40,15 @@ def main(argv=None) -> int:
         "--gh-secret", metavar="OWNER/REPO",
         help="store the seed as that repository's ASSET_SIGNING_KEY secret with `gh secret set`, never printing it",
     )
+    ap.add_argument(
+        "--gh-env", metavar="ENVIRONMENT", action="append", default=[],
+        help="with --gh-secret: store the seed in this deployment environment's ASSET_SIGNING_KEY secret instead "
+             "of the repository's; give it once for each environment (release, assets)",
+    )
     args = ap.parse_args(argv)
+    if args.gh_env and not args.gh_secret:
+        print("--gh-env needs --gh-secret OWNER/REPO", file=sys.stderr)
+        return 1
     if os.path.exists(PUB_PATH) and not args.force:
         print(f"{PUB_PATH} exists; pass --force to rotate the key", file=sys.stderr)
         return 1
@@ -54,20 +64,24 @@ def main(argv=None) -> int:
     if args.gh_secret:
         # The seed goes to gh on its standard input: not on the command line,
         # where every process on the machine could read it, and not on screen.
-        done = subprocess.run(
-            ["gh", "secret", "set", "ASSET_SIGNING_KEY", "--repo", args.gh_secret],
-            input=seed_b64 + "\n", text=True,
-        )
-        if done.returncode != 0:
-            print("gh secret set failed; nothing was written, run again", file=sys.stderr)
-            return 1
+        for where in [["--env", env] for env in args.gh_env] or [[]]:
+            done = subprocess.run(
+                ["gh", "secret", "set", "ASSET_SIGNING_KEY", "--repo", args.gh_secret, *where],
+                input=seed_b64 + "\n", text=True,
+            )
+            if done.returncode != 0:
+                # A secret set before this one now holds a seed whose public key was
+                # never written, so every secret named is set anew on the next run.
+                print("gh secret set failed; the public key files were not written: run again", file=sys.stderr)
+                return 1
     with open(PUB_PATH, "w", encoding="ascii") as f:
         f.write(b64_nopad(raw) + "\n")
     with open(PEM_PATH, "wb") as f:
         f.write(pem)
     print(f"Public key written to {PUB_PATH} and {PEM_PATH}; commit both.")
     if args.gh_secret:
-        print(f"Secret ASSET_SIGNING_KEY set on {args.gh_secret}. The seed exists nowhere else: a lost secret means a new key (--force) and a new release.")
+        where = f"in the {', '.join(args.gh_env)} environment(s) of {args.gh_secret}" if args.gh_env else f"on {args.gh_secret}"
+        print(f"Secret ASSET_SIGNING_KEY set {where}. The seed exists nowhere else: a lost secret means a new key (--force) and a new release.")
     else:
         print()
         print("Repository secret ASSET_SIGNING_KEY (shown once; store it safely):")
