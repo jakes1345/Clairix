@@ -38,6 +38,16 @@ const requirements: { icon: IconName; title: string; body: string }[] = [
   { icon: 'chip', title: 'Google Play services, if you have it.', body: 'Where it is installed, the tracker scanner takes its position fixes from Google’s fused location provider, and navigation and SOS position also use it, unless Satellite-only positioning is on. A phone without it, such as one running GrapheneOS or LineageOS without Google, uses Android’s own location service for the same fixes.' },
   { icon: 'nfc', title: 'An NFC reader', body: 'for NFC features.' },
   {
+    icon: 'navigate',
+    title: 'Memory, for offline navigation.',
+    body: 'Routing loads a whole state’s road map into the app’s memory, and how much memory Android lets one app use depends on the phone. A mid-sized state such as Ohio needs about 230 MB of it free; the largest need up to about 470 MB (Texas), more than some phones allow an app. If a map is too large for the phone, the app says so when you open it. Maps cover the United States only for now: the 50 states, DC and Puerto Rico.',
+  },
+  {
+    icon: 'car',
+    title: 'For Drive, optionally:',
+    body: 'a Bluetooth OBD-II adapter for engine data, and an RTL-SDR USB stick for the scanner and aircraft. The stick runs on the phone’s battery; below 15 % with no charger, Clairix stops it until the phone charges. Receiving and recording radio traffic is restricted in some places and in some vehicles; recording is off unless you turn it on.',
+  },
+  {
     icon: 'comms',
     title: 'An invite, for messaging.',
     body: 'Messaging, calls, SOS and the duress phrase need a Clairix number: an invite from someone already on Clairix, or a relay you run yourself. Everything else works without one.',

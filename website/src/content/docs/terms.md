@@ -6,7 +6,7 @@ Contact: support@clairix.app
 
 ## 1. What Clairix is
 
-Clairix is a personal security app. It helps you detect hidden cameras, Bluetooth trackers, spyware, suspicious Wi-Fi networks and suspicious cellular activity, and it provides end-to-end encrypted messaging and calls between Clairix users. It also includes emergency tools, offline navigation and NFC reading.
+Clairix is a personal security app. It helps you detect hidden cameras, Bluetooth trackers, spyware, suspicious Wi-Fi networks and suspicious cellular activity, and it provides end-to-end encrypted messaging and calls between Clairix users. It also includes emergency tools, offline navigation (United States only for now: the 50 states, DC and Puerto Rico), a radio receiver for an SDR stick and NFC reading.
 
 Clairix is a detection aid and a private communication channel. It is not an emergency service, a security guard or a guarantee of safety. If you believe you are in danger, contact local emergency services.
 
@@ -35,6 +35,7 @@ You must not use the Service to:
 - Access, probe or interfere with networks, devices, cameras or cards that you do not own or have permission to test. The network sweep is for the Wi-Fi network you are lawfully connected to and the devices on it that you are entitled to inspect.
 - Emulate, clone or present a card or credential you do not own, or use one in a way its issuer forbids (Clairix Full).
 - Break the law in your jurisdiction, including laws about electronic surveillance, radio reception, interception and computer misuse. Some countries restrict decoding certain radio signals or scanning networks. You are responsible for knowing the rules where you are.
+- Receive or record radio traffic where that is not lawful. Receiving, and even more recording, radio traffic that is not broadcast to the public is restricted in some countries and states, and some places restrict a scanner in a vehicle. The app's scanner records only when you turn recording on, and the recordings stay on your phone; whether you may make them, keep them or share them is yours to know.
 - Attack, overload, reverse-proxy or scrape the relay, impersonate another Clairix number, or attempt to defeat rate limits or authentication.
 - Distribute malware or unlawful content through Comms.
 - Resell, sublicense or offer the relay as a service to others without our written permission.

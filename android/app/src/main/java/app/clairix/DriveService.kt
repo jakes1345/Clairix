@@ -15,12 +15,15 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.clairix.security.NotificationPresentation
+import app.clairix.security.NotificationText
 import app.clairix.security.PlatformAlerts
 
 /**
  * Keeps the process in the foreground while drive mode is on, so the SDR stream, scanner
  * audio and OBD-II link keep running with the screen off. The work itself lives in
- * [DriveViewModel]; this service only holds the foreground state and the notification.
+ * [DriveViewModel]; this service only holds the foreground state and the notification,
+ * whose text the view model keeps current ([show]): the stick unplugged, the radio
+ * stopped on an error, everything paused on a low battery.
  */
 class DriveService : Service() {
 
@@ -29,7 +32,8 @@ class DriveService : Service() {
     override fun onCreate() {
         super.onCreate()
         // startForeground must come first: startForegroundService gives us only a few seconds.
-        if (enterForeground()) active = true else stopSelf()
+        active = enterForeground()
+        if (!active) stopSelf()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -60,7 +64,7 @@ class DriveService : Service() {
             type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
         }
         return try {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(this, text), type)
             true
         } catch (e: Exception) {
             // SecurityException (missing prerequisite permission) or
@@ -71,27 +75,6 @@ class DriveService : Service() {
 
     private fun granted(permission: String): Boolean =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-
-    private fun buildNotification(): Notification {
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_clairix)
-            .setContentTitle("Drive mode active")
-            .setContentText("SDR, scanner and OBD-II running")
-            .setContentIntent(open)
-            .setOngoing(true)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            // On the lock screen: the app's name and that it runs, nothing of what.
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_ID, NotificationPresentation.RUNNING))
-            .build()
-    }
 
     companion object {
         private const val CHANNEL_ID = "drive_mode"
@@ -105,6 +88,45 @@ class DriveService : Service() {
         @Volatile
         var active: Boolean = false
             private set
+        /** What the notification says; [DriveLink.ongoing] decides it. */
+        @Volatile private var text: NotificationText =
+            DriveLink.ongoing(DriveLink.Radio.ON, SdrState.Opening, obdConnected = false)
+
+        /**
+         * Says [shown] in the notification from now on: at once while the service runs, and
+         * when it starts otherwise. Only ever the service's own notification is replaced.
+         */
+        fun show(context: Context, shown: NotificationText) {
+            if (shown == text) return
+            text = shown
+            if (!active) return
+            val app = context.applicationContext
+            runCatching {
+                app.getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, buildNotification(app, shown))
+            }
+        }
+
+        private fun buildNotification(context: Context, shown: NotificationText): Notification {
+            val open = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            return NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_clairix)
+                .setContentTitle(shown.title)
+                .setContentText(shown.text)
+                .setContentIntent(open)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                // On the lock screen: the app's name and that it runs, nothing of what.
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(PlatformAlerts.publicVersion(context, CHANNEL_ID, NotificationPresentation.RUNNING))
+                .build()
+        }
 
         fun start(context: Context) {
             runCatching {

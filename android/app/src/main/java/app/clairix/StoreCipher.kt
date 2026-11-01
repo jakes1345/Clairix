@@ -13,11 +13,34 @@ import javax.crypto.spec.GCMParameterSpec
  * load. The scanner's stores are where the owner has been: the location log,
  * the timeline of detections with their positions, the cell-tower baseline,
  * the vehicle trips. In the clear, a copy of the app's files is a map of the
- * owner's life.
+ * owner's life. The radio scanner's recordings ([ScannerRecordings]) are
+ * sealed under the same key, a piece at a time ([sealBytes]).
  */
 interface StoreCipher {
     fun seal(text: String): ByteArray
     fun open(blob: ByteArray): String
+
+    /**
+     * Seals binary [plain] bound to [aad]: [openBytes] refuses it with any other [aad].
+     * For records written in pieces (the scanner's recordings), so a piece cannot be
+     * moved to another place or file. This default goes through [seal], with [aad]
+     * inside the sealed text; [KeystoreStoreCipher] seals the bytes directly, with [aad]
+     * as AES-GCM's associated data.
+     */
+    fun sealBytes(plain: ByteArray, aad: ByteArray): ByteArray {
+        val b64 = java.util.Base64.getEncoder()
+        return seal(b64.encodeToString(aad) + "." + b64.encodeToString(plain))
+    }
+
+    /** Opens what [sealBytes] sealed with the same [aad]; throws on anything else. */
+    fun openBytes(blob: ByteArray, aad: ByteArray): ByteArray {
+        val text = open(blob)
+        val dot = text.indexOf('.')
+        require(dot >= 0) { "not a sealed record" }
+        val b64 = java.util.Base64.getDecoder()
+        require(b64.decode(text.substring(0, dot)).contentEquals(aad)) { "sealed for another place" }
+        return b64.decode(text.substring(dot + 1))
+    }
 }
 
 /**
@@ -53,6 +76,21 @@ object KeystoreStoreCipher : StoreCipher {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, blob, 0, IV_LEN))
         return String(cipher.doFinal(blob, IV_LEN, blob.size - IV_LEN), Charsets.UTF_8)
+    }
+
+    override fun sealBytes(plain: ByteArray, aad: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        cipher.updateAAD(aad)
+        return cipher.iv + cipher.doFinal(plain)
+    }
+
+    override fun openBytes(blob: ByteArray, aad: ByteArray): ByteArray {
+        require(blob.size > IV_LEN) { "ciphertext truncated" }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, blob, 0, IV_LEN))
+        cipher.updateAAD(aad)
+        return cipher.doFinal(blob, IV_LEN, blob.size - IV_LEN)
     }
 
     @Synchronized

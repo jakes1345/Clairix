@@ -3,9 +3,13 @@ package app.clairix.nav
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.location.Location
+import android.net.ConnectivityManager
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -59,6 +63,23 @@ sealed interface GraphState {
 /** Where a search's results came from. */
 enum class SearchSource { NONE, OFFLINE, ONLINE }
 
+/** What a map download would cost, asked before it starts; see [NavViewModel.prepareDownload]. */
+sealed interface DownloadPrompt {
+    val region: MapRegion
+
+    /** The published map is being weighed. */
+    data class Checking(override val region: MapRegion) : DownloadPrompt
+
+    data class Ready(
+        override val region: MapRegion,
+        /** Null when the map's size and date could not be read (no connection, or GitHub did not answer). */
+        val published: PublishedGraph?,
+        val plan: MapDownloads.Plan,
+        /** When the map of this region already on the phone was built; null when there is none. */
+        val installedBuiltAtSec: Long?,
+    ) : DownloadPrompt
+}
+
 data class SearchState(
     val query: String = "",
     val loading: Boolean = false,
@@ -97,6 +118,11 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_MUTED = "muted"
         const val KEY_AVOID_CAMERAS = "avoid_cameras"
         const val KEY_WARN_CAMERAS = "warn_cameras"
+        /** Per region: when its published map was last compared with the one on the phone, and what was found. */
+        const val KEY_UPDATE_CHECKED = "update_checked_"
+        const val KEY_UPDATE_SEEN = "update_seen_"
+        /** How long the size and date of a published map may take to read before the download is offered without them. */
+        const val PROBE_TIMEOUT_MS = 15_000L
         const val DEFAULT_FUEL_PRICE = 3.50f
         const val RECOLOR_INTERVAL_MS = 30_000L
         const val IDLE_TRAFFIC_INTERVAL_MS = 60_000L
@@ -195,6 +221,24 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         .flatMapLatest { it?.workZones?.status ?: flowOf(WorkZoneFeed.Status.Unknown) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, WorkZoneFeed.Status.Unknown)
 
+    /** Where spoken directions are made; the route options say so when it may be off the phone. */
+    val voice: StateFlow<VoiceSource> = session
+        .flatMapLatest { it?.navigator?.voice ?: flowOf(VoiceSource.UNKNOWN) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, VoiceSource.UNKNOWN)
+
+    /** A drive under way with the battery low: its timers run every 5 minutes ([Navigator.lowBattery]). */
+    val lowBattery: StateFlow<Boolean> = session
+        .flatMapLatest { it?.navigator?.lowBattery ?: flowOf(false) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _updates = MutableStateFlow<Map<String, PublishedGraph>>(emptyMap())
+    /** Regions on the phone with a newer published map, and what that map weighs; see [MapDownloads]. */
+    val updates: StateFlow<Map<String, PublishedGraph>> = _updates.asStateFlow()
+
+    private val _downloadPrompt = MutableStateFlow<DownloadPrompt?>(null)
+    /** The download being weighed or offered, before anything is fetched. */
+    val downloadPrompt: StateFlow<DownloadPrompt?> = _downloadPrompt.asStateFlow()
+
     private val _fuelPrice = MutableStateFlow(prefs.getFloat(KEY_FUEL_PRICE, DEFAULT_FUEL_PRICE).toDouble())
     /** US dollars per gallon, for the fuel cost shown on each route. */
     val fuelPricePerGal: StateFlow<Double> = _fuelPrice.asStateFlow()
@@ -231,17 +275,27 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var routeJob: Job? = null
     private var reverseJob: Job? = null
+    private var promptJob: Job? = null
+
+    /** Gives back routing memory when Android asks; see [NavMemory]. */
+    private val memoryCallbacks = object : ComponentCallbacks2 {
+        override fun onTrimMemory(level: Int) = trimMemory(level)
+        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+        override fun onLowMemory() = trimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
+    }
 
     /** How far from a dropped pin the road it is named after may be. */
     private val PIN_NAME_RADIUS_M = 300.0
 
     init {
+        app.registerComponentCallbacks(memoryCallbacks)
         viewModelScope.launch {
             refreshInstalled()
             val saved = prefs.getString(KEY_REGION, null)
             val pick = _installed.value.firstOrNull { it.slug == saved } ?: _installed.value.firstOrNull()
             // A region chosen or downloaded meanwhile wins over the remembered one.
             if (pick != null && _graph.value == GraphState.None) load(pick.slug)
+            checkForUpdates()
         }
         // While not navigating, keep incidents on the map current while the Drive screen is
         // in front; in the background the loop waits for it to return instead of waking
@@ -260,7 +314,7 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                     if (plan.providers) s.traffic.refreshProviders(PROVIDER_PREVIEW_INTERVAL_MS)
                     if (plan.workZones) s.workZones.refreshIfStale()
                 }
-                delay(IDLE_TRAFFIC_INTERVAL_MS)
+                delay(DrivePower.navTimerMs(IDLE_TRAFFIC_INTERVAL_MS, lowBattery.value))
             }
         }
         // Work zones and provider closures feed both the map and the router's closed and slowed edges.
@@ -311,6 +365,85 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
     /** Lists the graphs on disk (reads each file's header) off the main thread. */
     private suspend fun refreshInstalled() {
         _installed.value = withContext(Dispatchers.IO) { store.installed() }
+        showKnownUpdates()
+    }
+
+    /**
+     * Weighs [region]'s published map and looks at the phone's free space and connection,
+     * before anything is downloaded: [downloadPrompt] shows it, [confirmDownload] starts
+     * the download. Without a connection the size is unknown and the prompt says so.
+     */
+    fun prepareDownload(region: MapRegion) {
+        if (downloadJob?.isActive == true) return
+        promptJob?.cancel()
+        _downloadPrompt.value = DownloadPrompt.Checking(region)
+        promptJob = viewModelScope.launch {
+            val published = withTimeoutOrNull(PROBE_TIMEOUT_MS) { publishedOrNull(region.slug) }
+            val installed = _installed.value.firstOrNull { it.slug == region.slug }
+            val free = withContext(Dispatchers.IO) { runCatching { ctx.filesDir.usableSpace }.getOrDefault(0L) }
+            val plan = MapDownloads.plan(published?.compressedBytes, published?.unpackedBytes, free, metered(), installed != null)
+            if (installed != null && published != null) rememberPublished(published, System.currentTimeMillis())
+            _downloadPrompt.value = DownloadPrompt.Ready(region, published, plan, installed?.builtAtEpochSec)
+        }
+    }
+
+    /** Starts the download [downloadPrompt] offered, if there is room for it. */
+    fun confirmDownload() {
+        val p = _downloadPrompt.value as? DownloadPrompt.Ready ?: return
+        if (!p.plan.enoughSpace) return
+        _downloadPrompt.value = null
+        downloadRegion(p.region)
+    }
+
+    fun dismissDownload() {
+        promptJob?.cancel()
+        _downloadPrompt.value = null
+    }
+
+    /** Whether the connection is one the owner may pay for by the megabyte (mobile data, a hotspot); unknown counts as metered. */
+    private fun metered(): Boolean =
+        runCatching { ctx.getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered }.getOrNull() ?: true
+
+    /**
+     * Compares each map on the phone with the published one, at most once a week per
+     * region ([MapDownloads.updateCheckDue]): two small reads from GitHub, the first few
+     * kilobytes and the last four bytes of the file. Offline, it tries again next time.
+     */
+    private suspend fun checkForUpdates() {
+        val now = System.currentTimeMillis()
+        for (r in _installed.value) {
+            if (!MapDownloads.updateCheckDue(prefs.getLong(KEY_UPDATE_CHECKED + r.slug, 0L), now)) continue
+            val published = publishedOrNull(r.slug) ?: continue
+            rememberPublished(published, now)
+        }
+        showKnownUpdates()
+    }
+
+    /** [GraphStore.published], or null when the map could not be weighed (offline, GitHub not answering). */
+    private suspend fun publishedOrNull(slug: String): PublishedGraph? = try {
+        store.published(slug)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun rememberPublished(p: PublishedGraph, now: Long) {
+        prefs.edit()
+            .putLong(KEY_UPDATE_CHECKED + p.slug, now)
+            .putString(KEY_UPDATE_SEEN + p.slug, "${p.builtAtEpochSec ?: ""}|${p.compressedBytes}|${p.unpackedBytes ?: ""}")
+            .apply()
+        showKnownUpdates()
+    }
+
+    /** The regions on the phone whose last-seen published map is newer than theirs. */
+    private fun showKnownUpdates() {
+        _updates.value = _installed.value.mapNotNull { r ->
+            val parts = prefs.getString(KEY_UPDATE_SEEN + r.slug, null)?.split('|') ?: return@mapNotNull null
+            if (parts.size != 3) return@mapNotNull null
+            val p = PublishedGraph(r.slug, parts[1].toLongOrNull() ?: return@mapNotNull null, parts[2].toLongOrNull(), parts[0].toLongOrNull())
+            if (MapDownloads.isNewer(r.builtAtEpochSec, p.builtAtEpochSec) == true) r.slug to p else null
+        }.toMap()
     }
 
     private fun regionName(slug: String): String = regions.firstOrNull { it.slug == slug }?.name ?: slug
@@ -633,6 +766,8 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
             _options.value = RouteOptions(dest, loading = false, error = "No road map is loaded")
             return
         }
+        // So the route options can say where spoken directions will be made before GO.
+        s.navigator.prepareVoice()
         val g = s.graph
         if (dest.lat < g.minLat - OUTSIDE_MARGIN_DEG || dest.lat > g.maxLat + OUTSIDE_MARGIN_DEG ||
             dest.lon < g.minLon - OUTSIDE_MARGIN_DEG || dest.lon > g.maxLon + OUTSIDE_MARGIN_DEG
@@ -887,10 +1022,30 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         return runs
     }
 
+    // ── Memory ──────────────────────────────────────────────────────────
+
+    /**
+     * Android says memory is short. Without a drive under way the routing arrays, the
+     * spatial index and the road-name index go; each is built again on its next use
+     * ([NavMemory]). The map drops its own decoded tiles ([NavScreen]).
+     */
+    private fun trimMemory(level: Int) {
+        if (!NavMemory.plan(level, navigating = navState.value !is NavState.Idle).routing) return
+        val s = session.value ?: return
+        local = null
+        // The router finishes a search under way before it lets go; never on the main thread.
+        viewModelScope.launch(Dispatchers.Default) {
+            s.router.releaseWorkArrays()
+            s.graph.releaseIndex()
+        }
+    }
+
     override fun onCleared() {
+        getApplication<Application>().unregisterComponentCallbacks(memoryCallbacks)
         setLocationActive(false)
         loadJob?.cancel()
         downloadJob?.cancel()
+        promptJob?.cancel()
         closeSession()
         super.onCleared()
     }

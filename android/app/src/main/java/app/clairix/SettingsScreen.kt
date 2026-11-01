@@ -863,7 +863,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
                     SChoiceRow(
                         title = "Keep history for",
-                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. The cell-tower baseline is what normal is measured against, so it keeps which towers are usual here, not when you were near them, and forgets a tower not seen for three times this long. An exported report is deleted after a day.",
+                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger, the radio scanner's recordings and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. The cell-tower baseline is what normal is measured against, so it keeps which towers are usual here, not when you were near them, and forgets a tower not seen for three times this long. An exported report is deleted after a day.",
                         choices = HistoryRetention.CHOICES,
                         selected = retentionDays,
                         label = ::retentionLabel,

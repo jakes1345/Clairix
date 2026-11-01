@@ -97,7 +97,12 @@ class SdrUsbDriver(private val context: Context) {
         }
     }
 
-    fun close() {
+    /**
+     * Releases the dongle. An error already reported (the stream stalled, the stick was
+     * pulled out) stays the state, so the screen keeps saying what went wrong instead of
+     * a bare "closed"; [clearError] is for the owner turning drive mode off.
+     */
+    fun close(clearError: Boolean = false) {
         synchronized(ioLock) {
             if (connection != null) {
                 try {
@@ -111,8 +116,14 @@ class SdrUsbDriver(private val context: Context) {
             }
             teardown()
         }
-        _state.value = SdrState.Closed
+        if (clearError || _state.value !is SdrState.Error) _state.value = SdrState.Closed
     }
+
+    /** A dongle this driver can open that is plugged in now, if any. */
+    fun attachedDongle(): UsbDevice? = findDevice()
+
+    /** Whether Clairix may already open [device], without asking. */
+    fun hasPermission(device: UsbDevice): Boolean = usbManager.hasPermission(device)
 
     /**
      * Retunes an open dongle. Returns false when [hz] is out of range or the PLL did not
@@ -163,9 +174,7 @@ class SdrUsbDriver(private val context: Context) {
     }.buffer(SAMPLE_QUEUE_DEPTH, BufferOverflow.DROP_OLDEST).flowOn(Dispatchers.IO)
 
     private fun findDevice(): UsbDevice? =
-        usbManager.deviceList.values.firstOrNull { dev ->
-            KNOWN_DONGLES.any { it.first == dev.vendorId && it.second == dev.productId }
-        }
+        usbManager.deviceList.values.firstOrNull { dev -> isKnownDongle(dev.vendorId, dev.productId) }
 
     private suspend fun requestPermission(device: UsbDevice): Boolean =
         suspendCancellableCoroutine { cont ->
@@ -616,6 +625,10 @@ class SdrUsbDriver(private val context: Context) {
 
         fun isTunable(hz: Long): Boolean = hz in MIN_FREQ_HZ..MAX_FREQ_HZ
 
+        /** Whether a USB device with these ids is a dongle this driver opens ([KNOWN_DONGLES]). */
+        fun isKnownDongle(vendorId: Int, productId: Int): Boolean =
+            KNOWN_DONGLES.any { it.first == vendorId && it.second == productId }
+
         /** USB vendor/product pairs this driver opens; res/xml/usb_device_filter.xml must match. */
         val KNOWN_DONGLES = listOf(
             0x0BDA to 0x2832, 0x0BDA to 0x2838,
@@ -643,8 +656,10 @@ class SdrUsbDriver(private val context: Context) {
 
         private const val BULK_IN_ADDRESS = 0x81
         private const val BULK_BUFFER_BYTES = 131072
-        private const val BULK_TIMEOUT_MS = 1000
-        private const val MAX_BULK_FAILURES = 10
+        // A buffer fills in about 33 ms at the scanner's rate, so eight empty quarter-seconds
+        // in a row (2 s) means the stick has gone. The detach broadcast usually says so sooner.
+        private const val BULK_TIMEOUT_MS = 250
+        private const val MAX_BULK_FAILURES = 8
         private const val SAMPLE_QUEUE_DEPTH = 16
 
         private const val BLOCK_USB = 1

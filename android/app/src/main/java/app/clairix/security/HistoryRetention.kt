@@ -9,6 +9,7 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import app.clairix.Registry
 import app.clairix.ScanService
+import app.clairix.ScannerRecordings
 import app.clairix.TimelineLog
 import app.clairix.analysis.LocationHistory
 import app.clairix.analysis.Report
@@ -108,6 +109,8 @@ object HistoryRetention {
         }
         runCatching { MapTiles.prune(app, cutoff) }
         runCatching { TypicalSpeedCache.prune(app, cutoff, now) }
+        // The radio scanner's recordings, by when each was last written.
+        runCatching { ScannerRecordings.pruneOlderThan(app, cutoff) }
         runCatching {
             val log = TimelineLog.get(app)
             if (log.pruneOlderThan(cutoff) > 0) Registry.publishTimeline(log.snapshot())

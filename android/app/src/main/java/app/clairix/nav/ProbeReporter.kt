@@ -112,6 +112,9 @@ class ProbeReporter(
         private set
     @Volatile private var suppressed = false
 
+    /** Set by the navigator while the battery is low: batches go every 5 minutes ([DrivePower.navTimerMs]), or when 60 wait. */
+    @Volatile var lowPower = false
+
     /**
      * Set by navigation once the destination is near: from then on nothing more is reported, and
      * the segment being driven is dropped rather than finished.
@@ -128,7 +131,7 @@ class ProbeReporter(
         synchronized(lock) { nearDestination(remainingM <= endZoneM) }
     }
 
-    /** Begins collecting; samples are posted every minute, or sooner once 60 are waiting. */
+    /** Begins collecting; samples are posted every minute (every 5 while [lowPower]), or sooner once 60 are waiting. */
     fun start(scope: CoroutineScope) {
         synchronized(lock) {
             if (active) return
@@ -148,7 +151,7 @@ class ProbeReporter(
             trip.reset()
             flushJob = scope.launch(Dispatchers.IO) {
                 while (isActive) {
-                    delay(FLUSH_INTERVAL_MS)
+                    delay(DrivePower.navTimerMs(FLUSH_INTERVAL_MS, lowPower))
                     flush()
                 }
             }

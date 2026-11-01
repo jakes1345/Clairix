@@ -245,6 +245,14 @@ class RoadGraph private constructor(
 
     private fun grid(): Grid = grid ?: synchronized(this) { grid ?: buildGrid().also { grid = it } }
 
+    /**
+     * Lets go of the spatial index, which the next lookup builds again: for when memory is
+     * short and no drive needs it ([NavMemory]). A lookup under way keeps the one it has.
+     */
+    fun releaseIndex() {
+        synchronized(this) { grid = null }
+    }
+
     /** The empty grid sized to this graph's bounding box; [buildGrid] fills it. */
     private fun gridShape(): Grid {
         val midLat = (minLat + maxLat) / 2

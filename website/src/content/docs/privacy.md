@@ -17,6 +17,7 @@ The following is created and stored only on your phone. We never upload it and c
 - Who you have blocked, and the message requests waiting for you, in the same database (see section 2.9).
 - Your duress phrase and app-lock settings.
 - Hidden-camera sweep images. The camera feed is analysed live and is not saved.
+- Radio scanner recordings, only if you turn "Record transmissions" on in Drive (it is off by default, and off again whenever drive mode ends). Each transmission is encrypted with a key held in your phone's secure hardware, stops after 10 minutes, and is deleted with your history (see below) or once all recordings pass 256 MB, oldest first. You can play and delete them on the Scanner card. Recordings made by earlier versions were not encrypted; the Scanner card offers to encrypt or delete any that are left, and does neither until you choose.
 - **Clairix Full only:** cards you save in the Card Vault. These are encrypted with a key held in your phone's secure hardware.
 
 You can delete all of this at any time with Wipe Clairix (Comms → menu → Wipe Clairix, or Settings → Wipe Clairix; type WIPE), or by uninstalling Clairix. History (the location log, the timeline, vehicle trip records, the unlock ledger, and the map's tile and traffic caches) older than the retention you choose is deleted on its own: 30 days by default, or 7, 90 or forever in Settings. The cell-tower baseline keeps which towers are usual where you go, not when you were near them, and forgets a tower not seen for three times the retention. An evidence report you export is deleted from the phone a day later. Android backups are turned off for Clairix, so this data is not copied to cloud backups.
@@ -60,12 +61,14 @@ When you send an SOS or type your duress phrase, Clairix takes your last known p
 
 Live traffic is used only when you are actively navigating and are registered with Comms. In that case Clairix sends anonymous speed samples to the relay. Each sample contains a road segment, the segment's map position, a speed and a time. Your GPS track is never sent. Nothing is sent for roughly the first kilometre of a trip or roughly the last kilometre before your destination; each stretch is between 500 metres and 1.5 kilometres long and is drawn at random for every trip, so trips cannot be traced back to where they start or end, and the first and last samples of a repeated trip are not a fixed distance from either. Samples are sent without your Clairix number: each request spends a single-use token, and samples from one drive share a temporary pseudonym your phone creates and replaces every ten minutes. They are deleted after two hours. Learned road-segment positions are kept for 30 days. Traffic incidents you choose to report are shared with other users until they expire.
 
+Spoken directions are made by your phone's text-to-speech engine, not by us. Clairix picks a voice that works without a connection when one is installed for your phone's language, and asks the engine not to use the network. If there is no such voice, the route options say so: the engine you chose in Android's settings may then send what it reads out, street names and "plate reader ahead" included, to its maker under that maker's own policy. Muting directions sends nothing to it.
+
 ### 2.7 Maps and search
 
 - **Map tiles.** When you view the map, tiles are downloaded from OpenStreetMap's servers. Those servers see your IP address and the area being viewed.
 - **Address search.** A search runs on your phone over the road names of the offline map you downloaded, and a dropped pin is named after the nearest road on that map; nothing is sent. Only when you choose "Search online instead" is the search text sent to OpenStreetMap's Nominatim service.
 - **OpenStreetMap's terms.** These services are run by the OpenStreetMap Foundation under its own privacy policy: https://osmfoundation.org/wiki/Privacy_Policy
-- **Offline road maps, work-zone lists and plate-reader lists.** These are downloaded from GitHub, which sees your IP address and the region you downloaded. The files are signed, and the app refuses one it cannot verify. The plate-reader list is the licence-plate cameras mapped in OpenStreetMap for that region; the app shows them, warns you before one and routes around them, all on the phone.
+- **Offline road maps, work-zone lists and plate-reader lists.** Maps cover the United States only for now (the 50 states, DC and Puerto Rico). These are downloaded from GitHub, which sees your IP address and the region you downloaded. Before a map downloads, the app reads its first few kilobytes and last four bytes from GitHub to show its size and build date; once a week at most, when you open Drive, it does the same for each map on your phone to see whether a newer one was published. GitHub sees your IP address and those regions. The files are signed, and the app refuses one it cannot verify. The plate-reader list is the licence-plate cameras mapped in OpenStreetMap for that region; the app shows them, warns you before one and routes around them, all on the phone.
 
 ### 2.8 Things you choose to share
 
@@ -125,7 +128,7 @@ Clairix is not directed to children under 13, and we do not knowingly collect in
 
 ## 8. Security
 
-Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, contacts, messages, groups, Comms settings, saved cards, location history, timeline, cell-tower baseline, trip records and unlock ledger on your device are encrypted with keys held in Android's hardware-backed keystore. No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
+Data in transit is protected with TLS, using only the certificate authorities built into Android, and Comms content is also end-to-end encrypted with the Olm double ratchet and sealed envelopes. Your keys, contacts, messages, groups, Comms settings, saved cards, location history, timeline, cell-tower baseline, trip records, unlock ledger and radio scanner recordings on your device are encrypted with keys held in Android's hardware-backed keystore (except recordings left by earlier versions, until you encrypt or delete them; see section 1). No system is perfectly secure, and you are responsible for keeping your device and passcode safe. Details are at https://clairix.app/security.
 
 ## 9. Legal basis and your rights
 

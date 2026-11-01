@@ -235,11 +235,14 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     if (fullAccess) {
         out += TourStop(
             "drive", "Drive", "Navigate, Radio, Vehicle",
-            "Navigate: turn-by-turn on offline maps you download per region, routed around known plate readers and spoken before " +
-                "one. Radio: with an RTL-SDR stick in the USB port, a narrowband voice scanner and nearby aircraft listed from their " +
-                "ADS-B broadcasts. Vehicle: live engine data from a Bluetooth OBD-II adapter.",
-            "Pick the region to download from the map's search bar. Long-press the map to route to a point. Report a hazard from " +
-                "the bar at the bottom while navigating; reports are anonymous.",
+            "Navigate: turn-by-turn on offline maps you download per US state, routed around known plate readers and spoken " +
+                "before one. Radio: with an RTL-SDR stick in the USB port, a narrowband voice scanner and nearby aircraft listed " +
+                "from their ADS-B broadcasts. Vehicle: live engine data from a Bluetooth OBD-II adapter.",
+            "Pick the state to download from the map's search bar; its size is shown first. Long-press the map to route to a " +
+                "point. Report a hazard from the bar at the bottom while navigating; reports are anonymous. Receiving and " +
+                "recording radio traffic is restricted in some places: the scanner records only when you turn recording on, " +
+                "and keeps recordings encrypted on the phone. The stick runs on the phone's battery; below 15 % with no " +
+                "charger, drive mode stops it and the OBD-II adapter until the phone charges.",
             ClairixIcons.DirectionsCar, TourTarget.Tab(HomeTab.DRIVE)
         )
         ACTIVITY_SUB_TABS.forEachIndexed { i, name ->

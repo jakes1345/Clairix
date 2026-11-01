@@ -6,7 +6,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.media.AudioAttributes
+import android.os.Bundle
+import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.Voice
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.clairix.analysis.FixRequest
@@ -187,6 +190,14 @@ class Navigator(
     private val _state = MutableStateFlow<NavState>(NavState.Idle())
     val state: StateFlow<NavState> = _state.asStateFlow()
 
+    private val _lowBattery = MutableStateFlow(false)
+    /**
+     * True while a drive goes on with the battery below [DrivePower.CUTOFF_PCT] and not
+     * charging: live traffic, speed reports and the faster-route check then run every 5
+     * minutes instead of every one or two. Guidance itself is unchanged.
+     */
+    val lowBattery: StateFlow<Boolean> = _lowBattery.asStateFlow()
+
     /** Voice guidance on or off; alerts and instructions are still shown when muted. */
     @Volatile var muted = false
 
@@ -232,13 +243,22 @@ class Navigator(
     @Volatile private var ttsReady = false
     @Volatile private var tts: TextToSpeech? = null
 
+    private val _voice = MutableStateFlow(VoiceSource.UNKNOWN)
+    /** Where spoken directions are made, known once the speech engine is up; see [VoicePick]. */
+    val voice: StateFlow<VoiceSource> = _voice.asStateFlow()
+
+    /** Starts the speech engine ahead of a drive, so the route options can say where speech is made. */
+    fun prepareVoice() = ensureTts()
+
     private fun ensureTts() {
         if (tts != null) return
         tts = TextToSpeech(appContext) { status ->
             val engine = tts ?: return@TextToSpeech
             if (status == TextToSpeech.SUCCESS) {
                 val lang = engine.isLanguageAvailable(Locale.getDefault())
-                engine.language = if (lang >= TextToSpeech.LANG_AVAILABLE) Locale.getDefault() else Locale.US
+                val locale = if (lang >= TextToSpeech.LANG_AVAILABLE) Locale.getDefault() else Locale.US
+                engine.language = locale
+                _voice.value = useOnDeviceVoice(engine, locale)
                 engine.setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
@@ -247,17 +267,55 @@ class Navigator(
                 )
                 ttsReady = true
             } else {
+                _voice.value = VoiceSource.NONE
                 Log.w(TAG, "Text-to-speech unavailable ($status)")
             }
         }
     }
+
+    /**
+     * Switches the engine to a voice of [locale]'s language that synthesises on the phone, if
+     * it has one installed ([VoicePick]); says whether it did. Without one, the engine's own
+     * choice stands and may synthesise on its maker's servers.
+     */
+    private fun useOnDeviceVoice(engine: TextToSpeech, locale: Locale): VoiceSource {
+        val voices: List<Voice> = runCatching { engine.voices?.toList() }.getOrNull().orEmpty()
+        val candidates = voices.map { v ->
+            VoicePick.Candidate(
+                name = v.name,
+                language = iso3Language(v.locale),
+                country = iso3Country(v.locale),
+                needsNetwork = v.isNetworkConnectionRequired,
+                installed = TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in v.features.orEmpty(),
+            )
+        }
+        val default = runCatching { engine.defaultVoice?.name }.getOrNull()
+        val pick = VoicePick.pick(candidates, iso3Language(locale), iso3Country(locale), default) ?: return VoiceSource.NETWORK
+        val voice = voices.firstOrNull { it.name == pick.name } ?: return VoiceSource.NETWORK
+        return if (runCatching { engine.setVoice(voice) }.getOrNull() == TextToSpeech.SUCCESS) VoiceSource.ON_DEVICE else VoiceSource.NETWORK
+    }
+
+    // A code with no three-letter form throws; it is compared as it is.
+    private fun iso3Language(l: Locale): String = runCatching { l.getISO3Language() }.getOrNull() ?: l.language
+
+    private fun iso3Country(l: Locale): String = runCatching { l.getISO3Country() }.getOrNull() ?: l.country
 
     private var utterance = 0
 
     private fun speak(text: String, flush: Boolean = false) {
         if (muted || !ttsReady) return
         val engine = tts ?: return
-        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "nav-${utterance++}")
+        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, speechParams(), "nav-${utterance++}")
+    }
+
+    /**
+     * Asks the engine not to synthesise over the network. The flag is the old way to ask
+     * (Android deprecated it for the voice chosen above, which is what binds a current
+     * engine); engines that still read it honour it, and the rest ignore it.
+     */
+    @Suppress("DEPRECATION")
+    private fun speechParams(): Bundle = Bundle().apply {
+        putString(TextToSpeech.Engine.KEY_FEATURE_NETWORK_SYNTHESIS, "false")
     }
 
     private val imperial: Boolean get() = Locale.getDefault().country in IMPERIAL_COUNTRIES
@@ -325,12 +383,20 @@ class Navigator(
             }
             traffic.startLive(s)
             probe.start(s)
+            // Below the cut-off with no charger, the drive goes on with its timers at 5 minutes.
+            s.launch {
+                DrivePower.lowBatteryStates(BatteryWatch.readings(appContext)).collect { low ->
+                    _lowBattery.value = low
+                    traffic.lowPower = low
+                    probe.lowPower = low
+                }
+            }
             s.launch { traffic.ensureTypical(route.edges.map { graph.segmentKey(it) }.toSet()) }
             route.maneuvers.firstOrNull()?.let { speak(it.instruction, flush = true) }
             s.launch { for (loc in channel) process(loc, gen) }
             s.launch {
                 while (isActive) {
-                    delay(FASTER_CHECK_MS)
+                    delay(DrivePower.navTimerMs(FASTER_CHECK_MS, _lowBattery.value))
                     checkFaster(gen)
                 }
             }
@@ -367,6 +433,9 @@ class Navigator(
         matcher.reset()
         tts?.stop()
         s?.cancel()
+        _lowBattery.value = false
+        traffic.lowPower = false
+        probe.lowPower = false
         _state.value = NavState.Idle(error)
     }
 

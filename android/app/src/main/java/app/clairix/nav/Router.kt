@@ -248,6 +248,22 @@ class Router(
 
     // ── Search ──────────────────────────────────────────────────────────────
 
+    /**
+     * Lets go of the per-edge work arrays and the search's scratch space, which the next
+     * search allocates again: for when memory is short and no drive needs the router
+     * ([NavMemory]). Waits for a search under way to finish first.
+     */
+    @Synchronized
+    fun releaseWorkArrays() {
+        g = FloatArray(0)
+        gTime = FloatArray(0)
+        pred = IntArray(0)
+        speedCache = FloatArray(0)
+        touched = IntArray(1024)
+        speedTouched = IntArray(1024)
+        heap.release()
+    }
+
     private fun ensureArrays() {
         if (g.size == edgeCount) return
         g = FloatArray(edgeCount) { Float.POSITIVE_INFINITY }
@@ -480,6 +496,13 @@ class Router(
             private set
 
         fun clear() { size = 0 }
+
+        /** Empties the heap and shrinks it back to its first size. */
+        fun release() {
+            keys = DoubleArray(1024)
+            items = IntArray(1024)
+            size = 0
+        }
 
         fun peekKey(): Double = keys[0]
 

@@ -429,7 +429,10 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
 
     // ── Live speeds and incidents ───────────────────────────────────────
 
-    /** Refreshes live speeds and incidents every minute on [scope] until [stopLive]. */
+    /** Set by the navigator while the battery is low: the live loop then runs every 5 minutes ([DrivePower.navTimerMs]). */
+    @Volatile var lowPower = false
+
+    /** Refreshes live speeds and incidents every minute (every 5 while [lowPower]) on [scope] until [stopLive]. */
     @Synchronized
     fun startLive(scope: CoroutineScope) {
         if (liveJob?.isActive == true) return
@@ -440,7 +443,7 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
                 // For the next minute's requests, after this minute's: a fetch right
                 // before a request would let the relay pair the two.
                 prefetchTokens()
-                delay(LIVE_INTERVAL_MS)
+                delay(DrivePower.navTimerMs(LIVE_INTERVAL_MS, lowPower))
             }
         }
     }

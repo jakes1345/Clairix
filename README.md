@@ -24,14 +24,15 @@ just as plainly, what it cannot do.
 | Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
-| Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online |
-| Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default; a Flock camera battery, Raven gunshot detector or Flock hotspot heard over radio is reported too, matched against the map or flagged as unmapped |
+| Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online. United States only for now: the 50 states, DC and Puerto Rico |
+| Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default (on the US maps above); a Flock camera battery, Raven gunshot detector or Flock hotspot heard over radio is reported too, matched against the map or flagged as unmapped |
 | Know if your GPS is lying | Checks that the satellite signals are from satellites: strengths too even or too strong, satellite time against network time, the GPS position against Wi-Fi and cell towers, impossible jumps, mock-location apps, and jamming; navigation warns on the map |
 | Hear the inaudible | Listens for the ultrasonic beacons ad-tracking kits play from TVs, shops and web pages to tie your phone to them, after a self-test that proves the microphone can hear that band |
 | Know where everything is | A guided tour of every screen and tool on first launch, from Settings any time after |
 | Know what your Bluetooth gives away | Shows what a roadside or in-store sensor can log: the phone's name (renamed to the model in one tap if it is yours), whether it is discoverable, and which paired accessories keep one address for life and were connected on your drives |
 | See your car's health | Connects to the car over Bluetooth OBD and shows live engine data and trip history |
 | Track aircraft nearby | Plug in an SDR stick and list nearby aircraft from their ADS-B broadcasts, with callsign, altitude, speed and heading (a list, not map markers) |
+| Listen to a scanner | The same stick scans the channels you add and plays them; transmissions are recorded only when you turn recording on, sealed on the phone like its other records. The stick runs on the phone's battery, and below 15 % with no charger drive mode stops it until the phone charges |
 
 ---
 
@@ -72,16 +73,18 @@ and hour of each transfer for 30 days, never who paid whom.
 
 **What is on the phone when it is seized locked.** The location log, the
 timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the
-whole Comms database (contacts, messages, groups), the Comms settings, keys
-and saved cards are sealed on disk under keys in the phone's secure hardware, so a
-copy of the app's files is ciphertext. The app lock can wipe after a run of wrong
-passcodes (a number you pick when you set it; until you do, none) and then
-closes. A separate duress passcode wipes at once and leaves a decoy: the lock
-screen says "Wrong passcode" as it does for any wrong guess, goes blank for a
-moment while Clairix restarts behind it and is back, and from then on that code
-opens Clairix, empty (no history, contacts or Clairix number, first run done).
-The "Wipe Clairix" page (Comms menu, or Settings) wipes on demand; a wipe
-deletes the keys first, so cutting it
+radio scanner's recordings, the whole Comms database (contacts, messages,
+groups), the Comms settings, keys and saved cards are sealed on disk under
+keys in the phone's secure hardware, so a copy of the app's files is
+ciphertext. (Recordings made by earlier versions were plain audio; the
+Scanner card offers to encrypt or delete any that are left.) The app lock
+can wipe after a run of wrong passcodes (a number you pick when you set it;
+until you do, none) and then closes. A separate duress passcode wipes at
+once and leaves a decoy: the lock screen says "Wrong passcode" as it does
+for any wrong guess, goes blank for a moment while Clairix restarts behind
+it and is back, and from then on that code opens Clairix, empty (no history,
+contacts or Clairix number, first run done). The "Wipe Clairix" page (Comms
+menu, or Settings) wipes on demand; a wipe deletes the keys first, so cutting it
 short leaves only ciphertext. Locking collapses every message notification
 into "Unlock to read" and every alert (a tracker, a cell anomaly, a
 phone-security warning) into one "Unlock to see alerts", stops read receipts,
@@ -112,9 +115,14 @@ nearest road from the same map, so a destination is never sent anywhere to be
 found or named. Searching online for an address or a place is a separate tap
 that says it sends the text to OpenStreetMap. The map's background tiles come
 from OpenStreetMap's servers when you are online, which see your IP address and
-the area you are looking at; the GPS track never leaves the phone, and roughly
-the first kilometre of a trip (a distance that varies from trip to trip) and
-its final approach are never reported to traffic.
+the area you are looking at; they are not part of the download, so offline the
+map shows only the areas you looked at before (up to 64 MB of them), and the
+route line on a blank background anywhere else. The GPS track never leaves the
+phone, and roughly the first kilometre of a trip (a distance that varies from
+trip to trip) and its final approach are never reported to traffic. Spoken
+directions use a voice that works offline when the phone has one; when it has
+none, the route options say that the speech engine may send what it reads out
+to its maker.
 
 ### What it cannot do
 
@@ -338,8 +346,8 @@ maintainer on the live service, not in this repository.
   never. Asked for when you set the passcode; never until you answer.
 - **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
   or forever. 30 by default. The location log, the timeline, vehicle trips,
-  the unlock ledger and the map's tile and traffic caches older than that are
-  deleted, once a day even with Clairix closed. The cell-tower baseline is
+  the unlock ledger, the radio scanner's recordings and the map's tile and
+  traffic caches older than that are deleted, once a day even with Clairix closed. The cell-tower baseline is
   kept, as which towers are usual and not when you were near them, and a tower
   not seen for three times the period is forgotten. An exported evidence
   report is deleted from the phone after a day.
@@ -351,6 +359,13 @@ maintainer on the live service, not in this repository.
   while the phone sits still. **Cross-check GPS against Wi-Fi/cell position**
   (Settings → Location, with the scanner): on by default; off, the GPS check
   asks for no Wi-Fi/cell position and its comparison does not run.
+- **Record transmissions** (Drive → Radio → Scanner): off by default, and
+  off again whenever drive mode ends. On, each transmission that opens the
+  squelch is kept, sealed like the scanner's other records, for at most ten
+  minutes each and 256 MB in all (the oldest go first), and is deleted with the
+  rest of your history. The Scanner card lists them with play and delete. The
+  first time drive mode is turned on or a channel is added, the app says that
+  receiving and recording radio traffic is restricted in some places.
 - **Route around known plate readers** and **Say when one is ahead** (Drive,
   route options): both on by default. The list is what OpenStreetMap has,
   largely from the DeFlock project; a camera nobody has mapped is not on it,

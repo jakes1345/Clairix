@@ -5,7 +5,10 @@ import app.clairix.ui.components.*
 import app.clairix.ui.theme.ClairixTheme
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.Intent
+import android.content.res.Configuration
 import android.content.res.Resources
 import android.location.Location
 import android.view.MotionEvent
@@ -303,6 +306,9 @@ private fun NavMapLayer(
     val warnCameras by vm.warnCameras.collectAsStateWithLifecycle()
     val cameraStatus by vm.cameraStatus.collectAsStateWithLifecycle()
     val workZoneStatus by vm.workZoneStatus.collectAsStateWithLifecycle()
+    val voice by vm.voice.collectAsStateWithLifecycle()
+    val lowBattery by vm.lowBattery.collectAsStateWithLifecycle()
+    val updates by vm.updates.collectAsStateWithLifecycle()
     // A spoofed or jammed receiver makes every turn instruction wrong; say so over the map.
     val gnss by app.clairix.Registry.gnss.collectAsStateWithLifecycle()
 
@@ -353,6 +359,7 @@ private fun NavMapLayer(
                     SearchBar(
                         state = search,
                         regionName = regionName,
+                        updateAvailable = updates.containsKey(graph.region),
                         onQuery = vm::setQuery,
                         onSubmit = vm::submitSearch,
                         onClear = vm::clearSearch,
@@ -391,6 +398,7 @@ private fun NavMapLayer(
                 NavBottomBar(
                     nav = nav,
                     muted = muted,
+                    lowBattery = lowBattery,
                     onMute = { vm.setMuted(!muted) },
                     onReport = { showReport = true },
                     onEnd = vm::stopNavigation,
@@ -404,6 +412,7 @@ private fun NavMapLayer(
                         warnCameras = warnCameras,
                         cameraStatus = cameraStatus,
                         workZoneStatus = workZoneStatus,
+                        voice = voice,
                         onAvoidCameras = vm::setAvoidCameras,
                         onWarnCameras = vm::setWarnCameras,
                         onProfile = vm::selectProfile,
@@ -701,6 +710,21 @@ private fun NavMap(
         }
     }
 
+    // Decoded tiles held in memory are for nobody once the screen is hidden; they come back
+    // from the tile cache on disk when the map is seen again ([NavMemory]).
+    DisposableEffect(mapView) {
+        val app = context.applicationContext
+        val callbacks = object : ComponentCallbacks2 {
+            override fun onTrimMemory(level: Int) {
+                if (NavMemory.plan(level, navigating = false).tiles) mapView.tileProvider.clearTileCache()
+            }
+            override fun onConfigurationChanged(newConfig: Configuration) = Unit
+            override fun onLowMemory() = mapView.tileProvider.clearTileCache()
+        }
+        app.registerComponentCallbacks(callbacks)
+        onDispose { app.unregisterComponentCallbacks(callbacks) }
+    }
+
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 }
 
@@ -710,6 +734,7 @@ private fun NavMap(
 private fun SearchBar(
     state: SearchState,
     regionName: String,
+    updateAvailable: Boolean,
     onQuery: (String) -> Unit,
     onSubmit: () -> Unit,
     onClear: () -> Unit,
@@ -745,7 +770,8 @@ private fun SearchBar(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                GhostButton("$regionName map", onClick = onShowRegions)
+                // A newer build of this map has been published: say so where the maps are picked.
+                GhostButton(if (updateAvailable) "$regionName map · update" else "$regionName map", onClick = onShowRegions)
             }
         }
     }
@@ -842,6 +868,7 @@ private fun RouteOptionsSheet(
     warnCameras: Boolean,
     cameraStatus: CameraFeed.Status,
     workZoneStatus: WorkZoneFeed.Status,
+    voice: VoiceSource,
     onAvoidCameras: (Boolean) -> Unit,
     onWarnCameras: (Boolean) -> Unit,
     onProfile: (RouteProfile) -> Unit,
@@ -850,6 +877,7 @@ private fun RouteOptionsSheet(
     onClose: () -> Unit,
     onEditFuel: () -> Unit,
 ) {
+    val context = LocalContext.current
     Surface(
         Modifier.fillMaxWidth(),
         shape = ClairixShapes.Sheet,
@@ -944,9 +972,38 @@ private fun RouteOptionsSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // What a drive costs, said where it is started.
+            Text(
+                "Navigating keeps the GPS on once a second until you arrive. Below ${DrivePower.CUTOFF_PCT} % with " +
+                    "no charger, live traffic, speed reports and the check for a faster route slow to every 5 minutes.",
+                Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (voice == VoiceSource.NETWORK) {
+                Notice(
+                    Tone.Caution,
+                    "This phone has no offline voice for its language. Clairix asks the speech engine not to use the " +
+                        "network, but whether it does is up to the engine: it may send what it reads out, street names " +
+                        "included, to its maker, or stay silent. Add an offline voice in Android's text-to-speech " +
+                        "settings, or mute directions while driving.",
+                    Modifier.padding(top = 8.dp, end = SOS_CLEARANCE),
+                    title = "Spoken directions may leave the phone",
+                    action = {
+                        GhostButton("Speech settings", onClick = {
+                            runCatching {
+                                context.startActivity(Intent(TTS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        })
+                    }
+                )
+            }
         }
     }
 }
+
+/** Android's text-to-speech settings, where an offline voice is installed. */
+private const val TTS_SETTINGS = "com.android.settings.TTS_SETTINGS"
 
 @Composable
 private fun CameraToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -1125,6 +1182,7 @@ private fun BannerNote(text: String) {
 private fun NavBottomBar(
     nav: NavState.Navigating,
     muted: Boolean,
+    lowBattery: Boolean,
     onMute: () -> Unit,
     onReport: () -> Unit,
     onEnd: () -> Unit,
@@ -1146,6 +1204,14 @@ private fun NavBottomBar(
                     )
                 }
                 SpeedReadout(nav.speedMps, nav.speedLimitKph)
+            }
+            if (lowBattery) {
+                Text(
+                    "Battery low: traffic and reports every 5 minutes until the phone charges",
+                    Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.caution,
+                )
             }
             Row(
                 Modifier.fillMaxWidth().padding(top = 8.dp, end = SOS_CLEARANCE),
@@ -1388,6 +1454,8 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
     val graphState by vm.graph.collectAsStateWithLifecycle()
     val installed by vm.installed.collectAsStateWithLifecycle()
     val download by vm.download.collectAsStateWithLifecycle()
+    val updates by vm.updates.collectAsStateWithLifecycle()
+    val prompt by vm.downloadPrompt.collectAsStateWithLifecycle()
     var filter by rememberSaveable { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf<InstalledRegion?>(null) }
 
@@ -1410,10 +1478,19 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                 if (onClose != null) GhostButton("Done", onClick = onClose)
             }
             Text(
-                "Routes are planned on your phone from a road map of one state. Download your state once; " +
+                "Maps cover the United States only for now: the 50 states, DC and Puerto Rico. " +
+                    "Routes are planned on your phone from a road map of one state. Download your state once; " +
                     "routing then works without a connection, and so does searching the map's road names; searching online " +
                     "for an address or a place is a separate tap that sends the text to OpenStreetMap. Live traffic and reports use the network. " +
-                    "Large states are big downloads, so Wi-Fi is best.",
+                    "Large states are big downloads, so Wi-Fi is best; the size is shown before anything is downloaded.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "The map behind the route is not part of the download: it comes from OpenStreetMap's servers while you " +
+                    "are online, and only areas you looked at then are kept on the phone (up to 64 MB). Offline, anywhere " +
+                    "else shows the route line on a blank background; directions still work.",
+                Modifier.padding(top = 4.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1442,21 +1519,33 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         if (installed.isNotEmpty()) {
             item { Text("On this phone", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp)) }
             items(installed, key = { "installed-${it.slug}" }) { r ->
+                val newer = updates[r.slug]
                 Card {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(r.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                String.format(Locale.US, "%.0f MB · built %s", r.sizeBytes / 1_048_576.0,
-                                    DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(r.builtAtEpochSec * 1000))),
+                                String.format(Locale.US, "%.0f MB · built %s", r.sizeBytes / 1_048_576.0, fmtDate(r.builtAtEpochSec)),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            if (newer != null) {
+                                Text(
+                                    (newer.builtAtEpochSec?.let { "Newer map built ${fmtDate(it)}" } ?: "Newer map") +
+                                        " · ${fmtBytes(newer.compressedBytes)} download",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
                         }
                         if (r.slug == currentSlug && graphState is GraphState.Ready) {
                             Text("In use", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                         } else {
                             GhostButton("Use", onClick = { vm.selectRegion(r.slug); onClose?.invoke() })
+                        }
+                        if (newer != null) {
+                            val region = vm.regions.firstOrNull { it.slug == r.slug }
+                            if (region != null) GhostButton("Update", onClick = { vm.prepareDownload(region) }, enabled = !busy)
                         }
                         GhostButton("Delete", onClick = { confirmDelete = r }, enabled = !busy)
                     }
@@ -1476,23 +1565,37 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         }
         items(shown, key = { "region-${it.slug}" }) { region ->
             val have = installed.any { it.slug == region.slug }
+            val label = when {
+                !have -> "Download"
+                region.slug in updates -> "Update"
+                // Up to date as far as is known; it can still be downloaded again.
+                else -> "On this phone"
+            }
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .clickable(enabled = !busy) { vm.downloadRegion(region) }
+                    .clickable(enabled = !busy) { vm.prepareDownload(region) }
                     .padding(horizontal = 8.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(region.name, Modifier.weight(1f))
                 Text(
-                    if (have) "Update" else "Download",
-                    color = if (busy) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    label,
+                    color = if (busy || label == "On this phone") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
         }
         item { Spacer(Modifier.height(SOS_CLEARANCE + 16.dp)) }
+    }
+
+    prompt?.let { p ->
+        DownloadPromptDialog(
+            prompt = p,
+            onConfirm = vm::confirmDownload,
+            onDismiss = vm::dismissDownload,
+        )
     }
 
     confirmDelete?.let { r ->
@@ -1511,6 +1614,103 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
             },
             dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = null }) },
         )
+    }
+}
+
+private fun fmtDate(epochSec: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(epochSec * 1000))
+
+private fun fmtBytes(bytes: Long): String {
+    val mb = bytes / 1_048_576.0
+    return if (mb >= 1024) String.format(Locale.US, "%.1f GB", mb / 1024) else String.format(Locale.US, "%.0f MB", mb)
+}
+
+/**
+ * What a map download costs, before anything is fetched: the download, the space on the
+ * phone, whether there is room, and whether the connection is metered ([MapDownloads]).
+ */
+@Composable
+private fun DownloadPromptDialog(prompt: DownloadPrompt, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val name = prompt.region.name
+    when (prompt) {
+        is DownloadPrompt.Checking -> AlertDialog(
+            onDismissRequest = onDismiss,
+            shape = ClairixShapes.Sheet,
+            containerColor = ClairixTheme.colors.surfaceRaised,
+            title = { Text(name) },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Checking the map's size…")
+                }
+            },
+            confirmButton = { GhostButton("Cancel", onClick = onDismiss) },
+        )
+        is DownloadPrompt.Ready -> {
+            val plan = prompt.plan
+            val published = prompt.published
+            val installedAt = prompt.installedBuiltAtSec
+            val newer = installedAt != null && MapDownloads.isNewer(installedAt, published?.builtAtEpochSec) == true
+            val title = when {
+                installedAt == null -> "Download $name?"
+                newer -> "Update $name?"
+                else -> "Download $name again?"
+            }
+            val lines = buildList {
+                if (published != null) {
+                    val onPhone = plan.installedBytes?.let { (if (plan.estimated) " · about " else " · ") + "${fmtBytes(it)} on this phone" }.orEmpty()
+                    add("${fmtBytes(published.compressedBytes)} download$onPhone.")
+                    published.builtAtEpochSec?.let { add("Built ${fmtDate(it)}.") }
+                } else {
+                    add(
+                        "The map's size could not be read (no connection, or GitHub did not answer). A large state is " +
+                            "a download of up to about 200 MB and takes up to about 500 MB on the phone."
+                    )
+                }
+                if (installedAt != null) {
+                    add("The one on this phone was built ${fmtDate(installedAt)}; it stays in use until the new one is ready.")
+                }
+                val need = plan.requiredFreeBytes
+                when {
+                    need == null -> add("This phone has ${fmtBytes(plan.freeBytes)} free.")
+                    plan.enoughSpace -> add("Needs ${fmtBytes(need)} free while it installs; this phone has ${fmtBytes(plan.freeBytes)}.")
+                    else -> add(
+                        "Not enough space: it needs ${fmtBytes(need)} free while it installs and this phone has " +
+                            "${fmtBytes(plan.freeBytes)}. Free ${fmtBytes(plan.missingBytes)} and try again."
+                    )
+                }
+                if (plan.metered) {
+                    add(
+                        "This connection is metered (mobile data, a hotspot, or a network marked as metered): the " +
+                            "download uses " + (published?.let { fmtBytes(it.compressedBytes) } ?: "up to about 200 MB") +
+                            " of your allowance. On unmetered Wi-Fi it uses none."
+                    )
+                }
+            }
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                shape = ClairixShapes.Sheet,
+                containerColor = ClairixTheme.colors.surfaceRaised,
+                title = { Text(title) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        lines.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                    }
+                },
+                confirmButton = {
+                    GhostButton(
+                        when {
+                            plan.metered -> "Download anyway"
+                            newer -> "Update"
+                            else -> "Download"
+                        },
+                        onClick = onConfirm,
+                        enabled = plan.enoughSpace,
+                    )
+                },
+                dismissButton = { GhostButton("Not now", onClick = onDismiss) },
+            )
+        }
     }
 }
 
