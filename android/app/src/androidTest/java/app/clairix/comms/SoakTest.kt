@@ -100,7 +100,10 @@ class SoakTest {
             val appRelay = if (peer === far) farRelay else null
 
             // The app writes, the peer reads it.
-            val out = "soak $round from the app " + "x".repeat(random.nextInt(0, 400))
+            // Trimmed as the app trims what is typed (CommsRepository.send): a
+            // round that draws no padding would otherwise end in a space the
+            // peer never receives, and wait for a body that cannot arrive.
+            val out = ("soak $round from the app " + "x".repeat(random.nextInt(0, 400))).trimEnd()
             repo.send(peer.number, out).getOrThrow()
             val got = peer.receive(90_000) { CommsWire.type(it) == CommsWire.T_MSG && it.optString(CommsWire.F_BODY) == out }
             sentByApp[got.getString(CommsWire.F_BODY)] = (sentByApp[out] ?: 0) + 1
