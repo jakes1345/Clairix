@@ -1,4 +1,7 @@
+import java.security.MessageDigest
 import java.util.Properties
+import java.util.TreeMap
+import java.util.TreeSet
 
 plugins {
     id("com.android.application")
@@ -12,6 +15,9 @@ plugins {
     id("io.gitlab.arturbosch.detekt")
     // The bill of materials attached to each release; see cyclonedxDirectBom below.
     id("org.cyclonedx.bom")
+    // The licences the app's Android libraries publish, for the third-party
+    // notices the app shows (thirdPartyNotices, below).
+    id("com.mikepenz.aboutlibraries.plugin")
 }
 
 // ── COMMS end-to-end encryption: the Rust crate in ../comms-crypto ─────────
@@ -144,6 +150,202 @@ val copyRelayList by tasks.registering(Copy::class) {
     into(relayListAssets)
 }
 tasks.named("preBuild") { dependsOn(copyRelayList) }
+
+// ── Third-party notices ────────────────────────────────────────────────────
+//
+// Settings > About > Third-party licences shows assets/third_party_licences.json,
+// which thirdPartyNotices<Variant> writes for each build from:
+//   - the variant's Android libraries and the licences their POMs declare, as
+//     the AboutLibraries plugin lists them (prepareLibraryDefinitions<Variant>);
+//   - notices/rust-crates.json: cargo-about's list of the crates compiled into
+//     libclairix_comms_crypto.so, with each crate's own licence file
+//     (comms-crypto/about.toml; .github/workflows/android.yml regenerates it
+//     and fails when it differs from what is committed);
+//   - notices/notices.json and notices/licences/: the licence texts the POMs
+//     only name, and the native code inside two libraries that no POM lists.
+// The build fails when a library has no licence or a licence has no text to
+// ship. Nothing in the output depends on the time or the machine, and every
+// list is in a fixed order, so two builds of one commit write the same bytes:
+// the reproducible-build comparison in android.yml covers the asset with the
+// rest of the APK.
+
+aboutLibraries {
+    // Licence data from the POMs only: nothing fetched over the network while
+    // building, which could differ from one build to the next.
+    offlineMode.set(true)
+    collect {
+        fetchRemoteLicense.set(false)
+        fetchRemoteFunding.set(false)
+    }
+    export {
+        // No generation date in the output.
+        includeMetaData.set(false)
+    }
+}
+
+abstract class ThirdPartyNoticesTask : DefaultTask() {
+
+    /** The AboutLibraries list of this variant's Android libraries. */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val androidLibraries: RegularFileProperty
+
+    /** app/notices: notices.json, licences/ and rust-crates.json. */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val noticesDir: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun write() {
+        val dir = noticesDir.get().asFile
+        @Suppress("UNCHECKED_CAST")
+        fun obj(v: Any?): Map<String, Any?> = (v as? Map<String, Any?>) ?: emptyMap()
+        fun list(v: Any?): List<Any?> = (v as? List<Any?>) ?: emptyList()
+        fun str(v: Any?): String? = (v as? String)?.takeIf { it.isNotBlank() }
+        fun sha(s: String): String = MessageDigest.getInstance("SHA-256")
+            .digest(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }.take(12)
+
+        val slurper = groovy.json.JsonSlurper()
+        val config = obj(slurper.parse(dir.resolve("notices.json")))
+        val texts = obj(config["licenceTexts"])
+        val byUrl = obj(config["licenceUrls"])
+        val linked = obj(config["linkedOnly"])
+        val overrides = obj(config["libraryLicences"])
+        // Licences whose text carries the project's own copyright line (BSD,
+        // MIT) are matched per library: a generic text would drop that line.
+        val perLibrary = obj(config["libraryTexts"])
+        val problems = mutableListOf<String>()
+
+        // Licences shown once each: keyed by id and a hash of the text, so the
+        // same text from several libraries or crates appears once.
+        val licences = TreeMap<String, Map<String, Any?>>()
+        fun withText(id: String, name: String, url: String?, text: String): String {
+            val key = "$id-${sha(text)}"
+            licences.getOrPut(key) { linkedMapOf("id" to id, "name" to name, "url" to url, "text" to text) }
+            return key
+        }
+        // A licence notices.json knows by id, with its text, or by name and link
+        // alone (terms that are not an open-source licence); null when it knows none.
+        fun known(id: String): String? {
+            val t = obj(texts[id])
+            if (t.isNotEmpty()) {
+                val body = str(t["text"]) ?: list(t["files"]).joinToString("\n\n") {
+                    dir.resolve("licences/$it").readText(Charsets.UTF_8).trimEnd()
+                }
+                return withText(id, str(t["name"]) ?: id, str(t["url"]), body)
+            }
+            val l = obj(linked[id])
+            if (l.isNotEmpty()) {
+                licences.getOrPut(id) { linkedMapOf("id" to id, "name" to (str(l["name"]) ?: id), "url" to str(l["url"])) }
+                return id
+            }
+            return null
+        }
+
+        val components = mutableListOf<Map<String, Any?>>()
+
+        // Android libraries, with the licences their POMs declare.
+        val about = obj(slurper.parse(androidLibraries.get().asFile))
+        val aboutLicences = obj(about["licenses"])
+        for (lib in list(about["libraries"]).map { obj(it) }) {
+            val id = str(lib["uniqueId"]) ?: continue
+            val declared = list(lib["licenses"]).mapNotNull { str(it) }
+            val resolved = if (declared.isEmpty()) {
+                val chosen = list(overrides[id]).mapNotNull { str(it) }
+                if (chosen.isEmpty()) problems += "$id declares no licence: add it under libraryLicences in app/notices/notices.json"
+                chosen.mapNotNull { lid -> known(lid) ?: run { problems += "$id: licence $lid is not in app/notices/notices.json"; null } }
+            } else {
+                declared.mapNotNull { key ->
+                    val lic = obj(aboutLicences[key])
+                    val spdx = str(lic["spdxId"])
+                    val url = str(lic["url"])
+                    val own = str(obj(perLibrary[id])[spdx ?: key])
+                    own?.let { known(it) } ?: spdx?.let { known(it) } ?: url?.let { u -> str(byUrl[u])?.let { known(it) } } ?: run {
+                        problems += "$id: licence \"${str(lic["name"]) ?: "?"}\" (${spdx ?: url ?: key}) has no text to ship: add it to app/notices/notices.json"
+                        null
+                    }
+                }
+            }
+            val organisation = str(obj(lib["organization"])["name"])
+            val developers = list(lib["developers"]).mapNotNull { str(obj(it)["name"]) }.distinct().joinToString(", ")
+            components += linkedMapOf(
+                "origin" to "android", "name" to (str(lib["name"]) ?: id), "id" to id, "version" to str(lib["artifactVersion"]),
+                "by" to (organisation ?: developers.ifEmpty { null }), "website" to str(lib["website"]), "licences" to resolved.distinct(),
+            )
+        }
+
+        // Native code compiled into two of those libraries, which no POM lists.
+        for (n in list(config["native"]).map { obj(it) }) {
+            val name = str(n["name"]) ?: continue
+            val resolved = list(n["licences"]).mapNotNull { str(it) }.mapNotNull { lid ->
+                known(lid) ?: run { problems += "native $name: licence $lid is not in app/notices/notices.json"; null }
+            }
+            if (resolved.isEmpty()) problems += "native $name has no licence"
+            components += linkedMapOf(
+                "origin" to "native", "name" to name, "id" to name, "in" to str(n["in"]),
+                "website" to str(n["website"]), "note" to str(n["note"]), "licences" to resolved,
+            )
+        }
+
+        // The Rust crates in libclairix_comms_crypto.so, each with its own licence file.
+        val rust = obj(slurper.parse(dir.resolve("rust-crates.json")))
+        val crates = TreeMap<String, Pair<Map<String, Any?>, TreeSet<String>>>()
+        for (l in list(rust["licences"]).map { obj(it) }) {
+            val lid = str(l["id"]) ?: continue
+            val text = (l["text"] as? String)?.trimEnd()
+            if (text.isNullOrBlank()) { problems += "rust-crates.json: a $lid entry has no text"; continue }
+            val key = withText(lid, str(l["name"]) ?: lid, null, text)
+            for (c in list(l["crates"]).map { obj(it) }) {
+                val name = str(c["name"]) ?: continue
+                val version = str(c["version"])
+                crates.getOrPut("$name $version") {
+                    linkedMapOf<String, Any?>("origin" to "rust", "name" to name, "id" to name, "version" to version) to TreeSet()
+                }.second += key
+            }
+        }
+        for ((entry, keys) in crates.values) components += entry + ("licences" to keys.toList())
+
+        if (problems.isNotEmpty()) {
+            throw GradleException("The third-party notices are incomplete:\n  " + problems.distinct().joinToString("\n  "))
+        }
+
+        val origins = listOf("android", "native", "rust")
+        val sorted = components.sortedWith(
+            compareBy<Map<String, Any?>>(
+                { origins.indexOf(it["origin"] as String) },
+                { (it["name"] as String).lowercase() },
+                { it["id"] as String },
+                { (it["version"] as? String).orEmpty() },
+            )
+        )
+        val out = linkedMapOf(
+            "format" to "clairix-third-party-licences",
+            "version" to 1,
+            "components" to sorted.map { c -> c.filterValues { it != null } },
+            "licences" to licences.mapValues { (_, l) -> l.filterValues { it != null } },
+        )
+        val file = outputDirectory.get().asFile.resolve("third_party_licences.json")
+        file.parentFile.mkdirs()
+        file.writeText(groovy.json.JsonOutput.toJson(out), Charsets.UTF_8)
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val suffix = variant.name.replaceFirstChar { it.uppercase() }
+        val notices = tasks.register<ThirdPartyNoticesTask>("thirdPartyNotices$suffix") {
+            description = "Writes the third-party licences the app shows for the ${variant.name} build"
+            dependsOn("prepareLibraryDefinitions$suffix")
+            androidLibraries.set(layout.buildDirectory.file("generated/aboutLibraries/${variant.name}/res/raw/aboutlibraries.json"))
+            noticesDir.set(layout.projectDirectory.dir("notices"))
+        }
+        // AGP sets the output directory and packs what is written there as assets.
+        variant.sources.assets?.addGeneratedSourceDirectory(notices, ThirdPartyNoticesTask::outputDirectory)
+    }
+}
 
 // The JVM unit tests load the same crate built for this machine, so the relay
 // round-trip tests exercise the real Olm and sealing code rather than a stand-in.

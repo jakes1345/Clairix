@@ -110,9 +110,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration as OsmConfig
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import android.content.ComponentName
@@ -2432,18 +2430,27 @@ private fun MapScreen() {
 
     val mapView = remember {
         configureOsm(context)
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+        // The tile server is the signed tile setting's (OpenStreetMap's until one
+        // names another), and every tile answer is counted for the notice below.
+        app.clairix.nav.MapTiles.newMapView(context).apply {
             // Tiles are 256 px; drawn unscaled, a phone screen at zoom 17 is around
             // fifty of them, and every pan, zoom or visit to this tab fetched that
             // many. Scaled to the display density it is a dozen or so, and the map
             // labels become legible at arm's length.
             setTilesScaledToDpi(true)
             setMultiTouchControls(true)
+            // The zoom buttons stand at the right edge, so the bottom edge stays
+            // free for the map credit and the banners above it.
+            zoomController.display.setPositions(
+                false,
+                org.osmdroid.views.CustomZoomButtonsDisplay.HorizontalPosition.RIGHT,
+                org.osmdroid.views.CustomZoomButtonsDisplay.VerticalPosition.CENTER
+            )
             controller.setZoom(17.0)
             isFlingEnabled = true
         }
     }
+    app.clairix.nav.FollowTileServer(mapView)
 
     // Only center the map on the very first GPS fix; after that the user controls it.
     var hasCentered by remember { mutableStateOf(false) }
@@ -2609,13 +2616,18 @@ private fun MapScreen() {
                 tone = if (status.hasFix) Tone.Neutral else Tone.Caution
             )
             if (cellHot) MapChip("Sketchy cell tower nearby · ${levelLabel(cell.level.name)}", Tone.Caution)
+            app.clairix.nav.TilesUnavailableNotice("Your position, the devices and their trails are still drawn.")
         }
+
+        // The data credit the licence asks for, on the map and clear of the SOS
+        // button; the banners below sit above it.
+        app.clairix.nav.MapAttribution(Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp))
 
         if (followingTrails > 0) {
             Row(
                 Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(start = 12.dp, end = 88.dp, bottom = 16.dp)
+                    .padding(start = 12.dp, end = 88.dp, bottom = 36.dp)
                     .background(ClairixTheme.colors.danger, ClairixShapes.Control)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2629,7 +2641,7 @@ private fun MapScreen() {
                 )
             }
         } else if (travellingTrails > 0) {
-            Box(Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 88.dp, bottom = 16.dp)) {
+            Box(Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 88.dp, bottom = 36.dp)) {
                 MapChip(
                     if (travellingTrails == 1) "1 device travelling with you" else "$travellingTrails devices travelling with you",
                     Tone.Caution

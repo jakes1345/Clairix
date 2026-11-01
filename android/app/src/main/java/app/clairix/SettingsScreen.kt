@@ -388,6 +388,17 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     // A newer version, from the signed note the app reads once a day: offered under About.
     val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+    // Which server the maps draw from: the signed tile setting, or OpenStreetMap's.
+    val tileServer by app.clairix.nav.MapTiles.config.collectAsStateWithLifecycle()
+    // About > Third-party licences: the list this build carries, full screen.
+    var showLicences by rememberSaveable { mutableStateOf(false) }
+    if (showLicences) {
+        BackHandler { showLicences = false }
+        Column(Modifier.fillMaxSize().background(c.base).navigationBarsPadding()) {
+            ThirdPartyLicencesPage(onBack = { showLicences = false })
+        }
+        return
+    }
 
     // This screen replaces the whole tab tree, so it does not inherit the insets
     // applied around the tabs and keeps clear of the system bars itself.
@@ -978,6 +989,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             color = c.textSubtle
                         )
                     }
+                    // Map data credit (ODbL) and the third-party licences row.
+                    AboutCredits(onOpenLicences = { showLicences = true })
 
                     Hairline(Modifier.padding(vertical = 4.dp))
                     Text("Privacy", style = MaterialTheme.typography.titleSmall, color = c.text)
@@ -986,10 +999,10 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             "Detection data stays on this phone. Location history, device identifiers, cell tower " +
                                 "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
                                 " are stored locally, sealed under a key in this phone's secure hardware, and never " +
-                                "uploaded. The map downloads tiles from OpenStreetMap, which sees your IP address and the " +
+                                "uploaded. The map downloads tiles from ${tileServer.name}'s tile server, which sees your IP address and the " +
                                 "area you're looking at; a place search runs on the phone over the offline map's road names " +
                                 "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
-                                "work zones and the stalkerware list come signed from GitHub, and so, once a day, do the relay list, " +
+                                "work zones, the stalkerware list and the setting that names the tile server come signed from GitHub, and so, once a day, do the relay list, " +
                                 "the keys those files are signed with and a note of the newest Clairix version. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
                                 "phone only when you export it. Positions for the scanner, navigation and SOS come from " +

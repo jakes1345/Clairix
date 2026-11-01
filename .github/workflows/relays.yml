@@ -43,6 +43,7 @@ jobs:
       changed: ${{ steps.check.outputs.changed }}
       keys_changed: ${{ steps.notes.outputs.keys_changed }}
       latest_changed: ${{ steps.notes.outputs.latest_changed }}
+      tiles_changed: ${{ steps.tiles.outputs.tiles_changed }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -125,11 +126,38 @@ jobs:
             echo "latest_changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # The map's tile server, relays/tiles.json: checked here, signed and added
+      # to the same release on its own in the publish job, so a new server reaches
+      # phones without an app update and whether or not the relay list changed.
+      # Phones refuse a setting issued earlier than the one they hold, and draw
+      # from OpenStreetMap's server while they hold none (nav/TileConfig.kt).
+      - name: Test the tile setting checker
+        run: python -m pytest -q tools/relays/test_check_tiles.py
+
+      - name: Check the tile setting
+        id: tiles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p published-tiles
+          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern tiles.json --dir published-tiles 2>/dev/null; then
+            if cmp -s relays/tiles.json published-tiles/tiles.json; then
+              echo "tiles.json is the setting already published"
+              python tools/relays/check_tiles.py relays/tiles.json
+            else
+              python tools/relays/check_tiles.py relays/tiles.json --published published-tiles/tiles.json
+              echo "tiles_changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            python tools/relays/check_tiles.py relays/tiles.json
+            echo "tiles_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # Signs and publishes a changed list from main: the only job that reads
   # ASSET_SIGNING_KEY (environment `assets`), and it never runs for a pull request.
   publish:
     needs: check
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.check.outputs.changed == 'true' || needs.check.outputs.keys_changed == 'true' || needs.check.outputs.latest_changed == 'true')
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.check.outputs.changed == 'true' || needs.check.outputs.keys_changed == 'true' || needs.check.outputs.latest_changed == 'true' || needs.check.outputs.tiles_changed == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: assets
@@ -224,3 +252,19 @@ jobs:
           if [ "$KEYS_CHANGED" = true ]; then files+=(dist/keys.json dist/keys.json.sig); fi
           if [ "$LATEST_CHANGED" = true ]; then files+=(dist/latest.json dist/latest.json.sig); fi
           gh release upload relays "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Sign the tile setting
+        if: needs.check.outputs.tiles_changed == 'true'
+        env:
+          ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
+        run: |
+          mkdir -p dist-tiles
+          cp relays/tiles.json dist-tiles/tiles.json
+          python tools/signing/sign.py dist-tiles/tiles.json
+          python tools/relays/check_keys.py relays/keys.json --verify-signed dist-tiles/tiles.json
+
+      - name: Publish the tile setting
+        if: needs.check.outputs.tiles_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload relays dist-tiles/tiles.json dist-tiles/tiles.json.sig --repo "$GITHUB_REPOSITORY" --clobber

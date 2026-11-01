@@ -112,3 +112,31 @@ publishes that signature instead of making one, and checks either against
 the built-in key before publishing.
 
     python3 tools/relays/check_keys.py relays/keys.json
+
+## The map's tile server
+
+`tiles.json` names the server both maps (the tracker map and Drive) draw
+their background from. The same workflow checks it
+(`tools/relays/check_tiles.py`), signs it with the asset key and adds it with
+its signature to the `relays` release. Phones ask for it once a day while the
+map is in use (and whenever they refresh the relay list), use it only if the
+signature checks, never go back to one issued earlier than one they hold, and
+draw from OpenStreetMap's own server, `tile.openstreetmap.org`, while they
+hold none. That lets the server change without an app update, which the
+OpenStreetMap tile usage policy asks of apps that use it.
+
+| Field | What |
+|---|---|
+| `name` | Who runs the server, as the app names it when its tiles stop coming |
+| `url` | The tile address, `https://`, with `{z}`, `{x}` and `{y}` each once |
+| `minZoom`, `maxZoom` | The zoom levels it serves (at most 22) |
+| `tileSize` | 256 or 512 pixels |
+| `attribution` | The credit drawn on the map. It must credit OpenStreetMap: every server the app may use draws OpenStreetMap's data, which the ODbL lets anyone use only with that credit |
+| `attributionUrl` | Where a tap on the credit goes: the data licence page |
+
+To change it, edit the fields, set `issued` to the current time in seconds
+(`date +%s`, later than the published one's) and run
+`python3 tools/relays/check_tiles.py relays/tiles.json`. A paid or self-hosted
+server is a budget decision for the maintainer; whichever it is, check its
+terms allow an app's users to fetch tiles directly, and put its own credit in
+`attribution` next to OpenStreetMap's.

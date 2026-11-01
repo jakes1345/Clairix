@@ -73,11 +73,11 @@ You own what you send. You grant us only the limited right to store and forward 
 
 ## 10. Intellectual property
 
-The Clairix name, logo, app and website are owned by Clairix or its licensors. These terms do not grant you any right to use the Clairix name or marks. Map data is from OpenStreetMap contributors under the ODbL. The encryption library vodozemac and other open-source components are used under their respective licences, which are listed in the app.
+The Clairix name, logo, app and website are owned by Clairix or its licensors. These terms do not grant you any right to use the Clairix name or marks. Map data is from OpenStreetMap contributors under the ODbL. The encryption library vodozemac and the other open-source components in the app are used under their respective licences. The app lists them, with their licences, under Settings, About, Third-party licences, and [THIRD-PARTY-NOTICES.md](https://github.com/jakes1345/Clairix/blob/main/THIRD-PARTY-NOTICES.md) in the source code lists the libraries Clairix declares and every Rust crate it compiles in.
 
 ## 11. Third-party services
 
-Clairix uses OpenStreetMap for map tiles and address search, GitHub for offline map downloads, the signed lists the app keeps up to date and its daily check for a newer version, Cloudflare for hosting the relay and call relays, and Google Play for distribution of the Play edition. Your use of those services is subject to their terms. We are not responsible for them.
+Clairix uses OpenStreetMap for map tiles (unless a signed tile setting the project publishes names another tile server) and address search, GitHub for offline map downloads, the signed lists and settings the app keeps up to date and its daily check for a newer version, Cloudflare for hosting the relay and call relays, and Google Play for distribution of the Play edition. Your use of those services is subject to their terms. We are not responsible for them.
 
 ## 12. Disclaimer of warranties
 

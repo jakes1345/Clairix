@@ -1,0 +1,51 @@
+# cargo-about's configuration: the licence notices of the crates compiled into
+# libclairix_comms_crypto.so, which the APK ships. Two files are generated from
+# it and committed: android/app/notices/rust-crates.json (about-json.hbs), which
+# the app's third-party notices are built from (app/build.gradle.kts,
+# thirdPartyNotices), and THIRD-PARTY-NOTICES.md at the repository root
+# (about.hbs). .github/workflows/android.yml regenerates both with the pinned
+# cargo-about and fails when either differs from what is committed. After a
+# change to Cargo.lock, from the repository root:
+#
+#   cargo install cargo-about --version 0.9.2 --locked --features cli
+#   cargo fetch --locked --manifest-path comms-crypto/Cargo.toml
+#   cargo about generate --frozen --fail -m comms-crypto/Cargo.toml comms-crypto/about-json.hbs -o android/app/notices/rust-crates.json
+#   cargo about generate --frozen --fail -m comms-crypto/Cargo.toml comms-crypto/about.hbs -o THIRD-PARTY-NOTICES.md
+
+# The licences the crates may be used under, in the order one is chosen when a
+# crate offers several. All of them allow combining with Clairix's GPL-3.0.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "BSL-1.0",
+    "Unlicense",
+]
+
+# What the library is built for (android/app/build.gradle.kts, rustAbis):
+# crates only another platform pulls in are not in it.
+targets = [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "x86_64-linux-android",
+]
+
+# Build scripts and tests run on the build machine; nothing of them is in the library.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Licence texts come from the crates' own files: --frozen (above) keeps
+# cargo-about off the network, so two runs on one Cargo.lock write the same bytes.
+
+# Crates whose licence files cargo-about knows how to read only with help.
+workarounds = ["ring", "rustls"]
+
+# Clairix's own crate (publish = false, GPL-3.0) is not a third party.
+[private]
+ignore = true

@@ -4,7 +4,10 @@ import android.content.Context
 import android.util.Log
 import app.clairix.nav.AssetKeyList
 import app.clairix.nav.AssetKeys
+import app.clairix.BuildConfig
 import app.clairix.nav.AssetSignature
+import app.clairix.nav.MapTiles
+import app.clairix.nav.TileConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -161,6 +164,14 @@ object RelayDirectory {
     /** How soon a refresh that failed (offline, the release down) is tried again. */
     private const val RETRY_INTERVAL_MS = 3600_000L
 
+    /**
+     * The maps' tile server ([TileConfig]): published on the same release,
+     * signed with the same key, checked the same way, and asked for with the
+     * relay list or, while the map is in use, on its own ([refreshTilesIfStale]).
+     */
+    private const val TILES_RELEASE = "https://github.com/jakes1345/Clairix/releases/download/relays/tiles.json"
+    @Volatile private var tilesAttemptMs = 0L
+
     private val _list = MutableStateFlow<RelayList?>(null)
     val list: StateFlow<RelayList?> = _list.asStateFlow()
 
@@ -240,6 +251,9 @@ object RelayDirectory {
             val keys = attempt("Key list") { refreshKeys(app) }
             val list = attempt("Relay list") { refreshList(app) }
             val latest = attempt("Version note") { refreshLatest(app) }
+            // The comms-only build has no map to set a tile server for; a tile setting
+            // that fails to come is retried while a map is open (refreshTilesIfStale).
+            if (BuildConfig.FULL_ACCESS) refreshTiles(app)
             val ok = keys && list && latest
             val next = System.currentTimeMillis() + if (ok) REFRESH_INTERVAL_MS else RETRY_INTERVAL_MS
             runCatching { prefs(app).edit().putLong(KEY_NEXT_TRY, next).apply() }
@@ -290,6 +304,40 @@ object RelayDirectory {
         false
     }
 
+    /** Asks the release for a newer tile setting when the last try was over [maxAgeMs] ago; the maps call this while shown. */
+    suspend fun refreshTilesIfStale(context: Context, maxAgeMs: Long = REFRESH_INTERVAL_MS) {
+        if (System.currentTimeMillis() - tilesAttemptMs < maxAgeMs) return
+        withContext(Dispatchers.IO) {
+            lock.withLock {
+                // A relay-list refresh may have fetched it while this waited for the lock.
+                if (System.currentTimeMillis() - tilesAttemptMs >= maxAgeMs) refreshTiles(context)
+            }
+        }
+    }
+
+    /**
+     * Downloads tiles.json and its signature and hands it to [MapTiles] when
+     * it is signed by the asset key and issued later than the one held.
+     * Under [lock]; false when that failed.
+     */
+    private fun refreshTiles(context: Context): Boolean {
+        tilesAttemptMs = System.currentTimeMillis()
+        return try {
+            val raw = fetch(TILES_RELEASE, MapTiles.MAX_SETTING_BYTES)
+            val sig = String(fetch("$TILES_RELEASE.sig", SIGNATURE_MAX_BYTES), Charsets.US_ASCII).trim()
+            val newer = TileConfig.accept(MapTiles.held(context), raw, sig, nowSec(), AssetSignature::verify) ?: return true
+            MapTiles.adopt(context, raw, newer)
+            Log.i(TAG, "Map tiles now from ${newer.name}")
+            true
+        } catch (e: IOException) {
+            Log.i(TAG, "Tile setting unavailable: ${e.message}")
+            false
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Tile setting refused: ${e.message}")
+            false
+        }
+    }
+
     /**
      * The key the relay at [url] publishes now (`relayKey` on its `GET /`),
      * asked of it directly; null when it did not answer with one.
@@ -335,5 +383,5 @@ object RelayDirectory {
 
     /** For tests: what [current] returns when nothing has been loaded. */
     @androidx.annotation.VisibleForTesting
-    internal fun reset() { _list.value = null; lastAttemptMs = 0L }
+    internal fun reset() { _list.value = null; lastAttemptMs = 0L; tilesAttemptMs = 0L }
 }

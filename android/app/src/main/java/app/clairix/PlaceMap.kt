@@ -11,11 +11,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -26,19 +25,22 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import app.clairix.nav.FollowTileServer
+import app.clairix.nav.MapAttribution
+import app.clairix.nav.MapTiles
+import app.clairix.nav.TilesUnavailableNotice
 import app.clairix.ui.components.ClairixTopBar
 import app.clairix.ui.theme.ClairixTheme
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 
 /**
  * One of the owner's places on the map, full screen, when she asks to see it.
  * The Places cards on the Patterns page name a place and no longer print its
- * coordinates; this is where she sees where it is. The tiles come from
- * OpenStreetMap, as on the Map tab, which sees this phone's IP address and the
- * area shown; nothing is fetched until she opens it.
+ * coordinates; this is where she sees where it is. The tiles come from the
+ * maps' tile server, as on the Map tab (OpenStreetMap's unless the signed tile
+ * setting names another, see MapTiles), which sees this phone's IP address and
+ * the area shown; nothing is fetched until she opens it.
  */
 @Composable
 internal fun PlaceMapDialog(label: String, lat: Double, lon: Double, onDismiss: () -> Unit) {
@@ -48,13 +50,13 @@ internal fun PlaceMapDialog(label: String, lat: Double, lon: Double, onDismiss: 
             ClairixTopBar(title = label, onBack = onDismiss)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 PlaceMapView(label = label, lat = lat, lon = lon)
+                TilesUnavailableNotice(
+                    "The place is still marked where it is.",
+                    Modifier.align(Alignment.TopCenter).padding(12.dp)
+                )
             }
-            Text(
-                "Map © OpenStreetMap contributors",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.textSubtle,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+            // The tile server's data credit, opening the licence page when tapped.
+            MapAttribution(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
     }
 }
@@ -65,9 +67,8 @@ private fun PlaceMapView(label: String, lat: Double, lon: Double) {
     val fill = ClairixTheme.colors.accent.toArgb()
     val ring = ClairixTheme.colors.text.toArgb()
     val mapView = remember {
-        app.clairix.nav.MapTiles.configure(context)
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+        MapTiles.configure(context)
+        MapTiles.newMapView(context).apply {
             setTilesScaledToDpi(true)
             setMultiTouchControls(true)
             isFlingEnabled = true
@@ -83,6 +84,7 @@ private fun PlaceMapView(label: String, lat: Double, lon: Double) {
             )
         }
     }
+    FollowTileServer(mapView)
     // Follows the lifecycle like the Map tab's view, and lets go of its tile
     // threads and caches when the dialog closes.
     val lifecycleOwner = LocalLifecycleOwner.current

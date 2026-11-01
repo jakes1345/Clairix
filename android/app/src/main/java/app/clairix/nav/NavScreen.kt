@@ -99,11 +99,9 @@ import app.clairix.BuildConfig
 import app.clairix.R
 import org.osmdroid.config.Configuration as OsmConfig
 import org.osmdroid.events.MapEventsReceiver
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
-import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
@@ -352,6 +350,7 @@ private fun NavMapLayer(
                 )
                 else -> {}
             }
+            TilesUnavailableNotice("Routes and directions come from the downloaded map and still work.")
             when {
                 nav != null -> ManeuverBanner(nav)
                 navState is NavState.Routing -> StatusCard("Finding your route…", busy = true, onCancel = vm::stopNavigation)
@@ -384,6 +383,9 @@ private fun NavMapLayer(
                     modifier = Modifier.padding(start = 8.dp),
                 ) { Text("Re-center") }
             }
+            // The data credit the licence asks for: on the map, above whatever
+            // panel is open, clear of the SOS button.
+            MapAttribution(Modifier.padding(start = 8.dp, bottom = if (nav == null && options == null) 8.dp else 0.dp))
             if (nav != null) {
                 val prompt = nav.incidentsAhead.firstOrNull {
                     it.distanceM <= INCIDENT_PROMPT_M && it.incident.votable && it.incident.id !in answered
@@ -485,8 +487,9 @@ private fun NavMap(
 
     val mapView = remember {
         configureNavOsm(context)
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+        // The signed tile setting's server (OpenStreetMap's until one names
+        // another), every tile answer counted for TilesUnavailableNotice.
+        MapTiles.newMapView(context).apply {
             setTilesScaledToDpi(true)
             setMultiTouchControls(true)
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
@@ -520,6 +523,7 @@ private fun NavMap(
             })
         }
     }
+    FollowTileServer(mapView)
 
     val positionMarker = remember {
         Marker(mapView).apply {
@@ -825,6 +829,19 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
                     }
                     HorizontalDivider()
                 }
+            }
+            if (state.source == SearchSource.ONLINE && state.results.isNotEmpty()) {
+                // Nominatim's usage policy asks for the data credit wherever its results are shown.
+                val context = LocalContext.current
+                Text(
+                    "Results © OpenStreetMap contributors (Nominatim)",
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClickLabel = "Open the map data licence") { openLink(context, TileConfig.OSM_COPYRIGHT_URL) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
