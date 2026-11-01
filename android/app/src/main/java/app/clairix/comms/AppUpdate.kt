@@ -114,8 +114,9 @@ internal fun updateNotice(latest: LatestRelease?, versionCode: Int, dismissedVer
  * an SOS cannot reach a member without ([forSos], see [carriesSos]).
  */
 internal fun sendRefusalFor(notice: UpdateNotice, alert: String?, forSos: Boolean = false): String? {
-    val newer = notice.newer
-    if (!notice.unsafe || newer == null || alert == RelayClient.ALERT_SOS || forSos) return null
+    val newer = notice.newer ?: return null
+    val sosGoes = alert == RelayClient.ALERT_SOS || forSos
+    if (!notice.unsafe || sosGoes) return null
     return "Not sent: this version of Clairix has a security flaw that ${newer.versionName} fixes, and it sends nothing " +
         "but SOS alerts until it is updated. Settings > About has the update."
 }

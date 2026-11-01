@@ -6,7 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.test.assertFailsWith
+import org.junit.Assert.assertThrows
 
 /**
  * ClairixCoin on the phone: the balance and the Pay button only where the relay
@@ -86,8 +86,8 @@ class CoinRulesTest {
 
     @Test
     fun aCreditIdEqualToThePaymentIdIsRefused() {
-        assertFailsWith<IllegalArgumentException> { CoinRules.payRequest("123456789", "pin", 1, txid, txid) }
-        assertFailsWith<IllegalArgumentException> { CoinRules.payRequest("123456789", "pin", 1, txid, txid.uppercase()) }
+        assertThrows(IllegalArgumentException::class.java) { CoinRules.payRequest("123456789", "pin", 1, txid, txid) }
+        assertThrows(IllegalArgumentException::class.java) { CoinRules.payRequest("123456789", "pin", 1, txid, txid.uppercase()) }
     }
 
     @Test

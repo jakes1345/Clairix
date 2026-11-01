@@ -152,6 +152,7 @@
     <ID>LargeClass:CommsStore.kt$CommsStore : SQLiteOpenHelper</ID>
     <ID>LargeClass:HiddenCameraScanner.kt$HiddenCameraScanner</ID>
     <ID>LargeClass:NavViewModel.kt$NavViewModel : AndroidViewModel</ID>
+    <ID>LargeClass:RelayClient.kt$RelayClient</ID>
     <ID>LargeClass:Navigator.kt$Navigator</ID>
     <ID>LargeClass:ScanService.kt$ScanService : LifecycleService</ID>
     <ID>LargeClass:StalkwareScanner.kt$StalkwareScanner</ID>
