@@ -2042,7 +2042,8 @@ object CommsRepository {
 
     private sealed class Deliver {
         object Sent : Deliver()
-        class Failed(val reason: String) : Deliver()
+        /** Final; [status] is the relay's HTTP answer when it was one (0 otherwise). */
+        class Failed(val reason: String, val status: Int = 0) : Deliver()
         /** Not now; try again later, or after [retryAfterMs] when the relay said how long. */
         class Offline(val reason: String, val retryAfterMs: Long? = null) : Deliver()
         /** The relay refused the envelope as too large (413): final for this message, but the queue behind it goes on. */
@@ -2066,9 +2067,15 @@ object CommsRepository {
      * to 25 seconds while a network call completes.
      */
     private suspend fun deliver(contact: Contact, payload: JSONObject): Deliver {
+        val type = CommsWire.type(payload)
         // A call being set up and an SOS skip the relay's mixing delay.
-        val urgent = CommsWire.type(payload) in URGENT_TYPES
+        val urgent = type in URGENT_TYPES
         val alert = alertFor(payload)
+        // Let through below the oldest safe version, with the SOS it serves (AppUpdate).
+        val forSos = carriesSos(
+            type, payload.optString(CommsWire.F_OP).ifEmpty { null }, payload.optString(CommsWire.F_GID).ifEmpty { null },
+            if (type == CommsWire.T_GROUP_CTRL) heldSosGroups() else emptySet()
+        )
         // Encryption runs under the lock; anything it needs from the network (a
         // bundle to start a session, the contact's current sealing prekey) is
         // fetched without it, once each, and encryption tried again.
@@ -2076,7 +2083,15 @@ object CommsRepository {
         var prekeyFetched = false
         while (true) {
             when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
-                is Prepared.Ready -> return transmit(contact, p.envelope, urgent, alert)
+                is Prepared.Ready -> {
+                    val sent = transmit(contact, p.envelope, urgent, alert, forSos)
+                    // Format 2 refused past the relay's cutoff: their keys may bring a prekey to seal it in format 3.
+                    if (sent !is Deliver.Failed ||
+                        !LegacyEnvelope.lookUpPrekeyAndRetry(sent.status, store.prekey(contact.number) != null, prekeyFetched)
+                    ) return sent
+                    prekeyFetched = true
+                    if (!learnPrekey(contact)) return sent
+                }
                 is Prepared.Failed -> return Deliver.Failed(p.reason)
                 is Prepared.Offline -> return Deliver.Offline(p.reason)
                 Prepared.NeedBundle -> {
@@ -2104,6 +2119,24 @@ object CommsRepository {
                 }
             }
         }
+    }
+
+    /**
+     * Looks up [contact]'s keys and keeps the sealing prekey they bring
+     * ([notePrekey]); true when a prekey of theirs is held afterwards. For a
+     * format-2 envelope the relay refused ([LegacyEnvelope]).
+     */
+    private fun learnPrekey(contact: Contact): Boolean {
+        val keys = try {
+            relay.identity(contact.number, fingerprint(contact.ed25519), contact.relay)
+        } catch (e: RelayException) {
+            CommsLog.add("Could not look up the current sealing key of ${contactLabel(contact)}: ${e.message}")
+            return false
+        }
+        if (keys.ed25519 == contact.ed25519 && keys.curve25519 == contact.curve25519 && keys.sealing == contact.sealing) {
+            notePrekey(contact, keys.sealingPrekey)
+        }
+        return store.prekey(contact.number) != null
     }
 
     /**
@@ -2219,10 +2252,10 @@ object CommsRepository {
      * outbox's backoff retries it (fetching tokens first), and [tokenRefill]
      * retries once at once if a fetch does bring tokens. No lock is held.
      */
-    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false, alert: String? = null): Deliver {
+    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false, alert: String? = null, forSos: Boolean = false): Deliver {
         val claim = claims.get(contact.number, System.currentTimeMillis())
         return try {
-            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert, store.pass(contact.number))
+            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert, store.pass(contact.number), forSos)
             if (claim != null) claims.accepted(contact.number, claim)
             Deliver.Sent
         } catch (e: RelayException) {
@@ -2272,6 +2305,7 @@ object CommsRepository {
         e.code == 401 -> Deliver.Failed("The relay does not accept this phone's signature (is its clock right?)")
         e.code == 403 -> Deliver.Offline(e.message ?: "The relay refused this phone's delivery tokens; trying again later")
         e.code == 413 -> Deliver.TooLarge(e.message ?: "The relay refused the message as too large")
+        e.code == LegacyEnvelope.UPGRADE_REQUIRED -> Deliver.Failed(e.message ?: "The relay asks for a newer Clairix", e.code)
         e.code == RelayClient.NO_TOKENS -> Deliver.Offline("Waiting for delivery tokens from the relay")
         // Busy, not down: the relay said how long to wait, and nothing is wrong
         // with the network, so the backoff does not grow.
@@ -3074,6 +3108,14 @@ object CommsRepository {
     /** The group outbox's rows of [kinds]: the store's and those kept in memory. */
     private fun groupRows(kinds: Set<GroupOutbox.Kind>): List<GroupOutbox.Row> =
         store.outbox(kinds) + memoryRows.all().filter { it.kind in kinds }
+
+    /**
+     * The groups with an SOS row still being tried, held for a confirmed member
+     * list or about to be ([carriesSos]): a row is marked held only after the
+     * try that asked for the list, which may already be on its way.
+     */
+    private fun heldSosGroups(): Set<String> =
+        groupRows(setOf(GroupOutbox.Kind.SOS)).filter { !it.final }.mapTo(HashSet()) { it.gid }
 
     private fun saveRow(row: GroupOutbox.Row) {
         if (memoryRows.has(row)) memoryRows.update(row) else store.updateOutbox(row)

@@ -157,6 +157,22 @@ class AppUpdateTest {
     }
 
     @Test
+    fun belowTheFloorAGroupSosStillGetsTheMemberListItWaitsFor() {
+        val unsafe = updateNotice(release(code = 29, minSafe = 27), 26, 0)
+        val held = setOf("g1")
+        val request = carriesSos(CommsWire.T_GROUP_CTRL, CommsWire.OP_ROSTER_REQUEST, "g1", held)
+        assertTrue("the request for the list an SOS to g1 waits for", request)
+        assertNull("so it goes", sendRefusalFor(unsafe, alert = null, forSos = request))
+        assertTrue("the SOS itself", carriesSos(CommsWire.T_PANIC, null, "g1", emptySet()))
+        // Nothing else the brake stops gets through on the SOS's account.
+        assertFalse("no SOS waits in g2", carriesSos(CommsWire.T_GROUP_CTRL, CommsWire.OP_ROSTER_REQUEST, "g2", held))
+        assertFalse("another group change", carriesSos(CommsWire.T_GROUP_CTRL, CommsWire.OP_LEAVE, "g1", held))
+        assertFalse("a group message", carriesSos(CommsWire.T_GROUP_MSG, null, "g1", held))
+        assertFalse("a message", carriesSos(CommsWire.T_MSG, null, null, held))
+        assertNotNull(sendRefusalFor(unsafe, alert = null, forSos = false))
+    }
+
+    @Test
     fun theDailyRefreshWaitsForItsTimeUnlessTheClockWasWrong() {
         val day = RelayDirectory.REFRESH_INTERVAL_MS
         assertTrue(RelayDirectory.refreshDue(nextTry = 0L, now = now * 1000))

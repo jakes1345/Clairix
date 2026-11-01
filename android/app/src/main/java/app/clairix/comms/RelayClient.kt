@@ -546,7 +546,8 @@ class RelayClient(
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
      *
-     * Below the oldest safe version ([AppUpdate]) nothing but an SOS is sent:
+     * Below the oldest safe version ([AppUpdate]) nothing but an SOS, and
+     * what it needs to reach a member ([forSos], see [carriesSos]), is sent:
      * this throws [UNSAFE_VERSION], with the reason, before anything leaves.
      */
     fun send(
@@ -557,8 +558,9 @@ class RelayClient(
         urgent: Boolean = false,
         alert: String? = null,
         passKey: ByteArray? = null,
+        forSos: Boolean = false,
     ): String {
-        AppUpdate.sendRefusal(alert)?.let { throw RelayException(it, UNSAFE_VERSION) }
+        AppUpdate.sendRefusal(alert, forSos)?.let { throw RelayException(it, UNSAFE_VERSION) }
         val data = Base64.getEncoder().encodeToString(envelope)
         val body = JSONObject().put("to", to).put("envelope", data)
         if (claim != null) body.put("claim", claim)
