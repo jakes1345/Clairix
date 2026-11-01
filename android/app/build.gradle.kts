@@ -538,6 +538,12 @@ android {
         abortOnError = true
         checkDependencies = true
         baseline = file("lint-baseline.xml")
+        // CI's SDK knows API 36, so "targetSdk = 35" reads as out of date there
+        // (not on an SDK without 36). Moving to 36 is its own change: compileSdk,
+        // AGP and an API 36 emulator together, with the behaviour changes tested.
+        // Until it lands, the reminder stays in every report without failing it;
+        // take this line out with that change.
+        informational += "OldTargetApi"
     }
 
     sourceSets {
