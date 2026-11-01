@@ -110,6 +110,28 @@ class IocListTest {
     }
 
     @Test
+    fun aClockSetBackDropsNeitherTheBuiltInListNorAVerifiedDownload() {
+        // A phone whose clock reads a day before the list was issued.
+        val issued = 1_800_000_000L
+        val list = gz(doc(issued = issued).toString())
+        try {
+            IocList.parse(list, issued - 86_400)
+            fail("a download issued in the phone's future was accepted")
+        } catch (e: IllegalArgumentException) {
+            // expected: a download is still compared with the clock
+        }
+        // The copy built into the app and the cached, verified download are read without the clock.
+        assertEquals(issued, IocList.parse(list, nowSec = null).issued)
+        // Everything else about the list is still checked.
+        try {
+            IocList.parse(gz(doc().put("version", 2).toString()), nowSec = null)
+            fail("a list of another version was accepted")
+        } catch (e: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test
     fun aListLargerThanTheCapIsRefusedWhileItIsBeingRead() {
         val big = ByteArray((IocList.MAX_JSON_BYTES + 1).toInt()) { ' '.code.toByte() }
         val out = ByteArrayOutputStream()

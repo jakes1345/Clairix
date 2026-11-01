@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.clairix.Alert
@@ -14,6 +15,7 @@ import app.clairix.Severity
 import app.clairix.Store
 import app.clairix.analysis.StalkwareScanner.GrantKind
 import app.clairix.analysis.StalkwareScanner.GrantStatus
+import app.clairix.security.PlatformAlerts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -30,12 +32,15 @@ import org.json.JSONObject
 
 /**
  * Keeps the stalkerware check running without anyone opening its page: once a day (from the
- * scanner's health cycle and whenever Clairix comes to the front, [checkIfDue]), at boot and after
- * an update (BootReceiver), and a few seconds after an app is installed or changed while the
- * scanner runs ([watchPackages]). Each check is compared with the last one on record, and what is
- * new, an app that now scores HIGH or a grant nobody vouches for, is raised through
- * [Registry.publishAlert] as a HIGH platform alert; the HIGH apps go into Phone check, so the
- * hub's verdict includes them.
+ * scanner's health cycle and whenever Clairix comes to the front, [checkIfDue]), whenever Clairix
+ * comes to the front after an app was installed, updated or removed, at boot and after an update
+ * (BootReceiver), and a few seconds after an app is installed, changed or removed while the
+ * scanner runs ([watchPackages]). Each check is compared with what has already been raised, and
+ * what is new, an app that now scores HIGH or a grant nobody vouches for, goes on the timeline
+ * through [Registry.publishAlert] as HIGH platform alerts, with one notification per check at
+ * most; the HIGH apps go into Phone check, so the hub's verdict includes them. A check that an
+ * install started holds its notification until the screen has gone off and the phone has been
+ * unlocked again ([HeldNotice]): whoever installed the app may still be holding the phone.
  *
  * The record (the last check's findings, and the grants the owner marked as theirs with "This is
  * mine") is a sealed [Store] in the app's private files.
@@ -62,6 +67,40 @@ object StalkwareWatch {
         }
 
     // ── What is new since the last check ────────────────────────────────────
+
+    /**
+     * What [current] holds that has not been raised before, and the record of what has been raised
+     * after it. [alerted] is null before the first check, whose findings are the baseline: all of
+     * them are returned (to go on the timeline without a notification) and recorded. A key stays
+     * raised while its app is [installed], even if it drops out of a check and comes back (an app
+     * whose hidden-service signal leaves the week's window and returns after a reboot); a mark
+     * takes it out ([StalkwareRecord.unalert]), and so does uninstalling the app.
+     */
+    internal fun newFindings(current: Set<String>, alerted: Set<String>?, installed: (String) -> Boolean): Pair<Set<String>, Set<String>> {
+        if (alerted == null) return current to current
+        val kept = alerted.filterTo(HashSet()) { it in current || installed(packageOf(it)) }
+        return (current - kept) to (kept + current)
+    }
+
+    /** The package a finding key ([findings]) is about. */
+    internal fun packageOf(key: String): String = key.substringAfter(':')
+
+    /**
+     * The one notification for a check's [alerts], each of which went on the timeline without
+     * its own: the alert itself when there is one, otherwise one that carries them all.
+     */
+    internal fun notice(alerts: List<Alert>, now: Long): Alert? {
+        val first = alerts.firstOrNull() ?: return null
+        if (alerts.size == 1) return first.copy(silent = false)
+        return Alert(
+            id = "stalkerware_notice@$now", ts = now,
+            severity = alerts.maxOf { it.severity },
+            title = alerts.joinToString("; ") { it.title },
+            detail = alerts.joinToString("\n\n") { it.detail },
+            kind = EventKind.PLATFORM,
+            dedupeKey = "stalkerware_notice:" + alerts.mapNotNull { it.dedupeKey }.sorted().joinToString("|"),
+        )
+    }
 
     /** What a check found that the owner should hear about: each HIGH app (`app:<package>`) and each grant needing a look ([StalkwareScanner.grantKey]). */
     internal fun findings(result: StalkwareScanner.Result): Set<String> {
@@ -133,7 +172,7 @@ object StalkwareWatch {
     // ── Running a check ─────────────────────────────────────────────────────
 
     /**
-     * Scans now, compares the result with the last check on record and raises what is new, then
+     * Scans now, compares the result with what has been raised before and raises what is new, then
      * updates Phone check. [foreground] for a check started from a screen the owner is looking at:
      * its alerts go on the timeline without a notification. With [refreshList] the release is then
      * asked for a newer stalkerware list, at most once a day ([StalkwareIoc.refreshIfStale]), in
@@ -146,15 +185,22 @@ object StalkwareWatch {
         return result
     }
 
-    /** [check], unless one ran within [CHECK_EVERY_MS] in this process; from a screen it also refreshes the list. */
+    /**
+     * [check], unless one ran within [CHECK_EVERY_MS] in this process. From a screen
+     * ([foreground]) it also checks when an app was installed, updated or removed since the last
+     * check, as Android counts them (PackageManager.getChangedPackages, which needs no receiver, so
+     * this holds with the scanner off too). A caller that ran the check, and every call from a
+     * screen, then asks for a newer stalkerware list ([StalkwareIoc.refreshIfStale] keeps that to
+     * about once a day), so the scanner's daily check refreshes it as well.
+     */
     suspend fun checkIfDue(context: Context, foreground: Boolean) {
         if (!BuildConfig.FULL_ACCESS) return
-        if (!due(StalkwareScanner.results.value?.scannedAt, System.currentTimeMillis())) return
         val app = context.applicationContext
         val ran = withContext(Dispatchers.IO) {
+            if (!dueNow(app, foreground)) return@withContext false
             mutex.withLock {
                 // Another caller may have checked while this one waited.
-                if (due(StalkwareScanner.results.value?.scannedAt, System.currentTimeMillis())) {
+                if (dueNow(app, foreground)) {
                     checkLocked(app, foreground)
                     true
                 } else {
@@ -162,11 +208,39 @@ object StalkwareWatch {
                 }
             }
         }
-        if (ran && foreground) refreshListThenRecheck(app, foreground)
+        if (ran || foreground) refreshListThenRecheck(app, foreground)
+    }
+
+    private fun dueNow(app: Context, foreground: Boolean): Boolean {
+        val last = StalkwareScanner.results.value?.scannedAt
+        val changed = if (foreground && last != null) changedPackages(app) else null
+        return dueOnResume(last, System.currentTimeMillis(), changed, app.packageName)
     }
 
     internal fun due(lastScannedAt: Long?, now: Long): Boolean =
         lastScannedAt == null || now - lastScannedAt >= CHECK_EVERY_MS || now < lastScannedAt
+
+    /**
+     * [due], or an app other than Clairix ([self]) was installed, updated or removed since the
+     * last check ([changed], from PackageManager.getChangedPackages; null when nothing changed or
+     * it was not asked).
+     */
+    internal fun dueOnResume(lastScannedAt: Long?, now: Long, changed: List<String>?, self: String): Boolean =
+        due(lastScannedAt, now) || changed.orEmpty().any { it != self }
+
+    /** Android's count of package changes when the last check in this process began; -1 before one. */
+    @Volatile private var checkedAtSequence = -1
+
+    /** Null from getChangedPackages means nothing changed since boot, which is count 0. */
+    private fun packageSequence(app: Context): Int? =
+        runCatching { app.packageManager.getChangedPackages(0)?.sequenceNumber ?: 0 }.getOrNull()
+
+    /** The packages changed since the last check in this process; null when none did or that is unknown. */
+    private fun changedPackages(app: Context): List<String>? {
+        val since = checkedAtSequence
+        if (since < 0) return null
+        return runCatching { app.packageManager.getChangedPackages(since)?.packageNames }.getOrNull()
+    }
 
     /** Asks for a newer list in the background and checks again with it if one came. */
     private fun refreshListThenRecheck(app: Context, foreground: Boolean) {
@@ -179,20 +253,41 @@ object StalkwareWatch {
         }
     }
 
-    private fun checkLocked(app: Context, foreground: Boolean): StalkwareScanner.Result {
+    /**
+     * One check. Every alert goes on the timeline without a notification of its own, and one
+     * notification ([notice]) follows unless the check is [foreground] or the first: at once, or,
+     * for a check an install started ([held]), once the screen has gone off and the phone has been
+     * unlocked again ([HeldNotice]).
+     */
+    private fun checkLocked(app: Context, foreground: Boolean, held: Boolean = false): StalkwareScanner.Result {
         val rec = record(app)
+        val sequence = packageSequence(app)
         val result = StalkwareScanner.scan(app, rec.acknowledged(), StalkwareIoc.current(app))
+        sequence?.let { checkedAtSequence = it }
         val now = result.scannedAt
         val current = findings(result)
-        val previous = rec.lastFindings()
+        val alerted = rec.alerted()
+        val (new, raised) = newFindings(current, alerted) { pkg -> installed(app, pkg) }
         rec.saveFindings(current, now)
+        rec.saveAlerted(raised)
         Registry.updatePhoneHealth { SpywareHealth.merge(it, SpywareHealth.appFindings(result), now) }
-        val new = if (previous == null) current else current - previous
         val labels = HashMap<String, String>()
         val label = { pkg: String -> labels.getOrPut(pkg) { StalkwareScanner.appLabel(app, pkg) } }
-        for (alert in alerts(new, result, label, now, silent = foreground || previous == null)) Registry.publishAlert(alert)
+        val raisedNow = alerts(new, result, label, now, silent = true)
+        raisedNow.forEach { Registry.publishAlert(it) }
+        if (!foreground && alerted != null) {
+            notice(raisedNow, now)?.let { n ->
+                if (held) heldNotice.hold(n, screenOn = isInteractive(app)) else runCatching { PlatformAlerts.notify(app, n) }
+            }
+        }
         return result
     }
+
+    private fun installed(app: Context, pkg: String): Boolean =
+        runCatching { app.packageManager.getPackageInfo(pkg, 0) }.isSuccess
+
+    private fun isInteractive(app: Context): Boolean =
+        app.getSystemService(PowerManager::class.java)?.isInteractive ?: true
 
     /**
      * Runs a check for a boot or update broadcast: off the main thread, holding the broadcast
@@ -211,9 +306,10 @@ object StalkwareWatch {
         }
     }
 
-    /** Forgets the last check's findings ("Clear all data"); the owner's marks stay, like the trusted devices. */
+    /** Forgets the last check's findings and what was raised ("Clear all data"); the owner's marks stay, like the trusted devices. */
     fun clear(context: Context) {
         record(context).clearFindings()
+        heldNotice.drop()
     }
 
     // ── The owner's marks ───────────────────────────────────────────────────
@@ -231,6 +327,8 @@ object StalkwareWatch {
         val signer = StalkwareScanner.Origins(app).signer(packageName)?.takeIf { it.isNotEmpty() } ?: return false
         val now = System.currentTimeMillis()
         record(app).acknowledge(StalkwareScanner.ackKey(kind, packageName, signer), now)
+        // Should the mark be undone, the grant is raised again as new.
+        record(app).unalert(StalkwareScanner.grantKey(kind, packageName))
         val label = StalkwareScanner.appLabel(app, packageName)
         Registry.publishAlert(
             Alert(
@@ -253,15 +351,20 @@ object StalkwareWatch {
 
     private var watchedBy: Context? = null
     private var packageReceiver: BroadcastReceiver? = null
+    private var screenReceiver: BroadcastReceiver? = null
+    /** The notification of a check an install started, until the phone has been put down and unlocked again. */
+    private val heldNotice = HeldNotice()
     /** The check on its way after an install, if one is; guarded by this object, like [changed]. */
     private var pending: Job? = null
     /** An install or change arrived since the pending check began. */
     private var changed = false
 
     /**
-     * Checks again [PACKAGE_SETTLE_MS] after an app is installed, updated or has a component
-     * switched on or off (how stalkerware hides its icon), for as long as [context] (the scanner
-     * service) keeps it registered. Android delivers these only to a receiver registered at run time.
+     * Checks again [PACKAGE_SETTLE_MS] after an app is installed, updated, removed or has a
+     * component switched on or off (how stalkerware hides its icon), for as long as [context] (the
+     * scanner service) keeps it registered. Android delivers these only to a receiver registered at
+     * run time. The screen going off and the phone being unlocked are watched alongside, to post a
+     * held notification ([HeldNotice]).
      */
     fun watchPackages(context: Context) {
         synchronized(this) {
@@ -277,19 +380,44 @@ object StalkwareWatch {
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_PACKAGE_ADDED)
                 addAction(Intent.ACTION_PACKAGE_CHANGED)
+                // Sent once an app is gone, not for the removal half of an update.
+                addAction(Intent.ACTION_PACKAGE_FULLY_REMOVED)
                 addDataScheme("package")
+            }
+            val screen = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_OFF -> heldNotice.screenOff()
+                        Intent.ACTION_USER_PRESENT ->
+                            heldNotice.userPresent()?.let { n -> runCatching { PlatformAlerts.notify(app, n) } }
+                    }
+                }
+            }
+            val screenFilter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_USER_PRESENT)
             }
             runCatching { ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED) }
                 .onSuccess { packageReceiver = receiver; watchedBy = context }
                 .onFailure { Log.w(TAG, "could not watch for installs", it) }
+            runCatching { ContextCompat.registerReceiver(context, screen, screenFilter, ContextCompat.RECEIVER_NOT_EXPORTED) }
+                .onSuccess { screenReceiver = screen }
+                .onFailure { Log.w(TAG, "could not watch the screen", it) }
         }
     }
 
+    /**
+     * Stops watching. A notification still held stays held, and is posted at the first unlock after
+     * the screen goes off once watching starts again; the alerts it carries are on the timeline.
+     */
     fun stopWatchingPackages(context: Context) {
         synchronized(this) {
             val receiver = packageReceiver ?: return
-            runCatching { (watchedBy ?: context).unregisterReceiver(receiver) }
+            val owner = watchedBy ?: context
+            runCatching { owner.unregisterReceiver(receiver) }
+            screenReceiver?.let { r -> runCatching { owner.unregisterReceiver(r) } }
             packageReceiver = null
+            screenReceiver = null
             watchedBy = null
             pending?.cancel()
             pending = null
@@ -309,7 +437,7 @@ object StalkwareWatch {
                 while (true) {
                     delay(PACKAGE_SETTLE_MS)
                     synchronized(this@StalkwareWatch) { changed = false }
-                    runCatching { check(app, foreground = false) }.onFailure { Log.w(TAG, "check after an install failed", it) }
+                    runCatching { checkAfterInstall(app) }.onFailure { Log.w(TAG, "check after an install failed", it) }
                     val again = synchronized(this@StalkwareWatch) { changed.also { if (!it) pending = null } }
                     if (!again) break
                 }
@@ -317,6 +445,52 @@ object StalkwareWatch {
             pending = job
             job.start()
         }
+    }
+
+    /** A check an install, update or removal started: its notification is held ([HeldNotice]). */
+    private suspend fun checkAfterInstall(app: Context) {
+        withContext(Dispatchers.IO) { mutex.withLock { checkLocked(app, foreground = false, held = true) } }
+    }
+}
+
+/**
+ * The notification of a check an install started, held until the phone has been put down and
+ * picked up again: the screen has gone off ([screenOff]) after the last [hold], and the phone has
+ * then been unlocked ([userPresent]). Whoever installed or hid an app may still be holding the
+ * phone a few seconds later, and a heads-up alarm then would tell them Clairix is there and saw it.
+ * The alerts are on the timeline and the hub at once; only the notification waits. Checks that
+ * land while one is held are carried in the same notification.
+ */
+internal class HeldNotice {
+
+    private val held = ArrayList<Alert>()
+    private var screenWentOff = false
+
+    /** Holds [notice]. With the screen on it waits for the screen to go off first, even if it had before. */
+    @Synchronized
+    fun hold(notice: Alert, screenOn: Boolean) {
+        held += notice
+        screenWentOff = !screenOn
+    }
+
+    @Synchronized
+    fun screenOff() {
+        if (held.isNotEmpty()) screenWentOff = true
+    }
+
+    /** The one notification to post now the phone is unlocked; null when nothing is held or the screen has not gone off since. */
+    @Synchronized
+    fun userPresent(): Alert? {
+        if (held.isEmpty() || !screenWentOff) return null
+        val out = StalkwareWatch.notice(held.toList(), held.last().ts)
+        drop()
+        return out
+    }
+
+    @Synchronized
+    fun drop() {
+        held.clear()
+        screenWentOff = false
     }
 }
 
@@ -375,9 +549,42 @@ internal class StalkwareRecord(private val store: Store) {
         }
     }
 
+    /**
+     * Every finding already raised ([StalkwareWatch.newFindings]), or null before the first check.
+     * A record written before this was kept reads its last check's findings as the ones raised.
+     */
+    fun alerted(): Set<String>? {
+        synchronized(lock) {
+            val keys = root().optJSONArray(ALERTED) ?: return lastFindings()
+            return (0 until keys.length()).mapNotNullTo(HashSet()) { keys.optString(it).takeIf { k -> k.isNotEmpty() } }
+        }
+    }
+
+    fun saveAlerted(keys: Set<String>) {
+        synchronized(lock) {
+            root().put(ALERTED, JSONArray(keys.sorted()))
+            store.markDirty()
+            store.flush()
+        }
+    }
+
+    /** Forgets that [key] was raised, so it is raised again should it come back. */
+    fun unalert(key: String) {
+        synchronized(lock) {
+            val keys = root().optJSONArray(ALERTED) ?: return
+            val kept = (0 until keys.length()).map { keys.optString(it) }.filter { it.isNotEmpty() && it != key }
+            if (kept.size == keys.length()) return
+            root().put(ALERTED, JSONArray(kept))
+            store.markDirty()
+            store.flush()
+        }
+    }
+
     fun clearFindings() {
         synchronized(lock) {
-            if (root().remove(LAST) == null) return
+            val last = root().remove(LAST)
+            val alerted = root().remove(ALERTED)
+            if (last == null && alerted == null) return
             store.markDirty()
             store.flush()
         }
@@ -386,5 +593,6 @@ internal class StalkwareRecord(private val store: Store) {
     private companion object {
         const val ACKS = "acks"
         const val LAST = "last"
+        const val ALERTED = "alerted"
     }
 }

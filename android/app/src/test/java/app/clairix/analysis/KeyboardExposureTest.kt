@@ -23,6 +23,9 @@ class KeyboardExposureTest {
             val f = KeyboardExposure.fact(KeyboardExposure.Keyboard(pkg, label, internet = true, system = true, vouched = true))!!
             // Every stock Pixel and Galaxy has one: no severity, the same advice.
             assertNull(label, f.severity)
+            // Its own id, so Phone check marks it as information, not as a passed check.
+            assertEquals(KeyboardExposure.STOCK_INTERNET_FACT_ID, f.id)
+            assertTrue(SpywareHealth.informational(f.id))
             assertEquals("$label: known keyboard, can reach the internet", f.value)
             assertTrue(f.detail!!.contains("turn off personalisation"))
             assertTrue(!f.detail!!.contains("treat it as spyware"))

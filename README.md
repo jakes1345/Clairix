@@ -21,7 +21,7 @@ just as plainly, what it cannot do.
 | Find a hidden camera | Point the phone around the room and it spots the glint a lens throws back when it can see you |
 | Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers, and says FOLLOWING only once one away from its owner has been heard at places far apart while your own position shows you travelled between them; anything else that does the same is reported as travelling with you, not as a tracker |
 | Catch a fake cell tower | Learns the towers that are normal for the places you go and warns when one breaks the rules |
-| Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
+| Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app that is not part of the phone's own system against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online. United States only for now: the 50 states, DC and Puerto Rico. A route takes a position every second; below 15 % with no charger, traffic and reports slow to every 5 minutes |
@@ -516,8 +516,9 @@ week without the app being opened. The Comms edition comes to 3, listed as
 medium. The Play edition comes to 2, below the 3 at which an app is listed,
 or 4 after a week unopened; its device admin is known to the model, since it
 comes from a store. Other scanners weigh these things differently. A unit
-test feeds Clairix's own manifest to the model and fails when a permission
-change moves these numbers.
+test reads Clairix's own manifests (`src/main`, `src/suite`, `src/fullSuite`),
+feeds their permissions to the model and fails when a permission change moves
+these numbers.
 
 ---
 

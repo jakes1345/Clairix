@@ -58,14 +58,18 @@ object KeyboardExposure {
         return Keyboard(pkg, label, internet, system, vouched)
     }
 
+    /** The row id of a genuine stock keyboard that can reach the internet: information, neither a pass nor an issue. */
+    const val STOCK_INTERNET_FACT_ID = "keyboard_stock_internet"
+
     fun fact(k: Keyboard?): HealthFact? {
         k ?: return null
         val id = "keyboard"
         return if (k.internet) {
-            // The stock keyboards, genuine: the same advice, as information.
+            // The stock keyboards, genuine: the same advice, as information, under an id of its own
+            // so Phone check gives it a neutral mark, not a passed check's.
             val stock = k.vouched && k.packageName in HONOUR_NO_LEARNING
             HealthFact(
-                id, "Apps", "Keyboard",
+                if (stock) STOCK_INTERNET_FACT_ID else id, "Apps", "Keyboard",
                 if (stock) "${k.label}: known keyboard, can reach the internet" else "${k.label}: can reach the internet",
                 if (stock) null else Severity.MEDIUM,
                 "${k.label} sees everything you type in every app, before any app encrypts it, and has internet access. " +

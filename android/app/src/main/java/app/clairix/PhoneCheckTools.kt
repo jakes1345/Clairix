@@ -150,10 +150,12 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                     if (r.owners.isNotEmpty()) KeyValueRow("Managed by", r.owners.joinToString(", ") { StalkwareScanner.appLabel(context, it.packageName) }, mono = false)
                     KeyValueRow("Other profiles", if (r.otherProfiles == 0) "None visible" else "${r.otherProfiles}, not scanned", mono = false)
                     if (r.listApps > 0) KeyValueRow("Stalkerware list", "${r.listApps} apps · issued ${tDay(r.listIssued * 1000)}", mono = false)
+                    else if (BuildConfig.FULL_ACCESS) KeyValueRow("Stalkerware list", "Not loaded: apps were checked by behaviour only", mono = false)
                 }
             }
             managedBySection(r, context, onMine)
-            if (r.high.isEmpty() && r.medium.isEmpty()) {
+            // Not while an owner or a grant needs a look: a green card beside them would say the phone is clean.
+            if (r.clean) {
                 item(key = "§clean") {
                     ClairixCard {
                         Text("No suspicious apps found", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.safe)
@@ -243,8 +245,9 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                             context = context,
                             actionLabel = "Open in Settings",
                             action = StalkwareScanner.appDetailsIntent(pkg),
-                            // A known name alone is not enough: the scanner vouches only for one from a store or the system image.
-                            known = pkg in r.vouchedAdmins,
+                            // A known name alone is not enough: the scanner vouches only for one from a store or the
+                            // system image, and never for an owner or an unconfirmed management app, whatever its name.
+                            known = r.adminStatus(pkg) == StalkwareScanner.GrantStatus.KNOWN,
                         )
                     }
                 }
@@ -393,8 +396,8 @@ private fun LazyListScope.accessSections(
             }
         }
     }
-    // The clean card carries this when nothing is flagged; otherwise it is said here.
-    if (r.high.isNotEmpty() || r.medium.isNotEmpty()) {
+    // The clean card carries this when nothing needs a look; otherwise it is said here.
+    if (!r.clean) {
         item(key = "§profiles") {
             Notice(Tone.Neutral, profilesCaveat(r), title = "Not checked")
         }

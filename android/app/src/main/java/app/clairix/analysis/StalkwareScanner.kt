@@ -101,7 +101,11 @@ object StalkwareScanner {
         val suspiciousImes: List<String>,
         /** Every app holding an active device-admin grant. */
         val activeDeviceAdmins: List<String>,
-        /** The members of [activeDeviceAdmins] vouched for: a known admin app from a store or the system image. */
+        /**
+         * The members of [activeDeviceAdmins] vouched for: those whose grant ([adminStatus]) is
+         * [GrantStatus.KNOWN] or [GrantStatus.YOURS] ([adminVouched]). Never a device or profile
+         * owner or a management app the owner has not confirmed, whatever its name.
+         */
         val vouchedAdmins: Set<String>,
         val usageAccessGranted: Boolean,
         val scannedAt: Long,
@@ -127,6 +131,18 @@ object StalkwareScanner {
         val medium: List<SuspiciousApp> get() = apps.filter { it.severity == Severity.MEDIUM }
 
         fun status(kind: GrantKind, packageName: String): GrantStatus? = grants[grantKey(kind, packageName)]
+
+        /** The verdict on [packageName]'s device admin: an owner's is its owner grant, which is the same grant. */
+        fun adminStatus(packageName: String): GrantStatus? =
+            status(owners.firstOrNull { it.packageName == packageName }?.kind ?: GrantKind.DEVICE_ADMIN, packageName)
+
+        /**
+         * Nothing needs a look: no app scores high or medium, and no grant (an owner included) is
+         * unknown or waiting to be confirmed. Only then does the page say no suspicious apps were found.
+         */
+        val clean: Boolean
+            get() = high.isEmpty() && medium.isEmpty() &&
+                grants.values.none { it == GrantStatus.UNKNOWN || it == GrantStatus.CONFIRM }
     }
 
     private const val HIGH_SCORE = 5
@@ -542,6 +558,11 @@ object StalkwareScanner {
         val acknowledged: Set<GrantKind> = emptySet(),
         /** Its entry on the stalkerware list, when its package name or a signing certificate is there. */
         val knownStalkerware: IocMatch? = null,
+        /**
+         * First installed before the running version of Android was built (`Build.TIME`), so its
+         * install record may have been carried over an OS upgrade, which keeps only the installer.
+         */
+        val installedBeforeSystemBuild: Boolean = false,
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -684,6 +705,37 @@ object StalkwareScanner {
      *   with "(a known app)" and score nothing, when they come from a store or the system
      *   image. A sideloaded app using a known name is scored as an impostor instead.
      */
+    /** Why [f], installed from outside a store, reads as sideloaded: what its install record says. */
+    private fun sideloadReason(f: AppFacts): String = when {
+        // Android records no initiating app for an install over adb or by root, forgets it
+        // once the app that ran the install is uninstalled, and never had it for a record
+        // carried over an OS upgrade, so this is said as what it is, not as proof of a forgery.
+        f.spoofedInstaller && f.installer == null && f.installedBeforeSystemBuild ->
+            "installingPackageName says ${f.declaredInstaller}, but no app on the phone is recorded as having " +
+                "installed it. It was installed before this version of Android was built, so its record may " +
+                "simply predate an OS upgrade, or the app that installed it has since been uninstalled; it is " +
+                "treated as not from a store"
+        f.spoofedInstaller && f.installer == null ->
+            "installingPackageName says ${f.declaredInstaller}, but initiatingPackageName is empty: no app on " +
+                "the phone is recorded as having installed it, and it was installed after this version of " +
+                "Android was built, so it is unlikely to be left over from an OS upgrade. That is how an install over adb " +
+                "or by root naming ${f.declaredInstaller} looks, and also how any install looks once the app " +
+                "that ran it has been uninstalled"
+        f.spoofedInstaller ->
+            "installingPackageName says ${f.declaredInstaller}, but initiatingPackageName is ${f.installer}: the installer is forged"
+        f.installer in OPEN_STORES ->
+            "installed by ${f.installer}, an open store that was itself installed from outside a store, so " +
+                "Clairix cannot tell it from a copy made to look like it (usual for F-Droid)"
+        f.installer in STORES ->
+            "installed by ${f.installer}, which is not the genuine store (it was not preloaded or installed by one)"
+        else -> when (f.installer) {
+            null, "com.android.shell" -> "installed from a computer (adb) or an unknown source"
+            "com.android.packageinstaller", "com.google.android.packageinstaller",
+            "com.samsung.android.packageinstaller" -> "installed from an APK file, not a store"
+            else -> "installed by ${f.installer}, not a store"
+        }
+    }
+
     internal fun assess(f: AppFacts): List<Signal> {
         val out = ArrayList<Signal>()
         val name = f.name
@@ -691,29 +743,7 @@ object StalkwareScanner {
         f.knownStalkerware?.let { out += Signal(KNOWN_STALKERWARE_SCORE, knownStalkerwareReason(it)) }
 
         if (f.sideloaded) {
-            out += Signal(SIDELOAD_SCORE, when {
-                // Android records no initiating app for an install over adb or by root, and also
-                // forgets it once the app that ran the install is uninstalled, so this is said as
-                // what it is, not as proof of a forgery.
-                f.spoofedInstaller && f.installer == null ->
-                    "installingPackageName says ${f.declaredInstaller}, but initiatingPackageName is empty: no app on " +
-                        "the phone is recorded as having installed it, which is how an install over adb or by root " +
-                        "naming ${f.declaredInstaller} looks, and also how any install looks once the app that ran it " +
-                        "has been uninstalled"
-                f.spoofedInstaller ->
-                    "installingPackageName says ${f.declaredInstaller}, but initiatingPackageName is ${f.installer}: the installer is forged"
-                f.installer in OPEN_STORES ->
-                    "installed by ${f.installer}, an open store that was itself installed from outside a store, so " +
-                        "Clairix cannot tell it from a copy made to look like it (usual for F-Droid)"
-                f.installer in STORES ->
-                    "installed by ${f.installer}, which is not the genuine store (it was not preloaded or installed by one)"
-                else -> when (f.installer) {
-                    null, "com.android.shell" -> "installed from a computer (adb) or an unknown source"
-                    "com.android.packageinstaller", "com.google.android.packageinstaller",
-                    "com.samsung.android.packageinstaller" -> "installed from an APK file, not a store"
-                    else -> "installed by ${f.installer}, not a store"
-                }
-            })
+            out += Signal(SIDELOAD_SCORE, sideloadReason(f))
         }
         val impostor = !f.nameTrusted && name in KNOWN_NAMES
         if (impostor) {
@@ -817,6 +847,13 @@ object StalkwareScanner {
 
     /** Whether [f] is a device admin the scanner vouches for: a known name from a store or the system image. */
     internal fun isVouchedAdmin(f: AppFacts): Boolean = vouched(f, KNOWN_ADMINS)
+
+    /** Whether an app first installed at [firstInstallTs] predates a system built at [systemBuiltTs]; false when either is unknown. */
+    internal fun installedBefore(firstInstallTs: Long, systemBuiltTs: Long): Boolean =
+        firstInstallTs > 0L && systemBuiltTs > 0L && firstInstallTs < systemBuiltTs
+
+    /** Whether a device admin whose grant (its owner grant, for an owner) is [status] counts as vouched for ([Result.vouchedAdmins]). */
+    internal fun adminVouched(status: GrantStatus): Boolean = status == GrantStatus.KNOWN || status == GrantStatus.YOURS
 
     /** Whether [f] is an accessibility service the scanner vouches for: a known name from a store or the system image. */
     internal fun isVouchedAccessibility(f: AppFacts): Boolean = vouched(f, KNOWN_ACCESSIBILITY)
@@ -962,10 +999,11 @@ object StalkwareScanner {
                 if (listener) judge(GrantKind.NOTIFICATION_LISTENER)
                 if (ime && judge(GrantKind.KEYBOARD).let { it == GrantStatus.KNOWN || it == GrantStatus.YOURS }) vouchedImes += name
                 if (admin) {
-                    if (isVouchedAdmin(origin)) vouchedAdmins += name
-                    // An owner is judged as an owner; its device admin is the same grant.
+                    // An owner is judged as an owner; its device admin is the same grant. A known
+                    // name is not enough to vouch for it: an owner, or a management app nobody
+                    // confirmed, needs a look whatever its name (Family Link runs as Play services).
                     val kind = ownerKinds[name] ?: GrantKind.DEVICE_ADMIN
-                    judge(kind)
+                    if (adminVouched(judge(kind))) vouchedAdmins += name
                 }
             }
             if (system && !systemAppWorthScoring(name, listener, a11y, ime)) continue
@@ -980,6 +1018,7 @@ object StalkwareScanner {
                 imeEnabled = ime,
                 deviceAdminActive = admin,
                 hiddenService = usageAccess && name in fgsPkgs && name !in resumedPkgs,
+                installedBeforeSystemBuild = installedBefore(pkg.firstInstallTime, Build.TIME),
             )
             val signals = assess(facts)
             val score = signals.sumOf { it.points }

@@ -24,6 +24,40 @@ internal object SpywareHealth {
     fun grantId(prefix: String, kind: GrantKind, packageName: String, component: String? = null): String =
         "$prefix${kind.key}:$packageName" + (component?.let { "/$it" } ?: "")
 
+    /**
+     * Rows of these kinds describe rather than judge, so Phone check gives them a neutral mark,
+     * not a passed check's: every "Access granted" row (Clairix vouching for an app, or the owner
+     * marking it as theirs, is not a check the app passed) and the stock keyboard that can reach
+     * the internet ([KeyboardExposure.STOCK_INTERNET_FACT_ID]).
+     */
+    fun informational(id: String): Boolean = id.startsWith(GRANTED_PREFIX) || id == KeyboardExposure.STOCK_INTERNET_FACT_ID
+
+    /** One device admin grant to judge in Phone check; [component] is null for an owner, which is judged once per package. */
+    data class AdminGrant(val kind: GrantKind, val packageName: String, val component: String?)
+
+    /**
+     * The grants among [admins] (package and receiver class of each active admin): an owner once
+     * per package, whichever of its admin components are active, since being the owner is one
+     * grant whatever receivers it holds; any other admin once per component. [ownerOf] is
+     * [StalkwareScanner.ownerOf]: true for the device owner, false for this profile's owner, null
+     * for neither; it is asked once per package.
+     */
+    fun adminGrants(admins: List<Pair<String, String>>, ownerOf: (String) -> Boolean?): List<AdminGrant> {
+        val owner = HashMap<String, Boolean?>()
+        val out = ArrayList<AdminGrant>()
+        for ((pkg, component) in admins) {
+            val isOwner = if (pkg in owner) owner[pkg] else ownerOf(pkg).also { owner[pkg] = it }
+            when (isOwner) {
+                null -> out += AdminGrant(GrantKind.DEVICE_ADMIN, pkg, component)
+                else -> {
+                    val kind = if (isOwner) GrantKind.DEVICE_OWNER else GrantKind.PROFILE_OWNER
+                    if (out.none { it.kind == kind && it.packageName == pkg }) out += AdminGrant(kind, pkg, null)
+                }
+            }
+        }
+        return out
+    }
+
     /** The package a finding or row id is about, or null for an id of some other kind. */
     fun packageOf(id: String): String? = when {
         id.startsWith(APP_PREFIX) -> id.removePrefix(APP_PREFIX)

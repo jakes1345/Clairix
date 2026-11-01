@@ -47,8 +47,6 @@ internal object SafetyFirst {
     /** At the top of the Wipe page, where the evidence Clairix holds is about to go. */
     const val TITLE_WIPE = "If you found a tracker or spyware"
 
-    /** How the owner check finishes "Enter your Clairix passcode to ...", as on the other Export buttons. */
-
     /** Owners of the phone or its profile the owner has not said she enrolled herself. */
     private fun unconfirmedOwners(r: StalkwareScanner.Result): List<String> =
         r.owners.filter { r.status(it.kind, it.packageName) != StalkwareScanner.GrantStatus.YOURS }.map { it.packageName }

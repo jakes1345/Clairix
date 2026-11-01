@@ -29,6 +29,46 @@ class SpywareHealthTest {
     )
 
     @Test
+    fun anOwnerIsOneGrantPerPackageWhateverAdminReceiversItHolds() {
+        // Family Link on a Pixel: Play services holds Find My Device's admin and the supervision receiver.
+        val gms = "com.google.android.gms"
+        val admins = listOf(
+            gms to "com.google.android.gms.mdm.receivers.MdmDeviceAdminReceiver",
+            gms to "com.google.android.gms.kids.account.receiver.ProfileOwnerReceiver",
+            "com.example.admin" to "com.example.admin.A",
+            "com.example.admin" to "com.example.admin.B",
+        )
+        var asked = 0
+        val grants = SpywareHealth.adminGrants(admins) { pkg -> asked++; if (pkg == gms) false else null }
+        assertEquals(
+            listOf(
+                SpywareHealth.AdminGrant(GrantKind.PROFILE_OWNER, gms, null),
+                SpywareHealth.AdminGrant(GrantKind.DEVICE_ADMIN, "com.example.admin", "com.example.admin.A"),
+                SpywareHealth.AdminGrant(GrantKind.DEVICE_ADMIN, "com.example.admin", "com.example.admin.B"),
+            ),
+            grants,
+        )
+        assertEquals("asked once per package", 2, asked)
+        assertEquals(
+            listOf(SpywareHealth.AdminGrant(GrantKind.DEVICE_OWNER, "com.airwatch.androidagent", null)),
+            SpywareHealth.adminGrants(listOf("com.airwatch.androidagent" to "X", "com.airwatch.androidagent" to "Y")) { true },
+        )
+    }
+
+    @Test
+    fun grantedRowsAndTheStockKeyboardAreInformationNotAPassedCheck() {
+        val mine = SpywareHealth.grantedFact(GrantKind.ACCESSIBILITY, "Button Mapper", "com.example.mapper", "Svc", GrantStatus.YOURS)
+        assertNull(mine.severity)
+        assertTrue(SpywareHealth.informational(mine.id))
+        val owner = SpywareHealth.grantedFact(GrantKind.DEVICE_OWNER, "Intune", "com.microsoft.windowsintune.companyportal", null, GrantStatus.YOURS)
+        assertTrue(SpywareHealth.informational(owner.id))
+        assertTrue(SpywareHealth.informational(KeyboardExposure.STOCK_INTERNET_FACT_ID))
+        // A keyboard with no internet access, or one flagged, is not information.
+        assertFalse(SpywareHealth.informational("keyboard"))
+        assertFalse(SpywareHealth.informational(SpywareHealth.grantId(SpywareHealth.GRANT_PREFIX, GrantKind.ACCESSIBILITY, "com.spy")))
+    }
+
+    @Test
     fun onlyHighAppsBecomeFindingsAndKnownStalkerwareIsCritical() {
         val findings = SpywareHealth.appFindings(result(
             app("com.mxspy", "Copy9", 7, knownAs = "TheTruthSpy"),

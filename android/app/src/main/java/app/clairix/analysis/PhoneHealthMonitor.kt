@@ -191,6 +191,27 @@ class PhoneHealthMonitor(private val context: Context) {
      * owner marked as theirs. Known and preloaded listeners and keyboards add nothing here; the
      * stalkerware page lists them all.
      */
+    /** One grant of [kind] to [pkg]: a finding when it is suspicious, a fact when it is known or the owner's. */
+    private fun judgeGrant(
+        kind: StalkwareScanner.GrantKind,
+        pkg: String,
+        name: String,
+        component: String?,
+        facts: StalkwareScanner.AppFacts,
+        findings: MutableList<PhoneHealthFinding>,
+        granted: MutableList<HealthFact>
+    ) {
+        val status = StalkwareScanner.grantStatus(kind, facts)
+        val severity = StalkwareScanner.grantSeverity(kind, status)
+        when {
+            severity != null -> findings += SpywareHealth.grantFinding(kind, name, pkg, component, status, severity)
+            status == StalkwareScanner.GrantStatus.KNOWN || status == StalkwareScanner.GrantStatus.YOURS -> when (kind) {
+                StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, StalkwareScanner.GrantKind.KEYBOARD -> Unit
+                else -> granted += SpywareHealth.grantedFact(kind, name, pkg, component, status)
+            }
+        }
+    }
+
     private fun grants(): Grants {
         val findings = ArrayList<PhoneHealthFinding>()
         val granted = ArrayList<HealthFact>()
@@ -212,15 +233,7 @@ class PhoneHealthMonitor(private val context: Context) {
             // An app Android will not show is judged as unknown: nothing can vouch for it.
             val facts = origins.facts(pkg, acknowledged, ioc)
                 ?: StalkwareScanner.AppFacts(pkg, system = false, installer = null, hasLauncher = true)
-            val status = StalkwareScanner.grantStatus(kind, facts)
-            val severity = StalkwareScanner.grantSeverity(kind, status)
-            when {
-                severity != null -> findings += SpywareHealth.grantFinding(kind, name, pkg, component, status, severity)
-                status == StalkwareScanner.GrantStatus.KNOWN || status == StalkwareScanner.GrantStatus.YOURS -> when (kind) {
-                    StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, StalkwareScanner.GrantKind.KEYBOARD -> Unit
-                    else -> granted += SpywareHealth.grantedFact(kind, name, pkg, component, status)
-                }
-            }
+            judgeGrant(kind, pkg, name, component, facts, findings, granted)
         }
 
         // Accessibility services — spyware heavily abuses these
@@ -250,18 +263,16 @@ class PhoneHealthMonitor(private val context: Context) {
                 .forEach { pkg -> judge(StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, pkg, label(pkg), null) }
         }
 
-        // Device admin — MDM / stalkerware control channel; an owner is judged as one
+        // Device admin — MDM / stalkerware control channel; an owner is judged as one, once per
+        // package and under the app's own label, whichever of its admin receivers are active
         runCatching {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            dpm.activeAdmins?.forEach { admin ->
-                if (admin.packageName == self) return@forEach
-                val name = adminLabel(admin) ?: label(admin.packageName)
-                val kind = when (StalkwareScanner.ownerOf(context, admin.packageName)) {
-                    true -> StalkwareScanner.GrantKind.DEVICE_OWNER
-                    false -> StalkwareScanner.GrantKind.PROFILE_OWNER
-                    null -> StalkwareScanner.GrantKind.DEVICE_ADMIN
-                }
-                judge(kind, admin.packageName, name, admin.className)
+            val admins = dpm.activeAdmins.orEmpty().filter { it.packageName != self }
+            val grants = SpywareHealth.adminGrants(admins.map { it.packageName to it.className }) { StalkwareScanner.ownerOf(context, it) }
+            for (g in grants) {
+                val receiver = g.component?.let { c -> admins.firstOrNull { it.packageName == g.packageName && it.className == c } }
+                val name = receiver?.let { adminLabel(it) } ?: label(g.packageName)
+                judge(g.kind, g.packageName, name, g.component)
             }
         }
 

@@ -10,6 +10,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 
 class StalkwareScannerTest {
     private val gboard = "com.google.android.inputmethod.latin"
@@ -220,6 +223,29 @@ class StalkwareScannerTest {
     // ── Install source: who really installed it, and whether that store is genuine ──
 
     private val fdroid = "org.fdroid.fdroid"
+
+    @Test
+    fun anInstallRecordFromBeforeTheSystemWasBuiltIsNotCalledAnAdbInstall() {
+        // A years-old Play app on a phone upgraded since: Android carried over only the installer.
+        val old = AppFacts("com.example.notes", false, installer = null, hasLauncher = true, declaredInstaller = play, installedBeforeSystemBuild = true)
+        val reason = StalkwareScanner.assess(old).map { it.reason }.single { "installingPackageName says $play" in it }
+        assertTrue(reason, "predate an OS upgrade" in reason && "uninstalled" in reason)
+        assertFalse(reason, "adb" in reason || "root" in reason || "forged" in reason)
+        // The score is that of any install from outside a store.
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE, score(old))
+        // Installed after this Android was built, it cannot be a carried-over record.
+        val recent = old.copy(installedBeforeSystemBuild = false)
+        val recentReason = StalkwareScanner.assess(recent).map { it.reason }.single { "installingPackageName says $play" in it }
+        assertTrue(recentReason, "unlikely to be left over from an OS upgrade" in recentReason && "adb" in recentReason)
+    }
+
+    @Test
+    fun installedBeforeComparesTheInstallWithTheSystemBuildAndNeedsBoth() {
+        assertTrue(StalkwareScanner.installedBefore(firstInstallTs = 1_000L, systemBuiltTs = 2_000L))
+        assertFalse(StalkwareScanner.installedBefore(firstInstallTs = 3_000L, systemBuiltTs = 2_000L))
+        assertFalse(StalkwareScanner.installedBefore(firstInstallTs = 0L, systemBuiltTs = 2_000L))
+        assertFalse(StalkwareScanner.installedBefore(firstInstallTs = 1_000L, systemBuiltTs = 0L))
+    }
 
     @Test
     fun anAdbInstallNamingPlayAsItsInstallerIsASideload() {
@@ -512,6 +538,43 @@ class StalkwareScannerTest {
         assertEquals(GrantStatus.CONFIRM, StalkwareScanner.grantStatus(GrantKind.DEVICE_OWNER, intune))
     }
 
+    private fun result(
+        apps: List<StalkwareScanner.SuspiciousApp> = emptyList(),
+        grants: Map<String, GrantStatus> = emptyMap(),
+        owners: List<StalkwareScanner.Owner> = emptyList(),
+    ) = StalkwareScanner.Result(
+        apps = apps, notificationListeners = emptyList(), accessibilityServices = emptyList(), vpnApps = emptyList(),
+        suspiciousImes = emptyList(), activeDeviceAdmins = owners.map { it.packageName }, vouchedAdmins = emptySet(),
+        usageAccessGranted = true, scannedAt = 0L, grants = grants, owners = owners,
+    )
+
+    @Test
+    fun anOwnerOrAnUnconfirmedManagementAppIsNeverAVouchedAdminAndNeverClean() {
+        // Only a known admin or one the owner marked counts as vouched for.
+        assertTrue(StalkwareScanner.adminVouched(GrantStatus.KNOWN))
+        assertTrue(StalkwareScanner.adminVouched(GrantStatus.YOURS))
+        assertFalse(StalkwareScanner.adminVouched(GrantStatus.CONFIRM))
+        assertFalse(StalkwareScanner.adminVouched(GrantStatus.UNKNOWN))
+        // Family Link: Play services owns the profile. Its admin reads as its owner grant, not as a known admin.
+        val gms = "com.google.android.gms"
+        val supervised = result(
+            grants = mapOf(StalkwareScanner.grantKey(GrantKind.PROFILE_OWNER, gms) to GrantStatus.CONFIRM),
+            owners = listOf(StalkwareScanner.Owner(gms, deviceOwner = false)),
+        )
+        assertEquals(GrantStatus.CONFIRM, supervised.adminStatus(gms))
+        assertFalse("no clean card beside an unconfirmed owner", supervised.clean)
+        // Confirmed, it is clean.
+        val confirmed = supervised.copy(grants = mapOf(StalkwareScanner.grantKey(GrantKind.PROFILE_OWNER, gms) to GrantStatus.YOURS))
+        assertEquals(GrantStatus.YOURS, confirmed.adminStatus(gms))
+        assertTrue(confirmed.clean)
+        // A plain admin reads as itself; an unknown grant of any kind is not clean either.
+        val plain = result(grants = mapOf(StalkwareScanner.grantKey(GrantKind.DEVICE_ADMIN, gms) to GrantStatus.KNOWN))
+        assertEquals(GrantStatus.KNOWN, plain.adminStatus(gms))
+        assertTrue(plain.clean)
+        assertFalse(result(grants = mapOf(StalkwareScanner.grantKey(GrantKind.ACCESSIBILITY, "com.spy") to GrantStatus.UNKNOWN)).clean)
+        assertTrue("preloaded keyboards need no look", result(grants = mapOf(StalkwareScanner.grantKey(GrantKind.KEYBOARD, "com.oem.ime") to GrantStatus.PRELOADED)).clean)
+    }
+
     @Test
     fun confirmingAnOwnerCoversItsDeviceAdminAndMarksAreTiedToTheSigner() {
         val pkg = "com.airwatch.androidagent"
@@ -526,25 +589,68 @@ class StalkwareScannerTest {
 
     // ── What this model makes of Clairix itself ──────────────────────────────
     // The README ("What Clairix looks like to another scanner, and what Settings shows") quotes
-    // these numbers; a manifest change that moves them fails here first. Clairix's own scan skips
-    // its own package.
+    // these numbers. The facts are read from Clairix's own manifests, so a permission change that
+    // moves them fails here first. Clairix's own scan skips its own package.
 
-    /** Clairix as the model reads it: src/main/AndroidManifest.xml, plus src/suite/AndroidManifest.xml for [suite]. */
-    private fun clairix(installer: String?, adminActive: Boolean, hiddenService: Boolean = false, suite: Boolean = true) = AppFacts(
-        name = "app.clairix", system = false, installer = installer, hasLauncher = true,
-        requested = setOf(
-            Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.INTERNET,
-            Manifest.permission.RECEIVE_BOOT_COMPLETED, Manifest.permission.WAKE_LOCK,
-        ) + if (suite) setOf(
-            Manifest.permission.ACCESS_BACKGROUND_LOCATION, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.QUERY_ALL_PACKAGES,
-            Manifest.permission.PACKAGE_USAGE_STATS, Manifest.permission.SCHEDULE_EXACT_ALARM, Manifest.permission.NFC,
-        ) else emptySet(),
-        // The unlock ledger's admin receiver (suite only); no listener, accessibility service, keyboard or VPN.
-        declared = if (suite) setOf(Manifest.permission.BIND_DEVICE_ADMIN) else emptySet(),
-        deviceAdminActive = adminActive,
-        hiddenService = hiddenService,
-    )
+    /**
+     * Every `<uses-permission>` in [manifests] (paths from the module directory, where Gradle runs
+     * unit tests), and every `BIND_*` permission a component there declares itself protected by.
+     */
+    private fun manifestPermissions(vararg manifests: String): Pair<Set<String>, Set<String>> {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val requested = HashSet<String>()
+        val declared = HashSet<String>()
+        for (path in manifests) {
+            val file = File(path)
+            assertTrue("$path is missing", file.isFile)
+            val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            val doc = factory.newDocumentBuilder().parse(file)
+            val uses = doc.getElementsByTagName("uses-permission")
+            for (i in 0 until uses.length) {
+                (uses.item(i) as Element).getAttributeNS(ns, "name").takeIf { it.isNotEmpty() }?.let { requested += it }
+            }
+            val all = doc.getElementsByTagName("*")
+            for (i in 0 until all.length) {
+                val permission = (all.item(i) as Element).getAttributeNS(ns, "permission")
+                if (permission.startsWith("android.permission.BIND_")) declared += permission
+            }
+        }
+        return requested to declared
+    }
+
+    /**
+     * Clairix as the model reads it, from its manifests: src/main, plus src/suite for [suite] (Play
+     * and Full), plus src/fullSuite for the Full edition ([full]).
+     */
+    private fun clairix(installer: String?, adminActive: Boolean, hiddenService: Boolean = false, suite: Boolean = true, full: Boolean = suite): AppFacts {
+        val manifests = listOfNotNull(
+            "src/main/AndroidManifest.xml",
+            "src/suite/AndroidManifest.xml".takeIf { suite },
+            "src/fullSuite/AndroidManifest.xml".takeIf { suite && full },
+        )
+        val (requested, declared) = manifestPermissions(*manifests.toTypedArray())
+        return AppFacts(
+            name = "app.clairix", system = false, installer = installer, hasLauncher = true,
+            requested = requested, declared = declared,
+            deviceAdminActive = adminActive,
+            hiddenService = hiddenService,
+        )
+    }
+
+    @Test
+    fun theManifestsAreReadAsTheyStand() {
+        val full = clairix(installer = null, adminActive = false)
+        // Read, not copied: the location, microphone and package permissions come from the files.
+        assertTrue(Manifest.permission.RECORD_AUDIO in full.requested)
+        assertTrue(Manifest.permission.ACCESS_BACKGROUND_LOCATION in full.requested)
+        assertTrue(Manifest.permission.QUERY_ALL_PACKAGES in full.requested)
+        // The unlock ledger's admin receiver (suite), and Full's card emulation service.
+        assertEquals(setOf(Manifest.permission.BIND_DEVICE_ADMIN, Manifest.permission.BIND_NFC_SERVICE), full.declared)
+        assertEquals(setOf(Manifest.permission.BIND_DEVICE_ADMIN), clairix(installer = play, adminActive = false, full = false).declared)
+        val comms = clairix(installer = null, adminActive = false, suite = false)
+        assertTrue(comms.declared.isEmpty())
+        assertFalse(Manifest.permission.ACCESS_BACKGROUND_LOCATION in comms.requested)
+    }
 
     @Test
     fun clairixFullFromGitHubScoresFive() {
@@ -568,7 +674,8 @@ class StalkwareScannerTest {
 
     @Test
     fun clairixFromPlayScoresTwoAndItsAdminIsKnown() {
-        val fromPlay = clairix(installer = play, adminActive = true)
+        // The Play edition has no card emulation (src/fullSuite).
+        val fromPlay = clairix(installer = play, adminActive = true, full = false)
         assertEquals(
             listOf("can record audio", "can read location in the background", "device admin is active (a known app)"),
             StalkwareScanner.assess(fromPlay).map { it.reason },

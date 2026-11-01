@@ -84,6 +84,7 @@ import app.clairix.security.AppLock
 import app.clairix.security.LockScreen
 import app.clairix.security.QuickExit
 import app.clairix.analysis.PhoneHealthMonitor
+import app.clairix.analysis.SpywareHealth
 import app.clairix.analysis.StalkwareWatch
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
@@ -3941,8 +3942,9 @@ private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
         )
         else -> Triple(
             "Phone clear",
+            // Two times: the settings pass runs often, the check of installed apps (the "known spyware") less often.
             "$checked checks passed. No root, debug access, unknown admins or known spyware. " +
-                "Checked ${fmtClock(health.findingsScannedTs)}.",
+                "Settings checked ${fmtClock(health.findingsScannedTs)}, apps checked ${fmtTime(health.spywareScannedTs)}.",
             Tone.Safe
         )
     }
@@ -3960,8 +3962,9 @@ private fun HealthFactRow(f: HealthFact, onAnswer: (String) -> Unit) {
     val c = ClairixTheme.colors
     val context = LocalContext.current
     // Purely informational rows (a version number, a battery level) get a neutral
-    // mark; a check that passed gets safe; a problem gets its severity's tone.
-    val informational = f.severity == null && INFORMATIONAL_FACTS.contains(f.id)
+    // mark, as do granted-access rows and the stock keyboard (SpywareHealth.informational);
+    // a check that passed gets safe; a problem gets its severity's tone.
+    val informational = f.severity == null && (INFORMATIONAL_FACTS.contains(f.id) || SpywareHealth.informational(f.id))
     val tone = when {
         f.severity != null -> f.severity.tone()
         informational -> Tone.Neutral

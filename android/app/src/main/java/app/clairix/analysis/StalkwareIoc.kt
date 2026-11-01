@@ -76,11 +76,17 @@ class IocList(
         private val PACKAGE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
         private val DIGEST = Regex("^(?:[0-9A-F]{40}|[0-9A-F]{64})$")
 
-        /** The list in [gz], gzip of the converter's JSON, or an [IllegalArgumentException] saying what is wrong with it. */
-        fun parse(gz: ByteArray, nowSec: Long): IocList =
+        /**
+         * The list in [gz], gzip of the converter's JSON, or an [IllegalArgumentException] saying
+         * what is wrong with it. A list issued more than an hour after [nowSec] is refused. With
+         * [nowSec] null the issue time is not compared with the phone's clock: that is how the copy
+         * built into the app and a download already verified are read, because a clock set back
+         * (by hand, or a phone that booted before network time) must not drop the list it has.
+         */
+        fun parse(gz: ByteArray, nowSec: Long?): IocList =
             parseJson(String(gunzip(gz, MAX_JSON_BYTES), Charsets.UTF_8), nowSec)
 
-        fun parseJson(text: String, nowSec: Long): IocList {
+        fun parseJson(text: String, nowSec: Long?): IocList {
             val doc = try { JSONObject(text) } catch (e: JSONException) { throw IllegalArgumentException("not JSON") }
             val unknown = doc.keys().asSequence().filter { it !in FIELDS }.toList()
             require(unknown.isEmpty()) { "unknown field(s) $unknown" }
@@ -88,7 +94,7 @@ class IocList(
             require(doc.opt("version") == VERSION) { "stalkerware list version ${doc.opt("version")} is not one this app reads" }
             val issued = (doc.opt("issued") as? Number)?.takeIf { it is Int || it is Long }?.toLong()
             require(issued != null && issued > 0) { "issued must be a positive whole number" }
-            require(issued <= nowSec + 3600) { "issued is in the future" }
+            require(nowSec == null || issued <= nowSec + 3600) { "issued is in the future" }
             for (field in listOf("source", "licence")) {
                 val v = doc.opt(field) as? String
                 require(v != null && v.length <= 500) { "$field must be text" }
@@ -210,12 +216,14 @@ object StalkwareIoc {
         synchronized(this) {
             _list.value?.let { return it }
             val app = context.applicationContext
+            // Neither copy is compared with the phone's clock: the built-in one shipped in the APK,
+            // and the cached one was kept only after its signature and issue time checked (see
+            // [refresh]). A clock set back must not leave the phone matching against nothing.
             val bundled = runCatching {
-                app.assets.open(ASSET).use { IocList.parse(IocList.readCapped(it, MAX_BYTES), nowSec()) }
+                app.assets.open(ASSET).use { IocList.parse(IocList.readCapped(it, MAX_BYTES), nowSec = null) }
             }.onFailure { Log.i(TAG, "No built-in stalkerware list: ${it.message}") }.getOrNull()
-            // Kept only after its signature checked (see [refresh]).
             val cached = runCatching {
-                cacheFile(app).takeIf { it.isFile }?.inputStream()?.use { IocList.parse(IocList.readCapped(it, MAX_BYTES), nowSec()) }
+                cacheFile(app).takeIf { it.isFile }?.inputStream()?.use { IocList.parse(IocList.readCapped(it, MAX_BYTES), nowSec = null) }
             }.getOrNull()
             val best = listOfNotNull(bundled, cached).maxByOrNull { it.issued }
             _list.value = best
