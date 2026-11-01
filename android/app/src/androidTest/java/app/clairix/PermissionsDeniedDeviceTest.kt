@@ -3,6 +3,7 @@ package app.clairix
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Point
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -132,25 +133,44 @@ class PermissionsDeniedDeviceTest {
         return false
     }
 
-    /** Scrolls the list a third of a screen; false at its end, or when nothing on screen scrolls. */
-    private fun scrollOnce(direction: Direction): Boolean {
-        val list = runCatching { ui.find(By.scrollable(true)) }.getOrNull() ?: return false
-        val moved = runCatching { list.scroll(direction, 0.3f) }.getOrDefault(false)
-        device.waitForIdle(1_000)
-        return moved
-    }
+    /** What Clairix's screen says now, to tell when a scroll has stopped moving the list. */
+    private fun onScreen(): List<String> = runCatching {
+        ui.findAll(By.pkg(pkg).text(Pattern.compile(".+"))).mapNotNull { runCatching { it.text }.getOrNull() }
+    }.getOrDefault(emptyList())
 
-    /** Scrolls the hub's list until [t] shows, then taps it. */
+    /**
+     * Scrolls the hub's list until [t] shows, then taps it: down first, then back up.
+     * A scroll's own answer is not trusted to mean the end (the first scrollable
+     * node found can be another one, which reports no movement); the end is two
+     * looks in a row with nothing new, as SmokeTest.tapScrolling finds it.
+     */
     private fun tapScrolling(t: String) {
         for (direction in listOf(Direction.DOWN, Direction.UP)) {
+            var still = 0
             var swipes = 0
-            while (swipes++ < 30) {
+            while (swipes++ < 40 && still < 2) {
                 if (tapIfShown(By.text(t), t, timeoutMs = 500)) return
-                if (!scrollOnce(direction)) break
+                still = if (scrollStep(direction)) 0 else still + 1
             }
         }
         if (tapIfShown(By.text(t), t, timeoutMs = 500)) return
         shot("MISSING-$t"); fail("Could not find \"$t\" by scrolling")
+    }
+
+    /** One step of the list in [direction]: the list's own scroll, or a slow drag where none answers. True when the screen changed. */
+    private fun scrollStep(direction: Direction): Boolean {
+        val before = onScreen()
+        val list = runCatching { ui.find(By.scrollable(true)) }.getOrNull()
+        val moved = list?.let { runCatching { it.scroll(direction, 0.3f) }.getOrDefault(false) } ?: false
+        if (!moved) {
+            val x = device.displayWidth / 2
+            val upper = device.displayHeight / 3
+            val lower = device.displayHeight * 2 / 3
+            val (from, to) = if (direction == Direction.DOWN) lower to upper else upper to lower
+            device.swipe(arrayOf(Point(x, from), Point(x, to), Point(x, to)), 40)
+        }
+        device.waitForIdle(1_000)
+        return onScreen() != before
     }
 
     /**
