@@ -237,6 +237,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
     var cas by remember { mutableStateOf<List<SuspiciousCa>?>(null) }
     var tls by remember { mutableStateOf<TlsCanaryResult?>(null) }
     var last by remember { mutableStateOf(TlsCanary.lastResult(context)) }
+    var next by remember { mutableStateOf(TlsCanary.nextRun(context)) }
     var pinned by remember { mutableStateOf(TlsCanary.pinned(context)) }
     var strict by remember { mutableStateOf(TlsCanary.strict(context)) }
     var checking by remember { mutableStateOf(false) }
@@ -244,6 +245,11 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
 
     LaunchedEffect(Unit) {
         cas = withContext(Dispatchers.IO) { runCatching { CaAuditScanner.scan(context) }.getOrDefault(emptyList()) }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        // A scheduled run may have happened while this page was away.
+        last = TlsCanary.lastResult(context)
+        next = TlsCanary.nextRun(context)
     }
 
     fun checkNow() {
@@ -253,6 +259,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             runCatching { TlsCanary.check(context).collect { tls = it } }
                 .onFailure { tls = TlsCanaryResult(intercepted = false, method = null, proxyHost = null, error = "Check failed: ${it.message}") }
             last = TlsCanary.lastResult(context)
+            next = TlsCanary.nextRun(context)
             pinned = TlsCanary.pinned(context)
             checking = false
         }
@@ -323,8 +330,14 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                     val alarming = lastRun.second.startsWith("INTERCEPTED") || lastRun.second.startsWith("NOT PUBLICLY TRUSTED")
                     KeyValueRow("Last result", lastRun.second, valueColor = if (alarming) ClairixTheme.colors.danger else ClairixTheme.colors.textMuted)
                     if (lastRun.first > 0) KeyValueRow("Checked", tFull(lastRun.first))
+                }
+                // The scheduled run: every four hours and on each network change, for as
+                // long as comms are set up or the scanner is on. Nothing armed means neither is.
+                val nextRun = next
+                if (nextRun != null) {
+                    KeyValueRow("Next check", tFull(nextRun))
                 } else {
-                    KeyValueRow("Last result", "never run")
+                    KeyValueRow("Next check", "Not scheduled: runs every four hours while Comms is set up or the scanner is on", mono = false)
                 }
                 pinned?.let { (host, pin) -> KeyValueRow("Pinned ($host)", pin.take(24) + "…") }
                 if (pinned != null) {

@@ -94,7 +94,17 @@ data class ScanStatus(
     val lon: Double? = null,
     val travelledM: Double = 0.0,
     val error: String? = null,
-    val nearbyCount: Int = 0  // total BLE devices in range including transient ones
+    val nearbyCount: Int = 0,  // total BLE devices in range including transient ones
+    /** When the last Bluetooth advertisement reached the scanner; 0 before the first. */
+    val lastPacketAt: Long = 0L,
+    /** Packets whose handling threw since the service started; shown on the Trackers details card. */
+    val packetErrors: Int = 0,
+    /**
+     * True when the scanner was on and ended without the owner stopping it (an
+     * update, a kill, a battery manager); [stoppedAt] is when it was lost.
+     */
+    val stoppedBySystem: Boolean = false,
+    val stoppedAt: Long = 0L
 )
 
 // --- Cellular / IMSI catcher ------------------------------------------------

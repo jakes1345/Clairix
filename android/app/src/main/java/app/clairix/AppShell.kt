@@ -1,5 +1,7 @@
 package app.clairix
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,12 +52,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.CameraFinding
 import app.clairix.analysis.HiddenCameraScanner
+import app.clairix.analysis.ScannerHealth
+import app.clairix.ui.BatteryExemptionCard
 import app.clairix.ui.components.BottomBarItem
 import app.clairix.ui.components.ClairixBottomBar
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.ClairixTopBar
 import app.clairix.ui.components.IconWell
 import app.clairix.ui.components.LogoMark
+import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.components.ScreenList
 import app.clairix.ui.components.SecondaryButton
 import app.clairix.ui.components.SectionHeader
@@ -62,6 +68,7 @@ import app.clairix.ui.components.SegmentedTabs
 import app.clairix.ui.components.StatusHero
 import app.clairix.ui.components.Tone
 import app.clairix.ui.components.color
+import app.clairix.ui.rememberBatteryUnrestricted
 import app.clairix.ui.theme.ClairixTheme
 
 /*
@@ -185,8 +192,15 @@ internal fun trackerStatus(status: ScanStatus, detections: List<Detection>, trus
     return when {
         following > 0 -> CategoryStatus("${count(following, "tracker")} following you", StatusTone.ALERT)
         travelling > 0 -> CategoryStatus("${count(travelling, "device")} travelling with you", StatusTone.CAUTION)
+        // Wanted on and not hearing, which is not a quiet all-clear. Bluetooth off is
+        // named (the service sets an error with it); for anything else (Location off,
+        // silence, a refused start) the hub's hero spells out the error.
+        !status.bluetoothOn && (status.scanning || status.error != null) -> CategoryStatus("Bluetooth is off", StatusTone.CAUTION)
+        status.error != null -> CategoryStatus("Scanner cannot hear", StatusTone.CAUTION)
+        // Ended by an update, a kill or a battery manager, not by the owner.
+        status.stoppedBySystem && !status.scanning ->
+            CategoryStatus("Stopped by the system at ${ScannerHealth.clock(status.stoppedAt)}", StatusTone.CAUTION)
         !status.scanning -> CategoryStatus("Scanner off", StatusTone.NEUTRAL)
-        !status.bluetoothOn -> CategoryStatus("Bluetooth is off", StatusTone.CAUTION)
         else -> CategoryStatus("${count(status.nearbyCount, "device")} nearby, none following", StatusTone.CLEAR)
     }
 }
@@ -405,16 +419,39 @@ internal fun ShellSubTabs(labels: List<String>, selected: Int, onSelect: (Int) -
 /** What the hub's hero says, from every category's status. */
 internal data class HubVerdict(val headline: String, val body: String, val tone: Tone)
 
-internal fun hubVerdict(scanning: Boolean, statuses: Collection<CategoryStatus>): HubVerdict {
+/**
+ * [error] is the scanner's status error: set, the scanner is wanted on and not
+ * hearing, which makes every quiet tile unproven, so it leads unless something
+ * is already confirmed. [stoppedBySystemAt] is when a scanner the owner left on
+ * was ended by something else; the hero then says so instead of "Standing by".
+ */
+internal fun hubVerdict(
+    scanning: Boolean,
+    statuses: Collection<CategoryStatus>,
+    error: String? = null,
+    stoppedBySystemAt: Long? = null
+): HubVerdict {
     val alerts = statuses.count { it.tone == StatusTone.ALERT }
     val cautions = statuses.count { it.tone == StatusTone.CAUTION }
     val toCheck = alerts + cautions
     return when {
+        alerts > 0 -> HubVerdict(
+            headline = if (toCheck == 1) "1 thing needs a look" else "$toCheck things need a look",
+            body = "Open the flagged checks below. Each one says what was found and what to do next." +
+                // What was found stands; what the scanner would find now, it cannot.
+                (error?.let { " The scanner cannot hear right now: $it" } ?: ""),
+            tone = Tone.Danger
+        )
+        error != null -> HubVerdict(headline = "Scanner cannot hear", body = error, tone = Tone.Caution)
+        !scanning && stoppedBySystemAt != null -> HubVerdict(
+            headline = "Scanner stopped",
+            body = ScannerHealth.stoppedBySystemLine(stoppedBySystemAt),
+            tone = Tone.Caution
+        )
         toCheck > 0 -> HubVerdict(
             headline = if (toCheck == 1) "1 thing needs a look" else "$toCheck things need a look",
-            body = if (alerts > 0) "Open the flagged checks below. Each one says what was found and what to do next."
-            else "Nothing urgent. Have a look at the checks marked below when you have a minute.",
-            tone = if (alerts > 0) Tone.Danger else Tone.Caution
+            body = "Nothing urgent. Have a look at the checks marked below when you have a minute.",
+            tone = Tone.Caution
         )
         scanning -> HubVerdict(
             headline = "All clear",
@@ -431,15 +468,26 @@ internal fun hubVerdict(scanning: Boolean, statuses: Collection<CategoryStatus>)
 
 /**
  * The Scan tab's landing screen: the status hero, then a tile per category with
- * its live status line.
+ * its live status line. [error] and [stoppedBySystemAt] are the scanner's; see
+ * [hubVerdict]. [scanEnabled] is whether the owner last left the scanner on: only
+ * then is the battery exemption asked for, and only then can "tap to resume"
+ * ([onResumeScan]) mean anything.
  */
 @Composable
 internal fun ScanHub(
     scanning: Boolean,
     statuses: Map<ScanCategory, CategoryStatus>,
-    onOpen: (ScanCategory) -> Unit
+    onOpen: (ScanCategory) -> Unit,
+    error: String? = null,
+    stoppedBySystemAt: Long? = null,
+    scanEnabled: Boolean = false,
+    onResumeScan: () -> Unit = {}
 ) {
-    val verdict = hubVerdict(scanning, statuses.values)
+    val verdict = hubVerdict(scanning, statuses.values, error, stoppedBySystemAt)
+    val context = LocalContext.current
+    // Asked only while the scanner is meant to run: a phone that never scans has
+    // nothing for the battery manager to stop.
+    val batteryFree by if (scanEnabled) rememberBatteryUnrestricted() else remember { mutableStateOf(true) }
     ScreenList {
         item(key = "§hero") {
             StatusHero(
@@ -449,18 +497,50 @@ internal fun ScanHub(
                 tone = verdict.tone,
                 modifier = Modifier.padding(top = 8.dp),
                 trailing = { LogoMark(size = 48.dp, contentDescription = null) },
-                footer = if (!scanning) {
-                    {
-                        SecondaryButton(
-                            "Open the scanner",
-                            onClick = { onOpen(ScanCategory.TRACKERS) },
-                            tone = Tone.Accent,
-                            icon = ClairixIcons.TrackChanges,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                footer = when {
+                    !scanning && stoppedBySystemAt != null -> {
+                        {
+                            PrimaryButton(
+                                "Resume scanning",
+                                onClick = onResumeScan,
+                                icon = ClairixIcons.TrackChanges,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
-                } else null
+                    !scanning -> {
+                        {
+                            SecondaryButton(
+                                "Open the scanner",
+                                onClick = { onOpen(ScanCategory.TRACKERS) },
+                                tone = Tone.Accent,
+                                icon = ClairixIcons.TrackChanges,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    error == ScannerHealth.LOCATION_OFF -> {
+                        {
+                            SecondaryButton(
+                                "Open Location settings",
+                                onClick = { openExternal(context, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
+                                tone = Tone.Accent,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    else -> null
+                }
             )
+        }
+        if (scanEnabled && !batteryFree) {
+            item(key = "§battery") {
+                BatteryExemptionCard(
+                    reason = "Battery saving can stop the scanner while the phone sleeps, and then nothing is watched. " +
+                        "Let Clairix run unrestricted.",
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
         item(key = "§checks") { SectionHeader("Checks", supporting = "${ScanCategory.entries.size} areas") }
         ScanCategory.entries.chunked(2).forEach { pair ->

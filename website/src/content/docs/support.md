@@ -14,7 +14,13 @@ Tracker detection needs the **Nearby devices** permission and Bluetooth turned o
 
 ### "Android blocked starting the scanner in the background"
 
-Android 12 and newer refuse to start a foreground service from the background, for example after a reboot or from a stale notification. Open Clairix and tap **Start** on the Scan screen. If you want the scan to resume after reboots, turn on **Resume after reboot** in Settings and exempt Clairix from battery optimisation (below).
+Android 12 and newer refuse to start a foreground service from the background, for example after a reboot or from a stale notification. Open Clairix: if you had left the scanner on, it starts again by itself. If it does not, tap **Start scanning** in **Scan > Trackers**. If you want the scan to resume after reboots, turn on **Resume after reboot** in Settings and exempt Clairix from battery optimisation (below).
+
+### "Scanner cannot hear" or "Scanner was stopped by the system"
+
+Android hands Bluetooth scan results to an app only while the system **Location** switch is on, so with it off the scanner runs but hears nothing. Clairix says so on the Scan screen and in a notification instead of showing an empty list as all clear; turn Location on in quick settings and the scan picks up again. Clairix shows the same warning if the scan has heard nothing at all for five minutes while the screen is on.
+
+"Stopped by the system at HH:MM" means the scanner was ended by an update, a low-memory kill, a restart or the phone's battery manager, not from Clairix. The time is when it was last known to be running, and the gap is written to the timeline. After an update the scanner comes back by itself when Clairix's location access is set to **Allow all the time**; otherwise opening Clairix starts it again. If this keeps happening, let Clairix run unrestricted from the card on the Scan screen, and on Samsung and Xiaomi phones also set the maker's own switch the card names.
 
 ### Calls do not ring, or messages arrive late
 

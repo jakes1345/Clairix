@@ -357,6 +357,10 @@ object CommsRepository {
         publishConfig()
         scope.launch { refreshUnread() }
         if (config.isRegistered && config.online) CommsService.start(appContext)
+        // The TLS canary watches the path to this relay for as long as the phone is
+        // registered with one: every four hours by alarm, and on network changes while
+        // the process runs.
+        if (config.isRegistered) runCatching { TlsCanary.start(appContext) }
         watchNetwork()
         if (config.isRegistered) scope.launch { pruneSessions() }
         scope.launch { runCatching { store.purgeChunks(System.currentTimeMillis() - CHUNK_TTL_MS) } }
@@ -622,6 +626,8 @@ object CommsRepository {
                     setBusy(false)
                     CommsLog.add("Registered as ${formatClairixNumber(registered.number)} on $url" + if (invite != null) " with ${formatClairixNumber(invite.number)}'s invite" else "")
                     CommsService.start(appContext)
+                    // The relay's key is pinned now, before anything can sit between this phone and it.
+                    runCatching { TlsCanary.start(appContext, runNow = true) }
                     LiveLink.refresh()
                     // Delivery tokens from the start, so the first send has one ready.
                     scope.launch { topUpTokens() }
@@ -728,6 +734,8 @@ object CommsRepository {
                 // The distributor's endpoint goes to the new relay, which checks it as any relay does.
                 endpoint?.let { onPushEndpoint(it) }
                 CommsService.start(appContext)
+                // A new relay, a new key to pin: checked now rather than at the next four-hour mark.
+                runCatching { TlsCanary.start(appContext, runNow = true) }
                 LiveLink.refresh()
                 bump()
                 scope.launch {
@@ -1006,6 +1014,12 @@ object CommsRepository {
             identities.destroy()
             transportKeys.destroy()
             config.clear()
+            // The canary's pin and last result name the relay just left; a phone that has
+            // left it keeps neither. After the config is gone, so no run can find the old
+            // relay and pin it again. A scanner the owner left on starts the canary
+            // afresh for its own proxy check, with no relay to compare keys against.
+            runCatching { TlsCanary.forget(appContext) }
+            runCatching { TlsCanary.startIfWanted(appContext) }
             syncCoverTraffic()
             // What else this phone kept about its comms: the duress phrase (it is
             // typed into comms), the comms log (it names contacts' numbers) and

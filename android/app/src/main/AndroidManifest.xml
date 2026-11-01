@@ -34,9 +34,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
-    <!-- COMMS: lets the owner exempt Clairix from battery optimisation, which on
-         many phones (Samsung especially) otherwise cuts the background relay
-         connection so incoming calls never ring. Asked for from COMMS settings. -->
+    <!-- Lets the owner exempt Clairix from battery optimisation, which on many
+         phones (Samsung especially) otherwise cuts the background relay connection
+         so incoming calls never ring, and stops the scanner while the phone sleeps.
+         Asked for from COMMS settings, and on the Scan hub while the scanner is on. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- COMMS calls: the proximity sensor switches the screen off at the ear. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -177,6 +178,12 @@
         <!-- Periodic check that the background relay connection is still alive. -->
         <receiver
             android:name=".comms.LinkWatchdog"
+            android:exported="false" />
+
+        <!-- The TLS canary's four-hourly check: an alarm the system keeps, so it runs
+             whether or not the process that armed it is still alive. -->
+        <receiver
+            android:name=".analysis.TlsCanaryAlarm"
             android:exported="false" />
 
         <!-- Decline / hang-up buttons on call notifications. -->

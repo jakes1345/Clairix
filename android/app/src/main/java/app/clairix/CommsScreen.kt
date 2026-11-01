@@ -10,7 +10,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
-import android.os.PowerManager
 import android.provider.Settings
 import android.widget.MediaController
 import android.widget.Toast
@@ -130,6 +129,8 @@ import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.ui.graphics.toArgb
 import app.clairix.ui.theme.ClairixBrand
 import app.clairix.ui.components.*
+import app.clairix.ui.openBatterySettings
+import app.clairix.ui.rememberBatteryUnrestricted
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
@@ -2790,30 +2791,6 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
     }
 }
 
-// ── Background reliability and diagnostics ───────────────────────────────────
-
-/**
- * Whether Android exempts Clairix from battery optimisation, re-read whenever the
- * screen resumes (the owner comes back from the system settings page).
- */
-@Composable
-private fun rememberBatteryUnrestricted(): State<Boolean> {
-    val context = LocalContext.current
-    val power = remember { context.getSystemService(PowerManager::class.java) }
-    val unrestricted = remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(context.packageName) == true) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                unrestricted.value = power?.isIgnoringBatteryOptimizations(context.packageName) == true
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    return unrestricted
-}
-
 // ── Group conversation ───────────────────────────────────────────────────────
 
 @Composable
@@ -3221,18 +3198,6 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
         },
         dismissButton = { GhostButton("Cancel", onClick = { if (!busy) onDismiss() }, tone = Tone.Neutral, enabled = !busy) }
     )
-}
-
-/**
- * Asks Android to let Clairix run unrestricted. The direct request shows a
- * one-tap system dialog; where a phone does not offer it, the battery
- * optimisation list opens instead so the owner can find Clairix there.
- */
-private fun openBatterySettings(context: Context) {
-    val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    val list = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(direct) }.recoverCatching { context.startActivity(list) }
 }
 
 private val logTimeFmt = SimpleDateFormat("MMM d HH:mm:ss", Locale.US)

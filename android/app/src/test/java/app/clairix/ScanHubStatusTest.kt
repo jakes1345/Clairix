@@ -2,6 +2,8 @@ package app.clairix
 
 import app.clairix.analysis.CameraFindMethod
 import app.clairix.analysis.CameraFinding
+import app.clairix.analysis.ScannerHealth
+import app.clairix.ui.components.Tone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -51,6 +53,65 @@ class ScanHubStatusTest {
             "Bluetooth is off",
             trackerStatus(ScanStatus(scanning = true, bluetoothOn = false), emptyList(), emptySet()).text
         )
+    }
+
+    @Test
+    fun aScannerThatCannotHearIsACautionNotAQuietAllClear() {
+        val deaf = ScanStatus(scanning = true, nearbyCount = 0, error = ScannerHealth.LOCATION_OFF)
+        val tile = trackerStatus(deaf, emptyList(), emptySet())
+        assertEquals("Scanner cannot hear", tile.text)
+        assertEquals(StatusTone.CAUTION, tile.tone)
+        val hero = hubVerdict(scanning = true, statuses = listOf(tile), error = deaf.error)
+        assertEquals("Scanner cannot hear", hero.headline)
+        assertEquals(ScannerHealth.LOCATION_OFF, hero.body)
+        assertEquals(Tone.Caution, hero.tone)
+        // Bluetooth off is named on the tile, where it used to read as a neutral "Scanner off".
+        val btOff = trackerStatus(ScanStatus(scanning = false, bluetoothOn = false, error = "Bluetooth is off"), emptyList(), emptySet())
+        assertEquals("Bluetooth is off", btOff.text)
+        assertEquals(StatusTone.CAUTION, btOff.tone)
+        // A start Android refused is a scanner that cannot hear, not one the owner turned off.
+        val refused = ScanStatus(scanning = false, error = "Android blocked starting the scanner in the background — open Clairix and tap Start")
+        assertEquals("Scanner cannot hear", trackerStatus(refused, emptyList(), emptySet()).text)
+        // Bluetooth off after the owner stopped the scanner is simply off.
+        assertEquals("Scanner off", trackerStatus(ScanStatus(scanning = false, bluetoothOn = false), emptyList(), emptySet()).text)
+    }
+
+    @Test
+    fun aConfirmedFollowerOutranksADeafScannerAndTheHeroStillSaysSo() {
+        val alert = CategoryStatus("1 tracker following you", StatusTone.ALERT)
+        val hero = hubVerdict(scanning = true, statuses = listOf(alert), error = ScannerHealth.QUIET)
+        assertEquals(Tone.Danger, hero.tone)
+        assertEquals("1 thing needs a look", hero.headline)
+        assertTrue(hero.body, hero.body.contains(ScannerHealth.QUIET))
+    }
+
+    @Test
+    fun aScannerStoppedByTheSystemSaysWhenAndLeadsTheHub() {
+        val at = 1_700_000_000_000L
+        val status = ScanStatus(scanning = false, stoppedBySystem = true, stoppedAt = at)
+        val tile = trackerStatus(status, emptyList(), emptySet())
+        assertEquals("Stopped by the system at ${ScannerHealth.clock(at)}", tile.text)
+        assertEquals(StatusTone.CAUTION, tile.tone)
+        // The tile is itself a caution; the hero names the stop rather than counting it.
+        val hero = hubVerdict(scanning = false, statuses = listOf(tile), stoppedBySystemAt = at)
+        assertEquals("Scanner stopped", hero.headline)
+        assertEquals(ScannerHealth.stoppedBySystemLine(at), hero.body)
+        assertEquals(Tone.Caution, hero.tone)
+        // Once it is running again the flag means nothing.
+        assertEquals("All clear", hubVerdict(scanning = true, statuses = emptyList(), stoppedBySystemAt = at).headline)
+    }
+
+    @Test
+    fun theHubWithoutAScannerProblemReadsAsBefore() {
+        val clear = CategoryStatus("No issues found", StatusTone.CLEAR)
+        assertEquals("All clear", hubVerdict(scanning = true, statuses = listOf(clear)).headline)
+        assertEquals("Standing by", hubVerdict(scanning = false, statuses = listOf(clear)).headline)
+        val caution = CategoryStatus("1 item to review", StatusTone.CAUTION)
+        val look = hubVerdict(scanning = true, statuses = listOf(caution))
+        assertEquals("1 thing needs a look", look.headline)
+        assertEquals(Tone.Caution, look.tone)
+        val alert = CategoryStatus("1 tracker following you", StatusTone.ALERT)
+        assertEquals("2 things need a look", hubVerdict(scanning = true, statuses = listOf(caution, alert)).headline)
     }
 
     @Test

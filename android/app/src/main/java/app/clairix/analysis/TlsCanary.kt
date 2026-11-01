@@ -1,16 +1,25 @@
 package app.clairix.analysis
 
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.ProxyInfo
+import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
 import app.clairix.Alert
+import app.clairix.AppSettings
+import app.clairix.BuildConfig
 import app.clairix.EventKind
 import app.clairix.Registry
 import app.clairix.Severity
 import app.clairix.comms.CommsConfig
+import app.clairix.security.Wiper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,8 +29,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -104,7 +113,9 @@ data class TlsCanaryResult(
 /**
  * A TLS interception canary.
  *
- * Every four hours, and whenever the default network changes, it opens a raw
+ * Every four hours, and when the default network changes while the process
+ * runs, for as long as the phone is registered with a relay or the owner has
+ * the scanner on, it opens a raw
  * TLS connection to the relay the comms module is registered with and looks at
  * the leaf certificate the server presents, without validating it: an
  * intercepting proxy presents its own certificate, signed by a root it had
@@ -127,6 +138,12 @@ data class TlsCanaryResult(
  * interception taught the owner to ignore the CRITICAL that matters. A proxy that
  * cannot be checked (a PAC script, no host, a refused tunnel) is MEDIUM and says
  * so rather than claiming the key held.
+ *
+ * The four-hourly run is an AlarmManager alarm ([TlsCanaryAlarm]), which the
+ * system keeps across process death and Doze, so a phone that has not opened
+ * Clairix for a day is still checked; the network-change run is a callback in
+ * whichever process is alive. Without a relay (a scanner-only phone) a run has
+ * no key to compare, and reports only a configured proxy.
  */
 object TlsCanary {
 
@@ -137,8 +154,16 @@ object TlsCanary {
     private const val KEY_STRICT = "strict"
     private const val KEY_LAST_RESULT = "last_result"
     private const val KEY_LAST_TS = "last_ts"
+    /** Wall-clock time of the next scheduled run, while one is armed. */
+    private const val KEY_NEXT_RUN = "next_run"
 
     private const val INTERVAL_MS = 4 * 3600_000L
+    /** The soonest an alarm is set for; a run that is already due is launched directly instead. */
+    private const val MIN_ARM_DELAY_MS = 60_000L
+    /** How long the alarm receiver's result is held open; the run itself carries on under the wake lock. */
+    private const val RECEIVER_BUDGET_MS = 25_000L
+    private const val ALARM_ACTION = "app.clairix.analysis.TLS_CANARY"
+    private const val ALARM_REQUEST = 0x7A00_0002
     private const val CONNECT_TIMEOUT_MS = 10_000
     /**
      * Ceiling on one probe from TCP connect to finished handshake, CONNECT headers
@@ -159,9 +184,17 @@ object TlsCanary {
     private const val NETWORK_DEBOUNCE_MS = 5_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var periodic: Job? = null
+    /** The run [start] launches when one is due; the runs after it come by alarm. */
+    private var firstRun: Job? = null
     private var networkRun: Job? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * Moved on by [stop]. A probe blocked in a socket cannot be cancelled, so a run
+     * still out when the canary is stopped (or forgotten on unpair, or wiped) checks
+     * this before it pins, remembers or raises anything, and keeps nothing.
+     */
+    @Volatile private var generation = 0
 
     /**
      * One check, as a cold flow that emits a single [TlsCanaryResult] and
@@ -172,26 +205,51 @@ object TlsCanary {
         emit(runOnce(context.applicationContext))
     }.flowOn(Dispatchers.IO)
 
+    /** What [start] does about the schedule: whether to run at once, and when the alarm is for. */
+    internal data class Plan(val runNow: Boolean, val nextAt: Long)
+
     /**
-     * Starts the four-hourly run plus a run on every default-network change.
+     * The scheduling decision, apart from the clocks and alarms that carry it
+     * out. A run is due when none was ever made, when the last one is an interval
+     * or more old, or when the clock has gone back past it; the next is an
+     * interval after whichever run is the reference.
+     */
+    internal fun plan(lastRunAt: Long, now: Long, intervalMs: Long = INTERVAL_MS): Plan {
+        val due = lastRunAt <= 0L || now - lastRunAt >= intervalMs || lastRunAt > now
+        return Plan(runNow = due, nextAt = if (due) now + intervalMs else lastRunAt + intervalMs)
+    }
+
+    /**
+     * Starts the canary: a run now when one is due (or when [runNow] asks for one,
+     * as registering with a relay does, so its key is pinned before anything can
+     * sit in between), the four-hourly run as an alarm the system keeps whether or
+     * not this process survives, and a run on every default-network change.
      * Idempotent. Each run that finds interception goes through
      * [Registry.publishAlert] as CRITICAL (deduplicated for an hour).
      */
     @Synchronized
-    fun start(context: Context) {
+    fun start(context: Context, runNow: Boolean = false) {
+        // A wipe in progress starts nothing that would write the canary's file back.
+        if (Wiper.isActive) return
         val app = context.applicationContext
-        if (periodic?.isActive != true) {
-            periodic = scope.launch {
-                while (isActive) {
-                    runAndAlert(app)
-                    delay(INTERVAL_MS)
-                }
-            }
+        val now = System.currentTimeMillis()
+        val plan = plan(lastResult(app)?.first ?: 0L, now)
+        if ((runNow || plan.runNow) && firstRun?.isActive != true) {
+            firstRun = scope.launch { runAndAlert(app) }
         }
+        arm(app, plan.nextAt - now)
         if (callback == null) {
             val cm = app.getSystemService(ConnectivityManager::class.java)
+            val current = runCatching { cm?.activeNetwork }.getOrNull()
             val cb = object : ConnectivityManager.NetworkCallback() {
+                /** Registering delivers the network already in use, which is not a change. */
+                private var first = true
+
                 override fun onAvailable(network: Network) {
+                    val initial = first && network == current
+                    first = false
+                    // A run for that one was just decided above; a cold start must not probe again.
+                    if (initial) return
                     synchronized(this@TlsCanary) {
                         networkRun?.cancel()
                         networkRun = scope.launch {
@@ -205,14 +263,135 @@ object TlsCanary {
         }
     }
 
+    /** Stops every scheduled run: the alarm, the network callback and anything in flight. */
     @Synchronized
     fun stop(context: Context) {
-        periodic?.cancel(); periodic = null
+        val app = context.applicationContext
+        generation++
+        firstRun?.cancel(); firstRun = null
         networkRun?.cancel(); networkRun = null
         callback?.let { cb ->
-            runCatching { context.applicationContext.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) }
+            runCatching { app.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) }
         }
         callback = null
+        runCatching { app.getSystemService(AlarmManager::class.java)?.cancel(alarmIntent(app)) }
+        // Only when there is something to remove: a wipe calls this after the
+        // preferences are gone, and a write then would leave an empty file behind.
+        val p = prefs(app)
+        if (p.contains(KEY_NEXT_RUN)) p.edit().remove(KEY_NEXT_RUN).apply()
+    }
+
+    /**
+     * Stops the canary and forgets everything it kept. The pin, the strict
+     * setting and the last result all name a relay; a phone that has unpaired
+     * from it keeps none of them.
+     */
+    fun forget(context: Context) {
+        stop(context)
+        prefs(context).edit().clear().apply()
+    }
+
+    /**
+     * Starts the canary when something wants it ([stillWanted]): after unpairing, a
+     * scanner the owner left on keeps it for the proxy check. Reads the comms
+     * settings off the caller's thread.
+     */
+    fun startIfWanted(context: Context) {
+        val app = context.applicationContext
+        scope.launch { if (stillWanted(app)) start(app) }
+    }
+
+    /** Stops the canary unless something still wants it ([stillWanted]). Reads the comms settings off the caller's thread. */
+    fun stopIfUnwanted(context: Context) {
+        val app = context.applicationContext
+        scope.launch { if (!stillWanted(app)) stop(app) }
+    }
+
+    /**
+     * When the next scheduled run is due, wall clock, or null while none is armed.
+     * A reboot or a force stop clears the alarm, and with it the pending intent, but
+     * not the time written down when it was set; that time counts only while the
+     * pending intent still exists.
+     */
+    fun nextRun(context: Context): Long? {
+        val app = context.applicationContext
+        val at = prefs(app).getLong(KEY_NEXT_RUN, 0L).takeIf { it > 0L } ?: return null
+        val armed = runCatching {
+            PendingIntent.getBroadcast(app, ALARM_REQUEST, alarmTarget(app), PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
+        }.getOrNull() != null
+        return if (armed) at else null
+    }
+
+    private fun alarmTarget(app: Context): Intent = Intent(app, TlsCanaryAlarm::class.java).setAction(ALARM_ACTION)
+
+    private fun alarmIntent(app: Context): PendingIntent = PendingIntent.getBroadcast(
+        app, ALARM_REQUEST, alarmTarget(app),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    /** Arms the scheduled run [delayMs] from now, replacing any armed before. Allowed in Doze; needs no exact-alarm permission. */
+    private fun arm(app: Context, delayMs: Long) {
+        if (Wiper.isActive) return
+        val alarms = app.getSystemService(AlarmManager::class.java) ?: return
+        val delay = delayMs.coerceAtLeast(MIN_ARM_DELAY_MS)
+        runCatching {
+            alarms.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + delay,
+                alarmIntent(app)
+            )
+            prefs(app).edit().putLong(KEY_NEXT_RUN, System.currentTimeMillis() + delay).apply()
+        }
+    }
+
+    /**
+     * Whether anything still wants the canary, asked in a process that may remember
+     * nothing: a relay to watch, or the scanner the owner left on. The comms
+     * settings are read the way the relay connection reads them, which works with
+     * the phone locked; a read that fails counts as registered, so a passing
+     * Keystore fault does not end the schedule.
+     */
+    private fun stillWanted(app: Context): Boolean {
+        if (runCatching { CommsConfig(app).isRegistered }.getOrDefault(true)) return true
+        if (!BuildConfig.FULL_ACCESS) return false
+        AppSettings.load(app)
+        return AppSettings.scanEnabled
+    }
+
+    /**
+     * The scheduled run, from [TlsCanaryAlarm]. The next alarm is armed before
+     * anything else, so a process killed mid-run does not end the schedule; the
+     * alert path is bound so the result reaches the timeline and the shade in a
+     * process nothing else has set up; the phone is kept awake for the probes.
+     */
+    internal fun onAlarm(app: Context, pending: BroadcastReceiver.PendingResult) {
+        // Off the receiver's main thread: the comms settings are decrypted to answer stillWanted.
+        scope.launch {
+            var finished = false
+            val finish = { if (!finished) { finished = true; pending.finish() } }
+            try {
+                if (!runCatching { stillWanted(app) }.getOrDefault(true)) {
+                    prefs(app).edit().remove(KEY_NEXT_RUN).apply()
+                    return@launch
+                }
+                arm(app, INTERVAL_MS)
+                Registry.bindTrustStore(app)
+                val lock = app.getSystemService(PowerManager::class.java)
+                    ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "clairix:tls-canary")
+                    ?.apply { acquire(2 * PROBE_DEADLINE_MS + 5_000L) }
+                try {
+                    val run = launch { runCatching { runAndAlert(app) } }
+                    // The receiver's grace is short; a probe held to its deadline finishes under the wake lock.
+                    withTimeoutOrNull(RECEIVER_BUDGET_MS) { run.join() }
+                    finish()
+                    run.join()
+                } finally {
+                    runCatching { if (lock?.isHeld == true) lock.release() }
+                }
+            } finally {
+                finish()
+            }
+        }
     }
 
     /** Forgets the pinned key; the next connection pins afresh. For a relay that rotated its certificate. */
@@ -256,7 +435,10 @@ object TlsCanary {
     }
 
     private suspend fun runAndAlert(app: Context) {
+        val gen = generation
         check(app).collect { r ->
+            // Stopped while the probe was out: nothing is raised for a canary no longer running.
+            if (gen != generation) return@collect
             if (r.intercepted) {
                 publishInterception(r)
                 return@collect
@@ -434,6 +616,7 @@ object TlsCanary {
     }
 
     private fun runOnce(app: Context): TlsCanaryResult {
+        val gen = generation
         val proxies = proxyFindings(app)
         val proxy = proxies.firstOrNull()
 
@@ -442,7 +625,7 @@ object TlsCanary {
         val host = uri?.host
         if (host.isNullOrBlank()) {
             // No relay to probe: the proxy is still worth reporting, unverified.
-            return remember(app, TlsCanaryResult(
+            return remember(app, gen, TlsCanaryResult(
                 intercepted = false,
                 method = null,
                 proxyHost = proxy?.display,
@@ -474,11 +657,12 @@ object TlsCanary {
         val p = prefs(app)
         val pinnedSpki = p.getString(KEY_PIN, null)?.takeIf { p.getString(KEY_HOST, null) == host }
         val verdict = assess(pinnedSpki, directProbe, proxyProbe)
-        verdict.pinNow?.let { pin(app, host, it) }
+        // A run that outlived a stop or an unpair pins nothing: the key may be the relay just left.
+        verdict.pinNow?.let { if (gen == generation) pin(app, host, it) }
 
         val observed = direct.getOrNull()
         val via = ((proxyProbe as? ProxyProbe.Done)?.probe) as? Probe.Seen
-        return remember(app, TlsCanaryResult(
+        return remember(app, gen, TlsCanaryResult(
             intercepted = verdict.intercepted,
             method = verdict.method,
             proxyHost = proxy?.display,
@@ -512,7 +696,9 @@ object TlsCanary {
         pin(context.applicationContext, host, spki)
     }
 
-    private fun remember(app: Context, r: TlsCanaryResult): TlsCanaryResult {
+    /** Writes the run's outcome for the Certificates page, unless the canary was stopped since the run started ([gen]). */
+    private fun remember(app: Context, gen: Int, r: TlsCanaryResult): TlsCanaryResult {
+        if (gen != generation) return r
         val text = when {
             r.intercepted -> "INTERCEPTED: ${r.method}"
             r.untrustedUnpinned -> "NOT PUBLICLY TRUSTED: ${r.relayHost} (not pinned)"
@@ -740,4 +926,11 @@ object TlsCanary {
     }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+}
+
+/** The canary's four-hourly run, delivered by AlarmManager whether or not the process that armed it survived; see [TlsCanary.start]. */
+class TlsCanaryAlarm : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        TlsCanary.onAlarm(context.applicationContext, goAsync())
+    }
 }

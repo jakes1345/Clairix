@@ -9,6 +9,7 @@ import androidx.core.app.NotificationManagerCompat
 import app.clairix.CardEmulationBridge
 import app.clairix.Registry
 import app.clairix.ScanService
+import app.clairix.analysis.TlsCanary
 import app.clairix.comms.CallService
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.CommsService
@@ -113,6 +114,8 @@ object Wiper {
         runCatching { app.stopService(Intent(app, ScanService::class.java)) }
         runCatching { app.stopService(Intent(app, CommsService::class.java)) }
         runCatching { app.stopService(Intent(app, CallService::class.java)) }
+        // The canary's alarm lives with the system, not in the files erased below.
+        runCatching { TlsCanary.stop(app) }
     }
 
     /** The file whose presence means a wipe was started and has not been seen through. */

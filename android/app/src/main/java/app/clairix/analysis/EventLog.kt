@@ -49,7 +49,10 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
             val recent = events.firstOrNull { it.id.startsWith("$dedupeKey@") }
             if (recent != null && event.ts - recent.ts < dedupeWindowMs) return false
         }
-        events.add(0, event)
+        // Newest first by when it happened, not by when it was written: a scanner stop
+        // dated from its last heartbeat is written after events that came later.
+        val at = events.indexOfFirst { it.ts <= event.ts }
+        events.add(if (at < 0) events.size else at, event)
         while (events.size > cap) events.removeAt(events.size - 1)
         persist()
         return true

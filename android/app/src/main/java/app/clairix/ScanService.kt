@@ -24,9 +24,11 @@ import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.hardware.TriggerEvent
 import android.hardware.TriggerEventListener
+import android.location.LocationManager
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -52,6 +54,9 @@ import app.clairix.analysis.LocationTrack
 import app.clairix.analysis.MotionPolicy
 import app.clairix.analysis.Tracker
 import app.clairix.analysis.PhoneHealthMonitor
+import app.clairix.analysis.ScanRecord
+import app.clairix.analysis.ScannerHealth
+import app.clairix.analysis.TlsCanary
 import app.clairix.analysis.WifiScanner
 import app.clairix.analysis.haversine
 import app.clairix.analysis.toFix
@@ -72,6 +77,9 @@ import app.clairix.security.NotificationPresentation
 import app.clairix.security.NotificationText
 import app.clairix.security.PlatformAlerts
 import app.clairix.security.UnlockLedger
+import app.clairix.security.Wiper
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -86,6 +94,7 @@ import java.util.Collections
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicInteger
 
 class ScanService : LifecycleService() {
 
@@ -166,11 +175,69 @@ class ScanService : LifecycleService() {
 
     private fun post(results: List<ScanResult>) {
         try {
-            bleExecutor.execute { for (r in results) runCatching { handle(r) } }
+            bleExecutor.execute {
+                for (r in results) {
+                    runCatching { handle(r) }.onFailure { e ->
+                        // Counted and shown on the Trackers details card, and logged
+                        // sparingly: a stack handing over a malformed record does it
+                        // for every advert, not once.
+                        val n = packetErrors.incrementAndGet()
+                        if (n == 1 || n % 100 == 0) Log.w(TAG, "packet handling failed ($n so far)", e)
+                    }
+                }
+            }
         } catch (_: RejectedExecutionException) {
             // The service is gone; a packet that arrived on the way out is dropped.
         }
     }
+
+    /** When the last advertisement reached [handle], and when the current scan was registered; see [ScannerHealth]. */
+    @Volatile private var lastPacketAt = 0L
+    @Volatile private var scanStartedAt = 0L
+
+    /** Packets whose handling threw, counted rather than swallowed. */
+    private val packetErrors = AtomicInteger()
+
+    /** The health message in force, so the owner is told once per loss of hearing, not every cycle. */
+    private var deafCause: String? = null
+    private var lastHeartbeatAt = 0L
+    private val loopFailures = AtomicInteger()
+
+    /** The Location switch as last seen, so its coming back on restarts the scan once, not on every provider change. */
+    @Volatile private var locationWasOn = true
+
+    /** Whatever still escapes [guarded] is logged rather than taking the process down. */
+    private val loopGuard = CoroutineExceptionHandler { _, e -> Log.e(TAG, "scanner loop failed", e) }
+
+    /**
+     * Runs one iteration of a polling loop. An iteration that throws is logged,
+     * [onFailure] is told, and the loop pauses [pauseMs] before the next, instead of
+     * the throw ending the loop and crashing the process: the cell poll and the
+     * publish cycle each call half a dozen things that can throw (the modem, the
+     * Wi-Fi scanner, the disk), and one bad poll used to end the check for the rest
+     * of the run. Only cancellation, which is how the loop is meant to end, passes.
+     */
+    private suspend fun guarded(
+        loop: String,
+        pauseMs: Long,
+        onFailure: (Throwable) -> Unit = {},
+        block: suspend () -> Unit
+    ) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            val n = loopFailures.incrementAndGet()
+            if (n <= 3 || n % 50 == 0) Log.w(TAG, "$loop loop: iteration failed ($n so far)", e)
+            runCatching { onFailure(e) }
+            delay(pauseMs)
+        }
+    }
+
+    /** The system Location switch; unknown reads as on, so a missing service never cries wolf. */
+    private fun locationEnabled(): Boolean =
+        runCatching { getSystemService(LocationManager::class.java)?.isLocationEnabled }.getOrNull() != false
 
     /** How hard the scanner works for its position; see [applyPace]. */
     private val motion = MotionPolicy()
@@ -273,6 +340,17 @@ class ScanService : LifecycleService() {
                 BluetoothAdapter.ACTION_SCAN_MODE_CHANGED -> onScanModeChanged(
                     intent.getIntExtra(BluetoothAdapter.EXTRA_SCAN_MODE, BluetoothAdapter.ERROR)
                 )
+                LocationManager.PROVIDERS_CHANGED_ACTION, LocationManager.MODE_CHANGED_ACTION -> {
+                    // Android withholds scan results while Location is off. When it comes
+                    // back the scan is registered afresh rather than trusted to resume:
+                    // once per return, since a toggle sends several of these and Android
+                    // throttles an app that starts scans in quick succession. Either way
+                    // the health check runs at once instead of at the next cycle.
+                    val on = locationEnabled()
+                    if (on && !locationWasOn) restartScan()
+                    locationWasOn = on
+                    publishKick.trySend(Unit)
+                }
                 BluetoothDevice.ACTION_ACL_CONNECTED, BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                     val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                         ?: return
@@ -413,7 +491,14 @@ class ScanService : LifecycleService() {
             return START_NOT_STICKY
         }
 
+        // A previous run that ended without reaching onDestroy (killed outright, or by an
+        // update) left a heartbeat newer than any stop on record. Its end goes on the
+        // timeline, dated by that heartbeat, before this run's first heartbeat replaces it;
+        // whether it was on is read before this start turns scanning on.
+        val unrecordedStop = ScanRecord.claimSystemStop(this, AppSettings.scanEnabled)
         AppSettings.setScanEnabled(this, true)
+        // Running again: whatever ended the last run is history now (the timeline keeps it).
+        Registry.update { it.copy(stoppedBySystem = false, stoppedAt = 0L) }
         registerSystemReceiver()
         // What is connected at this moment, before the ACL broadcasts take over; the
         // profile proxies answer asynchronously, so this runs off the main thread.
@@ -424,6 +509,9 @@ class ScanService : LifecycleService() {
         // The Karma canary is a hidden network suggestion the platform probes for;
         // registering it is idempotent, and a refusal only means no canary this run.
         runCatching { KarmaCanary.ensure(this) }
+        // The TLS canary runs while the scanner does, so a phone without comms still
+        // learns of a proxy on its network; with comms it also watches the relay's key.
+        runCatching { TlsCanary.start(this) }
 
         startScanning()
         startLocation()
@@ -431,13 +519,19 @@ class ScanService : LifecycleService() {
         startCellPolling()
         startPublishing()
 
-        recordEvent(
-            TimelineEvent(
-                id = "scan_start@${System.currentTimeMillis()}", kind = EventKind.SCAN_START,
-                ts = System.currentTimeMillis(), title = "Scanning started", detail = "",
-                severity = Severity.LOW
+        val startedAt = System.currentTimeMillis()
+        // One coroutine for both rows, so the earlier stop is written before this start.
+        lifecycleScope.launch(Dispatchers.IO) {
+            unrecordedStop?.let { eventLog.record(ScannerHealth.systemStopEvent(it)) }
+            eventLog.record(
+                TimelineEvent(
+                    id = "scan_start@$startedAt", kind = EventKind.SCAN_START,
+                    ts = startedAt, title = "Scanning started", detail = "",
+                    severity = Severity.LOW
+                )
             )
-        )
+            Registry.publishTimeline(eventLog.snapshot())
+        }
 
         return START_STICKY
     }
@@ -450,7 +544,10 @@ class ScanService : LifecycleService() {
             addAction(BluetoothAdapter.ACTION_SCAN_MODE_CHANGED)
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+            addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
+            addAction(LocationManager.MODE_CHANGED_ACTION)
         }
+        locationWasOn = locationEnabled()
         ContextCompat.registerReceiver(
             this, systemReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED
         )
@@ -510,7 +607,8 @@ class ScanService : LifecycleService() {
         try {
             scanner?.startScan(filters, settings, scanCallback)
             scanActive = true
-            Registry.update { it.copy(scanning = true, bluetoothOn = true, error = null) }
+            scanStartedAt = System.currentTimeMillis()
+            Registry.update { it.copy(scanning = true, bluetoothOn = true, error = null, stoppedBySystem = false, stoppedAt = 0L) }
         } catch (e: SecurityException) {
             Registry.update { it.copy(scanning = false, error = "Scan denied: ${e.message}") }
         } catch (e: IllegalStateException) {
@@ -565,8 +663,15 @@ class ScanService : LifecycleService() {
     // Cell sampling reads the modem and writes the baseline to disk. Both belong off
     // the main thread — on it, every poll janked the UI of whatever was on screen.
     private fun startCellPolling() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            while (isActive) {
+        lifecycleScope.launch(Dispatchers.IO + loopGuard) {
+            // A poll that failed leaves no reading standing as if it had been judged:
+            // the Cell tab and its hub tile say there is none until a poll succeeds.
+            val onFailure: (Throwable) -> Unit = { e ->
+                Registry.publishCell(
+                    CellStatus(available = false, reason = "The cell check failed (${e.javaClass.simpleName}); trying again", analysing = true)
+                )
+            }
+            while (isActive) guarded("cell", CELL_FAILURE_PAUSE_MS, onFailure) {
                 val reason = cellMonitor.unavailableReason()
                 if (reason != null) {
                     Registry.publishCell(CellStatus(available = false, reason = reason))
@@ -628,10 +733,34 @@ class ScanService : LifecycleService() {
     }
 
     private fun startPublishing() {
-        lifecycleScope.launch(Dispatchers.Default) {
-            while (isActive) {
+        lifecycleScope.launch(Dispatchers.Default + loopGuard) {
+            while (isActive) guarded("publish", PUBLISH_FAILURE_PAUSE_MS) {
                 val now = System.currentTimeMillis()
                 tracker.prune(now)
+                // Whether the scan can hear at all: Location off hides every result, and
+                // an unfiltered scan that has heard nothing for five minutes is not
+                // listening. The cause goes on the status (the hub reads it as "Scanner
+                // cannot hear") and, once per loss, to the shade; the heartbeat says the
+                // service was alive this minute, for the hub to read once it is gone.
+                val cause = ScannerHealth.deafCause(
+                    scanActive = scanActive, locationOn = locationEnabled(), unfiltered = screenOn,
+                    lastPacketAt = lastPacketAt, scanStartedAt = scanStartedAt, now = now
+                )
+                val heard = lastPacketAt
+                val errors = packetErrors.get()
+                Registry.update {
+                    it.copy(
+                        error = ScannerHealth.reconcileError(it.error, cause),
+                        lastPacketAt = ScannerHealth.publishedHeard(it.lastPacketAt, heard),
+                        packetErrors = errors
+                    )
+                }
+                if (cause != null && cause != deafCause) notifyCannotHear(cause, now)
+                deafCause = cause
+                if (ScannerHealth.heartbeatDue(lastHeartbeatAt, now)) {
+                    lastHeartbeatAt = now
+                    ScanRecord.heartbeat(this@ScanService, now)
+                }
                 if (now - lastRetentionAt > retentionEveryMs) {
                     lastRetentionAt = now
                     withContext(Dispatchers.IO) { runCatching { HistoryRetention.apply(this@ScanService) } }
@@ -795,6 +924,7 @@ class ScanService : LifecycleService() {
     }
 
     private fun handle(result: ScanResult) {
+        lastPacketAt = System.currentTimeMillis()
         // Every packet, unfiltered, for the finder and the self-test that follow the
         // stream; neither needs a scan of its own.
         Registry.publishScan(result)
@@ -1047,6 +1177,21 @@ class ScanService : LifecycleService() {
         )
     }
 
+    /**
+     * The owner is told once each time the scan stops hearing; the hub and the
+     * Trackers hero carry the cause for as long as it lasts. Through the shared
+     * alert path, so the loss is on the timeline too, as a gap in cover.
+     */
+    private fun notifyCannotHear(cause: String, now: Long) {
+        Registry.publishAlert(
+            Alert(
+                id = "scanner_deaf@$now", ts = now, severity = Severity.MEDIUM,
+                title = "Scanner cannot hear", detail = cause,
+                kind = EventKind.PLATFORM, dedupeKey = "scanner_deaf"
+            )
+        )
+    }
+
     /** Records an event off the calling thread — [EventLog.record] writes to disk. */
     private fun recordEvent(event: TimelineEvent, dedupeKey: String? = null) {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -1289,6 +1434,13 @@ class ScanService : LifecycleService() {
     override fun onDestroy() {
         liveTrips = null
         stopScanning()
+        val now = System.currentTimeMillis()
+        // Stopping from the app (the toggle, the notification's button) turns scanning
+        // off before the service goes; a scanner that ends with it still on was ended
+        // by something else — an update, a kill, a battery manager — and the record
+        // says so rather than "Scanning stopped" as if the owner had done it. A wipe
+        // records nothing: it is erasing the file this would go in.
+        val bySystem = running && AppSettings.scanEnabled && !Wiper.isActive
         if (running) {
             try { unregisterReceiver(systemReceiver) } catch (_: IllegalArgumentException) {}
             location.removeLocationUpdates(locationCallback)
@@ -1297,17 +1449,27 @@ class ScanService : LifecycleService() {
             gnssHandle?.let { GnssMonitor.release(it) }
             gnssHandle = null
             // A drive still under way is closed and stored, or the trip count loses it.
-            if (vehicleTrips.inTrip) vehicleTrips.endTrip(System.currentTimeMillis()).forEach(::publishVehicleFinding)
+            if (vehicleTrips.inTrip) vehicleTrips.endTrip(now).forEach(::publishVehicleFinding)
             // Recorded synchronously: the process may not outlive this callback.
-            eventLog.record(
-                TimelineEvent(
-                    id = "scan_stop@${System.currentTimeMillis()}", kind = EventKind.SCAN_STOP,
-                    ts = System.currentTimeMillis(), title = "Scanning stopped", detail = "",
-                    severity = Severity.LOW
-                )
+            if (!Wiper.isActive) {
+                val reason = if (bySystem) ScannerHealth.StopReason.SYSTEM else ScannerHealth.StopReason.USER
+                ScanRecord.recordStop(this, reason, now, sync = true)
+                eventLog.record(if (bySystem) ScannerHealth.systemStopEvent(now) else ScannerHealth.userStopEvent(now))
+            }
+        }
+        // The owner turned the scanner off: the TLS canary stops too, unless comms keep
+        // it. A scanner the system ended keeps it, as the owner still wants the cover.
+        if (!AppSettings.scanEnabled) TlsCanary.stopIfUnwanted(this)
+        Registry.update {
+            if (running) it.copy(
+                scanning = false,
+                // A stop clears whatever the scan was saying; the flag says how it ended.
+                error = null, stoppedBySystem = bySystem, stoppedAt = if (bySystem) now else 0L
+            ) else it.copy(
+                // A start that failed: its reason stays up, and so does an earlier system stop.
+                scanning = false
             )
         }
-        Registry.update { it.copy(scanning = false) }
         // The last reading stays on the Cell tab, but nothing is judging it any more;
         // the tab says so instead of showing a frozen "RISK: NONE" as if it were live.
         Registry.updateCell { it.copy(analysing = false, findings = emptyList(), score = 0, level = Threat.NONE) }
@@ -1390,5 +1552,9 @@ class ScanService : LifecycleService() {
         private const val SETTLED_FIX_MS = 3 * 60_000L
         /** A hardware sighting reuses its nearest-camera lookup for this long. */
         private const val NEAREST_CAMERA_REUSE_MS = 30_000L
+        /** How long each polling loop waits after an iteration threw, about its own slowest cadence; see [guarded]. */
+        private const val CELL_FAILURE_PAUSE_MS = 30_000L
+        private const val PUBLISH_FAILURE_PAUSE_MS = 10_000L
+        private const val TAG = "ScanService"
     }
 }

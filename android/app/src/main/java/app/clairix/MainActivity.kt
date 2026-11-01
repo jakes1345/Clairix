@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -74,6 +75,8 @@ import app.clairix.CatcherFinding
 import app.clairix.analysis.CardVault
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.NfcScanner
+import app.clairix.analysis.ScanRecord
+import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.WifiScanner
 import app.clairix.security.AppLock
 import app.clairix.security.LockScreen
@@ -447,6 +450,36 @@ class MainActivity : AppCompatActivity() {
         startService(intent)
     }
 
+    /**
+     * The scanner is meant to be running whenever the owner last left it on. An
+     * update or a system kill ends the service without turning that off, and the
+     * hub then read "Scanner off" as if she had stopped it. On every return to the
+     * foreground the scanner is started again when it can be, and its own start
+     * puts the lost time on the timeline (ScanService.onStartCommand). When it
+     * cannot be (a permission taken away since), the gap is recorded here and the
+     * status says when the scanner was lost, so the hub and the Trackers screen can
+     * say so and offer to resume.
+     */
+    private fun reconcileScanner() {
+        if (!BuildConfig.FULL_ACCESS || !AppSettings.scanEnabled) return
+        if (Registry.status.value.scanning) return
+        if (ESSENTIAL.all { granted(it) }) {
+            startScanning()
+            return
+        }
+        val app = applicationContext
+        lifecycleScope.launch(Dispatchers.IO) {
+            // A live service that cannot scan says why in its error; only a dead one was
+            // "stopped by the system", dated by its own record or, when the process was
+            // killed outright (an update, a low-memory kill), by its last heartbeat.
+            if (Registry.status.value.error != null) return@launch
+            // A kill leaves no row behind; the gap in cover goes on the timeline once.
+            ScanRecord.claimSystemStop(app, scanEnabled = true)?.let { TimelineLog.record(app, ScannerHealth.systemStopEvent(it)) }
+            val at = ScanRecord.systemStopAt(app, scanEnabled = true) ?: return@launch
+            Registry.update { if (it.scanning) it else it.copy(stoppedBySystem = true, stoppedAt = at) }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         resumed = true
@@ -455,6 +488,7 @@ class MainActivity : AppCompatActivity() {
         app.clairix.comms.Vault.check()
         applyNfcMode()
         if (BuildConfig.FULL_ACCESS) refreshDeviceHealth()
+        reconcileScanner()
         // Envelopes that arrived while the app was closed are pulled on every
         // return to the foreground; the push endpoint is renewed if it was lost.
         // While the app stays on screen the relay socket is held open, so what
@@ -1322,6 +1356,12 @@ private fun MainApp(
         trackerActionName = null
     }
 
+    // "Tap to resume" on the hub and the timeline: the scanner starts straight away
+    // when it may; otherwise the Trackers screen asks for what it still needs.
+    val resumeScan: () -> Unit = {
+        if (hasPermissions()) onStart() else { openTab(HomeTab.SCAN); openCategory(ScanCategory.TRACKERS) }
+    }
+
     // A call ringing or in progress takes the Comms tab regardless of where the
     // user was. Settings, the Comms safety pages and the explainer sheet are drawn
     // over or instead of it, so they close too; otherwise the call's ACCEPT button
@@ -1512,7 +1552,11 @@ private fun MainApp(
                 category == null -> ScanHub(
                     scanning = status.scanning,
                     statuses = statuses,
-                    onOpen = { openCategory(it) }
+                    onOpen = { openCategory(it) },
+                    error = status.error,
+                    stoppedBySystemAt = status.stoppedAt.takeIf { status.stoppedBySystem && it > 0L },
+                    scanEnabled = AppSettings.scanEnabled,
+                    onResumeScan = resumeScan
                 )
                 category == ScanCategory.TRACKERS -> if (trackerSub == 0) {
                     ScanScreen(
@@ -1565,7 +1609,7 @@ private fun MainApp(
             }
             HomeTab.DRIVE -> DriveScreen()
             HomeTab.ACTIVITY -> when (activitySub) {
-                0 -> TimelineScreen()
+                0 -> TimelineScreen(onResumeScan = resumeScan)
                 1 -> PatternOfLifePage()
                 else -> UnlockLedgerPage()
             }
@@ -1634,7 +1678,7 @@ internal fun ScanScreen(
         }
 
         if (status.scanning || status.error != null) {
-            item(key = "§details") { ScanDetailsCard(status, detections, trusted) }
+            item(key = "§details") { ScanDetailsCard(status, detections, trusted, now) }
         }
 
         // ── Findings ──
@@ -1684,9 +1728,20 @@ internal fun ScanScreen(
 /** The verdict the Trackers screen leads with, and the start/stop switch under it. */
 @Composable
 private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggle: () -> Unit) {
+    val context = LocalContext.current
     val following = live.filter { it.following }
     val persistent = live.count { it.persistent }
+    val error = status.error
     val (headline, body, tone) = when {
+        // Wanted on and unable to scan (Bluetooth off, a refused restart): the cause,
+        // which is what there is to act on, as the hub puts it first too.
+        !status.scanning && error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
+        // Ended by an update, a kill or a battery manager: said so, not "off" as if she had.
+        !status.scanning && status.stoppedBySystem -> Triple(
+            "Scanner stopped",
+            ScannerHealth.stoppedBySystemLine(status.stoppedAt),
+            Tone.Caution
+        )
         !status.scanning -> Triple(
             "Scanner off",
             "Start scanning to check for Bluetooth trackers travelling with you.",
@@ -1703,6 +1758,9 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
             "They were heard in different places while you moved. Open each one below to see where to look.",
             Tone.Danger
         )
+        // Registered and hearing nothing (Location off, five quiet minutes): a confirmed
+        // follower above still stands, but "nothing following" below would be unproven.
+        error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
         persistent > 0 -> Triple(
             "Keep watching",
             "${plural(persistent, "device")} keep showing up. Following is only confirmed once you move about " +
@@ -1723,9 +1781,21 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
         modifier = Modifier.padding(top = 8.dp),
         footer = {
             if (status.scanning) {
+                if (error == ScannerHealth.LOCATION_OFF) {
+                    SecondaryButton(
+                        "Open Location settings",
+                        onClick = { openExternal(context, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
+                        tone = Tone.Accent,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 SecondaryButton("Stop scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
             } else {
-                PrimaryButton("Start scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
+                PrimaryButton(
+                    if (status.stoppedBySystem) "Resume scanning" else "Start scanning",
+                    onClick = onToggle,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     )
@@ -1778,7 +1848,7 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
 
 /** What the scan is working with: position, filtered noise, trusted devices, errors. */
 @Composable
-private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, trusted: Set<String>) {
+private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, trusted: Set<String>, now: Long) {
     ClairixCard(spacing = 4.dp) {
         val scanText = when {
             !status.scanning -> "Idle"
@@ -1789,6 +1859,23 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
         val filtered = status.nearbyCount - detections.size
         if (status.scanning && filtered > 0) {
             KeyValueRow("Filtered out", "$filtered passing signals")
+        }
+        // The scan's own pulse: a scan that is registered but hears nothing shows it here
+        // first. The time is published to the half minute (see ScannerHealth), so it reads
+        // to the minute.
+        if (status.scanning) {
+            val heard = status.lastPacketAt
+            KeyValueRow(
+                "Last heard",
+                when {
+                    heard == 0L -> "nothing yet"
+                    now - heard < 60_000L -> "within the last minute"
+                    else -> fmtAgo(now, heard)
+                }
+            )
+        }
+        if (status.packetErrors > 0) {
+            KeyValueRow("Packet errors", "${status.packetErrors}", valueColor = ClairixTheme.colors.caution)
         }
         if (status.hasFix) {
             KeyValueRow("Position", "%.4f, %.4f".format(Locale.US, status.lat ?: 0.0, status.lon ?: 0.0))
@@ -2339,7 +2426,7 @@ private fun MapChip(text: String, tone: Tone) {
 // ── Timeline screen ──────────────────────────────────────────────────────
 
 @Composable
-internal fun TimelineScreen() {
+internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null) {
     val events by Registry.timeline.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(60_000L)
@@ -2347,6 +2434,9 @@ internal fun TimelineScreen() {
     val groups = remember(events, now / 60_000L) { events.groupBy { dayLabel(it.ts, now) } }
     val flagged = remember(events) { events.count { it.severity.ordinal >= Severity.HIGH.ordinal || it.kind == EventKind.PANIC } }
     val today = groups[dayLabel(now, now)]?.size ?: 0
+    // The newest stop on record. When it was the system's and the scanner is still
+    // down, its row offers to resume; older stops are history.
+    val latestStop = remember(events) { events.firstOrNull { it.kind == EventKind.SCAN_STOP } }
 
     ScreenList {
         // ── Status first: how much is on record and how much of it matters ──
@@ -2368,7 +2458,11 @@ internal fun TimelineScreen() {
         } else {
             groups.forEach { (label, list) ->
                 item(key = "§day-$label") { SectionHeader(label, supporting = plural(list.size, "event")) }
-                items(list, key = { it.id }) { TimelineRow(it, status) }
+                items(list, key = { it.id }) { e ->
+                    val resumable = onResumeScan != null && e.id == latestStop?.id &&
+                        e.id.startsWith(ScannerHealth.SYSTEM_STOP_ID_PREFIX) && !status.scanning && AppSettings.scanEnabled
+                    TimelineRow(e, status, onResume = if (resumable) onResumeScan else null)
+                }
             }
         }
     }
@@ -2397,7 +2491,7 @@ private fun eventTone(e: TimelineEvent): Tone = when (e.kind) {
 }
 
 @Composable
-private fun TimelineRow(e: TimelineEvent, status: ScanStatus) {
+private fun TimelineRow(e: TimelineEvent, status: ScanStatus, onResume: (() -> Unit)? = null) {
     var open by remember(e.id) { mutableStateOf(false) }
     val tone = eventTone(e)
     val tag = eventKindTag(e.kind)
@@ -2436,6 +2530,8 @@ private fun TimelineRow(e: TimelineEvent, status: ScanStatus) {
                 overflow = TextOverflow.Ellipsis
             )
         }
+        // A scanner the system stopped, still down: "tap to resume" means this row.
+        if (onResume != null) GhostButton("Resume scanning", onClick = onResume)
         if (lat != null && lon != null) {
             Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         }
