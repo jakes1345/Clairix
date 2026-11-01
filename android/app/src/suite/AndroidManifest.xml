@@ -64,10 +64,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <!--
-        Device tab: the packages the security check looks for. Package visibility
-        filtering hides every other app from getPackageInfo unless it is named here;
-        this is the list of root managers, hooking frameworks and known stalkerware
-        that PhoneHealthMonitor reports when installed. Nothing else is visible.
+        Device tab: the root managers and hooking frameworks PhoneHealthMonitor
+        reports when installed. QUERY_ALL_PACKAGES above already lets the app see
+        every package, which the stalkerware check needs anyway: it matches every
+        installed app against its signed stalkerware list (analysis/StalkwareIoc.kt)
+        by package name and signing certificate, so no stalkerware is named here.
     -->
     <queries>
         <package android:name="com.topjohnwu.magisk" />
@@ -87,25 +88,6 @@
         <package android:name="org.lsposed.manager" />
         <package android:name="com.saurik.substrate" />
         <package android:name="re.frida.server" />
-        <package android:name="com.mspy.lite" />
-        <package android:name="com.mspy.android" />
-        <package android:name="com.flexispy.android" />
-        <package android:name="com.hellospy.system" />
-        <package android:name="com.spyzie.android" />
-        <package android:name="com.cocospy.android" />
-        <package android:name="com.spyic.android" />
-        <package android:name="com.hoverwatch.android" />
-        <package android:name="com.thetruthspy.android" />
-        <package android:name="com.spyhuman.android" />
-        <package android:name="com.xnspy.android" />
-        <package android:name="com.mobistealth.android" />
-        <package android:name="com.ikeymonitor.android" />
-        <package android:name="com.cerberusapp" />
-        <package android:name="com.lsdroid.cerberus" />
-        <package android:name="com.spy2mobile.light" />
-        <package android:name="com.mxspy" />
-        <package android:name="com.pcTattletale" />
-        <package android:name="com.retinax.mobilespy" />
         <!--
             Makes every active device admin visible so its label can be resolved
             through its receiver component; without this the Device tab showed raw

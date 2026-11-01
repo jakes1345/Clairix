@@ -58,6 +58,7 @@ import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.analysis.ScanPacing
 import app.clairix.analysis.ScanRecord
 import app.clairix.analysis.ScannerHealth
+import app.clairix.analysis.StalkwareWatch
 import app.clairix.analysis.TlsCanary
 import app.clairix.analysis.WifiScanner
 import app.clairix.analysis.haversine
@@ -508,6 +509,9 @@ class ScanService : LifecycleService() {
         // Running again: whatever ended the last run is history now (the timeline keeps it).
         Registry.update { it.copy(stoppedBySystem = false, stoppedAt = 0L) }
         registerSystemReceiver()
+        // An app installed or changed while the scanner runs is checked for stalkerware a few
+        // seconds later; Android only tells a receiver registered at run time.
+        StalkwareWatch.watchPackages(this)
         // What is connected at this moment, before the ACL broadcasts take over; the
         // profile proxies answer asynchronously, so this runs off the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
@@ -883,6 +887,10 @@ class ScanService : LifecycleService() {
                 val healthEvery = if (screenOn) 30_000L else 5 * 60_000L
                 if (publishCycle == 1 || now - lastHealthAt >= healthEvery) {
                     lastHealthAt = now
+                    // The stalkerware check, once a day: every installed app scored and matched
+                    // against the list, compared with the last check, and what is new alerted. Off
+                    // this loop, which it would hold up for a second; it publishes its own result.
+                    lifecycleScope.launch(Dispatchers.IO) { runCatching { StalkwareWatch.checkIfDue(this@ScanService, foreground = false) } }
                     phoneHealthMonitor.scanAndPublish()
                     // Unlock ledger: pull the platform's keyguard events and judge
                     // the sleep window, so a night-time unlock is reported while
@@ -1329,6 +1337,7 @@ class ScanService : LifecycleService() {
         synchronized(nearestCameraCache) { nearestCameraCache.clear() }
         GnssMonitor.clear()
         runCatching { app.clairix.analysis.CellularExposure.clear(this) }
+        runCatching { StalkwareWatch.clear(this) }
         LocationHistory.clear(this)
         alerted.clear()
         followAlerts.clear()
@@ -1547,6 +1556,7 @@ class ScanService : LifecycleService() {
     override fun onDestroy() {
         liveTrips = null
         stopScanning()
+        StalkwareWatch.stopWatchingPackages(this)
         val now = System.currentTimeMillis()
         // Stopping from the app (the toggle, the notification's button) turns scanning
         // off before the service goes; a scanner that ends with it still on was ended

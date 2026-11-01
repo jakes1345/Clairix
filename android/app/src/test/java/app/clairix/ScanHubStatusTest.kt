@@ -157,8 +157,16 @@ class ScanHubStatusTest {
     @Test
     fun phoneCheckNeverClaimsCleanBeforeAScan() {
         assertEquals("Not checked yet", phoneStatus(PhoneHealth()).text)
-        val clean = PhoneHealth(findingsScannedTs = 1L, facts = listOf(HealthFact("lock", "Lock", "Screen lock", "PIN")))
+        val clean = PhoneHealth(findingsScannedTs = 1L, facts = listOf(HealthFact("lock", "Lock", "Screen lock", "PIN")), spywareScannedTs = 1L)
         assertEquals("No issues found", phoneStatus(clean).text)
+        // Nothing found yet, but the installed apps have not been checked: no all-clear.
+        val unchecked = clean.copy(spywareScannedTs = 0L)
+        assertEquals("Checking installed apps", phoneStatus(unchecked).text)
+        assertEquals(StatusTone.NEUTRAL, phoneStatus(unchecked).tone)
+        // An app the stalkerware check scored HIGH is an issue on the hub.
+        val spy = clean.copy(findings = listOf(PhoneHealthFinding("spy:com.mxspy", Severity.CRITICAL, "Stalkerware", "Copy9 is known stalkerware: TheTruthSpy", "")))
+        assertEquals("1 issue to fix", phoneStatus(spy).text)
+        assertTrue(phoneStatus(spy).alert)
         val bad = PhoneHealth(
             findingsScannedTs = 1L,
             findings = listOf(PhoneHealthFinding("a11y", Severity.HIGH, "Apps", "Accessibility service", "Reads the screen"))

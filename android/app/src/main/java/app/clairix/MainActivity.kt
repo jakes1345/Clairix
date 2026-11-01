@@ -82,6 +82,7 @@ import app.clairix.analysis.WifiScanner
 import app.clairix.security.AppLock
 import app.clairix.security.LockScreen
 import app.clairix.analysis.PhoneHealthMonitor
+import app.clairix.analysis.StalkwareWatch
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
 import app.clairix.security.SosLocation
@@ -594,6 +595,10 @@ class MainActivity : AppCompatActivity() {
      * and brings the unlock ledger up to date from the usage log while it is there.
      */
     private fun refreshDeviceHealth() {
+        // The stalkerware check behind "no known spyware": at most once a day, alongside, and on
+        // the owner's screen, so what it finds goes on the timeline without a notification. It
+        // adds its result to Phone check itself.
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { StalkwareWatch.checkIfDue(applicationContext, foreground = true) } }
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching { phoneHealthMonitor.scanAndPublish() }
             runCatching { UnlockLedger.refresh(applicationContext) }
@@ -3622,8 +3627,16 @@ private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
         )
         sensor != null -> Triple(
             sensor,
-            "No spyware or risky settings found in $checked checks. Something is using a sensor right now; see below.",
+            (if (health.spywareScannedTs > 0L) "No spyware or risky settings found in $checked checks. "
+            else "No risky settings found in $checked checks; installed apps are still being checked. ") +
+                "Something is using a sensor right now; see below.",
             Tone.Caution
+        )
+        // "Known spyware" is only said once the stalkerware check has run.
+        health.spywareScannedTs == 0L -> Triple(
+            "Checking apps",
+            "$checked checks passed. No root, debug access or unknown admins. Installed apps are still being checked for spyware.",
+            Tone.Neutral
         )
         else -> Triple(
             "Phone clear",
@@ -3689,7 +3702,7 @@ private fun HealthFactRow(f: HealthFact) {
 
 /** Checklist rows that describe rather than judge, so a safe mark would overclaim. */
 private val INFORMATIONAL_FACTS = setOf(
-    "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always"
+    "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always", "profiles"
 )
 
 @Composable

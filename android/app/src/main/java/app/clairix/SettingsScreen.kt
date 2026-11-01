@@ -816,6 +816,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
+                    if (BuildConfig.FULL_ACCESS) {
+                        Text(
+                            "The stalkerware list is converted from Stalkerware Indicators of Compromise by Julien Voisin and " +
+                                "Tek for Echap (github.com/AssoEchap/stalkerware-indicators), used under the Creative Commons " +
+                                "Attribution 4.0 licence (creativecommons.org/licenses/by/4.0). Clairix keeps only the app " +
+                                "names, package names and certificate fingerprints from it.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = c.textSubtle
+                        )
+                    }
 
                     Hairline(Modifier.padding(vertical = 4.dp))
                     Text("Privacy", style = MaterialTheme.typography.titleSmall, color = c.text)
@@ -826,8 +836,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 " are stored locally, sealed under a key in this phone's secure hardware, and never " +
                                 "uploaded. The map downloads tiles from OpenStreetMap, which sees your IP address and the " +
                                 "area you're looking at; a place search runs on the phone over the offline map's road names " +
-                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps " +
-                                "and work zones come signed from GitHub. Messages, calls and live traffic go through the " +
+                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
+                                "work zones and the stalkerware list come signed from GitHub. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
                                 "phone only when you export it."
                         else

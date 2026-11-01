@@ -28,6 +28,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
+import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
 import app.clairix.HealthFact
 import app.clairix.PhoneHealthFinding
@@ -169,16 +170,35 @@ class PhoneHealthMonitor(private val context: Context) {
         mainHandler.postDelayed(recheckCameras, OWN_CAMERA_RELEASE_GRACE_MS + 100L)
     }
 
+    /** The grants Phone check judges: the ones needing a look, and the ones listed as access granted. */
+    private class Grants(val findings: List<PhoneHealthFinding>, val granted: List<HealthFact>)
+
     /**
-     * The static findings — accessibility services, device admins, debug settings.
-     * Microphone and camera state is published separately as it changes.
+     * The static findings — special access nobody vouches for, root managers and hooking
+     * frameworks. Microphone and camera state is published separately as it changes, and the
+     * apps the stalkerware check scores HIGH are added by [scanAndPublish].
      *
      * Cheap and service-free, so the Activity runs it too: the Device tab must not
      * say "no issues" merely because the scanner is off and nothing has looked.
      */
-    fun scan(): List<PhoneHealthFinding> {
-        val findings = mutableListOf<PhoneHealthFinding>()
+    fun scan(): List<PhoneHealthFinding> = grants().findings + watchedFindings()
+
+    /**
+     * Every accessibility service, notification listener, device admin (and device or profile
+     * owner) and enabled keyboard on the phone, judged by [StalkwareScanner.grantStatus], the same
+     * verdict the stalkerware page shows: a finding for each that needs a look, an "Access granted"
+     * row with no severity for each accessibility service, admin or owner that is known or that the
+     * owner marked as theirs. Known and preloaded listeners and keyboards add nothing here; the
+     * stalkerware page lists them all.
+     */
+    private fun grants(): Grants {
+        val findings = ArrayList<PhoneHealthFinding>()
+        val granted = ArrayList<HealthFact>()
         val pm = context.packageManager
+        val self = context.packageName
+        val origins = StalkwareScanner.Origins(context)
+        val acknowledged = StalkwareWatch.acknowledged(context)
+        val ioc = if (acknowledged.isEmpty()) null else runCatching { StalkwareIoc.current(context) }.getOrNull()
 
         // Package visibility filtering hides most other apps' ApplicationInfo from a
         // third-party app, so looking a label up by package name throws
@@ -188,6 +208,21 @@ class PhoneHealthMonitor(private val context: Context) {
             pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
         }.getOrDefault(pkg)
 
+        fun judge(kind: StalkwareScanner.GrantKind, pkg: String, name: String, component: String?) {
+            // An app Android will not show is judged as unknown: nothing can vouch for it.
+            val facts = origins.facts(pkg, acknowledged, ioc)
+                ?: StalkwareScanner.AppFacts(pkg, system = false, installer = null, hasLauncher = true)
+            val status = StalkwareScanner.grantStatus(kind, facts)
+            val severity = StalkwareScanner.grantSeverity(kind, status)
+            when {
+                severity != null -> findings += SpywareHealth.grantFinding(kind, name, pkg, component, status, severity)
+                status == StalkwareScanner.GrantStatus.KNOWN || status == StalkwareScanner.GrantStatus.YOURS -> when (kind) {
+                    StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, StalkwareScanner.GrantKind.KEYBOARD -> Unit
+                    else -> granted += SpywareHealth.grantedFact(kind, name, pkg, component, status)
+                }
+            }
+        }
+
         // Accessibility services — spyware heavily abuses these
         runCatching {
             val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
@@ -195,47 +230,67 @@ class PhoneHealthMonitor(private val context: Context) {
                 .forEach { svc ->
                     val info = svc.resolveInfo.serviceInfo
                     val pkg = info.packageName
-                    if (pkg == context.packageName) return@forEach
+                    if (pkg == self) return@forEach
                     // The ResolveInfo the accessibility manager hands over already
                     // carries the label; no package lookup needed.
                     val name = runCatching { svc.resolveInfo.loadLabel(pm)?.toString() }
                         .getOrNull()?.takeIf { it.isNotBlank() } ?: label(pkg)
                     // The id carries the service class: one app can register several
                     // services, and the Device tab keys its list on the id, so two
-                    // findings sharing "a11y_<pkg>" crashed it.
-                    findings += PhoneHealthFinding(
-                        id = "a11y_$pkg/${info.name}",
-                        severity = Severity.HIGH,
-                        category = "Accessibility",
-                        title = "$name — accessibility service active",
-                        detail = "Accessibility services can read every word on screen, intercept key presses, " +
-                                "perform taps on your behalf, and run in the background indefinitely. " +
-                                "Stalkerware almost always registers as one. Check Settings → Accessibility → Installed services."
-                    )
+                    // findings sharing one id crashed it.
+                    judge(StalkwareScanner.GrantKind.ACCESSIBILITY, pkg, name, info.name)
                 }
         }
 
-        // Device admin — MDM / stalkerware control channel
+        // Notification listeners: every notification, one-time codes included
+        runCatching {
+            val raw = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners").orEmpty()
+            raw.split(':').mapNotNull { ComponentName.unflattenFromString(it) }.map { it.packageName }.distinct()
+                .filter { it != self }
+                .forEach { pkg -> judge(StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, pkg, label(pkg), null) }
+        }
+
+        // Device admin — MDM / stalkerware control channel; an owner is judged as one
         runCatching {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             dpm.activeAdmins?.forEach { admin ->
-                if (admin.packageName == context.packageName) return@forEach
+                if (admin.packageName == self) return@forEach
                 val name = adminLabel(admin) ?: label(admin.packageName)
-                findings += PhoneHealthFinding(
-                    id = "admin_${admin.packageName}/${admin.className}",
-                    severity = Severity.HIGH,
-                    category = "Device Admin",
-                    title = "$name — device admin",
-                    detail = "Device admin apps can lock or wipe the device, enforce password policies, " +
-                            "and block uninstallation. MDM agents and stalkerware both use this. " +
-                            "Revoke from Settings → Security → Device admin apps."
-                )
+                val kind = when (StalkwareScanner.ownerOf(context, admin.packageName)) {
+                    true -> StalkwareScanner.GrantKind.DEVICE_OWNER
+                    false -> StalkwareScanner.GrantKind.PROFILE_OWNER
+                    null -> StalkwareScanner.GrantKind.DEVICE_ADMIN
+                }
+                judge(kind, admin.packageName, name, admin.className)
             }
         }
 
-        // Known stalkerware, root managers and hooking frameworks. Package visibility
-        // filtering hides other apps from a third-party app unless they are named in
-        // the manifest's <queries> block, which is where this list also lives.
+        // Enabled keyboards: every keystroke typed with them
+        runCatching {
+            val imm = context.getSystemService(InputMethodManager::class.java)
+            imm?.enabledInputMethodList.orEmpty().distinctBy { it.packageName }.forEach { ime ->
+                if (ime.packageName == self) return@forEach
+                val name = runCatching { ime.loadLabel(pm)?.toString() }.getOrNull()?.takeIf { it.isNotBlank() } ?: label(ime.packageName)
+                judge(StalkwareScanner.GrantKind.KEYBOARD, ime.packageName, name, null)
+            }
+        }
+
+        // Guaranteed unique for the same reason IMSICatcher does it: a duplicate id
+        // takes the Device tab down.
+        return Grants(findings.distinctBy { it.id }, granted.distinctBy { it.id })
+    }
+
+    /** Root managers and hooking frameworks found installed ([WATCHED_PACKAGES]). */
+    private fun watchedFindings(): List<PhoneHealthFinding> {
+        val findings = mutableListOf<PhoneHealthFinding>()
+        val pm = context.packageManager
+        fun label(pkg: String) = runCatching {
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault(pkg)
+
+        // Root managers and hooking frameworks. Known stalkerware is matched by the
+        // stalkerware check against its signed list (StalkwareIoc), by package name and
+        // signing certificate, and reaches this tab through [scanAndPublish].
         for ((pkg, what) in WATCHED_PACKAGES) {
             val installed = runCatching { pm.getPackageInfo(pkg, 0); true }.getOrDefault(false)
             if (!installed) continue
@@ -405,7 +460,15 @@ class PhoneHealthMonitor(private val context: Context) {
         if (!alwaysOnVpn.isNullOrBlank()) out += HealthFact("vpn_always", "Network", "Always-on VPN", alwaysOnVpn)
         runCatching { CellularExposure.fact(context, advancedProtectionEnabled()) }.getOrNull()?.let { out += it }
         runCatching { NetworkLeaks.facts(NetworkLeaks.read(context)) }.getOrNull()?.let { out += it }
+        caFact()?.let { out += it }
         runCatching { KeyboardExposure.fact(KeyboardExposure.current(context)) }.getOrNull()?.let { out += it }
+        // What the stalkerware check cannot see: apps in any other profile.
+        runCatching {
+            SpywareHealth.profilesFact(
+                StalkwareScanner.otherProfiles(context), StalkwareScanner.hasSecureFolder(context), Build.VERSION.SDK_INT,
+                StalkwareScanner.ownProfile(context)
+            )
+        }.getOrNull()?.let { out += it }
 
         // ── Identity ────────────────────────────────────────────────────────
         out += identityFacts()
@@ -809,19 +872,54 @@ class PhoneHealthMonitor(private val context: Context) {
         if (f.canRead()) f.readText().trim().takeIf { it.isNotEmpty() } else null
     }.getOrNull()
 
-    /** Runs [scan] and [facts] and publishes both together with when they were taken. */
+    /**
+     * Runs [scan] and [facts] and publishes both together with when they were taken, with the
+     * apps the last stalkerware check scored HIGH ([StalkwareScanner.results]) and when that check
+     * ran, so the hub's verdict covers them. The check itself runs elsewhere ([StalkwareWatch]):
+     * it walks every installed package, too much for every thirty-second pass.
+     */
     fun scanAndPublish() {
-        val findings = scan()
+        val grants = runCatching { grants() }.getOrDefault(Grants(emptyList(), emptyList()))
+        val watched = runCatching { watchedFindings() }.getOrDefault(emptyList())
         val facts = runCatching { facts() }.getOrDefault(emptyList())
         val now = System.currentTimeMillis()
         // Only the findings: mic and camera state is pushed by the callbacks and
-        // must not be overwritten here.
-        Registry.updatePhoneHealth { it.copy(findings = findings, facts = facts, findingsScannedTs = now) }
+        // must not be overwritten here. The check's result is read inside the update,
+        // so a check that finishes meanwhile is not overwritten with an older one.
+        Registry.updatePhoneHealth {
+            val spyware = StalkwareScanner.results.value
+            SpywareHealth.merge(
+                it.copy(
+                    findings = (grants.findings + watched).distinctBy { f -> f.id },
+                    facts = (facts + grants.granted).distinctBy { f -> f.id },
+                    findingsScannedTs = now
+                ),
+                SpywareHealth.appFindings(spyware),
+                spyware?.scannedAt ?: 0L
+            )
+        }
+    }
+
+    /**
+     * The certificates row ([CaAuditScanner.fact]). Reading the trust store parses every root, so
+     * it is read at most every [CA_EVERY_MS], not on every pass.
+     */
+    private fun caFact(): HealthFact? {
+        val now = SystemClock.elapsedRealtime()
+        caCache?.let { (at, fact) -> if (now - at < CA_EVERY_MS) return fact }
+        val fact = runCatching { CaAuditScanner.fact(CaAuditScanner.scan(context)) }.getOrNull()
+        caCache = now to fact
+        return fact
     }
 
     companion object {
         /** Read-only boot properties already read; see [prop]. */
         private val bootProps = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+        /** The last certificates row and when it was read ([SystemClock.elapsedRealtime]); see [caFact]. */
+        @Volatile
+        private var caCache: Pair<Long, HealthFact?>? = null
+        private const val CA_EVERY_MS = 10 * 60_000L
 
         /** The monitor currently registered for callbacks, if the service is running. */
         @Volatile
@@ -902,8 +1000,11 @@ class PhoneHealthMonitor(private val context: Context) {
         )
 
         /**
-         * Packages worth reporting when present. Each entry must also appear in the
-         * manifest's <queries> block or the platform hides it from getPackageInfo.
+         * Packages worth reporting when present: hooking frameworks and root managers.
+         * QUERY_ALL_PACKAGES (src/suite/AndroidManifest.xml) lets getPackageInfo see
+         * them; the manifest's <queries> block names them as well. Stalkerware is not
+         * listed here: the stalkerware check matches every app against the signed
+         * stalkerware list ([StalkwareIoc]) by package name and signing certificate.
          */
         val WATCHED_PACKAGES: Map<String, Triple<Severity, String, String>> = linkedMapOf(
             // Hooking / instrumentation frameworks: capable of altering any app's behaviour.
@@ -916,27 +1017,7 @@ class PhoneHealthMonitor(private val context: Context) {
             "com.topjohnwu.magisk" to Triple(Severity.MEDIUM, "Root", "Magisk manages root access on this phone."),
             "me.weishu.kernelsu" to Triple(Severity.MEDIUM, "Root", "KernelSU manages root access on this phone."),
             "me.bmax.apatch" to Triple(Severity.MEDIUM, "Root", "APatch manages root access on this phone."),
-            "eu.chainfire.supersu" to Triple(Severity.MEDIUM, "Root", "SuperSU manages root access on this phone."),
-            // Commercial stalkerware, by the package names they ship under.
-            "com.mspy.lite" to Triple(Severity.CRITICAL, "Stalkerware", "mSpy records messages, calls, location and keystrokes and uploads them to whoever installed it."),
-            "com.mspy.android" to Triple(Severity.CRITICAL, "Stalkerware", "mSpy records messages, calls, location and keystrokes and uploads them to whoever installed it."),
-            "com.flexispy.android" to Triple(Severity.CRITICAL, "Stalkerware", "FlexiSPY intercepts calls, messages and the microphone."),
-            "com.hellospy.system" to Triple(Severity.CRITICAL, "Stalkerware", "HelloSpy monitors messages, calls and location."),
-            "com.spyzie.android" to Triple(Severity.CRITICAL, "Stalkerware", "Spyzie monitors messages, calls and location."),
-            "com.cocospy.android" to Triple(Severity.CRITICAL, "Stalkerware", "Cocospy monitors messages, calls and location."),
-            "com.spyic.android" to Triple(Severity.CRITICAL, "Stalkerware", "Spyic monitors messages, calls and location."),
-            "com.hoverwatch.android" to Triple(Severity.CRITICAL, "Stalkerware", "Hoverwatch records calls, messages and the camera."),
-            "com.thetruthspy.android" to Triple(Severity.CRITICAL, "Stalkerware", "TheTruthSpy monitors messages, calls and location."),
-            "com.spyhuman.android" to Triple(Severity.CRITICAL, "Stalkerware", "SpyHuman monitors messages, calls and location."),
-            "com.xnspy.android" to Triple(Severity.CRITICAL, "Stalkerware", "XNSPY monitors messages, calls and location."),
-            "com.mobistealth.android" to Triple(Severity.CRITICAL, "Stalkerware", "Mobistealth monitors messages, calls and location."),
-            "com.ikeymonitor.android" to Triple(Severity.CRITICAL, "Stalkerware", "iKeyMonitor logs keystrokes and screenshots."),
-            "com.cerberusapp" to Triple(Severity.HIGH, "Remote control", "Cerberus is anti-theft software that also allows remote camera, microphone and location access."),
-            "com.lsdroid.cerberus" to Triple(Severity.HIGH, "Remote control", "Cerberus is anti-theft software that also allows remote camera, microphone and location access."),
-            "com.spy2mobile.light" to Triple(Severity.CRITICAL, "Stalkerware", "Spy2Mobile monitors messages, calls and location."),
-            "com.mxspy" to Triple(Severity.CRITICAL, "Stalkerware", "mxspy monitors messages, calls and location."),
-            "com.pcTattletale" to Triple(Severity.CRITICAL, "Stalkerware", "pcTattletale records the screen continuously."),
-            "com.retinax.mobilespy" to Triple(Severity.CRITICAL, "Stalkerware", "Mobile Spy monitors messages, calls and location.")
+            "eu.chainfire.supersu" to Triple(Severity.MEDIUM, "Root", "SuperSU manages root access on this phone.")
         )
     }
 }

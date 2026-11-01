@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import app.clairix.analysis.StalkwareWatch
 import app.clairix.comms.CommsRepository
 
 /**
@@ -42,6 +43,11 @@ class BootReceiver : BroadcastReceiver() {
         runCatching { CommsRepository.init(context.applicationContext) }
         // The comms-only build has no scanner service to bring back.
         if (!BuildConfig.FULL_ACCESS) return
+
+        // The stalkerware check, whether or not the scanner is on: after a reboot, and after an
+        // update, which may bring a newer stalkerware list. Compared with the last check; what is
+        // new is alerted. Runs off the main thread with the broadcast held open.
+        runCatching { StalkwareWatch.checkForBroadcast(context, goAsync()) }
 
         AppSettings.load(context)
         if (!AppSettings.scanEnabled) return

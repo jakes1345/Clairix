@@ -666,7 +666,13 @@ data class PhoneHealth(
      * physical camera makes its logical and multi-camera siblings unavailable too, so
      * counting ids reported "3 cameras in use" for one app taking a photo.
      */
-    val cameraInUse: Boolean = false
+    val cameraInUse: Boolean = false,
+    /**
+     * When the stalkerware check behind the apps among [findings] ran (it walks every
+     * installed package, see analysis/StalkwareWatch), or 0 when it has not run in this
+     * process: nothing may say "no known spyware" on the strength of a check not made.
+     */
+    val spywareScannedTs: Long = 0L
 ) {
     val sensorActive: Boolean get() = activeRecordings > 0 || cameraInUse
 

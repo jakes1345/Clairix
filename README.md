@@ -21,7 +21,7 @@ just as plainly, what it cannot do.
 | Find a hidden camera | Point the phone around the room and it spots the lens glint every camera has |
 | Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers, and says FOLLOWING only once one away from its owner has been heard at places far apart while your own position shows you travelled between them; anything else that does the same is reported as travelling with you, not as a tracker |
 | Catch a fake cell tower | Learns the towers that are normal for the places you go and warns when one breaks the rules |
-| Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level |
+| Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online |
@@ -181,6 +181,11 @@ Read this part twice.
   notice; it says so before you remove anything and offers to save the
   evidence first. A call, text or chat to a helpline stays in the phone's
   call log, messages or browser history.
+- **Other profiles.** The spyware check sees the apps in the profile Clairix
+  runs in and no other: apps in a work profile, Samsung's Secure Folder,
+  Android's Private space, a second space or a dual-apps profile are not
+  scanned. Phone check says how many other profiles Android shows it; Private
+  space is hidden from every app, Clairix included.
 - **The scanner's keys work while the phone is locked.** The scanner has
   to write while the keyguard is up, so the keys that seal its records work
   while the phone is locked. Comms is different: since Beta 7 what reads
@@ -321,6 +326,45 @@ a last-seen time. The full account is in [`comms-worker/README.md`](comms-worker
 
 ---
 
+## What Clairix looks like to another scanner, and what Settings shows
+
+To do its own checks Clairix holds some of the access a monitoring app wants,
+so a stalkerware scanner, another company's or Clairix's own scoring run
+against Clairix, has things to point at. Clairix's own check skips Clairix.
+What there is to see:
+
+- **Where it came from.** Clairix Full and the Comms edition are installed
+  from an APK file, and Settings says so; the Play edition says Google Play.
+- **Permissions.** Location, and "Allow all the time" if you let the scanner
+  keep running in your pocket; the microphone (calls, voice notes, the
+  ultrasound listener); the camera (the camera sweep, pairing codes); nearby
+  devices; notifications. The scanner editions can also see every installed
+  app, for the spyware check, and hold usage access and the alarms permission
+  if you grant them.
+- **Device admin.** Only once you switch on the unlock ledger: Settings →
+  Security → Device admin apps then lists Clairix, with two policies,
+  watching lock-screen events and locking the screen. Android's activation
+  screen says only that it records lock-screen events and can lock the
+  screen when asked.
+- **Running in the background.** The scanner, and Comms when it stays
+  online, run as foreground services, each with its notification while it
+  runs.
+- **What it does not hold.** No accessibility service, notification access,
+  keyboard, VPN or permission to draw over other apps.
+
+Scored by Clairix's own model (`StalkwareScanner`), Clairix Full comes to 5:
+2 for an install from outside a store, and 1 each for the microphone,
+background location and a device-admin receiver. HIGH starts at 5. With the
+unlock ledger's admin switched on it is 7, and 9 if the scanner then ran for a
+week without the app being opened. The Comms edition comes to 3, listed as
+medium. The Play edition comes to 2, below the 3 at which an app is listed,
+or 4 after a week unopened; its device admin is known to the model, since it
+comes from a store. Other scanners weigh these things differently. A unit
+test feeds Clairix's own manifest to the model and fails when a permission
+change moves these numbers.
+
+---
+
 ## How to build it
 
 **You need:** [Android Studio](https://developer.android.com/studio) or the
@@ -388,6 +432,14 @@ The fonts the app ships with keep their own licence, the SIL Open Font License
 1.1: Archivo ([licenses/OFL-1.1-Archivo.txt](licenses/OFL-1.1-Archivo.txt))
 and JetBrains Mono ([licenses/OFL-1.1-JetBrains-Mono.txt](licenses/OFL-1.1-JetBrains-Mono.txt)).
 Libraries the app and the relay depend on keep theirs.
+
+The stalkerware list (`android/app/src/suite/assets/ioc.json.gz`, and the
+`ioc` release the app updates it from) is adapted by `tools/ioc/convert.py`
+from [Stalkerware Indicators of Compromise](https://github.com/AssoEchap/stalkerware-indicators),
+maintained by Julien Voisin and Tek for the Echap non-profit, and used under
+the Creative Commons Attribution 4.0 licence; the converter keeps the app
+names, package names and certificate fingerprints and leaves out the rest
+([licenses/CC-BY-4.0-stalkerware-indicators.txt](licenses/CC-BY-4.0-stalkerware-indicators.txt)).
 
 ---
 

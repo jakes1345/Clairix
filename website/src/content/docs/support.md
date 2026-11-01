@@ -72,9 +72,17 @@ The compass sensor is reporting that it needs calibration. Move the phone in a f
 
 The cell check learns what is normal over days. The screen shows the baseline's maturity and how many cells and visits it is built on. Until it is mature, a quiet result means "nothing stands out yet", not "all clear". Several rules also stay silent while you are moving, since travelling looks like a lot of cell switching.
 
-### The spyware check flags Clairix Full itself
+### What Clairix looks like to another scanner, and what Settings shows
 
-Clairix Full is installed from outside a store, which is one of the signals the stalkerware scan looks for. The check is working as intended. The Play edition is not flagged.
+Clairix's own spyware check skips Clairix. Another app's stalkerware scanner may list it, because to do its checks Clairix holds some of the access a monitoring app wants:
+
+- **Where it came from.** Clairix Full and the Comms edition are installed from an APK file, and Settings says so; the Play edition says Google Play.
+- **Permissions.** Location, and "Allow all the time" if you let the scanner keep running in your pocket; the microphone, for calls, voice notes and the ultrasound listener; the camera, for the camera sweep and pairing codes; nearby devices; notifications. The scanner editions can also see every installed app, for the spyware check, and hold usage access and the alarms permission if you grant them.
+- **Device admin.** Only once you switch on the unlock ledger. **Settings > Security > Device admin apps** then lists Clairix with two policies: watching lock-screen events and locking the screen.
+- **Running in the background.** The scanner, and Comms when it stays online, run with a notification of their own.
+- **What it does not hold.** No accessibility service, notification access, keyboard, VPN or permission to draw over other apps.
+
+Run against itself, Clairix's own scoring gives Clairix Full 5 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location and the device-admin receiver; 7 with the unlock ledger's admin on. The Comms edition scores 3 and the Play edition 2, which is not listed. Other scanners weigh these things differently.
 
 ### I have no invite
 

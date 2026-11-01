@@ -98,7 +98,7 @@ In particular:
 - **Background location** is used only by the tracker scanner you start, to tell whether a device is moving with you. Location history stays on the device.
 - **Camera** is used for the hidden-camera sweep and to scan a contact's pairing code. Nothing is recorded.
 - **Microphone** is used only during a call you place or answer, and while you hold the record button for a voice note.
-- **Access to the installed-app list** is used only by the spyware check, on the device.
+- **Access to the installed-app list** is used only by the spyware check, on the device. Nothing about your apps leaves the phone: the check matches them against a stalkerware list built into the app, and about once a day while you use Clairix it asks GitHub for a newer, signed copy of that list, which tells GitHub your IP address and that the list was asked for.
 
 ## 6. Deleting your data
 

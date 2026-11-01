@@ -1,14 +1,12 @@
 package app.clairix.analysis
 
 import android.content.Context
-import app.clairix.PhoneHealthFinding
+import android.provider.Settings
+import app.clairix.HealthFact
 import app.clairix.Severity
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import javax.security.auth.x500.X500Principal
@@ -219,14 +217,45 @@ object CaAuditScanner {
         return out.values.sortedWith(compareByDescending<SuspiciousCa> { it.severity.ordinal }.thenBy { it.subjectCn })
     }
 
-    /** The audit's findings in the Device tab's own type, one row per root. */
-    fun scanAsFindings(context: Context): List<PhoneHealthFinding> = scan(context).map { ca ->
-        PhoneHealthFinding(
-            id = "ca_${ca.fingerprint.take(23)}",
-            severity = ca.severity,
-            category = "Trust store",
-            title = (if (ca.source == "user") "User-installed CA: " else "Unlisted root CA: ") + ca.subjectCn,
-            detail = ca.reason + " Issuer: ${cn(ca.issuerDn) ?: ca.issuerDn}. Valid ${date(ca.validFrom)} – ${date(ca.validTo)}. SHA-256 ${ca.fingerprint}."
+    /**
+     * Phone check's certificates row, from [scan]'s result: the roots someone installed by hand,
+     * and any trusted from outside both stores, are HIGH, since either lets whoever holds the key
+     * read the phone's encrypted traffic. A system root missing from the stock bundle stays on the
+     * Certificates page only: the bundle list here is representative, not complete, and a maker's
+     * or carrier's own root is common.
+     */
+    fun fact(cas: List<SuspiciousCa>): HealthFact {
+        val user = cas.filter { it.source == "user" }
+        val unknown = cas.filter { it.source == "unknown" }
+        if (user.isEmpty() && unknown.isEmpty()) {
+            return HealthFact("user_ca", "Network", "Installed certificates", "None added by hand")
+        }
+        val value = listOfNotNull(
+            user.size.takeIf { it > 0 }?.let { "$it added by hand" },
+            unknown.size.takeIf { it > 0 }?.let { "$it from outside the stores" }
+        ).joinToString(", ")
+        val listed = user + unknown
+        val names = listed.take(3).joinToString(", ") { it.subjectCn } + if (listed.size > 3) ", …" else ""
+        val detail = buildString {
+            append("Trusted roots: $names. ")
+            if (user.isNotEmpty()) {
+                append(
+                    "A root installed by hand lets whoever holds its key read this phone's encrypted traffic through a proxy, " +
+                        "which is how someone who has had the phone and its PIN, or a management profile, reads it. Unless you " +
+                        "installed it yourself, remove it under Settings → Security → Encryption & credentials → User credentials. "
+                )
+            }
+            if (unknown.isNotEmpty()) {
+                append(
+                    "A root trusted from outside both the system and the user store takes a modified trust manager or OS " +
+                        "component; treat the phone's encrypted connections as readable until that is explained. "
+                )
+            }
+            append("Phone check → Certificates shows each one.")
+        }
+        return HealthFact(
+            "user_ca", "Network", "Installed certificates", value, Severity.HIGH, detail,
+            fixAction = Settings.ACTION_SECURITY_SETTINGS
         )
     }
 
@@ -287,6 +316,4 @@ object CaAuditScanner {
         return raw.substring(prefix.length).trim().removeSurrounding("\"").replace("\\,", ",").replace("\\+", "+")
             .takeIf { it.isNotEmpty() }
     }
-
-    private fun date(ts: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(ts))
 }

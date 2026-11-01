@@ -20,7 +20,24 @@ import app.clairix.Severity
  */
 object KeyboardExposure {
 
-    data class Keyboard(val packageName: String, val label: String, val internet: Boolean, val system: Boolean)
+    /**
+     * The keyboard in use. [vouched] when the stalkerware check vouches for it: a known keyboard
+     * from a store or the system image ([StalkwareScanner.isVouchedIme]).
+     */
+    data class Keyboard(
+        val packageName: String,
+        val label: String,
+        val internet: Boolean,
+        val system: Boolean,
+        val vouched: Boolean = false,
+    )
+
+    /**
+     * Gboard and Samsung Keyboard: the stock keyboards of most phones, and the ones known to honour
+     * the request not to learn from what is typed in Clairix. Genuine copies of them are shown as
+     * information, not as an issue, or nearly every phone would carry one forever.
+     */
+    private val HONOUR_NO_LEARNING = setOf("com.google.android.inputmethod.latin", "com.samsung.android.honeyboard")
 
     /** The keyboard in use, or null when the phone does not say. */
     fun current(context: Context): Keyboard? {
@@ -35,20 +52,28 @@ object KeyboardExposure {
         val pkgInfo = runCatching { pm.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS) }.getOrNull() ?: return Keyboard(pkg, label, internet = true, system = false)
         val internet = pkgInfo.requestedPermissions?.contains(Manifest.permission.INTERNET) == true
         val system = ((pkgInfo.applicationInfo?.flags ?: 0) and ApplicationInfo.FLAG_SYSTEM) != 0
-        return Keyboard(pkg, label, internet, system)
+        val vouched = runCatching {
+            StalkwareScanner.Origins(context).facts(pkg)?.let { StalkwareScanner.isVouchedIme(it) } == true
+        }.getOrDefault(false)
+        return Keyboard(pkg, label, internet, system, vouched)
     }
 
     fun fact(k: Keyboard?): HealthFact? {
         k ?: return null
         val id = "keyboard"
         return if (k.internet) {
+            // The stock keyboards, genuine: the same advice, as information.
+            val stock = k.vouched && k.packageName in HONOUR_NO_LEARNING
             HealthFact(
-                id, "Apps", "Keyboard", "${k.label}: can reach the internet", Severity.MEDIUM,
+                id, "Apps", "Keyboard",
+                if (stock) "${k.label}: known keyboard, can reach the internet" else "${k.label}: can reach the internet",
+                if (stock) null else Severity.MEDIUM,
                 "${k.label} sees everything you type in every app, before any app encrypts it, and has internet access. " +
                     "Clairix tells it not to learn from what you type in Clairix (Gboard and Samsung's keyboard honour that); " +
                     "nothing tells it that in other apps. In ${k.label}'s settings turn off personalisation, typing-history " +
                     "sync and any \"improve\" or voice-data sharing, or switch to a keyboard with no internet access " +
-                    "(FlorisBoard, or the stock keyboard on GrapheneOS). If you did not choose this keyboard, treat it as spyware." +
+                    "(FlorisBoard, or the stock keyboard on GrapheneOS)." +
+                    (if (stock) "" else " If you did not choose this keyboard, treat it as spyware.") +
                     if (!k.system) " It is not part of the phone's own system." else "",
                 fixAction = Settings.ACTION_INPUT_METHOD_SETTINGS
             )

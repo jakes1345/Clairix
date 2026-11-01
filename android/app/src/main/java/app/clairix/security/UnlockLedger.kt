@@ -288,10 +288,10 @@ object UnlockLedger {
             .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent(context))
             .putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "Lets Clairix keep a record of every time this phone is unlocked, fails to unlock, or has its " +
-                    "PIN changed — so you can see whether it was used while you slept. The one other thing " +
-                    "Clairix does with it is lock the screen when you press \"Schedule and lock\" on the Fake " +
-                    "call page; it never wipes or sets a password policy."
+                // Shown on Android's own screen, which anyone looking at the phone can read: it
+                // says what the grant does, not what it is for.
+                "Lets Clairix record lock-screen events: unlocks, failed unlocks and PIN changes. It can also " +
+                    "lock the screen when you ask it to. It never wipes the phone or sets a password policy."
             )
 
     // ── Usage access ────────────────────────────────────────────────────────

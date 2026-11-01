@@ -2,11 +2,11 @@
 
 Everything a phone downloads from this repository's releases is signed, and
 the app refuses what it cannot verify: the road graphs (`maps-<slug>`
-releases), the work-zone files (`workzones`) and the release checksums
-(`SHA256SUMS.txt`). A checksum fetched from the same place as the file only
-proves the download was not corrupted; the signature proves it was published
-by whoever holds the signing key, which a compromised release, a hijacked
-Actions tag or a compelled host does not.
+releases), the work-zone files (`workzones`), the stalkerware list (`ioc`)
+and the release checksums (`SHA256SUMS.txt`). A checksum fetched from the
+same place as the file only proves the download was not corrupted; the
+signature proves it was published by whoever holds the signing key, which a
+compromised release, a hijacked Actions tag or a compelled host does not.
 
 The key is Ed25519. Its secret half lives only in the repository secret
 `ASSET_SIGNING_KEY`; its public half is committed, so the app and anyone
@@ -46,9 +46,10 @@ this repository, since a workflow runs with the secrets it is given. That is
 the repository's administrators, so keep that list short and under two-factor
 authentication.
 
-Without the secret, the Maps, Work zones and Release workflows fail rather
-than publish unsigned files. Without the public key file, a release build of
-the app fails; a debug build skips verification and says so in logcat.
+Without the secret, the Maps, Work zones, Stalkerware list and Release
+workflows fail rather than publish unsigned files. Without the public key
+file, a release build of the app fails; a debug build skips verification and
+says so in logcat.
 
 ## What is signed
 
@@ -57,6 +58,7 @@ the app fails; a debug build skips verification and says so in logcat.
 | `graph-<slug>.agr.gz.sha256` | `graph-<slug>.agr.gz.sha256.sig` | the exact bytes of the checksum file; the app then checks the graph against the signed checksum |
 | `workzones-<slug>.json.gz` | `workzones-<slug>.json.gz.sig` | the gzip bytes |
 | `workzones-index.json` | `workzones-index.json.sig` | the exact bytes of the index; the app reads the time of the aggregator's last run from it |
+| `ioc.json.gz` (the `ioc` release, `.github/workflows/ioc.yml`) | `ioc.json.gz.sig` | the gzip bytes of the stalkerware list (`tools/ioc/convert.py`); the app refuses one issued earlier than the list it has |
 | `SHA256SUMS.txt` | `SHA256SUMS.txt.sig` | the exact bytes of the checksum file |
 
 A `.sig` is one line: the 64-byte Ed25519 signature, base64 without padding.

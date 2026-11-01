@@ -266,6 +266,8 @@ internal fun phoneStatus(health: PhoneHealth): CategoryStatus {
             CategoryStatus("Camera or microphone in use", StatusTone.ALERT)
         health.level.ordinal >= Threat.HIGH.ordinal -> CategoryStatus("${count(issues, "issue")} to fix", StatusTone.ALERT)
         issues > 0 -> CategoryStatus("${count(issues, "item")} to review", StatusTone.CAUTION)
+        // Nothing found, but the installed apps have not been checked for spyware yet.
+        health.spywareScannedTs == 0L -> CategoryStatus("Checking installed apps", StatusTone.NEUTRAL)
         else -> CategoryStatus("No issues found", StatusTone.CLEAR)
     }
 }
