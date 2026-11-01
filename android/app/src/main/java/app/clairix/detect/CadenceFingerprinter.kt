@@ -111,7 +111,13 @@ class CadenceFingerprinter(
          * one device. Never [certain]. Callers should not let such a stitch carry a
          * verdict the old address earned onto the new one: it may be the other unit.
          */
-        val indistinguishable: Boolean
+        val indistinguishable: Boolean,
+        /**
+         * The address this one was stitched onto (the quiet predecessor), so a caller
+         * can ask whether a [certain] stitch carries something that address held, such
+         * as the owner's trust. Null when not known.
+         */
+        val from: String? = null
     )
 
     /**
@@ -165,6 +171,8 @@ class CadenceFingerprinter(
         var stitchCertain = false
         /** Whether that stitch was [Match.indistinguishable]. */
         var stitchIndistinguishable = false
+        /** The address that stitch joined this one to ([Match.from]). */
+        var stitchedFrom: String? = null
 
         fun push(deltaMs: Long) {
             deltas[head] = deltaMs
@@ -226,7 +234,7 @@ class CadenceFingerprinter(
         val track = existing ?: Track(address, nowMs).also { tracks[address] = it }
         record(track, packet)
 
-        if (track.stitched) return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable)
+        if (track.stitched) return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable, track.stitchedFrom)
 
         // A fresh address is scored only once it has measured its own cadence; until
         // then it has nothing that is its own to compare. Packets before that point
@@ -244,7 +252,8 @@ class CadenceFingerprinter(
         track.stitched = true
         track.stitchCertain = best.certain
         track.stitchIndistinguishable = best.indistinguishable
-        return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable)
+        track.stitchedFrom = best.candidate.address
+        return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable, track.stitchedFrom)
     }
 
     /**

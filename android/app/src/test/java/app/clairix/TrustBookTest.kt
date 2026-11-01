@@ -2,6 +2,7 @@ package app.clairix
 
 import app.clairix.analysis.IdentityResolver
 import app.clairix.analysis.TrustedIdentities
+import app.clairix.detect.CadenceFingerprinter
 import app.clairix.detect.Signatures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,9 +11,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * "Mark as mine" follows the device, not one of its addresses: a rotation the scanner
- * links stays the owner's, another unit of the product does not, and trust in a device
- * that rotates by design lasts a day before the owner is asked again.
+ * "Mark as mine" follows the device across an address change only when the scanner can
+ * prove it is the same unit: a certain cadence stitch does, a resolver link or a stitch
+ * between two units of one product does not, and trust in a device that rotates by
+ * design lasts a day before the owner is asked again.
  */
 class TrustBookTest {
 
@@ -22,55 +24,83 @@ class TrustBookTest {
     private val stranger = "6C:00:00:00:00:0C"
 
     @Test
-    fun aRotationTheResolverLinksStaysTrustedAndIsAddedToTheDevice() {
+    fun aTagTheResolverLinksToHerOwnTrustedTagIsNotTrusted() {
+        // Her own AirTag under A, trusted, left at the door; a tag planted in the car
+        // under B is first heard fifteen seconds after A goes quiet, as faint as A was
+        // last heard. Every AirTag fingerprints alike, so the resolver files B under A's
+        // identity. That link must not carry her trust onto the planted tag.
         val resolver = IdentityResolver()
-        val identities = TrustedIdentities()
-        var book = TrustBook.EMPTY.trust(a, "Keys", rotating = true, now = t0)
+        val book = TrustBook.EMPTY.trust(a, "Keys", rotating = true, now = t0)
+        val first = resolver.resolve(a, -88, "airtag-fp", t0)
+        assertTrue(TrustedIdentities.check(a, book.addresses, provenFrom = null).trusted)
 
-        // Her own AirTag under address A, trusted.
-        val first = resolver.resolve(a, -60, "airtag-fp", t0)
-        assertTrue(identities.check(first.identity.id, a, book.addresses).trusted)
+        val linked = resolver.resolve(b, -90, "airtag-fp", t0 + 15_000L)
+        assertTrue(linked.rotated)
+        assertEquals(first.identity.id, linked.identity.id)
+        val check = TrustedIdentities.check(b, book.addresses, provenFrom = null)
+        assertFalse(check.trusted)
+        assertNull(check.learned)
+    }
 
-        // A goes quiet; fifteen seconds later B appears with the same fingerprint and
-        // signal, and the resolver links it as a rotation of the same identity.
-        val rotated = resolver.resolve(b, -62, "airtag-fp", t0 + 15_000L)
-        assertTrue(rotated.rotated)
-        val check = identities.check(rotated.identity.id, b, book.addresses)
+    @Test
+    fun onlyACertainCadenceStitchOntoATrustedAddressCarriesTrust() {
+        val book = TrustBook.EMPTY.trust(a, "Earbuds", rotating = true, now = t0)
+        fun match(certain: Boolean, indistinguishable: Boolean, logicalId: String = "id1") =
+            CadenceFingerprinter.Match(logicalId, certain, indistinguishable, from = a)
+
+        // Two units of one product: never proof, whatever else the stitch says.
+        assertNull(TrustedIdentities.provenPredecessor(match(certain = false, indistinguishable = true), "id1"))
+        assertNull(TrustedIdentities.provenPredecessor(match(certain = false, indistinguishable = false), "id1"))
+        // A stitch onto another logical device than the one the packet was filed under.
+        assertNull(TrustedIdentities.provenPredecessor(match(certain = true, indistinguishable = false, logicalId = "id9"), "id1"))
+        assertNull(TrustedIdentities.provenPredecessor(null, "id1"))
+
+        val proven = TrustedIdentities.provenPredecessor(match(certain = true, indistinguishable = false), "id1")
+        assertEquals(a, proven)
+        val check = TrustedIdentities.check(b, book.addresses, proven)
         // Not observed, not alerted on: the scanner returns before the tracker sees it.
         assertTrue(check.trusted)
         assertEquals(b, check.learned)
         assertEquals(a, check.knownAddress)
 
-        book = book.extend(b, a)
-        assertTrue(b in book.addresses)
-        assertEquals(listOf(a, b), book.device(b)!!.addresses)
+        val grown = book.extend(b, a)
+        assertEquals(listOf(a, b), grown.device(b)!!.addresses)
         // The rotation does not renew the day.
-        assertEquals(t0 + TrustBook.ROTATING_TRUST_MS, book.device(b)!!.until)
+        assertEquals(t0 + TrustBook.ROTATING_TRUST_MS, grown.device(b)!!.until)
+
+        // A certain stitch onto an address she never trusted carries nothing.
+        assertFalse(TrustedIdentities.check(b, book.addresses, provenFrom = stranger).trusted)
     }
 
     @Test
-    fun anotherDeviceOfTheSameKindIsNotTrusted() {
-        val resolver = IdentityResolver()
-        val identities = TrustedIdentities()
-        val book = TrustBook.EMPTY.trust(a, "Keys", rotating = true, now = t0)
-        val mine = resolver.resolve(a, -60, "airtag-fp", t0)
-        assertTrue(identities.check(mine.identity.id, a, book.addresses).trusted)
-        // Heard at the same time as hers: a second AirTag, its own identity.
-        val other = resolver.resolve(stranger, -61, "airtag-fp", t0 + 2_000L)
-        assertFalse(other.rotated)
-        assertFalse(identities.check(other.identity.id, stranger, book.addresses).trusted)
+    fun theFingerprinterSaysWhichAddressACertainStitchFollows() {
+        val fp = CadenceFingerprinter()
+        fun gadget(address: String, atMs: Long) = CadenceFingerprinter.Packet(
+            address = address, timestampNanos = atMs * 1_000_000L, nowMs = atMs, rssi = -65,
+            primaryPhy = 1, advertisingSid = 3, hasRecord = true, txPower = -8,
+            company = 0x0999, mfrPayload = byteArrayOf(0x07, 0x11, 0x22, 0x33), services = emptySet(), payloadLength = 22
+        )
+        val jitter = longArrayOf(0, 3, 7, 1, 9, 4, 2, 8, 5, 6)
+        for (i in 0 until 15) fp.stitch(gadget(a, t0 + i * 1_285L + jitter[i % jitter.size]))
+        fp.assign(a, "id1")
+        val last = t0 + 14 * 1_285L
+        val match = (0 until 6).firstNotNullOfOrNull { i ->
+            fp.stitch(gadget(b, last + 5_000 + i * 1_285L + jitter[i % jitter.size]))
+        }
+        assertEquals("id1", match!!.logicalId)
+        assertTrue(match.certain)
+        assertEquals(a, TrustedIdentities.provenPredecessor(match, "id1"))
     }
 
     @Test
-    fun takingTrustBackRemovesEveryAddressAndTheKey() {
-        val identities = TrustedIdentities()
+    fun takingTrustBackRemovesEveryAddress() {
         var book = TrustBook.EMPTY.trust(a, null, rotating = true, now = t0).extend(b, a)
-        assertTrue(identities.check("id1", a, book.addresses).trusted)
+        assertTrue(TrustedIdentities.check(a, book.addresses, provenFrom = null).trusted)
         book = book.untrust(b)
         assertTrue(book.addresses.isEmpty())
-        // The key went with it: a later address linked to it is a stranger.
-        assertFalse(identities.check("id1", stranger, book.addresses).trusted)
-        assertFalse(identities.check("id1", a, book.addresses).trusted)
+        // A later address proved to follow it is a stranger: nothing it follows is trusted.
+        assertFalse(TrustedIdentities.check(stranger, book.addresses, provenFrom = a).trusted)
+        assertFalse(TrustedIdentities.check(a, book.addresses, provenFrom = null).trusted)
     }
 
     @Test

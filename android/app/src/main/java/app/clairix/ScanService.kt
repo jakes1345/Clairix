@@ -131,9 +131,6 @@ class ScanService : LifecycleService() {
     /** One GATT exchange at a time; the stack handles parallel connections badly. */
     private val dultGate = Mutex()
 
-    /** The logical devices behind the owner's trusted addresses, this run; see [TrustedIdentities]. */
-    private val trustedIdentities = TrustedIdentities()
-
     /** The addresses the screen-off scan was last registered with a filter for, and when; see [ScreenOffWatch]. */
     @Volatile private var watchedFilterAddresses: Set<String> = emptySet()
     @Volatile private var watchedFilterAt = 0L
@@ -1105,11 +1102,13 @@ class ScanService : LifecycleService() {
             resolution.identity.id
         }
         cadence.supersededKey(address)?.let { tracker.merge(it, key, certain, indistinguishable) }
-        // Skip the owner's own devices: by the address they marked, or by the logical
-        // device it belongs to, so an address change the scanner links stays theirs.
-        // Checked after the resolvers on purpose: a trusted device's packets keep its
-        // identity and cadence current, which is what links its next address to it.
-        val trust = trustedIdentities.check(key, address, Registry.trusted.value)
+        // Skip the owner's own devices: by the address they marked, or by a certain
+        // cadence stitch onto one of those, so an address change the scanner can prove
+        // stays theirs (a resolver or same-product link could be a planted tag; see
+        // [TrustedIdentities]). Checked after the resolvers on purpose: a trusted
+        // device's packets keep its cadence current, which is what links its next address.
+        val provenFrom = TrustedIdentities.provenPredecessor(stitched, key)
+        val trust = TrustedIdentities.check(address, Registry.trusted.value, provenFrom)
         if (trust.trusted) {
             val known = trust.knownAddress
             trust.learned?.let { if (known != null) Registry.extendTrust(it, known) }
@@ -1501,7 +1500,6 @@ class ScanService : LifecycleService() {
         cadence.clear()
         vehicleTrips.clear()
         dultSchedule.clear()
-        trustedIdentities.clear()
         synchronized(infrastructureAlertedAt) { infrastructureAlertedAt.clear() }
         synchronized(nearestCameraCache) { nearestCameraCache.clear() }
         GnssMonitor.clear()
