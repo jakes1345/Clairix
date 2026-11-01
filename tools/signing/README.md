@@ -56,6 +56,7 @@ the app fails; a debug build skips verification and says so in logcat.
 |---|---|---|
 | `graph-<slug>.agr.gz.sha256` | `graph-<slug>.agr.gz.sha256.sig` | the exact bytes of the checksum file; the app then checks the graph against the signed checksum |
 | `workzones-<slug>.json.gz` | `workzones-<slug>.json.gz.sig` | the gzip bytes |
+| `workzones-index.json` | `workzones-index.json.sig` | the exact bytes of the index; the app reads the time of the aggregator's last run from it |
 | `SHA256SUMS.txt` | `SHA256SUMS.txt.sig` | the exact bytes of the checksum file |
 
 A `.sig` is one line: the 64-byte Ed25519 signature, base64 without padding.

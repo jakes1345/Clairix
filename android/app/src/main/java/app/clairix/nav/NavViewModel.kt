@@ -194,6 +194,11 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         .flatMapLatest { it?.cameras?.status ?: flowOf(CameraFeed.Status.Unknown) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, CameraFeed.Status.Unknown)
 
+    /** Whether the loaded region has a work-zone list and how old it is, for the route options sheet. */
+    val workZoneStatus: StateFlow<WorkZoneFeed.Status> = session
+        .flatMapLatest { it?.workZones?.status ?: flowOf(WorkZoneFeed.Status.Unknown) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, WorkZoneFeed.Status.Unknown)
+
     private val _fuelPrice = MutableStateFlow(prefs.getFloat(KEY_FUEL_PRICE, DEFAULT_FUEL_PRICE).toDouble())
     /** US dollars per gallon, for the fuel cost shown on each route. */
     val fuelPricePerGal: StateFlow<Double> = _fuelPrice.asStateFlow()

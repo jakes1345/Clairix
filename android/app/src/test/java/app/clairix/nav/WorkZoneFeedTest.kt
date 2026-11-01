@@ -109,6 +109,64 @@ class WorkZoneFeedTest {
             "https://github.com/jakes1345/Clairix/releases/download/workzones/workzones-north-america-us-ohio.json.gz",
             WorkZoneFeed.url("north-america-us-ohio"),
         )
+        assertEquals("https://github.com/jakes1345/Clairix/releases/download/workzones/workzones-index.json", WorkZoneFeed.INDEX_URL)
+    }
+
+    @Test
+    fun parseFileCarriesTheFilesDateAndTheIndexCarriesTheRunsDate() {
+        val parsed = WorkZoneFeed.parseFile(file, now, "north-america-us-ohio")
+        assertEquals(1_760_499_900L, parsed.generatedEpochSec)
+        assertEquals(listOf("ohgo:WZ-1", "ohgo:WZ-2", "ohgo:WZ-4"), parsed.zones.map { it.id })
+        assertNull(WorkZoneFeed.parseFile("""{"version":1,"slug":"x","items":[]}""", now, "x").generatedEpochSec)
+        assertNull(WorkZoneFeed.parseFile("""{"version":1,"generated":0,"items":[]}""", now).generatedEpochSec)
+
+        assertEquals(1_760_500_123L, WorkZoneFeed.parseIndexGenerated("""{"generated":1760500123,"feeds":[{"name":"ohgo","ok":true}]}"""))
+        assertNull(WorkZoneFeed.parseIndexGenerated("""{"feeds":[]}"""))
+        assertNull(WorkZoneFeed.parseIndexGenerated("""{"generated":null}"""))
+        try {
+            WorkZoneFeed.parseIndexGenerated("not an index")
+            fail("parsed junk as an index")
+        } catch (e: JSONException) { /* expected */ }
+    }
+
+    @Test
+    fun ageTextAndTheStatusLineSayHowOldTheZonesAre() {
+        assertEquals("just now", WorkZoneFeed.asOfText(now, now - 30))
+        assertEquals("12 min ago", WorkZoneFeed.asOfText(now, now - 12 * 60 - 5))
+        assertEquals("3 h ago", WorkZoneFeed.asOfText(now, now - 3 * 3600 - 59 * 60))
+        assertEquals("2 d ago", WorkZoneFeed.asOfText(now, now - 2 * 86_400 - 1))
+        // A phone clock behind the server's does not make the data "in the future".
+        assertEquals("just now", WorkZoneFeed.asOfText(now, now + 600))
+
+        assertEquals(
+            "Work zones as of 3 h ago: 12 listed for this map, from the state DOT feeds.",
+            WorkZoneFeed.statusText(WorkZoneFeed.Status.Loaded(12, now - 3 * 3600), now),
+        )
+        assertEquals(
+            "Work zones as of just now: none listed for this map, from the state DOT feeds.",
+            WorkZoneFeed.statusText(WorkZoneFeed.Status.Loaded(0, now), now),
+        )
+        assertEquals(
+            "Work zones: 1 listed for this map, from the state DOT feeds; the list carries no date.",
+            WorkZoneFeed.statusText(WorkZoneFeed.Status.Loaded(1, null), now),
+        )
+        assertEquals("No work-zone list has been published for this map yet.", WorkZoneFeed.statusText(WorkZoneFeed.Status.NotPublished, now))
+        assertEquals("The work-zone list for this map has not been fetched yet.", WorkZoneFeed.statusText(WorkZoneFeed.Status.Unknown, now))
+    }
+
+    @Test
+    fun theAgeComesFromWhatARefreshConfirmedAndNeverGoesBackwards() {
+        // A new file: its own date, or the index's run time when that is newer.
+        assertEquals(1_000L, WorkZoneFeed.confirmedAsOf(true, 1_000L, null, null))
+        assertEquals(1_500L, WorkZoneFeed.confirmedAsOf(true, 1_000L, null, 1_500L))
+        // A new file starts again: the date the previous file was confirmed to does not carry over.
+        assertEquals(1_200L, WorkZoneFeed.confirmedAsOf(true, 1_200L, 5_000L, null))
+        // An unchanged file (304) keeps its earlier confirmation when the index could not be had...
+        assertEquals(5_000L, WorkZoneFeed.confirmedAsOf(false, 1_000L, 5_000L, null))
+        // ...and moves forward to the index's run time when it could.
+        assertEquals(6_000L, WorkZoneFeed.confirmedAsOf(false, 1_000L, 5_000L, 6_000L))
+        assertEquals(1_000L, WorkZoneFeed.confirmedAsOf(false, 1_000L, null, null))
+        assertNull(WorkZoneFeed.confirmedAsOf(false, null, null, null))
     }
 
     // ── Provider incidents and merging ─────────────────────────────────────

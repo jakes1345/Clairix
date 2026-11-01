@@ -2,9 +2,17 @@ name: Work zones
 
 # Aggregates the public WZDx / CWZ work-zone feeds listed in the USDOT registry into one
 # workzones-<slug>.json.gz per region (+ workzones-index.json) and publishes them on the single
-# release tagged `workzones`, overwriting the previous run's files. The phone downloads
-# https://github.com/jakes1345/Clairix/releases/download/workzones/workzones-<slug>.json.gz.
+# release tagged `workzones`. Only the files whose content changed are replaced
+# (tools/workzones/publish.py): the aggregator keeps a region's file byte-identical while its
+# work zones are unchanged, so a run costs a few uploads rather than ~107 and stays under
+# GitHub's secondary rate limit, which used to fail every run. The phone downloads
+# https://github.com/jakes1345/Clairix/releases/download/workzones/workzones-<slug>.json.gz
+# and reads the time of the last run from workzones-index.json.
 # Key-gated feeds are included when the WZDX_KEYS secret (JSON object: feedname -> key) has them.
+#
+# The schedule is best-effort: GitHub runs scheduled workflows when it has capacity, in
+# practice several times a day rather than every 15 minutes. That is why the app shows the
+# data's age, and why a failing run opens an issue (the alert job) instead of failing unseen.
 on:
   schedule:
     - cron: '*/15 * * * *'
@@ -23,7 +31,9 @@ concurrency:
 jobs:
   aggregate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The first run after a format change replaces every file at one write a second, and a
+    # rate limit can add a few minutes of waiting.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -34,37 +44,58 @@ jobs:
       - name: Install pytest and the signing tool
         run: python -m pip install -r tools/signing/requirements.txt pytest==9.1.1
 
-      - name: Test aggregator and signing tool
-        run: python -m pytest -q tools/workzones/test_aggregate.py tools/signing/test_sign.py
+      - name: Test aggregator, publisher, signing tool and failure alert
+        run: python -m pytest -q tools/workzones tools/signing/test_sign.py .github/scripts/test_report_failure.py
 
       - name: Aggregate feeds
         env:
           WZDX_KEYS: ${{ secrets.WZDX_KEYS }}
         run: python tools/workzones/aggregate.py --out dist
 
-      # Every per-region file is signed; the app verifies before it parses.
+      # Every per-region file is signed, and so is the index the app reads the run time
+      # from; the app verifies before it parses.
       - name: Sign
         env:
           ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
         run: |
-          python tools/signing/sign.py dist/workzones-*.json.gz
-          python tools/signing/sign.py --verify android/asset-signing.pub dist/workzones-*.json.gz
+          python tools/signing/sign.py dist/workzones-*.json.gz dist/workzones-index.json
+          python tools/signing/sign.py --verify android/asset-signing.pub dist/workzones-*.json.gz dist/workzones-index.json
 
+      # Replaces only the assets whose content changed, one write a second, with a retry
+      # and backoff on 403/429; the release is created on the first run.
       - name: Publish
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: workzones
-          name: Work zones
-          body: |
-            Live work zones aggregated from the USDOT WZDx feed registry, refreshed every 15 minutes.
-            One workzones-<slug>.json.gz per region; workzones-index.json lists each feed's status.
-            workzones-feeds.json.gz holds each feed's items so a feed that fails briefly is carried forward.
-          prerelease: true
-          make_latest: false
-          overwrite_files: true
-          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
+          Live work zones aggregated from the USDOT WZDx feed registry.
+          The workflow is scheduled every 15 minutes, but GitHub runs schedules on a best-effort basis, in practice several times a day: `generated` in workzones-index.json is the time of the last run, and the app shows it as the age of its work zones.
+          One workzones-<slug>.json.gz per region, replaced only when its zones change (its `generated` is the run that last changed them); workzones-index.json lists each feed's status; workzones-feeds.json.gz holds each feed's items so a feed that fails briefly is carried forward; SHA256SUMS.txt lists every file's checksum.
+          EOF
           # dist/workzones-*.json.gz includes workzones-feeds.json.gz.
-          files: |
-            dist/workzones-*.json.gz
-            dist/workzones-*.json.gz.sig
-            dist/workzones-index.json
+          python tools/workzones/publish.py --tag workzones --name "Work zones" --prerelease \
+            --body-file "$RUNNER_TEMP/notes.md" \
+            dist/workzones-*.json.gz dist/workzones-*.json.gz.sig dist/workzones-index.json dist/workzones-index.json.sig
+
+  # A red scheduled run is otherwise seen by nobody: this opens one issue, or adds the run
+  # to the open one (.github/scripts/report-failure.sh).
+  alert:
+    needs: aggregate
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_TITLE: Work zones publish failing
+          FAILURE_MEANS: >-
+            No new work-zone files were published. Phones keep the files they last downloaded, and
+            the age shown under route options ("Work zones as of ...") grows until a run succeeds.
+        run: .github/scripts/report-failure.sh

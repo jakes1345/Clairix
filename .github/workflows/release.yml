@@ -27,6 +27,11 @@ on:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
         default: 'v3.0.0-beta.8'
+      allow_throwaway_key:
+        description: 'Build without ANDROID_KEYSTORE_BASE64, signing with a throwaway key. The files are kept as a workflow artifact only; no GitHub release is published.'
+        type: boolean
+        required: false
+        default: false
 
 # Every action is pinned to a commit: this job holds the release signing key
 # and a token that can publish, so a moved tag would be a trojaned release.
@@ -38,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.name }}
+      stable: ${{ steps.signing.outputs.stable }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -145,15 +151,19 @@ jobs:
       # log and the trusted-device list with it.
       #
       # With the ANDROID_KEYSTORE_BASE64 secret set, every release is signed by the
-      # same key and installs straight over the last one. Without it we fall back to
-      # the old throwaway key so the build still produces something installable, and
-      # the release notes say plainly that it needs a clean install. The keystore
-      # is written under the runner's temp directory, outside the checkout, and is
-      # gone when the job ends.
+      # same key and installs straight over the last one. Without it the run stops
+      # here: a lost or mis-rotated secret must not publish a release that no
+      # existing install can take and that looks tampered. The one exception is a
+      # manual run with allow_throwaway_key, for trying the build itself: it signs
+      # with a throwaway key, keeps the files as a workflow artifact and publishes
+      # no GitHub release (the upload steps below require stable == 'true'). The
+      # keystore is written under the runner's temp directory, outside the
+      # checkout, and is gone when the job ends.
       - name: Prepare signing key
         id: signing
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ALLOW_THROWAWAY: ${{ inputs.allow_throwaway_key == true }}
         run: |
           mkdir -p "$RUNNER_TEMP/signing"
           KS="$RUNNER_TEMP/signing/release.keystore"
@@ -161,6 +171,9 @@ jobs:
             printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
             echo "stable=true" >> "$GITHUB_OUTPUT"
             echo "Signing with the persistent release key."
+          elif [ "$ALLOW_THROWAWAY" != "true" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. A release signed with any other key cannot be installed over an earlier one, so nothing is built or published. Restore the secret (android/README.md, Signing), or start the workflow by hand with allow_throwaway_key to get a throwaway-signed build as a workflow artifact only."
+            exit 1
           else
             keytool -genkeypair -v \
               -keystore "$KS" \
@@ -172,7 +185,7 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
             echo "stable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so these builds are signed with a throwaway key: the APKs cannot be installed over an earlier release, and the AAB must not be uploaded to Google Play."
+            echo "::warning::allow_throwaway_key: these builds are signed with a throwaway key. They are kept as a workflow artifact and not published as a release; the APKs cannot be installed over an earlier release, and the AAB must not be uploaded to Google Play."
           fi
 
       # Gradle signs the release builds itself from these four variables (see
@@ -237,6 +250,19 @@ jobs:
           keytool -printcert -jarfile "$OUT/clairix-play-${TAG}.aab"
           (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-play-${TAG}.aab" > SHA256SUMS.txt)
           cat "$OUT/SHA256SUMS.txt"
+
+      # Android 15+ devices with 16 KB pages load only libraries built for them, and
+      # Google Play requires it: every LOAD segment of each 64-bit library must be
+      # 0x4000-aligned, and the APKs must place the libraries on 16 KiB boundaries
+      # (zipalign -c -P 16 -v 4; the bundle's libraries are read the same way, and
+      # bundletool does its own aligning). Today that holds because cargo-ndk 4.1.2
+      # passes max-page-size for NDK 27; this step stops a release the day it stops.
+      - name: Check the native libraries are built for 16 KB pages
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          OUT=android/app/build/outputs/release-files
+          tools/android/check-16k-alignment.sh "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk" "$OUT/clairix-play-${TAG}.aab"
 
       # The checksum file is signed with the asset signing key (tools/signing),
       # whose public half is committed as android/asset-signing.pem, so a
@@ -502,9 +528,10 @@ jobs:
               echo "4. Grant Nearby devices and Location (precise). Notifications is optional — declining it costs the alert, not the detector."
             else
               echo "> [!WARNING]"
-              echo "> This build is signed with a throwaway key, so Android will refuse to install it"
-              echo "> over an earlier release. You have to uninstall the old version first, which"
-              echo "> clears the cell baseline, the event log and the trusted-device list."
+              echo "> This build is signed with a throwaway key (a manual run with allow_throwaway_key),"
+              echo "> so it was kept as a workflow artifact and not published as a release. Android will"
+              echo "> refuse to install it over an earlier release: you have to uninstall the old version"
+              echo "> first, which clears the cell baseline, the event log and the trusted-device list."
               echo
               echo "1. Uninstall any existing Clairix."
               echo "2. Download \`clairix-${TAG}.apk\` below and tap it."
@@ -542,7 +569,11 @@ jobs:
             fi
           } > "$RUNNER_TEMP/notes.md"
 
+      # Only files signed with the release key are attached to a release: a
+      # throwaway-signed build (allow_throwaway_key) is kept as an artifact of this
+      # run instead, with the notes that say what it is.
       - name: Create GitHub Release
+        if: steps.signing.outputs.stable == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
@@ -558,14 +589,56 @@ jobs:
           draft: false
           prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
 
+      - name: Keep the throwaway-signed build as a workflow artifact
+        if: steps.signing.outputs.stable != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          cp "$RUNNER_TEMP/notes.md" android/app/build/outputs/release-files/NOTES.md
+          echo "::notice::Signed with a throwaway key, so no GitHub release was published; the files are in this run's throwaway-signed-${TAG} artifact."
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.signing.outputs.stable != 'true'
+        with:
+          name: throwaway-signed-${{ steps.tag.outputs.name }}
+          path: android/app/build/outputs/release-files/
+          if-no-files-found: error
+          retention-days: 7
+
   # A release published with this workflow's own token starts no other
   # workflow, so the rebuild-and-compare check is called from here: a runner
   # that never saw this build makes it again from the tag and requires the
-  # published APKs to match (verify-release.yml).
+  # published APKs to match (verify-release.yml). A throwaway-signed build
+  # published nothing, so there is nothing to verify.
   verify:
     needs: release
+    if: needs.release.outputs.stable == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/verify-release.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
+
+  # A failed release, or one whose rebuild did not match, is seen on the Actions
+  # tab by whoever started it; this opens an issue as well, or adds the run to
+  # the open one (.github/scripts/report-failure.sh), so it is not lost.
+  alert:
+    needs: [release, verify]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_TITLE: Release workflow failing
+          FAILURE_MEANS: >-
+            The release for the tag named in the run was not published, or its
+            rebuild-and-compare check (verify-release.yml) did not match the published APKs.
+        run: .github/scripts/report-failure.sh

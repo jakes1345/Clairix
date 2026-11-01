@@ -199,3 +199,26 @@ jobs:
           overwrite_files: true
           prerelease: true
           make_latest: false
+
+  # A red daily run is otherwise seen by nobody: one issue for the run (not one per
+  # region), or a comment on the open one (.github/scripts/report-failure.sh).
+  alert:
+    needs: [plan, build]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_TITLE: Maps publish failing
+          FAILURE_MEANS: >-
+            At least one region's road graph or plate-reader list was not rebuilt and published
+            (the run's job list says which). Phones keep that region's last published files.
+        run: .github/scripts/report-failure.sh

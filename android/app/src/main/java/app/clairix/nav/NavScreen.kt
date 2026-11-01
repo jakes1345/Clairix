@@ -302,6 +302,7 @@ private fun NavMapLayer(
     val avoidCameras by vm.avoidCameras.collectAsStateWithLifecycle()
     val warnCameras by vm.warnCameras.collectAsStateWithLifecycle()
     val cameraStatus by vm.cameraStatus.collectAsStateWithLifecycle()
+    val workZoneStatus by vm.workZoneStatus.collectAsStateWithLifecycle()
     // A spoofed or jammed receiver makes every turn instruction wrong; say so over the map.
     val gnss by app.clairix.Registry.gnss.collectAsStateWithLifecycle()
 
@@ -402,6 +403,7 @@ private fun NavMapLayer(
                         avoidCameras = avoidCameras,
                         warnCameras = warnCameras,
                         cameraStatus = cameraStatus,
+                        workZoneStatus = workZoneStatus,
                         onAvoidCameras = vm::setAvoidCameras,
                         onWarnCameras = vm::setWarnCameras,
                         onProfile = vm::selectProfile,
@@ -839,6 +841,7 @@ private fun RouteOptionsSheet(
     avoidCameras: Boolean,
     warnCameras: Boolean,
     cameraStatus: CameraFeed.Status,
+    workZoneStatus: WorkZoneFeed.Status,
     onAvoidCameras: (Boolean) -> Unit,
     onWarnCameras: (Boolean) -> Unit,
     onProfile: (RouteProfile) -> Unit,
@@ -929,6 +932,14 @@ private fun RouteOptionsSheet(
                     CameraFeed.Status.NotPublished -> "No plate-reader list has been published for this map yet."
                     CameraFeed.Status.Unknown -> "The plate-reader list for this map has not been fetched yet."
                 },
+                Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // The work zones the routes above take into account, and how old that list is: the
+            // feed is rebuilt a few times a day, not on a fixed clock, so the age is said.
+            Text(
+                WorkZoneFeed.statusText(workZoneStatus, System.currentTimeMillis() / 1000),
                 Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

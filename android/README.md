@@ -165,10 +165,14 @@ somewhere safe: a phone only accepts an update signed with the same key as the
 installed app, so losing it means every user has to uninstall and reinstall.
 The same key signs the Play bundle, which makes it the Play upload key.
 
-Without `ANDROID_KEYSTORE_BASE64` the workflow still runs, but signs with a
-throwaway key it makes on the spot. It says so in a warning and in the release
-notes: those APKs will not install over an earlier release, and the bundle must
-not be uploaded to Play.
+Without `ANDROID_KEYSTORE_BASE64` the workflow stops before it builds: a
+release signed with any other key cannot be installed over an earlier one, and
+a lost or mis-rotated secret must not publish one that looks tampered. To try
+the build itself anyway, start the workflow by hand with `allow_throwaway_key`:
+it signs with a throwaway key it makes on the spot, keeps the files as a
+workflow artifact (`throwaway-signed-<tag>`, for seven days) and publishes no
+GitHub release. Those APKs will not install over an earlier release, and the
+bundle must not be uploaded to Play.
 
 To build signed release files locally:
 
@@ -199,11 +203,15 @@ a release build fails without the public key file.
    created at its head); or Actions → Release → Run workflow with the tag.
 3. The workflow tests the crypto crate, builds and signs `fullSuite` and
    `fullComms` APKs and the `playSuite` bundle, checks the Play manifest has no
-   card emulation, and publishes a GitHub Release with the three files,
-   `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed by the
-   asset signing key). A tag ending in `-alpha.N`, `-beta.N` or `-rc.N` is
-   marked as a pre-release. A run started by hand must start from `main`, a
-   `release/v*` branch or a `v*` tag.
+   card emulation, checks that every 64-bit native library in them is built
+   for 16 KB pages (`tools/android/check-16k-alignment.sh`: each LOAD segment
+   0x4000-aligned, `zipalign -c -P 16 -v 4` on the APKs), and publishes a
+   GitHub Release with the three files, `SHA256SUMS.txt` and
+   `SHA256SUMS.txt.sig` (the checksums signed by the asset signing key). A tag
+   ending in `-alpha.N`, `-beta.N` or `-rc.N` is marked as a pre-release. A run
+   started by hand must start from `main`, a `release/v*` branch or a `v*` tag.
+   A failed run, or a rebuild-and-compare check that does not match, opens an
+   issue titled "Release workflow failing" (or adds the run to the open one).
 4. Check the certificate digest the "Collect and verify artifacts" step prints:
    it must be the same as the previous release's, or phones will refuse the update.
 5. Upload `clairix-play-<tag>.aab` in the Play Console (a beta goes to a testing
