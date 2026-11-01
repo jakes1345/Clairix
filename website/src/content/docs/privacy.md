@@ -54,7 +54,7 @@ If you turn on the offline mesh (off by default), texts, group texts and SOS ale
 
 ### 2.4 ClairixCoin (Clairix Full only)
 
-ClairixCoin is in Clairix Full, on any relay whose operator has not switched it off. If you use it, the relay keeps your balance and, for each transfer you make or receive, its id, the amount, the hour it was made and whether it came in or went out. It does not record who paid whom: your phone tells the person you pay inside an end-to-end encrypted notice, together with any note you add, and the relay sees who pays whom only while it moves the coins. It keeps the 100 most recent transfers per account, none for longer than 30 days, and the balance until you delete your account. ClairixCoin is an in-app token with no monetary value.
+ClairixCoin is in Clairix Full, on any relay whose operator has not switched it off. If you use it, the relay keeps your balance and, for each transfer you make or receive, its id, the amount, the hour it was made and whether it came in or went out. It does not record who paid whom: your phone tells the person you pay inside an end-to-end encrypted notice, together with any note you add, and the relay sees who pays whom only while it moves the coins. Your record and theirs of the same transfer carry different ids, so they cannot be matched by id; the same amount in the same hour on two accounts can still hint at a pair. It keeps the 100 most recent transfers per account, none for longer than 30 days, and the balance until you delete your account. ClairixCoin is an in-app token with no monetary value.
 
 ### 2.5 Emergency alerts
 

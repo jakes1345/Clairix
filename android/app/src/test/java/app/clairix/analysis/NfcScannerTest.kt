@@ -1,5 +1,7 @@
 package app.clairix.analysis
 
+import app.clairix.CardProfile
+import app.clairix.NfcTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -132,5 +134,31 @@ class NfcScannerTest {
         assertTrue("the probe SELECT is recorded", recording.pairs.hasCmd("00A40400"))
         assertTrue("the follow-up is recorded", recording.pairs.hasCmd("80A8") || recording.pairs.hasCmd("00B2"))
         assertFalse("an access card is not a payment card", recording.isPayment)
+    }
+
+    private fun tag(uid: String, profile: CardProfile) =
+        NfcTag(uid = uid, techs = isoDep, type = profile.label, payload = null, suspicious = false, note = "", ts = 0L, profile = profile)
+
+    @Test
+    fun aPaymentCardHeldToARecordReTapStagesNothingForTheVault() {
+        // The re-tap reads whatever card comes next. A payment card there instead must
+        // not become savable: the PPSE/SELECT pairs it answered are dropped with it.
+        val pairs = listOf("00A4040E325041592E5359532E444446303100" to "9000")
+        for (p in listOf(CardProfile.EMV_VISA, CardProfile.EMV_MASTERCARD, CardProfile.EMV_AMEX, CardProfile.EMV_OTHER)) {
+            assertTrue(NfcScanner.isPaymentProfile(p))
+            assertNull("$p was staged for the vault", NfcScanner.stagedCapture(NfcScanner.VaultCapture(tag("04A1", p), pairs)))
+        }
+    }
+
+    @Test
+    fun anAccessCardRecordedByAReTapIsStagedWithItsPairs() {
+        val pairs = listOf("00A4040006A0000000010100" to "9000", "80A8000002830000" to "6A82")
+        val staged = NfcScanner.stagedCapture(NfcScanner.VaultCapture(tag("08C0FFEE", CardProfile.ISO14443_4), pairs))
+        assertNotNull(staged)
+        assertEquals("08C0FFEE", staged!!.uid)
+        assertEquals(CardProfile.ISO14443_4, staged.profile)
+        assertEquals(pairs, staged.apduPairs)
+        assertFalse(NfcScanner.isPaymentProfile(CardProfile.MIFARE_DESFIRE))
+        assertFalse(NfcScanner.isPaymentProfile(CardProfile.UNKNOWN))
     }
 }

@@ -21,7 +21,7 @@ Only what the relay stores. Per Clairix number, that is:
 | Unused invite codes the number created | 7 days |
 | That someone, never who, took one of the number's one-time keys to start a conversation | The exact time for up to 15 minutes, until a message follows; if none does, the day, for 30 days |
 | A note that each of its keys belongs to the number | Until the account is deleted |
-| ClairixCoin, in Clairix Full on a relay that offers it: the balance, and for each transfer its id, the amount, the hour and whether it came in or went out (never who paid whom) | The balance until the account is deleted; each transfer for 30 days at most, the 100 most recent |
+| ClairixCoin, in Clairix Full on a relay that offers it: the balance, and for each transfer its id, the amount, the hour and whether it came in or went out (never who paid whom; the two sides' records of a transfer carry different ids, though the same amount in the same hour can hint at a pair) | The balance until the account is deleted; each transfer for 30 days at most, the 100 most recent |
 | That the number is suspended, and the day the suspension began, only if the operator suspended it ([abuse policy](https://github.com/jakes1345/Clairix/blob/main/docs/ABUSE.md)); never why | Until the suspension is lifted or the account is deleted |
 | Rate-limit allowances, as a count and the hour | Until they refill |
 | The nonce of each signed request | 5 minutes |

@@ -12,6 +12,7 @@ import android.nfc.tech.NfcF
 import app.clairix.BuildConfig
 import app.clairix.CardProfile
 import app.clairix.NfcTag
+import app.clairix.PendingVaultCapture
 
 object NfcScanner {
 
@@ -65,6 +66,26 @@ object NfcScanner {
      */
     fun capture(tag: Tag, mifareClassicSupported: Boolean): VaultCapture =
         read(tag, mifareClassicSupported, captureForVault = true)
+
+    /** The profiles of a recognised payment card: never staged for the vault, saved or emulated. */
+    private val PAYMENT_PROFILES = setOf(
+        CardProfile.EMV_VISA, CardProfile.EMV_MASTERCARD, CardProfile.EMV_AMEX, CardProfile.EMV_OTHER
+    )
+
+    /** Whether [profile] is a recognised payment card's. */
+    fun isPaymentProfile(profile: CardProfile): Boolean = profile in PAYMENT_PROFILES
+
+    /**
+     * What a "Record for vault" re-tap stages for the owner to name and save, or null
+     * when there is nothing the vault may keep. The re-tap reads whatever card is held
+     * to the phone next, not necessarily the one whose row armed it (many ISO-DEP cards
+     * answer with a new random UID on every tap, so the UIDs cannot be matched), and a
+     * payment card held there instead must not become savable: the vault never stores
+     * or emulates one.
+     */
+    fun stagedCapture(capture: VaultCapture): PendingVaultCapture? =
+        if (isPaymentProfile(capture.tag.profile)) null
+        else PendingVaultCapture(capture.tag.uid, capture.tag.profile, capture.tag.type, capture.apduPairs)
 
     private fun read(tag: Tag, mifareClassicSupported: Boolean, captureForVault: Boolean): VaultCapture {
         val uid = tag.id.hex()

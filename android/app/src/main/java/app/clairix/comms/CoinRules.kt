@@ -37,4 +37,25 @@ object CoinRules {
      */
     fun confirms(history: List<RelayClient.CoinTx>, txid: String, amount: Long, alreadyCounted: Boolean): Boolean =
         !alreadyCounted && history.any { it.id == txid && it.direction == "in" && it.amount == amount }
+
+    /**
+     * The body of a payment request. The payer's account records the debit under
+     * [txid] and the payee's account the credit under [credit]: two ids this phone
+     * chose, the second told to the payee only inside the end-to-end encrypted
+     * payment notice. Were both records kept under one id, anyone who can read the
+     * relay's storage could join them into who paid whom. Both are sent again
+     * unchanged when the request is repeated, so a repeat is the same payment.
+     */
+    fun payRequest(to: String, pin: String, amount: Long, txid: String, credit: String): JSONObject {
+        require(!credit.equals(txid, ignoreCase = true)) { "the credit id must differ from the payment id" }
+        return JSONObject().put("to", to).put("pin", pin).put("amount", amount).put("txid", txid).put("credit", credit)
+    }
+
+    /**
+     * The id the payee's account keeps a payment under, from the relay's answer to it
+     * ([answer]): its "credit". A relay from before the split ids keeps the credit
+     * under the payment id itself ([txid]) and does not say, so the notice names that.
+     */
+    fun creditId(answer: JSONObject, txid: String): String =
+        answer.optString("credit", "").takeIf { it.isNotEmpty() } ?: txid
 }

@@ -69,7 +69,9 @@ phone makes up for each drive and replaces every ten minutes. An image of the
 relay's storage shows public keys, queued envelopes with their recipient, size
 and time, and nothing about senders, lookups or activity, except ClairixCoin
 where the relay's operator has not switched it off: a balance, and the amount
-and hour of each transfer for 30 days, never who paid whom.
+and hour of each transfer for 30 days, never who paid whom (the payer's and
+the payee's records of one transfer carry different ids; only the same amount
+in the same hour on two accounts can hint at a pair).
 
 **What is on the phone when it is seized locked.** The location log, the
 timeline, the cell-tower baseline, vehicle trips, the unlock ledger, the

@@ -1059,24 +1059,54 @@ test("a payment repeated under the same txid moves the coins once", async () => 
   const bob = await makePhone(relay);
   const pin = await fingerprint(bob.ed25519);
   const txid = "0f0e0d0c-0b0a-4908-8706-050403020100";
-  const first = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid });
+  const credit = "0f0e0d0c-0b0a-4908-8706-0504030201ff";
+  const first = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid, credit });
   assert.equal(first.status, 200);
   assert.equal(first.json.txid, txid);
+  assert.equal(first.json.credit, credit);
   assert.equal(first.json.balance, 95);
   // The same request again, as a phone repeats one whose answer was lost.
-  const again = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid });
+  const again = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid, credit });
   assert.equal(again.status, 200);
   assert.equal(again.json.balance, 95);
   assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 95);
   assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 105);
-  assert.equal((await bob.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === txid).length, 1);
+  assert.equal((await bob.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === credit).length, 1);
   assert.equal((await alice.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === txid).length, 1);
   // Another id is another payment; an id that is not a UUID is replaced with one the relay mints.
-  assert.equal((await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid: "1f0e0d0c-0b0a-4908-8706-050403020100" })).json.balance, 90);
+  assert.equal((await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid: "1f0e0d0c-0b0a-4908-8706-050403020100", credit: "1f0e0d0c-0b0a-4908-8706-0504030201ff" })).json.balance, 90);
   const minted = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 1, txid: "not-a-uuid" });
   assert.equal(minted.status, 200);
   assert.match(minted.json.txid, /^[0-9a-f-]{36}$/);
   assert.equal(minted.json.balance, 89);
+});
+
+test("a payment that names its txid must name a different credit id, and one that names neither gets two", async () => {
+  const relay = makeRelay({ COIN: "on", COIN_INITIAL_BALANCE: "10" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const pin = await fingerprint(bob.ed25519);
+  const txid = "3f0e0d0c-0b0a-4908-8706-050403020100";
+  for (const body of [
+    { to: bob.number, pin, amount: 1, txid },
+    { to: bob.number, pin, amount: 1, txid, credit: txid },
+    { to: bob.number, pin, amount: 1, txid, credit: txid.toUpperCase() },
+    { to: bob.number, pin, amount: 1, txid, credit: "not-a-uuid" },
+  ]) {
+    const res = await alice.signed("POST", "/v1/coin/pay", body);
+    assert.equal(res.status, 400);
+    assert.match(res.json.error, /credit/);
+  }
+  // Refused on its form: nothing moved and nothing was written.
+  assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 10);
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).has("txHistory"), false);
+  // A request naming neither: two fresh ids, and each ledger holds only its own.
+  const bare = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 2 });
+  assert.equal(bare.status, 200);
+  assert.match(bare.json.credit, /^[0-9a-f-]{36}$/);
+  assert.notEqual(bare.json.credit, bare.json.txid);
+  assert.deepEqual((await alice.signed("GET", "/v1/coin/history")).json.txs.map((t) => t.id), [bare.json.txid]);
+  assert.deepEqual((await bob.signed("GET", "/v1/coin/history")).json.txs.map((t) => t.id), [bare.json.credit]);
 });
 
 test("a payment tells nobody whether a number exists: a missing payee and a wrong pin are refused alike, and no coin moves", async () => {
@@ -1135,7 +1165,8 @@ test("a transfer is kept as its id, amount, hour and direction, never who paid w
   advance(17 * 60_000 + 4321);
   const hour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
   const txid = "2f0e0d0c-0b0a-4908-8706-050403020100";
-  const paid = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 7, txid, note: "for the taxi" });
+  const credit = "2f0e0d0c-0b0a-4908-8706-0504030201ff";
+  const paid = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 7, txid, credit, note: "for the taxi" });
   assert.equal(paid.status, 200);
   const minted = await alice.signed("POST", "/v1/admin/coin/mint", { to: bob.number, amount: 3 });
   assert.equal(minted.status, 403, "minting needs the admin secret");
@@ -1148,7 +1179,7 @@ test("a transfer is kept as its id, amount, hour and direction, never who paid w
   assert.deepEqual(out, [{ id: txid, amount: 7, ts: hour, direction: "out" }]);
   const into = (await bob.signed("GET", "/v1/coin/history")).json.txs;
   assert.equal(into.length, 2);
-  assert.deepEqual(into[1], { id: txid, amount: 7, ts: hour, direction: "in" });
+  assert.deepEqual(into[1], { id: credit, amount: 7, ts: hour, direction: "in" });
   assert.deepEqual({ ...into[0], id: "x" }, { id: "x", amount: 3, ts: hour, direction: "in", note: "Minted by the relay" });
   // And what is stored: neither mailbox names the other, nor the phone that minted, nor the note.
   const aliceBox = JSON.stringify([...relay.env.MAILBOX.storageOf(alice.number)]);
@@ -1156,6 +1187,9 @@ test("a transfer is kept as its id, amount, hour and direction, never who paid w
   assert.ok(!aliceBox.includes(bob.number), "the payer's mailbox names the payee");
   assert.ok(!bobBox.includes(alice.number), "the payee's mailbox names the payer or the minter");
   assert.ok(!aliceBox.includes("taxi") && !bobBox.includes("taxi"), "a note reached the ledger");
+  // Nor do the two ledgers share an id that would join them into who paid whom.
+  assert.ok(!bobBox.includes(txid), "the payee's ledger keeps the payer's txid");
+  assert.ok(!aliceBox.includes(credit), "the payer's ledger keeps the payee's credit id");
   // A credit for a number nobody holds is not made, and leaves nothing behind.
   const nobody = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName("987654321"));
   assert.equal(await nobody.credit(5, txid), null);

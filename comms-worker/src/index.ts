@@ -161,13 +161,16 @@ export { IncidentCache, Mailbox, Traffic };
  * ClairixCoin (each relay is its own coin community; balances live in the mailboxes). On unless COIN is
  * "off": then every route below answers 404, and GET / says coin: false, so the app shows no balance:
  *   GET    /v1/coin/balance                                → {balance, symbol: "AC"}
- *   POST   /v1/coin/pay        {to, pin, amount, txid?}    → {txid, balance, ok}: moves coins to a contact; pin is the
+ *   POST   /v1/coin/pay        {to, pin, amount, txid?, credit?} → {txid, credit, balance, ok}: moves coins to a contact; pin is the
  *                                                            fingerprint of the payee's identity key, as a lookup
  *                                                            takes. A number that does not exist and a pin that does
  *                                                            not match are refused alike, before any coin moves. A
- *                                                            repeat with the same txid moves nothing twice
+ *                                                            repeat with the same txid moves nothing twice. The payer's
+ *                                                            ledger keeps the debit under txid, the payee's the credit
+ *                                                            under credit (a second id the payer's phone chose), so the
+ *                                                            two ledgers share no id
  *   GET    /v1/coin/history                                → {txs: [{id, amount, ts, direction, note?}]}, newest first:
- *                                                            the hour, never the moment, and never who paid whom
+ *                                                            the hour, never the moment, and no counterparty
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
  * The operator (no signature; X-Admin-Secret must match ADMIN_SECRET; a few tries a minute per address):
  *   DELETE /v1/admin/accounts/:number                      → {ok, number}: deletes the account as DELETE /v1/me
@@ -537,7 +540,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     requireCoin(env);
     const allowed = await me.rateOk("pay", Mailbox.PAY_LIMIT);
     if (!allowed.ok) throw new HttpError(429, "Too many payments; try again in a minute", allowed.retryAfter);
-    const body = parseJson<{ to?: unknown; pin?: unknown; amount?: unknown; txid?: unknown }>(bodyText);
+    const body = parseJson<{ to?: unknown; pin?: unknown; amount?: unknown; txid?: unknown; credit?: unknown }>(bodyText);
     const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
     if (!to) throw new HttpError(400, "to must be a Clairix number");
     if (to === profile.number) throw new HttpError(400, "You cannot pay yourself");
@@ -547,7 +550,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     // The phone names the payment, so a request it had to repeat (the answer
     // lost on the network) is the same payment: the debit and the credit are
     // each made once per txid, and a repeat gets the balance as it stands.
-    const txid = typeof body.txid === "string" && TXID_RE.test(body.txid) ? body.txid.toLowerCase() : crypto.randomUUID();
+    const named = typeof body.txid === "string" && TXID_RE.test(body.txid);
+    const txid = named ? (body.txid as string).toLowerCase() : crypto.randomUUID();
+    // The payee's mailbox keeps the credit under another id ([coinCreditId]),
+    // which the payer's phone also chose and tells the payee only inside the
+    // end-to-end encrypted notice, so the two ledgers share no id.
+    const credit = coinCreditId(body.credit, named, txid);
     // The payer shows it already knows whom it pays: the fingerprint of the
     // payee's identity key, which its phone pinned when it added the contact,
     // as a lookup of an unlisted number asks. A number that does not exist
@@ -563,7 +571,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
     let credited: number | null;
     try {
-      credited = await them.credit(amount, txid);
+      credited = await them.credit(amount, credit);
     } catch (e) {
       await refundPayment(me, amount, txid, e);
       throw e;
@@ -573,7 +581,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       await refundPayment(me, amount, txid, "no such number");
       throw new HttpError(400, "Payment refused");
     }
-    return json({ txid, balance: debited.balance, ok: true });
+    return json({ txid, credit, balance: debited.balance, ok: true });
   }
 
   if (path === "/v1/coin/history" && request.method === "GET") {
@@ -1154,6 +1162,28 @@ function coinAmount(raw: unknown): number {
 function coinPin(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 64) throw new HttpError(400, "pin must be the payee's key fingerprint");
   return raw;
+}
+
+/**
+ * The id the payee's mailbox keeps a payment's credit under, or a 400. The
+ * payer's mailbox keeps the debit under [txid]; were the credit kept under the
+ * same id, anyone reading the relay's storage could join the two ledgers and
+ * read off who paid whom. So the payer's phone chooses a second id ([raw])
+ * and tells it to the payee only inside the end-to-end encrypted payment
+ * notice. A phone that names its payment ([named], so that a repeated request
+ * is the same payment) must name the credit too, and differently, or a repeat
+ * would be credited under a new id; a request that names neither gets two
+ * fresh ids. Checked for its form only, before anything about the payee is read.
+ */
+function coinCreditId(raw: unknown, named: boolean, txid: string): string {
+  if (typeof raw === "string" && TXID_RE.test(raw)) {
+    const credit = raw.toLowerCase();
+    if (credit === txid) throw new HttpError(400, "credit must differ from txid");
+    return credit;
+  }
+  if (raw !== undefined && raw !== null) throw new HttpError(400, "credit must be a UUID");
+  if (named) throw new HttpError(400, "A payment that names its txid must name its credit too");
+  return crypto.randomUUID();
 }
 
 /**

@@ -347,19 +347,22 @@ jobs:
       # not a gate: it does not fail the release.
       - name: Count unreachable toolkit classes in the Comms APK (warning)
         run: |
-          COMMS=android/app/build/outputs/apk/fullComms/release/app-full-comms-release.apk
-          if [ ! -f "$COMMS" ]; then echo "::warning::Comms APK not found at $COMMS; skipping the dex class count"; exit 0; fi
-          DEX=$(unzip -p "$COMMS" 'classes*.dex' 2>/dev/null)
+          # R8 renames these classes (proguard-rules.pro keeps none of them and renames
+          # the source-file attribute), so their names are not in the dex whether or not
+          # the code is: grepping the dex would always say "none". The mapping file R8
+          # writes for the variant lists every class it kept, under its original name.
+          MAP=android/app/build/outputs/mapping/fullCommsRelease/mapping.txt
+          if [ ! -f "$MAP" ]; then echo "::warning::R8 mapping for the Comms APK not found at $MAP; cannot tell which toolkit classes it carries"; exit 0; fi
           total=0
-          for cls in SdrUsbDriver ScannerMonitor AdsbDecoder ObdBluetoothManager NfcScanner CardVault CardEmulationService; do
-            n=$(printf '%s' "$DEX" | grep -ao "$cls" | wc -l | tr -d ' ')
+          for cls in app.clairix.SdrUsbDriver app.clairix.ScannerMonitor app.clairix.AdsbDecoder app.clairix.ObdBluetoothManager app.clairix.analysis.NfcScanner app.clairix.analysis.CardVault app.clairix.CardEmulationService; do
+            n=$(grep -c "^${cls//./\\.} -> " "$MAP" || true)
             echo "  $cls: $n"
             total=$((total + n))
           done
           if [ "$total" -gt 0 ]; then
-            echo "::warning::The Comms APK's dex still carries scanner/NFC/vault classes ($total name occurrences). They are unreachable (no components, no permissions) but not yet removed; move the entry points into edition/tier source sets behind TierShell so R8 drops them, then make this a gate (grep -c … must be 0)."
+            echo "::warning::The Comms APK still carries $total of the scanner/NFC/vault classes (R8 kept them; see mapping.txt). They are unreachable (no components, no permissions) but not yet removed; move the entry points into edition/tier source sets behind TierShell so R8 drops them, then make this a gate (the count must be 0)."
           else
-            echo "No scanner/NFC/vault class names found in the Comms APK's dex."
+            echo "R8 kept none of the listed scanner/NFC/vault classes in the Comms APK."
           fi
 
       # The bills of materials the sbom job made from this commit.
