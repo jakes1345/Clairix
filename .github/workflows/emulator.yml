@@ -155,13 +155,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/tor/data" "$RUNNER_TEMP/tor/relay-b"
           chmod 700 "$RUNNER_TEMP/tor/data" "$RUNNER_TEMP/tor/relay-b"
           cat > "$RUNNER_TEMP/tor/torrc" <<EOF
-          SocksPort 0
+          SocksPort 127.0.0.1:9152
           DataDirectory $RUNNER_TEMP/tor/data
           HiddenServiceDir $RUNNER_TEMP/tor/relay-b
           HiddenServiceVersion 3
           HiddenServicePort 80 127.0.0.1:8788
           EOF
           nohup tor -f "$RUNNER_TEMP/tor/torrc" > tor-onion.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/tor/pid"
           for i in $(seq 1 60); do [ -s "$RUNNER_TEMP/tor/relay-b/hostname" ] && break; sleep 1; done
           ONION_HOST="$(cat "$RUNNER_TEMP/tor/relay-b/hostname")"
           echo "$ONION_HOST" | grep -Eq '^[a-z2-7]{56}\.onion$' || { echo "::error::Tor did not make the onion service"; cat tor-onion.log; exit 1; }
@@ -555,6 +556,27 @@ jobs:
         timeout-minutes: 25
         run: |
           ADB="$ANDROID_HOME/platform-tools/adb"
+          # The onion test needs relay B's onion service to be found on the Tor
+          # network. On 9b2e3d0 (Android 12) the phone could not reach it for
+          # five minutes ("SOCKS: Host unreachable") with nothing to say whether
+          # the service or the phone was at fault. So the runner first reaches
+          # the onion itself through its own Tor (SocksPort on 127.0.0.1 only,
+          # not reachable from the emulator); when it cannot, Tor is told to
+          # publish the service again (SIGHUP) and is given more time. Only an
+          # onion the runner can reach is handed to the phone's test.
+          reached=""
+          for round in 1 2 3; do
+            for _ in $(seq 1 18); do
+              if curl -sf --max-time 30 --socks5-hostname 127.0.0.1:9152 "$RELAY_B_ONION/" > /dev/null; then reached=1; break; fi
+              sleep 10
+            done
+            [ -n "$reached" ] && break
+            echo "relay B's onion was not reachable from the runner (round $round); publishing it again"
+            kill -HUP "$(cat "$RUNNER_TEMP/tor/pid")" || true
+          done
+          tail -n 20 ../tor-onion.log || true
+          [ -n "$reached" ] || { echo "::error::Relay B's onion service could not be reached on the Tor network from the runner itself, so the phone's onion test could not be run; see tor-onion.log"; exit 1; }
+          echo "relay B's onion answers on the Tor network"
           "$ADB" logcat -c
           set +e
           timeout 1400 "$ADB" shell am instrument -w -r \
