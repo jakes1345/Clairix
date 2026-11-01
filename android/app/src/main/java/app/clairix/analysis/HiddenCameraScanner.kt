@@ -589,7 +589,8 @@ object HiddenCameraScanner {
             _irDismissedIds.value = emptySet()
             irSpots.clear()
             alerted.clear()
-            runCatching { storeFor(app).replace(CameraSweepRecord().toJson()) }
+            // The owner's clear: the file goes even if this run could not read it.
+            runCatching { storeFor(app).also { it.discardUnread() }.replace(CameraSweepRecord().toJson()) }
         }
     }
 

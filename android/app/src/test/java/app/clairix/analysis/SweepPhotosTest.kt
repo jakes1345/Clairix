@@ -49,6 +49,23 @@ class SweepPhotosTest {
     }
 
     @Test
+    fun `clear all data deletes every photo, named or not, and nothing else`() {
+        val a = SweepPhotos.save(filesDir, jpeg, TestStoreCipher)
+        val b = SweepPhotos.save(filesDir, jpeg, TestStoreCipher)
+        val dir = File(filesDir, SweepPhotos.DIR)
+        val halfWritten = File(dir, "0123456789abcdef0123456789abcdef.clxp.tmp").apply { writeBytes(jpeg) }
+        val notOurs = File(dir, "notes.txt").apply { writeText("x") }
+        val timeline = File(filesDir, "timeline.json").apply { writeText("{}") }
+        assertEquals(3, SweepPhotos.deleteAll(filesDir))
+        assertNull(SweepPhotos.open(filesDir, a, TestStoreCipher))
+        assertNull(SweepPhotos.open(filesDir, b, TestStoreCipher))
+        assertFalse(halfWritten.exists())
+        assertTrue(notOurs.exists())
+        assertTrue(timeline.exists())
+        assertEquals("no folder, nothing to do", 0, SweepPhotos.deleteAll(Files.createTempDirectory("empty").toFile()))
+    }
+
+    @Test
     fun `only names it made itself are ever read or deleted`() {
         assertNull(SweepPhotos.fileOf(filesDir, "sweep/../timeline.json"))
         assertNull(SweepPhotos.fileOf(filesDir, "../sweep/0123456789abcdef0123456789abcdef.clxp"))

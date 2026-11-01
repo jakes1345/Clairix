@@ -80,6 +80,16 @@ object SweepPhotos {
         for (a in attachments) fileOf(filesDir, a)?.let { runCatching { it.delete() } }
     }
 
+    /**
+     * Deletes every sweep photo under [filesDir], and any half-written one, and returns
+     * how many went. For "Clear all data", which clears every timeline event a photo can
+     * belong to: an event in a timeline this run could not read is cleared without being
+     * read, so [delete] by name never hears of its photo.
+     */
+    fun deleteAll(filesDir: File): Int =
+        File(filesDir, DIR).listFiles { f -> f.isFile && (NAME.matches(f.name) || NAME.matches(f.name.removeSuffix(".tmp"))) }
+            ?.count { it.delete() } ?: 0
+
     /** The file an attachment names, or null when it is not a sweep photo (no paths out of the folder). */
     internal fun fileOf(filesDir: File, attachment: String): File? {
         if (!isPhoto(attachment)) return null

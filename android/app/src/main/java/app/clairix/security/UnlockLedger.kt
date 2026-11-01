@@ -171,6 +171,9 @@ object UnlockLedger {
             // rows stayed in memory and the database below was deleted all the same.
             s.markDirty()
             s.flush()
+            // flush() keeps quiet about a write that failed (a Keystore that would not
+            // seal): the database is the only other copy, so it stays until one lands.
+            check(s.isWritten()) { "the copied rows are not on disk yet" }
         }.isSuccess
         // Deleted only once its rows are in the sealed file; a failed read keeps it for the next start.
         if (copied) runCatching { app.deleteDatabase(LEGACY_DB_NAME) }

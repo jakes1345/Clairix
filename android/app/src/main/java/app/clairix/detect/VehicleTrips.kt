@@ -342,6 +342,8 @@ class VehicleTrips(private val store: Store) {
             tripAccessories.clear()
             tripOwnCar = false
             history.clear()
+            // The owner's clear: the file goes even if this run could not read it.
+            store.discardUnread()
             store.replace(JSONObject())
         }
     }

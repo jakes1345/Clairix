@@ -193,6 +193,27 @@ class Store(
         return data!!
     }
 
+    /**
+     * Said by the owner's own clear ("Clear all data"), before it writes the cleared
+     * document: what is on disk goes, even when this run could not open it. A store
+     * whose file the Keystore would not open writes nothing ([writable]), so without
+     * this a clear changed only memory and the history it was meant to delete came
+     * back at the next start. Returns whether the file on disk had not been read.
+     */
+    fun discardUnread(): Boolean = synchronized(lock) {
+        val unread = !writable
+        writable = true
+        unread
+    }
+
+    /**
+     * Whether everything this store holds is on disk: nothing changed since the last
+     * write, no write still on its way, and a file this run could read. For a caller
+     * that deletes the only other copy once the store has it ([flush] does not say
+     * when its write failed).
+     */
+    fun isWritten(): Boolean = synchronized(lock) { writable && !dirty && pending == null }
+
     /** Where a damaged file goes: `<name>.unreadable`, or a dated name beside an earlier one, which it must not replace. */
     private fun setAsideTarget(): File {
         val first = File(file.parentFile, "${file.name}$SET_ASIDE_SUFFIX")

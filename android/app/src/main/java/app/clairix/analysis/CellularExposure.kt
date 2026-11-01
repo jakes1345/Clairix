@@ -112,7 +112,11 @@ object CellularExposure {
 
     fun clear(context: Context) {
         val s = store(context)
-        synchronized(s) { s.replace(JSONObject()) }
+        synchronized(s) {
+            // The owner's clear: the file goes even if this run could not read it.
+            s.discardUnread()
+            s.replace(JSONObject())
+        }
     }
 
     /** Whether the modem takes the allowed-network-types mask that the "Allow 2G" switch sets; null without telephony. */

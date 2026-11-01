@@ -189,6 +189,53 @@ class StoreTest {
         assertEquals(42, Store(file, cipher = FlipCipher).load { JSONObject() }.getInt("baseline"))
     }
 
+    /** Opens like [FlipCipher] and seals nothing, as a Keystore that will not seal just now. */
+    private object NoSealCipher : StoreCipher {
+        override fun seal(text: String): ByteArray = throw java.security.ProviderException("Keystore operation failed")
+        override fun open(blob: ByteArray): String = FlipCipher.open(blob)
+    }
+
+    @Test
+    fun theOwnersClearReachesTheDiskEvenWhenTheFileCouldNotBeRead() {
+        sealedFile(JSONObject().put("history", "where she went"))
+        val s = Store(file, held.asCoroutineDispatcher(), FlakyCipher(failures = Int.MAX_VALUE)) { error("not damaged") }
+        s.load { JSONObject() }
+        // "Clear all data": without discardUnread the cleared document stayed in memory
+        // and the history came back at the next start.
+        assertTrue(s.discardUnread())
+        s.replace(JSONObject().put("cleared", true))
+        held.runAll()
+        val next = Store(file, cipher = FlipCipher).load { JSONObject() }
+        assertFalse(next.has("history"))
+        assertTrue(next.getBoolean("cleared"))
+        assertFalse("said once", s.discardUnread())
+    }
+
+    @Test
+    fun isWrittenOnlyOnceTheNewestStateIsOnDisk() {
+        val s = Store(file, held.asCoroutineDispatcher(), FlipCipher)
+        synchronized(owner) {
+            s.load { JSONObject() }.put("v", 1)
+            s.markDirty()
+            assertFalse(s.isWritten())
+            s.flush()
+        }
+        assertTrue(s.isWritten())
+
+        val failing = Store(File(file.parentFile, "other.json"), held.asCoroutineDispatcher(), NoSealCipher)
+        synchronized(owner) {
+            failing.load { JSONObject() }.put("v", 1)
+            failing.markDirty()
+            failing.flush()
+        }
+        assertFalse("flush() said nothing, and the write failed", failing.isWritten())
+
+        sealedFile(JSONObject().put("v", 3))
+        val unread = Store(file, held.asCoroutineDispatcher(), FlakyCipher(failures = Int.MAX_VALUE)) { }
+        unread.load { JSONObject() }
+        assertFalse("a file this run could not read is not this store's state", unread.isWritten())
+    }
+
     @Test
     fun aSetAsideFileIsNotOverwrittenByTheNextWrite() {
         file.writeText("{ this is not json")

@@ -175,6 +175,31 @@ class UnlockLedgerTest {
         assertEquals(2, UnlockLedger.events(0L).size)
     }
 
+    @Test
+    fun theLegacyDatabaseStaysWhenItsRowsCouldNotBeWrittenSealed() {
+        UnlockLedger.closeForTest()
+        val path = app.getDatabasePath(UnlockLedger.LEGACY_DB_NAME).apply { parentFile?.mkdirs() }
+        SQLiteDatabase.openOrCreateDatabase(path, null).use { db ->
+            db.execSQL("CREATE TABLE unlock_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, event TEXT NOT NULL, extra TEXT)")
+            db.insert("unlock_events", null, ContentValues().apply { put("ts", now - 5_000L); put("event", "PASSWORD_FAILED") })
+        }
+        // A Keystore that will not seal just now: the write fails, and flush() does not say so.
+        val noSeal = object : app.clairix.StoreCipher {
+            override fun seal(text: String): ByteArray = throw java.security.ProviderException("Keystore operation failed")
+            override fun open(blob: ByteArray): String = TestStoreCipher.open(blob)
+        }
+        UnlockLedger.openStore = { _ -> Store(storeFile(), Dispatchers.Unconfined, noSeal) }
+        UnlockLedger.init(app)
+        UnlockLedger.events(0L)
+        assertTrue("the only copy of the unlock history was deleted before it was written", path.exists())
+
+        // The next start, with a Keystore that seals, moves the rows across and only then deletes it.
+        store = null
+        open()
+        assertEquals(listOf(now - 5_000L to UnlockKind.PASSWORD_FAILED), kinds())
+        assertFalse(path.exists())
+    }
+
     // ── The sleep window ───────────────────────────────────────────────────
 
     /** [hour]:[minute] local time, [daysAgo] days ago. */

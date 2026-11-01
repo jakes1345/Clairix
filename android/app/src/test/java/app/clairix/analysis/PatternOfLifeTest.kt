@@ -158,6 +158,30 @@ class PatternOfLifeTest {
         assertTrue(report.suggestions.none { it.startsWith("You leave work") })
     }
 
+    /**
+     * The analysis runs on the log read back from disk, not on live fixes: the speed
+     * that keeps fixes taken on the move out of a stay has to survive the round trip,
+     * or every stored fix reads as still.
+     */
+    @Test
+    fun theLogKeepsEachFixsSpeedSoTheAnalysisOfItFindsTheSamePlaces() {
+        val live = fortnight()
+        val readBack = live.map { LocationHistory.fixOf(LocationHistory.row(it))!! }
+        assertEquals(live, readBack)
+        val report = PatternOfLife.analyze(readBack)
+        assertEquals(listOf("Home", "Work"), report.clusters.map { it.label })
+        assertEquals(10, report.clusters[1].visits)
+    }
+
+    @Test
+    fun aRowWrittenBeforeSpeedWasKeptReadsBackWithoutOne() {
+        val old = org.json.JSONArray().put(1_780_000_000_000L).put(home.first).put(home.second).put(12.0)
+        assertEquals(Fix(home.first, home.second, null, 1_780_000_000_000L, 12f), LocationHistory.fixOf(old))
+        val noAccuracy = LocationHistory.row(Fix(home.first, home.second, 1.5f, 1_780_000_000_000L, null))
+        assertEquals(Fix(home.first, home.second, 1.5f, 1_780_000_000_000L, null), LocationHistory.fixOf(noAccuracy))
+        assertEquals(null, LocationHistory.fixOf(org.json.JSONArray().put(1L).put(2.0)))
+    }
+
     @Test
     fun tooLittleHistorySaysSoAndNamesNoPlace() {
         val report = PatternOfLife.analyze(listOf(Fix(home.first, home.second, 0f, 1_780_000_000_000L, 10f)))

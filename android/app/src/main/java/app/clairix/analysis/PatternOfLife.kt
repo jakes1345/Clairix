@@ -21,7 +21,7 @@ import kotlin.math.sqrt
  * 500 fixes in memory, so nothing survived a restart; this is the on-disk record,
  * a [Store]-backed JSON file:
  *
- *   {"fixes": [[ts, lat, lon, accuracy], …]}   oldest first, at most [CAP] rows
+ *   {"fixes": [[ts, lat, lon, accuracy, speed], …]}   oldest first, at most [CAP] rows
  *
  * [ScanService] records each fix it receives; a fix is kept when the phone moved
  * at least 25 m or 30 s passed, and coarse fixes (worse than 100 m) are dropped.
@@ -53,7 +53,7 @@ object LocationHistory {
             val s = store(context)
             val root = s.json
             var arr = root.optJSONArray(KEY) ?: JSONArray().also { root.put(KEY, it) }
-            arr.put(JSONArray().put(fix.time).put(fix.lat).put(fix.lon).put((fix.accuracy ?: -1f).toDouble()))
+            arr.put(row(fix))
             if (arr.length() > CAP + CAP / 10) {
                 // Trim in one go rather than removing the head row by row on every fix.
                 val trimmed = JSONArray()
@@ -72,14 +72,25 @@ object LocationHistory {
     fun load(context: Context): List<Fix> {
         val arr = store(context).json.optJSONArray(KEY) ?: return emptyList()
         val out = ArrayList<Fix>(arr.length())
-        for (i in 0 until arr.length()) {
-            val row = arr.optJSONArray(i) ?: continue
-            if (row.length() < 3) continue
-            val acc = if (row.length() > 3) row.optDouble(3, -1.0).toFloat().takeIf { it >= 0f } else null
-            out += Fix(row.optDouble(1), row.optDouble(2), null, row.optLong(0), acc)
-        }
+        for (i in 0 until arr.length()) out += fixOf(arr.optJSONArray(i) ?: continue) ?: continue
         out.sortBy { it.time }
         return out
+    }
+
+    /**
+     * One stored row: time, latitude, longitude, accuracy and speed, -1 for an
+     * accuracy or a speed the fix did not have. The speed is what lets
+     * [PatternOfLife] leave fixes taken on the move out of a stay; rows written
+     * before it was kept have four columns and read back without one.
+     */
+    internal fun row(fix: Fix): JSONArray = JSONArray().put(fix.time).put(fix.lat).put(fix.lon)
+        .put((fix.accuracy ?: -1f).toDouble()).put((fix.speed ?: -1f).toDouble())
+
+    /** The fix a stored [row] holds, or null when it has no time and place. */
+    internal fun fixOf(row: JSONArray): Fix? {
+        if (row.length() < 3) return null
+        fun optional(i: Int): Float? = if (row.length() > i) row.optDouble(i, -1.0).toFloat().takeIf { it >= 0f } else null
+        return Fix(row.optDouble(1), row.optDouble(2), optional(4), row.optLong(0), optional(3))
     }
 
     fun size(context: Context): Int = store(context).json.optJSONArray(KEY)?.length() ?: 0
@@ -123,7 +134,10 @@ object LocationHistory {
     fun clear(context: Context) {
         synchronized(lock) {
             last = null
-            store(context).replace(JSONObject().put(KEY, JSONArray()))
+            val s = store(context)
+            // The owner's clear: the file goes even if this run could not read it.
+            s.discardUnread()
+            s.replace(JSONObject().put(KEY, JSONArray()))
         }
     }
 
