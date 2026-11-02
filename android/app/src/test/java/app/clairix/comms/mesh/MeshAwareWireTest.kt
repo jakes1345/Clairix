@@ -87,7 +87,7 @@ class MeshAwareWireTest {
     }
 
     private fun assertThrows(block: () -> Unit) {
-        try { block() } catch (e: IOException) { return }
+        try { block() } catch (expected: IOException) { return }
         throw AssertionError("expected an IOException")
     }
 }

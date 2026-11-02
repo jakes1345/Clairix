@@ -68,8 +68,14 @@ class LoraMessengerTest {
         var radioUp = true
         val toA = ArrayList<ByteArray>()
         val toB = ArrayList<ByteArray>()
-        val a = LoraMessenger(FakeCodec(keyA), { body -> if (!radioUp) false else { if (!lose) toB += body; true } }, java.util.Random(1))
-        val b = LoraMessenger(FakeCodec(keyB), { body -> if (!lose) toA += body; true }, java.util.Random(2))
+        val a = LoraMessenger(FakeCodec(keyA), { body ->
+            if (radioUp && !lose) toB += body
+            radioUp
+        }, java.util.Random(1))
+        val b = LoraMessenger(FakeCodec(keyB), { body ->
+            if (!lose) toA += body
+            true
+        }, java.util.Random(2))
         init {
             a.addContact(keyB, "Bea", now0, keyA)
             b.addContact(keyA, "Al", now0, keyB)

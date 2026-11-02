@@ -67,7 +67,7 @@ class MeshAware(
     private val store: MeshStore,
     private val ownTags: () -> Set<String>,
     private val onDeliver: (ByteArray) -> Unit,
-    private val _status: MutableStateFlow<MeshStatus>
+    private val status: MutableStateFlow<MeshStatus>
 ) {
     companion object {
         private const val TAG = "MeshAware"
@@ -144,7 +144,7 @@ class MeshAware(
                 session = s
                 startPublish(s)
                 if (wantSubscribe) startSubscribe(s)
-                _status.update { it.copy(aware = true) }
+                status.update { it.copy(aware = true) }
             }
 
             override fun onAttachFailed() { Log.i(TAG, "attach failed") }
@@ -158,7 +158,7 @@ class MeshAware(
         publish?.close(); publish = null
         subscribe?.close(); subscribe = null
         session?.close(); session = null
-        _status.update { it.copy(aware = false) }
+        status.update { it.copy(aware = false) }
     }
 
     private fun startPublish(s: WifiAwareSession) {
@@ -239,7 +239,7 @@ class MeshAware(
 
         val session = MeshSession(
             store, ownTags,
-            deliver = { b -> _status.update { it.copy(receivedForYou = it.receivedForYou + 1) }; onDeliver(b.data) },
+            deliver = { b -> status.update { it.copy(receivedForYou = it.receivedForYou + 1) }; onDeliver(b.data) },
             send = { frame -> val o = out; runCatching { writer.execute { write(o, frame) } } },
             now = { System.currentTimeMillis() },
             initiator = initiator
@@ -279,7 +279,7 @@ class MeshAware(
                 val s = try {
                     server.soTimeout = ACCEPT_TIMEOUT_MS
                     server.accept()
-                } catch (e: IOException) { null }
+                } catch (e: IOException) { Log.i(TAG, "no peer connected: ${e.message}"); null }
                 handler.post { if (s == null) end() else run(s) }
             }, "mesh-aware-a").apply { isDaemon = true }.start()
         }
@@ -290,7 +290,7 @@ class MeshAware(
             Thread({
                 val s = try {
                     network.socketFactory.createSocket().apply { connect(at, CONNECT_TIMEOUT_MS) }
-                } catch (e: IOException) { null }
+                } catch (e: IOException) { Log.i(TAG, "could not reach the peer: ${e.message}"); null }
                 handler.post { if (s == null) end() else run(s) }
             }, "mesh-aware-c").apply { isDaemon = true }.start()
         }
@@ -302,16 +302,19 @@ class MeshAware(
             try {
                 s.soTimeout = READ_TIMEOUT_MS
                 out = BufferedOutputStream(s.getOutputStream())
-            } catch (e: IOException) { end(); return }
+            } catch (e: IOException) { Log.i(TAG, "socket setup failed: ${e.message}"); end(); return }
             session.start()
             Thread({ readAll(s) }, "mesh-aware-r").apply { isDaemon = true }.start()
         }
 
         /** Reads frames until the peer closes, the socket fails or the meeting ends; on its own thread. */
         private fun readAll(s: Socket) {
-            val input = try { DataInputStream(s.getInputStream().buffered()) } catch (e: IOException) { null }
+            val input = try {
+                DataInputStream(s.getInputStream().buffered())
+            } catch (e: IOException) { Log.i(TAG, "no input stream: ${e.message}"); null }
             while (input != null) {
-                val frame = try { MeshAwareWire.readFrame(input) } catch (e: IOException) { null } ?: break
+                // The peer closing, a timeout or end() closing the socket all land here; each ends the reading.
+                val frame = try { MeshAwareWire.readFrame(input) } catch (ignored: IOException) { null } ?: break
                 handler.post { onFrame(frame) }
             }
             handler.post { finishIfDone(); end() }
@@ -327,6 +330,7 @@ class MeshAware(
             try {
                 MeshAwareWire.writeFrame(o, frame)
             } catch (e: IOException) {
+                Log.i(TAG, "write failed: ${e.message}")
                 handler.post { end() }
             }
         }
@@ -336,7 +340,7 @@ class MeshAware(
         private fun finishIfDone() {
             if (ended || counted || !session.finished) return
             counted = true
-            _status.update {
+            status.update {
                 it.copy(meetings = it.meetings + 1, lastMeetingAt = System.currentTimeMillis(),
                     handedOn = it.handedOn + session.forwarded, carrying = store.size)
             }

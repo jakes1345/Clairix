@@ -283,12 +283,7 @@ class LoraMessenger(
         contacts.clear(); messages.clear(); pending.clear(); seen.clear()
         val b64 = Base64.getDecoder()
         root.optJSONArray("contacts")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val k = runCatching { b64.decode(o.getString("k")) }.getOrNull() ?: continue
-                if (k.size != LoraLinkProtocol.KEY_LEN) continue
-                contacts += Contact(k, o.optString("n"), o.optLong("a"), o.optInt("u"))
-            }
+            for (i in 0 until arr.length()) contactFrom(arr.optJSONObject(i), b64)?.let { contacts += it }
         }
         var failed = false
         root.optJSONArray("messages")?.let { arr ->
@@ -298,18 +293,27 @@ class LoraMessenger(
                 val outgoing = o.optBoolean("o")
                 val cutOff = outgoing && (state == State.SENDING || state == State.SENT)
                 failed = failed || cutOff
-                val m = Message(
-                    o.optString("c"), outgoing, o.optLong("i"), o.optLong("t"),
-                    if (cutOff) State.FAILED else state,
-                    o.optInt("k", KIND_TEXT), o.optString("x"),
-                    o.has("la"), o.optInt("la"), o.optInt("lo"), if (o.has("r")) o.optInt("r") else null
-                )
+                val m = messageFrom(o, outgoing, if (cutOff) State.FAILED else state)
                 messages += m
                 if (!outgoing) seen += "${m.contact}/${m.id}"
             }
         }
         dirty = failed
     }
+
+    /** One saved contact, or null when its key is missing or the wrong length. */
+    private fun contactFrom(o: JSONObject?, b64: Base64.Decoder): Contact? {
+        if (o == null) return null
+        val k = runCatching { b64.decode(o.getString("k")) }.getOrNull() ?: return null
+        if (k.size != LoraLinkProtocol.KEY_LEN) return null
+        return Contact(k, o.optString("n"), o.optLong("a"), o.optInt("u"))
+    }
+
+    private fun messageFrom(o: JSONObject, outgoing: Boolean, state: State): Message = Message(
+        o.optString("c"), outgoing, o.optLong("i"), o.optLong("t"), state,
+        o.optInt("k", KIND_TEXT), o.optString("x"),
+        o.has("la"), o.optInt("la"), o.optInt("lo"), if (o.has("r")) o.optInt("r") else null
+    )
 
     private fun minutes(now: Long): Long = now / MINUTE_MS
 

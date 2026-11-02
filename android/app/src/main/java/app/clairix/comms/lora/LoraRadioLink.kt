@@ -199,11 +199,14 @@ class LoraRadioLink(context: Context, private val listener: Listener) {
         armSetupTimer()
     }
 
+    /** Connected to a radio, its MTU raised, but its notifications never switched on. */
+    private fun setupStalled(): Boolean = !ready && address != null && gatt != null && mtu != 23
+
     private fun armSetupTimer() {
         setupTimer?.cancel(false)
         setupTimer = exec.schedule({
             // Connected but never subscribed (a stale bond, a radio that forgot this phone): start over.
-            if (!ready && address != null && gatt != null && mtu != 23) {
+            if (setupStalled()) {
                 closeLocked("The radio did not finish connecting; if it was reset, pair it again")
                 openLocked()
             }

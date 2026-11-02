@@ -15,7 +15,7 @@ time, with no phone network and no internet. It works in two ways:
 
 The code is in `lora/core`, the protocol library tested on the host, and in
 `lora/firmware`, the board glue (PlatformIO). The phone side is in
-`android/app/src/main/java/app/clairix/comms/lora` and `LoraTools.kt`.
+`android/app/src/main/java/app/clairix/comms/lora` and `LoraScreen.kt`.
 
 ## Boards
 

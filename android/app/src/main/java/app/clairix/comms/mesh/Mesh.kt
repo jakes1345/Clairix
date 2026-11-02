@@ -92,7 +92,7 @@ object Mesh {
                 context, store(context),
                 ownTags = { CommsRepository.meshTags() },
                 onDeliver = { data -> CommsRepository.receiveFromMesh(data) },
-                _status = _status
+                status = _status
             ).also { it.start() }
         }
         _status.value = _status.value.copy(carrying = store(context).size, awareSupported = aware != null)
