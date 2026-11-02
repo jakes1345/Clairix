@@ -729,7 +729,7 @@ jobs:
           # lists the app; a restart in between costs a try, with time for the
           # framework to come back.
           ready() {
-            "$ADB" wait-for-device
+            timeout 300 "$ADB" wait-for-device || return 1
             for _ in $(seq 1 60); do
               [ "$(timeout 10 "$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] \
                 && timeout 10 "$ADB" shell am get-started-user-state 0 2>/dev/null | grep -q RUNNING_UNLOCKED \
@@ -787,6 +787,11 @@ jobs:
           # shellcheck disable=SC2086
           walk all "$(echo $PERMS | tr ' ' ',')"
           for p in $PERMS; do
+            # adb lost the Android 14 emulator between two walks on 991feab
+            # ("adb: device offline" on the next pm call, with the app's run
+            # before it passing); each walk starts once the device answers
+            # again, as after boot.
+            ready || { echo "::error::The emulator did not answer again before the $p walk"; exit 1; }
             "$ADB" shell pm clear app.clairix > /dev/null
             # shellcheck disable=SC2086
             grant $PERMS
