@@ -67,6 +67,21 @@ list, except BoringSSL's and libevent's, which the app's list links to.
   Julien Voisin and Tek for Echap (github.com/AssoEchap/stalkerware-indicators),
   under the Creative Commons Attribution 4.0 licence.
 
+## The LoRa radio firmware
+
+The radio firmware in `lora/` is not part of the app; it is flashed onto a LoRa
+board. It is built with:
+
+- **Monocypher** (`lora/core/src/monocypher`, in the source tree), by Loup
+  Vaillant: 2-clause BSD or CC0-1.0, at the user's choice
+  (`lora/core/src/monocypher/LICENCE.md`).
+- **RadioLib** 7.1.2, by Jan Gromeš: MIT.
+- **NimBLE-Arduino** 1.4.3, by h2zero, with Apache NimBLE: Apache-2.0.
+- **U8g2** 2.35.30, by Oliver Kraus (the Heltec screen): 2-clause BSD.
+- **LovyanGFX** 1.1.16, by lovyan03 (the T-Deck screen): FreeBSD (2-clause BSD).
+- The **Arduino core for the ESP32** and **ESP-IDF**, by Espressif: LGPL-2.1
+  and Apache-2.0.
+
 ## Rust crates in the encryption library
 
 `libclairix_comms_crypto.so` (`comms-crypto/`) compiles in these crates, for

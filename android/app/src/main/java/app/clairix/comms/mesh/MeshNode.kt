@@ -55,6 +55,10 @@ data class MeshStatus(
     val still: Boolean = false,
     /** Whether the radio runs at full pace (something to carry, a conversation open, a meeting lately) or at low power. */
     val fullPace: Boolean = false,
+    /** Whether Wi-Fi Aware runs beside Bluetooth ([MeshAware]). */
+    val aware: Boolean = false,
+    /** Whether this phone could run Wi-Fi Aware: Android 13, the hardware, and the Nearby Wi-Fi devices permission. */
+    val awareSupported: Boolean = false,
     val error: String? = null
 )
 
@@ -90,7 +94,9 @@ class MeshNode(
     /** Where the node reports what it is doing; owned by [Mesh] so the page can watch it before the node exists. */
     private val _status: MutableStateFlow<MeshStatus>,
     /** Whether a conversation is open on screen, when a message may be about to need the mesh. */
-    private val conversationOpen: () -> Boolean = { false }
+    private val conversationOpen: () -> Boolean = { false },
+    /** Told the pace after every review: full (true) or low power. */
+    private val onPace: (Boolean) -> Unit = {}
 ) {
     companion object {
         private const val TAG = "MeshNode"
@@ -243,6 +249,7 @@ class MeshNode(
             plan = next
         }
         _status.update { it.copy(carrying = carrying, still = still, fullPace = busy) }
+        onPace(busy)
     }
 
     // ── Advertising and scanning ──────────────────────────────────────────

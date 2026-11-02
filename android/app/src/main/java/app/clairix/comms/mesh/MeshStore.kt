@@ -36,6 +36,17 @@ class MeshStore(private val store: Store) {
     @Volatile
     var onChange: (() -> Unit)? = null
 
+    /** Told, like [onChange], when a bundle is added; for the LoRa radio, which carries the owner's bundles too. */
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
+    fun addListener(l: () -> Unit) { listeners += l }
+    fun removeListener(l: () -> Unit) { listeners -= l }
+
+    private fun changed() {
+        onChange?.invoke()
+        listeners.forEach { it() }
+    }
+
     val size: Int get() = synchronized(lock) { bundles.size }
 
     /** How many bundles this phone carries once those past their time are dropped; what [MeshPacing.busy] counts. */
@@ -59,7 +70,7 @@ class MeshStore(private val store: Store) {
         evict()
         save()
         true
-    }.also { if (it) onChange?.invoke() }
+    }.also { if (it) changed() }
 
     /** Over [MeshProtocol.MAX_STORE]: the oldest carried bundle goes, never one of the owner's own. */
     private fun evict() {
@@ -80,6 +91,12 @@ class MeshStore(private val store: Store) {
     fun knownIds(now: Long): List<ByteArray> = synchronized(lock) {
         prune(now)
         bundles.values.map { it.id }.take(MeshProtocol.MAX_STORE)
+    }
+
+    /** The owner's own bundles still within their time, oldest first: what a LoRa radio is handed to send. */
+    fun ownBundles(now: Long): List<MeshProtocol.Bundle> = synchronized(lock) {
+        prune(now)
+        bundles.values.filter { it.idHex in own }
     }
 
     /** What this phone holds that a peer holding [theirs] lacks, with one more hop on each. */
@@ -116,7 +133,7 @@ class MeshStore(private val store: Store) {
         evict()
         save()
         true
-    }.also { if (it) onChange?.invoke() }
+    }.also { if (it) changed() }
 
     fun clear() = synchronized(lock) {
         bundles.clear(); queued.clear(); delivered.clear(); own.clear()

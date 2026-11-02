@@ -1,0 +1,3 @@
+# PlatformIO, the firmware build tool, pinned; requirements.txt is made from this
+# with pip-compile --generate-hashes so CI installs exactly these files.
+platformio==6.1.18

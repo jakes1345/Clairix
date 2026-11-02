@@ -4,9 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.content.ContextCompat
 import app.clairix.Store
 import app.clairix.comms.CommsRepository
+import app.clairix.comms.lora.Lora
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,12 +27,21 @@ object Mesh {
 
     @Volatile private var store: MeshStore? = null
     @Volatile private var node: MeshNode? = null
+    @Volatile private var aware: MeshAware? = null
     private val _status = MutableStateFlow(MeshStatus())
     val status: StateFlow<MeshStatus> = _status.asStateFlow()
 
     val PERMISSIONS = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE
     )
+
+    /**
+     * What the page asks for when the mesh is turned on: [PERMISSIONS], which it needs,
+     * and on Android 13 and later Nearby Wi-Fi devices for Wi-Fi Aware, which it uses
+     * when granted and goes without when not.
+     */
+    val REQUESTED: Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) PERMISSIONS + Manifest.permission.NEARBY_WIFI_DEVICES else PERMISSIONS
 
     fun enabled(context: Context): Boolean =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ON, false)
@@ -70,14 +81,28 @@ object Mesh {
             onDeliver = { data -> CommsRepository.receiveFromMesh(data) },
             _status = _status,
             // A conversation open on screen: a message may be about to need the mesh.
-            conversationOpen = { CommsRepository.openPeer != null }
+            conversationOpen = { CommsRepository.openPeer != null },
+            onPace = { full -> aware?.setFullPace(full) }
         )
         node = n
-        _status.value = _status.value.copy(carrying = store(context).size)
+        if (MeshAware.usable(context)) {
+            aware = MeshAware(
+                context, store(context),
+                ownTags = { CommsRepository.meshTags() },
+                onDeliver = { data -> CommsRepository.receiveFromMesh(data) },
+                _status = _status
+            ).also { it.start() }
+        }
+        _status.value = _status.value.copy(carrying = store(context).size, awareSupported = aware != null)
         n.start()
+        // A paired LoRa radio rides on the same service: it carries the same bundles, farther.
+        Lora.attach(context)
     }
 
     internal fun stopNode() {
+        Lora.detach()
+        aware?.stop()
+        aware = null
         node?.stop()
         node = null
     }

@@ -85,6 +85,8 @@ object CommsNotifications {
     const val REQUEST_NOTIFICATION_ID = 0x5C00_0009
     /** Android refused, twice in a row, to restart the background connection ([LinkHealth]). */
     const val LINK_STOPPED_NOTIFICATION_ID = 0x5C00_000A
+    /** A Lite message or SOS heard over the LoRa radio (comms/lora). */
+    const val RADIO_NOTIFICATION_ID = 0x5C00_000B
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -544,6 +546,42 @@ object CommsNotifications {
             )
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(notificationId(contact.number), notification)
+    }
+
+    /**
+     * A Lite message heard over the LoRa radio from [from], someone paired over the
+     * radio. Previews follow the same rules as any message; an SOS uses the SOS
+     * channel, which alerts through Do Not Disturb.
+     */
+    fun notifyRadio(context: Context, from: String, text: String, sos: Boolean) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        if (previewsHidden(context)) {
+            manager.notify(RADIO_NOTIFICATION_ID, unlockToRead(context, if (sos) "SOS" else "New message", "Open Clairix to read", RADIO_NOTIFICATION_ID))
+            return
+        }
+        val channel = if (sos) CHANNEL_SOS else CHANNEL_MESSAGES
+        val icon = if (sos) android.R.drawable.stat_sys_warning else android.R.drawable.stat_notify_chat
+        val notification = NotificationCompat.Builder(context, channel)
+            .setSmallIcon(icon)
+            .setContentTitle(if (sos) "SOS from $from" else from)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(if (sos) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(if (sos) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, RADIO_NOTIFICATION_ID))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, channel)
+                    .setSmallIcon(icon)
+                    .setContentTitle(if (sos) "SOS" else "New message")
+                    .setContentText("Unlock to read")
+                    .build()
+            )
+            .build()
+        manager.notify(RADIO_NOTIFICATION_ID, notification)
     }
 
     /**

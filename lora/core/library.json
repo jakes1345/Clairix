@@ -1,0 +1,14 @@
+{
+  "name": "clairix-lora-core",
+  "version": "1.0.0",
+  "description": "The Clairix LoRa protocol: link encryption, managed flooding, bundle fragments, Lite messages, pairing and the phone link.",
+  "license": "GPL-3.0-only",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "includeDir": "include",
+    "srcDir": "src",
+    "srcFilter": ["+<*>"],
+    "flags": ["-std=gnu++17"]
+  }
+}

@@ -197,7 +197,10 @@ Read this part twice.
   at, and the app falls back to them when the first is blocked (unless you
   have pinned the relay's key, in which case only the pinned address is
   used). With no network at all, the offline mesh carries texts and SOS
-  phone to phone over Bluetooth. ClairixCoin stays within one relay.
+  phone to phone over Bluetooth and, on Android 13 and later, Wi-Fi Aware.
+  A small LoRa radio paired with the phone carries them kilometres, radio
+  to radio, and a LilyGO T-Deck runs as a handheld on its own
+  ([docs/LORA.md](docs/LORA.md)). ClairixCoin stays within one relay.
 - **Your keyboard.** It sees everything typed in every app before any app can
   encrypt it. Clairix asks it not to learn from what is typed in Clairix, which
   Gboard and Samsung's keyboard honour, and Phone check says whether the

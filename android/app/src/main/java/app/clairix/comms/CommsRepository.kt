@@ -4132,6 +4132,14 @@ object CommsRepository {
     }
 
     /**
+     * This phone's identity for the LoRa radio's Lite messages and pairing
+     * (comms/lora), or null while the vault is sealed or before setup: Lite is
+     * opened only with the vault open, as every other message is.
+     */
+    fun loraIdentity(): uniffi.clairix_comms_crypto.Identity? =
+        if (Vault.sealed.value) null else runCatching { identities.get() }.getOrNull()
+
+    /**
      * An envelope the mesh carried here: into the same path the relay's take, with the
      * time it arrived (the relay's timestamp is not there to use). Duplicates of one the
      * relay also delivered are dropped there, by content and by message id.

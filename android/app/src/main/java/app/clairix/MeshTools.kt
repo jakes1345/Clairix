@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.comms.mesh.Mesh
+import app.clairix.comms.mesh.MeshAware
 import app.clairix.comms.mesh.MeshPacing
 import app.clairix.comms.mesh.MeshProtocol
 import app.clairix.ui.components.ClairixCard
@@ -33,8 +34,13 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
     var denied by remember { mutableStateOf(false) }
     val now = rememberToolTick(5_000L)
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants.values.all { it }) { Mesh.setEnabled(context, true); on = true; denied = false } else denied = true
+        // Nearby Wi-Fi devices is asked for too, for Wi-Fi Aware; the mesh runs on Bluetooth without it.
+        if (Mesh.permitted(context) || Mesh.PERMISSIONS.all { grants[it] == true }) {
+            Mesh.setEnabled(context, true); on = true; denied = false
+        } else denied = true
     }
+    var lora by remember { mutableStateOf<LoraScreen?>(null) }
+    lora?.let { screen -> LoraScreens(screen) { lora = it }; return }
 
     ToolPageList(title = "Offline mesh", onBack = onBack) {
         item(key = "§hero") {
@@ -50,7 +56,8 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
             Notice(
                 Tone.Caution, title = "What turning it on shows",
                 text = "While it is on, this phone advertises a Bluetooth service that anyone scanning nearby can see: it says a " +
-                    "Clairix phone is here, never whose, and the address it advertises from changes. What it carries is sealed end " +
+                    "Clairix phone is here, never whose, and the address it advertises from changes. On phones with Wi-Fi Aware it also " +
+                    "offers the mesh service there, under an id that changes each time the mesh starts. What it carries is sealed end " +
                     "to end, exactly as the relay carries it; a phone carrying someone else's message cannot read it or tell who it " +
                     "is for. Leave it off when being seen to run Clairix is the bigger risk."
             )
@@ -58,7 +65,9 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
         item(key = "§toggle") {
             if (on) PrimaryButton("Turn off", onClick = { Mesh.setEnabled(context, false); on = false }, tone = Tone.Neutral)
             else PrimaryButton("Turn on", onClick = {
-                if (Mesh.permitted(context)) { Mesh.setEnabled(context, true); on = true } else ask.launch(Mesh.PERMISSIONS)
+                if (Mesh.permitted(context) && (Mesh.REQUESTED.size == Mesh.PERMISSIONS.size || MeshAware.usable(context))) {
+                    Mesh.setEnabled(context, true); on = true
+                } else ask.launch(Mesh.REQUESTED)
             })
         }
         if (denied) item(key = "§denied") {
@@ -82,6 +91,12 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                     status.still -> "Paused while the phone is still"
                     else -> "Not running"
                 })
+                KeyValueRow("Wi-Fi Aware", when {
+                    !on || !status.running -> "Off"
+                    status.aware -> if (status.fullPace) "On" else "On, found by others but not looking"
+                    !status.awareSupported -> "This phone does not have it, or Nearby Wi-Fi devices is not allowed"
+                    else -> "Wi-Fi is off"
+                })
                 KeyValueRow("Meetings", "${status.meetings}")
                 KeyValueRow("Last meeting", if (status.lastMeetingAt == 0L) "None yet" else "${(now - status.lastMeetingAt) / 60_000} min ago")
                 KeyValueRow("Carrying", "${status.carrying} message${if (status.carrying == 1) "" else "s"}")
@@ -90,6 +105,7 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                 status.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution) }
             }
         }
+        loraRows(on) { lora = it }
         item(key = "§battery") {
             Notice(
                 Tone.Info, title = "Battery",
@@ -104,7 +120,9 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
             Notice(
                 Tone.Info, title = "Limits",
                 text = "Bluetooth reaches a few tens of metres; phones with Bluetooth's long-range mode (shown above) reach several " +
-                    "times farther between each other, out in the open. A message moves when phones pass each other. Photos, videos and " +
+                    "times farther between each other, out in the open. Phones with Wi-Fi Aware (Android 13 and later, shown above) " +
+                    "meet over it too, at about Wi-Fi's reach, and trade everything they carry in seconds. A message moves when phones " +
+                    "pass each other. Photos, videos and " +
                     "calls stay for the relay. A contact can be reached only after one message has gone through the relay, which is " +
                     "how the two phones' sessions start. Messages are carried for ${MeshProtocol.TTL_MS / 3_600_000} hours and at most " +
                     "${MeshProtocol.MAX_HOPS} hops. The relay keeps trying as well; whichever copy arrives second is dropped."

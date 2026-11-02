@@ -36,6 +36,14 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
+    <!-- Offline mesh over Wi-Fi Aware (comms/mesh/MeshAware.kt), Android 13 and later,
+         while the owner has the mesh on: finds nearby Clairix phones and opens a
+         data path to them. Never used to work out where the phone is. -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
+
     <!-- Cell tab: the data network type (LTE / NR / HSPA+). A normal permission on
          Android 13+, granted at install; on 12 the read is skipped. -->
     <uses-permission android:name="android.permission.READ_BASIC_PHONE_STATE" />
@@ -63,6 +71,7 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi.aware" android:required="false" />
 
     <!-- Drive mode: RTL-SDR dongle over USB host, OBD-II over Bluetooth. -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />

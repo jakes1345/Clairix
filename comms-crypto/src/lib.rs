@@ -58,6 +58,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 uniffi::setup_scaffolding!();
 
+pub mod lora;
 pub mod recovery;
 pub mod tor;
 
