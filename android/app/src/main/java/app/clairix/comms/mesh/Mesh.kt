@@ -1,6 +1,7 @@
 package app.clairix.comms.mesh
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -27,7 +28,8 @@ object Mesh {
 
     @Volatile private var store: MeshStore? = null
     @Volatile private var node: MeshNode? = null
-    @Volatile private var aware: MeshAware? = null
+    // Holds only the application context, which lives as long as the process.
+    @SuppressLint("StaticFieldLeak") @Volatile private var aware: MeshAware? = null
     private val _status = MutableStateFlow(MeshStatus())
     val status: StateFlow<MeshStatus> = _status.asStateFlow()
 

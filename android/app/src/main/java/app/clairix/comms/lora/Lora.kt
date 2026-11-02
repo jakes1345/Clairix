@@ -1,5 +1,6 @@
 package app.clairix.comms.lora
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Base64
 import app.clairix.Store
@@ -99,9 +100,11 @@ object Lora {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val random = SecureRandom()
 
-    @Volatile private var app: Context? = null
-    private var prefs: SealedPrefs? = null
-    private var link: LoraRadioLink? = null
+    // These three hold only the application context (attach, prefs and link all
+    // take context.applicationContext), which lives as long as the process.
+    @SuppressLint("StaticFieldLeak") @Volatile private var app: Context? = null
+    @SuppressLint("StaticFieldLeak") private var prefs: SealedPrefs? = null
+    @SuppressLint("StaticFieldLeak") private var link: LoraRadioLink? = null
     private var attached = false
     private var ticker: ScheduledFuture<*>? = null
     private var vaultWatch: Job? = null
