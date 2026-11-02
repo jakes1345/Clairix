@@ -399,7 +399,7 @@ fn claim_mac_input(
 }
 
 fn claim_mac(key: &[u8; 32]) -> Hmac<Sha256> {
-    <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes a key of any length")
+    <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(key).expect("HMAC takes a key of any length")
 }
 
 /// The parsed inner layout of an opened format-2 envelope; see [`INNER_HEADER`].
@@ -2729,5 +2729,28 @@ mod tests {
         assert!(TransportKey::from_seed(vec![1, 2, 3]).is_err());
         let identity = Identity::create();
         assert_ne!(key.public_key(), identity.ed25519());
+    }
+
+    // Known answers for the RustCrypto primitives under the envelope and the
+    // safety number. Pinned with hkdf 0.12 / hmac 0.12 / sha2 0.10 and kept
+    // across upgrades: a dependency bump that changes any of these would make
+    // envelopes, claims or safety numbers disagree between app versions.
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn primitives_match_their_pinned_answers() {
+        let key = claim_key(&[0x11; 32], &[0x22; 32], &[0x33; 32]);
+        let mut mac = claim_mac(&key);
+        mac.update(&claim_mac_input(3, &[0x44; 32], &[0x55; 32], &[0x66; 32], 1_700_000_000_000, b"ciphertext"));
+        let tag = mac.finalize().into_bytes();
+        assert_eq!(hex(key.as_ref()), "86dcb0d6f2f4881b203ad9fde72c37d8fa4d8d25c4713d60eb451b7021ff28af");
+        assert_eq!(hex(&tag), "e2616204fb90daa5a7d58471e862c95242328ef93b896ee4f45367451c1bd0f1");
+        assert_eq!(
+            safety_number_for("alice-ed25519", "bob-ed25519"),
+            "59769 01279 46172 11961 90240 69686 88148 87976 01972 76819 50716 77225"
+        );
+        assert_eq!(fingerprint("alice-ed25519".to_string()), "oQPnHb3eLZ1BY0I2");
     }
 }
