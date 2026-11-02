@@ -697,7 +697,7 @@ dependencies = [
  "clairix_relay_voprf",
  "futures",
  "hkdf 0.12.4",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "rand 0.8.8",
  "rustls",
  "serde",
