@@ -26,6 +26,7 @@ import uniffi.clairix_comms_crypto.loraParseNetworkCode
 import uniffi.clairix_comms_crypto.loraPublicNetworkKey
 import java.io.File
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -403,7 +404,7 @@ object Lora {
     private fun <T> onExec(f: () -> T): T? = runCatching { exec.submit<T> { f() }.get(5, TimeUnit.SECONDS) }.getOrNull()
 
     private fun sosLine(m: LoraMessenger.Message): String {
-        val where = if (m.hasPosition) " at %.5f, %.5f".format(m.lat7 / 1e7, m.lon7 / 1e7) else ""
+        val where = if (m.hasPosition) " at %.5f, %.5f".format(Locale.US, m.lat7 / 1e7, m.lon7 / 1e7) else ""
         return (m.text.ifBlank { "Needs help" }) + where
     }
 

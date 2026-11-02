@@ -538,6 +538,10 @@ android {
         abortOnError = true
         checkDependencies = true
         baseline = file("lint-baseline.xml")
+        // Print every finding to the build log, not only the first, so a failed
+        // CI run shows them all without downloading the report.
+        textReport = true
+        textOutput = file("stdout")
         // CI's SDK knows API 36, so "targetSdk = 35" reads as out of date there
         // (not on an SDK without 36). Moving to 36 is its own change: compileSdk,
         // AGP and an API 36 emulator together, with the behaviour changes tested.

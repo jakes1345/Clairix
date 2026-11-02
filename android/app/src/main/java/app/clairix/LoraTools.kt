@@ -12,6 +12,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -208,7 +209,7 @@ private fun LoraRadioSettings() {
     val context = LocalContext.current
     var preset by remember { mutableStateOf(Lora.preset(context)) }
     var power by remember { mutableFloatStateOf(Lora.power(context).toFloat()) }
-    var hops by remember { mutableStateOf(Lora.hops(context)) }
+    var hops by remember { mutableIntStateOf(Lora.hops(context)) }
     val apply = { Lora.setRadio(context, preset, power.toInt(), hops) }
     ClairixCard {
         Text("Speed and reach", style = MaterialTheme.typography.titleSmall)
