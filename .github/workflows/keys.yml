@@ -1,0 +1,106 @@
+name: Signing keys
+
+# Publishes docs/KEYS.md, the record of the keys Clairix signs with, signed with
+# the asset key (tools/signing), as the `keys` release: KEYS.md and KEYS.md.sig.
+# The legal-process page (website/src/content/docs/legal-process.md, with its
+# dated transparency statement) is signed and published beside it the same way,
+# as legal-process.md and legal-process.md.sig.
+# Publishing is a statement by the maintainer (docs/KEYS.md, "What the maintainer
+# signs for"), so it happens only when someone starts this workflow by hand, from
+# main. Pull requests that touch the file or the key files only check that the
+# file names the committed key.
+on:
+  pull_request:
+    paths:
+      - 'docs/KEYS.md'
+      - 'android/asset-signing.pub'
+      - 'android/asset-signing.pem'
+      - '.github/workflows/keys.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keys
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The signing key must not sign whatever any branch holds.
+      - name: Check where a manual run starts from
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::docs/KEYS.md is signed and published only from main, not $REF"
+          exit 1
+
+      # The two key files must hold one key, and docs/KEYS.md must name it: its
+      # base64, the SHA-256 of the raw key and of the SubjectPublicKeyInfo, and
+      # the SHA-256 of each file. A key that changes while the record stays
+      # behind fails here.
+      - name: Check docs/KEYS.md names the committed key
+        run: |
+          pub=$(tr -d '\r\n' < android/asset-signing.pub)
+          b64=${pub%%=*}
+          while [ $(( ${#b64} % 4 )) -ne 0 ]; do b64="$b64="; done
+          [ "$(printf '%s' "$b64" | base64 -d | wc -c)" -eq 32 ] || { echo "::error::android/asset-signing.pub is not a 32-byte key"; exit 1; }
+          from_pem=$(openssl pkey -pubin -in android/asset-signing.pem -outform DER | tail -c 32 | base64)
+          [ "${from_pem%%=*}" = "${pub%%=*}" ] || { echo "::error::android/asset-signing.pub and android/asset-signing.pem hold different keys"; exit 1; }
+          raw_sha=$(printf '%s' "$b64" | base64 -d | sha256sum | cut -d' ' -f1)
+          spki_sha=$(openssl pkey -pubin -in android/asset-signing.pem -outform DER | sha256sum | cut -d' ' -f1)
+          pub_sha=$(sha256sum android/asset-signing.pub | cut -d' ' -f1)
+          pem_sha=$(sha256sum android/asset-signing.pem | cut -d' ' -f1)
+          for v in "${pub%%=*}" "$raw_sha" "$spki_sha" "$pub_sha" "$pem_sha"; do
+            grep -qF -- "$v" docs/KEYS.md || { echo "::error file=docs/KEYS.md::does not name $v, from the committed key files"; exit 1; }
+          done
+          echo "docs/KEYS.md names the committed asset key."
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          python-version: '3.11'
+
+      - name: Install the signing tool
+        if: github.event_name == 'workflow_dispatch'
+        run: python -m pip install -r tools/signing/requirements.txt
+
+      - name: Sign
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
+        run: |
+          mkdir -p dist
+          cp docs/KEYS.md dist/KEYS.md
+          cp website/src/content/docs/legal-process.md dist/legal-process.md
+          python tools/signing/sign.py dist/KEYS.md dist/legal-process.md
+          python tools/signing/sign.py --verify android/asset-signing.pub dist/KEYS.md dist/legal-process.md
+
+      - name: Publish
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: keys
+          name: Signing keys
+          body: |
+            docs/KEYS.md as of ${{ github.sha }}: the keys Clairix signs with, and how to check them.
+            KEYS.md.sig is its Ed25519 signature by the asset key (android/asset-signing.pub).
+            legal-process.md is the text of https://clairix.app/legal-process as of the same commit, with its
+            dated transparency statement; legal-process.md.sig is its signature by the same key.
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/KEYS.md
+            dist/KEYS.md.sig
+            dist/legal-process.md
+            dist/legal-process.md.sig

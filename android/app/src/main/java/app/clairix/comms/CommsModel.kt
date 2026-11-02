@@ -28,7 +28,11 @@ data class Group(
     val createdBy: String,
     val createdTs: Long,
     val myRole: OrgRole,
-    val memberCount: Int = 0
+    val memberCount: Int = 0,
+    /** The number of the roster this phone holds; 0 for a group no admin has numbered ([RosterSync]). */
+    val rosterVersion: Long = 0L,
+    /** The newest roster number any member's payload named; above [rosterVersion], the roster is out of date. */
+    val rosterSeen: Long = 0L
 )
 
 data class GroupMember(
@@ -39,7 +43,9 @@ data class GroupMember(
     val ed25519: String,
     /** Clairix number of the admin who added them. */
     val addedBy: String,
-    val addedTs: Long
+    val addedTs: Long,
+    /** The newest roster number they are known to be in: what they sent was numbered so, or a roster or change that new named them. */
+    val rv: Long = 0L
 )
 
 data class GroupThread(
@@ -72,7 +78,9 @@ data class SharedThreat(
 /**
  * Someone this identity can talk to. The keys are pinned at first contact;
  * [verified] is true once the owner has scanned this contact's QR code (or
- * compared safety numbers) rather than trusting the relay's lookup.
+ * compared safety numbers) rather than trusting the relay's lookup. A row
+ * that is [blocked] or a [request] is kept in the same table but is not a
+ * contact to the rest of the app ([CommsStore.contact]).
  */
 data class Contact(
     val number: String,
@@ -90,7 +98,17 @@ data class Contact(
      * phone's own; null for a contact on the same relay. Everything for them
      * still goes through this phone's relay, which forwards it there.
      */
-    val relay: String? = null
+    val relay: String? = null,
+    /**
+     * Blocked by the owner, and kept with the conversation as a record:
+     * nothing they send reaches this phone (see [ContactGate]).
+     */
+    val blocked: Boolean = false,
+    /**
+     * A message request: someone who wrote first and whom the owner has not
+     * accepted. What they send is kept, with no receipt and no ring.
+     */
+    val request: Boolean = false
 )
 
 /** One message in a conversation, stored on the phone with an encrypted body. */
@@ -286,7 +304,9 @@ data class CommsState(
     /** One-time keys the relay still holds for us. */
     val relayOneTimeKeys: Int = -1,
     /** ClairixCoin on this relay, or -1 until the relay has said. */
-    val balance: Long = -1L
+    val balance: Long = -1L,
+    /** Whether the relay offers ClairixCoin (its `GET /` says "coin": true); see [CoinRules.shown]. */
+    val coin: Boolean = false
 )
 
 /**

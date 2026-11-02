@@ -27,6 +27,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
@@ -34,6 +38,8 @@ import app.clairix.Registry
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.isActive
@@ -70,7 +76,9 @@ data class LocatorState(
     val trend: SignalTrend,
     val samples: Int,
     /** Milliseconds since the target was last heard, or null before the first packet. */
-    val lastSeenAgoMs: Long?
+    val lastSeenAgoMs: Long?,
+    /** Median RSSI of the last second and a half, or NaN when nothing was heard in it. */
+    val smoothedRssi: Float = Float.NaN
 )
 
 /**
@@ -113,12 +121,16 @@ object RssiLocator {
      * sensor. Collecting the flow registers the sensor; cancelling it unregisters.
      */
     fun track(address: String, context: Context): Flow<LocatorState> =
-        track(address, context, Registry.scans)
+        track(MutableStateFlow(address), context, Registry.scans)
 
-    fun track(address: String, context: Context, scans: Flow<ScanResult>): Flow<LocatorState> = channelFlow {
+    /**
+     * [track] for a device whose address can change while it is followed: when the
+     * scanner links a rotation, the device's row carries the new address, and the
+     * locator moves to it without throwing away the directions it has surveyed.
+     */
+    fun track(address: StateFlow<String>, context: Context, scans: Flow<ScanResult> = Registry.scans): Flow<LocatorState> = channelFlow {
         val app = context.applicationContext
-        val target = BleNames.formatMac(address)
-        val engine = Engine(target)
+        val engine = Engine(BleNames.formatMac(address.value))
 
         val sensors = app.getSystemService(SensorManager::class.java)
         val rotation = sensors?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
@@ -131,8 +143,9 @@ object RssiLocator {
         }
         if (rotation != null) sensors?.registerListener(listener, rotation, SensorManager.SENSOR_DELAY_GAME)
 
+        launch { address.collect { engine.retarget(BleNames.formatMac(it)) } }
         launch {
-            scans.filter { BleNames.formatMac(it.device?.address ?: "") == target }.collect { scan ->
+            scans.filter { BleNames.formatMac(it.device?.address ?: "") == engine.target }.collect { scan ->
                 engine.sample(scan, SystemClock.elapsedRealtime())
                 send(engine.state(SystemClock.elapsedRealtime()))
             }
@@ -173,9 +186,20 @@ object RssiLocator {
     fun distanceMetres(rssi: Double, referenceAtOneMetre: Int): Float =
         10.0.pow((referenceAtOneMetre - rssi) / (10.0 * PATH_LOSS_EXPONENT)).toFloat()
 
-    private class Engine(val address: String) {
+    private class Engine(address: String) {
         private val lock = Any()
+        /** The address being followed; see [retarget]. */
+        @Volatile
+        var target: String = address
+            private set
         private var heading = Float.NaN
+
+        /**
+         * The device is now heard under [address]: a rotation the scanner linked to it.
+         * The surveyed directions, the recent samples and the confidence are kept; it is
+         * the same device in the same place.
+         */
+        fun retarget(address: String) { synchronized(lock) { target = address } }
         private val windows = Array(BUCKETS) { ArrayDeque<Pair<Long, Int>>() }
         private val median = FloatArray(BUCKETS) { Float.NaN }
         private val updatedAt = LongArray(BUCKETS)
@@ -228,8 +252,9 @@ object RssiLocator {
 
             // Distance from the last second and a half of packets, not one of them.
             val smoothed = recent.filter { now - it.first <= 1_500L }.map { it.second }
+            val smoothedRssi = medianOf(smoothed)
             val distance = if (smoothed.isEmpty()) Float.NaN
-            else distanceMetres(medianOf(smoothed).toDouble(), reference)
+            else distanceMetres(smoothedRssi.toDouble(), reference)
 
             val coverage = (filled.toFloat() / 8f).coerceIn(0f, 1f)
             val recency = if (lastSeen == 0L) 0f else (1f - (now - lastSeen).toFloat() / LOST_MS).coerceIn(0f, 1f)
@@ -237,7 +262,7 @@ object RssiLocator {
             val confidence = (0.4f * coverage + 0.3f * recency + 0.3f * contrast).coerceIn(0f, 1f)
 
             LocatorState(
-                address = address,
+                address = target,
                 headingDeg = if (heading.isNaN()) 0f else heading,
                 bestAzimuthDeg = bestAzimuth,
                 rssiByBucket = buckets,
@@ -246,7 +271,8 @@ object RssiLocator {
                 lastRssi = lastRssi,
                 trend = trend(now),
                 samples = samples,
-                lastSeenAgoMs = if (lastSeen == 0L) null else now - lastSeen
+                lastSeenAgoMs = if (lastSeen == 0L) null else now - lastSeen,
+                smoothedRssi = smoothedRssi
             )
         }
 
@@ -282,6 +308,10 @@ object RssiLocator {
  * segment is coloured by how strong the tracker was from that direction — cold (info) to
  * hot (accent) — and the strongest one is marked. Turn until the mark sits under the
  * pointer, then walk, watching the distance and the warmer/colder line.
+ *
+ * For a screen reader the dial is described in words ([LocatorCues.description]) and
+ * the warmer/colder line is a live region that speaks when the distance band or the
+ * trend changes ([LocatorCues.announcement]).
  */
 @Composable
 fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
@@ -294,6 +324,8 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
     val minRssi = values.minOrNull() ?: -100f
     val maxRssi = values.maxOrNull() ?: -40f
     val range = (maxRssi - minRssi).coerceAtLeast(6f)
+    val spokenDial = LocatorCues.description(state)
+    val spokenTrend = LocatorCues.announcement(state)
 
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         val palette = ClairixTheme.colors
@@ -302,6 +334,7 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .padding(16.dp)
+                .semantics { contentDescription = spokenDial }
         ) {
             val c = center
             val r = size.minDimension / 2f
@@ -402,7 +435,14 @@ fun RssiLocatorView(state: LocatorState, modifier: Modifier = Modifier) {
                 else -> "Signal lost — last heard ${state.lastSeenAgoMs / 1000} s ago"
             } to ClairixTheme.colors.danger
         }
-        Text(trendText, style = MaterialTheme.typography.mono, color = trendColour)
+        Text(
+            trendText, style = MaterialTheme.typography.mono, color = trendColour,
+            // Spoken as it changes: "Warmer, about 2 metres".
+            modifier = Modifier.semantics {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = spokenTrend
+            }
+        )
         Spacer(Modifier.height(6.dp))
         val bearingText = when {
             state.bestAzimuthDeg.isNaN() -> "Turn a full circle to find the strongest direction"

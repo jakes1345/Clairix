@@ -23,8 +23,13 @@ sealed interface BleCanaryState {
     data object Starting : BleCanaryState
     /** Advertising; [payloadHex] is the manufacturer data on the air, for the self-test screen. */
     data class Advertising(val payloadHex: String) : BleCanaryState
-    /** The scanner saw the canary. [address] is the (random) address the stack chose for it. */
-    data class Detected(val address: String, val rssi: Int) : BleCanaryState
+    /**
+     * The scanner saw the canary. [address] is the (random) address the stack chose for
+     * it; [classifiedAsAirTag] says whether the tracker signatures, the same
+     * [Signatures.match] and [Signatures.isBenign] every packet goes through, took it
+     * for what it is built to be: a separated AirTag.
+     */
+    data class Detected(val address: String, val rssi: Int, val classifiedAsAirTag: Boolean) : BleCanaryState
     data object Stopped : BleCanaryState
     data class Error(val message: String) : BleCanaryState
 }
@@ -38,7 +43,9 @@ sealed interface BleCanaryState {
  * exactly what [Signatures.match] classifies as an AirTag. The key bytes are random
  * per run, so the payload also serves as the canary's identity: [isCanary] matches on
  * them, and the scanning service drops the packet before it can become a detection
- * or trigger a DULT interrogation of ourselves.
+ * or trigger a DULT interrogation of ourselves. What the scanner received is then run
+ * through the tracker signatures here, so a pass means the radio heard it and the
+ * classifier recognised it; the follow check, which needs travel, is not exercised.
  *
  * One honest caveat. Whether a phone can hear its own advertisement depends on the
  * Bluetooth controller: some report their own packets to the scanner, many do not,
@@ -135,13 +142,17 @@ object BleCanary {
         }
 
         // The scanning service publishes every packet it receives; the canary's own
-        // payload among them is the proof. Each distinct address is reported once.
+        // payload among them is the proof. Each distinct address is reported once,
+        // with what the tracker signatures made of the record the scanner received.
         val seen = HashSet<String>()
         launch {
             Registry.scans.collect { result ->
-                if (!isCanary(result.scanRecord)) return@collect
+                val record = result.scanRecord
+                if (!isCanary(record)) return@collect
                 val address = BleNames.formatMac(result.device?.address ?: return@collect)
-                if (seen.add(address)) trySend(BleCanaryState.Detected(address, result.rssi))
+                if (!seen.add(address)) return@collect
+                val classified = Signatures.match(record) === Signatures.AIRTAG && !Signatures.isBenign(record)
+                trySend(BleCanaryState.Detected(address, result.rssi, classified))
             }
         }
 
@@ -163,7 +174,7 @@ object BleCanary {
      * Apple manufacturer payload as [ScanRecord.getManufacturerSpecificData] returns it:
      * type, length, status, 22 key bytes, the key's top two bits, and a hint byte.
      */
-    private fun buildPayload(): ByteArray {
+    internal fun buildPayload(): ByteArray {
         val random = SecureRandom()
         val payload = ByteArray(2 + FIND_MY_LENGTH)
         payload[0] = FIND_MY_TYPE.toByte()

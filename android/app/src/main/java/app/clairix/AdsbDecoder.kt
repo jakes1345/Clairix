@@ -93,6 +93,19 @@ class AdsbDecoder {
         runner = null
     }
 
+    /**
+     * Forgets every aircraft and publishes the empty list. Once the stream has stopped
+     * nothing ages the tracks out, so without this the last list would stand frozen as if
+     * those aircraft were still overhead.
+     */
+    fun clear() {
+        synchronized(lock) {
+            tracks.clear()
+            dirty = false
+        }
+        _aircraft.value = emptyMap()
+    }
+
     private fun processChunk(bytes: ByteArray) {
         val n = bytes.size / 2
         val total = carryLen + n

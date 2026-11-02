@@ -122,6 +122,11 @@ object CallManager {
     private val _call = MutableStateFlow<ActiveCall?>(null)
     val call: StateFlow<ActiveCall?> = _call.asStateFlow()
 
+    private val _directCallAsk = MutableStateFlow<DirectCallAsk?>(null)
+    val directCallAsk: StateFlow<DirectCallAsk?> = _directCallAsk.asStateFlow()
+    private var directCallAskExpiry: Job? = null
+
+
     /**
      * The WebRTC objects of one call. They belong to that call's id: a setup
      * that resumes after its call was hung up disposes only what it created,
@@ -165,8 +170,20 @@ object CallManager {
 
     // ── Public entry points ───────────────────────────────────────────────
 
-    /** Places a call to [contact]. Needs the microphone permission already granted. */
-    fun place(contact: Contact) { serial.launch { placeLocked(contact) } }
+    /**
+     * Places a call to [contact]. Needs the microphone permission already
+     * granted. [allowDirect] is the owner's confirmation, for this call alone,
+     * that it may connect directly ([directCallAsk]).
+     */
+    fun place(contact: Contact, allowDirect: Boolean = false) {
+        _directCallAsk.value = null
+        serial.launch { placeLocked(contact, allowDirect) }
+    }
+
+    /** The owner declined to call directly: the waiting call is dropped. */
+    fun dismissDirectCallAsk() {
+        _directCallAsk.value = null
+    }
 
     /**
      * Answers the ringing call, or only the call [callId] when given (a screen
@@ -315,8 +332,21 @@ object CallManager {
         earlyCandidates.remove(id)
     }
 
-    private suspend fun placeLocked(contact: Contact) {
+    private suspend fun placeLocked(contact: Contact, allowDirect: Boolean) {
         if (_call.value?.let { it.phase != CallPhase.ENDED } == true) return
+        // Decided before anything rings: a call that would go direct without
+        // the owner's say waits for it instead of starting.
+        val plan = CallPlan.plan(answering = false, directConfirmed = allowDirect)
+        if (plan.route == RelayOnlyCalls.Route.ASK) {
+            CommsLog.add("Call to ${label(contact)} not placed yet: the relay offered no TURN server, so a direct call would share this phone's address")
+            _directCallAsk.value = DirectCallAsk(contact, plan.relayKnownTurn == true)
+            directCallAskExpiry?.cancel()
+            directCallAskExpiry = serial.launch {
+                delay(RING_TIMEOUT_MS)
+                _directCallAsk.value = null
+            }
+            return
+        }
         val id = UUID.randomUUID().toString()
         _call.value = ActiveCall(id, contact, Direction.OUT, CallPhase.DIALING, System.currentTimeMillis())
         CommsLog.add("Calling ${label(contact)}")
@@ -324,7 +354,7 @@ object CallManager {
         CallService.start(appContext)
         startAudio(id)
         try {
-            val m = createPeerConnection(id)
+            val m = createPeerConnection(id, plan)
             if (!stillLive(id)) { m.dispose(); return }
             media = m
             val offer = m.pc.createSdp(offer = true)
@@ -355,7 +385,7 @@ object CallManager {
         CallService.start(appContext)
         startAudio(c.id)
         try {
-            val m = createPeerConnection(c.id)
+            val m = createPeerConnection(c.id, CallPlan.plan(answering = true, directConfirmed = false))
             if (!stillLive(c.id)) { m.dispose(); return }
             media = m
             m.pc.setRemote(offer)
@@ -660,42 +690,8 @@ object CallManager {
         (field.get(input) as? AudioRecord)?.audioSessionId
     }.getOrNull()
 
-    private suspend fun createPeerConnection(callId: String): Media {
-        // Only the servers the relay hands out are used. There is no built-in
-        // fallback: a third party's STUN server would learn this phone's address
-        // on every call, which the relay's own TURN never does.
-        val servers = withContext(Dispatchers.IO) {
-            runCatching { CommsRepository.relayClient().turn() }
-                .onFailure { CommsLog.add("Could not fetch call servers from the relay (${it.message}); using host candidates only") }
-                .getOrDefault(emptyList())
-        }
-        if (servers.isEmpty()) {
-            Log.w(TAG, "no ICE servers: the call connects only on the same network or over a VPN")
-            CommsLog.add("No call servers available: the call connects only when both phones can reach each other directly")
-        } else if (servers.none { s -> s.urls.any { it.startsWith("turn") } }) {
-            CommsLog.add("No TURN relay configured: calls connect only when both networks allow a direct path")
-        }
-        // With relay-only on, the connection gathers no host or reflexive
-        // candidates at all, so the other phone is told nothing but the TURN
-        // server's address; and without a TURN server there is no call.
-        val relayOnly = CommsRepository.relayOnlyCalls()
-        if (relayOnly && servers.none { s -> s.urls.any { it.startsWith("turn") } }) {
-            CommsLog.add("Relay-only calls are on and the relay offered no TURN server, so the call cannot be placed")
-            throw IllegalStateException("Relay-only calls need the relay's call servers, and none are available right now")
-        }
-        val ice = servers.map { s ->
-            PeerConnection.IceServer.builder(s.urls).apply {
-                s.username?.let { setUsername(it) }
-                s.credential?.let { setPassword(it) }
-            }.createIceServer()
-        }
-        val config = PeerConnection.RTCConfiguration(ice).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
-            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-            if (relayOnly) iceTransportsType = PeerConnection.IceTransportsType.RELAY
-        }
+    private fun createPeerConnection(callId: String, plan: CallPlan): Media {
+        val config = plan.rtcConfiguration()
         val f = ensureFactory()
         val peer = f.createPeerConnection(config, observer(callId)) ?: throw IllegalStateException("WebRTC refused to create a connection")
         val source = f.createAudioSource(MediaConstraints())

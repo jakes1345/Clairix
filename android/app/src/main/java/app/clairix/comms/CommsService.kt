@@ -8,11 +8,13 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import app.clairix.security.DiscreetMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -21,8 +23,13 @@ import kotlinx.coroutines.withTimeoutOrNull
  * so [LiveLink] can hold the relay socket open and envelopes (and call offers)
  * arrive the moment they are queued.
  *
- * It is a foreground service of the remote-messaging type: Android would
- * otherwise kill the process within minutes of the app leaving the screen.
+ * It is a foreground service of the special-use type: Android would otherwise
+ * kill the process within minutes of the app leaving the screen. None of
+ * Android's named types describes a socket to a relay held open so calls and
+ * messages arrive without a Google push service, so the manifest gives that
+ * reason in the service's PROPERTY_SPECIAL_USE_FGS_SUBTYPE. Special use may
+ * still start from BOOT_COMPLETED on Android 15 (BootReceiver relies on it) and
+ * has no running-time limit. Before Android 14 the service runs untyped.
  * The socket itself belongs to [LiveLink]; this service only takes a hold on
  * it and mirrors its state in the notification.
  */
@@ -49,17 +56,22 @@ class CommsService : Service() {
             return START_NOT_STICKY
         }
         if (!promote(LiveLink.connected.value)) return START_NOT_STICKY
+        // Running again: whatever the watchdog counted of Android's refusals is over.
+        LinkHealth.onRunning(this)
         LiveLink.hold(HOLD)
         LinkWatchdog.schedule(this)
         if (watcher?.isActive != true) {
             // Later changes only update the notification; going foreground again
-            // could be refused from the background and would gain nothing.
+            // could be refused from the background and would gain nothing. Discreet
+            // mode switched on or off rewords it at once: this notification stays up
+            // for as long as Comms is online, and would otherwise keep naming Comms
+            // and the relay until the connection next changed.
             watcher = scope.launch {
-                LiveLink.connected.collect { connected ->
+                combine(LiveLink.connected, DiscreetMode.state) { connected, _ -> connected }.collect { connected ->
                     runCatching {
                         getSystemService(NotificationManager::class.java)?.notify(
                             CommsNotifications.LINK_NOTIFICATION_ID,
-                            CommsNotifications.linkNotification(this@CommsService, connected, CommsRepository.number())
+                            CommsNotifications.linkNotification(this@CommsService, connected)
                         )
                     }
                 }
@@ -75,9 +87,9 @@ class CommsService : Service() {
      * the service; the app starts it again the next time it is opened.
      */
     private fun promote(connected: Boolean): Boolean = try {
-        val notification = CommsNotifications.linkNotification(this, connected, CommsRepository.number())
+        val notification = CommsNotifications.linkNotification(this, connected)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+            startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(CommsNotifications.LINK_NOTIFICATION_ID, notification)
         }
@@ -99,7 +111,7 @@ class CommsService : Service() {
 
     companion object {
         private const val TAG = "CommsService"
-        private const val HOLD = "service"
+        private const val HOLD = LiveLink.SERVICE_HOLD
         const val ACTION_STOP = "app.clairix.comms.STOP"
 
         /**
@@ -110,8 +122,20 @@ class CommsService : Service() {
          * when Android allows it.
          */
         fun start(context: Context) {
-            runCatching { context.startForegroundCompat(Intent(context, CommsService::class.java)) }
-                .onFailure { Log.w(TAG, "could not start the relay connection now: ${it.message}") }
+            tryStart(context)
+        }
+
+        /**
+         * [start], saying how it went: null when Android took the start, or what
+         * it threw (ForegroundServiceStartNotAllowedException from the
+         * background) for the watchdog to count ([LinkHealth]).
+         */
+        fun tryStart(context: Context): Exception? = try {
+            context.startForegroundCompat(Intent(context, CommsService::class.java))
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "could not start the relay connection now: ${e.message}")
+            e
         }
 
         fun stop(context: Context) {

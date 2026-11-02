@@ -25,6 +25,14 @@ import org.json.JSONObject
  * an AirTag or SmartTag but cannot tell two AirTags apart. The second is therefore
  * reported a notch lower and phrased as "an AirTag", not "the same AirTag".
  *
+ * A trip is any stretch at road speed, so a bus or a train is one too, and a device
+ * on three of them may be the bus's own electronics or a fellow commuter's watch. A
+ * finding is therefore phrased by what shows the journey was in the owner's car: a
+ * car kit connected during it ([noteAccessory]) or Drive mode on ([sight]). With that,
+ * it is "in your vehicle", with the places to search; without it, it "has been on
+ * N of your journeys", a notch lower, with the co-traveller explanation
+ * ([Finding.coTraveller], [JOURNEYS_PREFIX]).
+ *
  * Trips are persisted through [Store] so the count survives the service being
  * restarted between drives, which it always is.
  */
@@ -56,7 +64,18 @@ class VehicleTrips(private val store: Store) {
         val severity: Severity,
         val title: String,
         val detail: String,
-        val dedupeKey: String
+        val dedupeKey: String,
+        /**
+         * How long a repeat under [dedupeKey] stays off the timeline and out of the
+         * shade. A day for a shared signature, which every separated AirTag has.
+         */
+        val dedupeWindowMs: Long = ADDRESS_DEDUPE_MS,
+        /**
+         * Nothing showed the journey was in the owner's car: the finding says "your
+         * journeys", not "your vehicle", and its timeline row opens the co-traveller
+         * explanation ([JOURNEYS_PREFIX]).
+         */
+        val coTraveller: Boolean = false
     )
 
     private class Seen(val address: String) {
@@ -76,6 +95,8 @@ class VehicleTrips(private val store: Store) {
     private var tripStartLon: Double? = null
     private val seen = HashMap<String, Seen>()
     private val tripAccessories = HashMap<String, String>()
+    /** Something on this trip showed it was in the owner's car: a car kit connected, or Drive mode on. */
+    private var tripOwnCar = false
     private val history = ArrayList<Trip>()
 
     init {
@@ -95,16 +116,20 @@ class VehicleTrips(private val store: Store) {
             tripStartLon = startLon
             seen.clear()
             tripAccessories.clear()
+            tripOwnCar = false
         }
     }
 
     /**
      * Records one of the owner's connected accessories as riding along on the current
      * trip. Nothing is recorded outside a trip. A later name for the same address wins.
+     * A [car] kit (a hands-free or car audio unit) connected during the trip shows the
+     * trip was in the owner's car, which decides how a finding on it is phrased.
      */
-    fun noteAccessory(address: String, name: String) {
+    fun noteAccessory(address: String, name: String, car: Boolean = false) {
         synchronized(lock) {
             if (tripStart == 0L) return
+            if (car) tripOwnCar = true
             if (tripAccessories.size >= MAX_ACCESSORIES && address !in tripAccessories) return
             tripAccessories[address] = name
         }
@@ -153,7 +178,8 @@ class VehicleTrips(private val store: Store) {
      * Records a sighting during the current trip. Returns a [Finding] the first time
      * this device qualifies for the trip and has already qualified on enough earlier
      * trips to make the total [TRIPS_TO_ALERT]; null in every other case, including
-     * when no trip is under way.
+     * when no trip is under way. [driveMode] says Drive mode is on, which shows the trip
+     * is in the owner's car.
      */
     fun sight(
         key: String,
@@ -161,10 +187,12 @@ class VehicleTrips(private val store: Store) {
         name: String,
         tracker: TrackerType?,
         fingerprint: String?,
-        now: Long
+        now: Long,
+        driveMode: Boolean = false
     ): Finding? {
         synchronized(lock) {
             if (tripStart == 0L) return null
+            if (driveMode) tripOwnCar = true
             val entry = seen.getOrPut(key) {
                 if (seen.size >= MAX_SEEN) return null
                 Seen(address).apply { first = now }
@@ -182,33 +210,76 @@ class VehicleTrips(private val store: Store) {
             val byAddress = earlierTrips { it.addresses.contains(entry.address) }
             if (byAddress + 1 >= TRIPS_TO_ALERT) {
                 entry.reported = true
-                return Finding(
-                    id = "vehicle@${entry.address}@$now",
-                    severity = Severity.CRITICAL,
-                    title = "${entry.name} has been in your vehicle on ${byAddress + 1} trips",
-                    detail = "Same Bluetooth address (${entry.address}) present for the length of " +
-                        "${byAddress + 1} separate drives. Check the OBD-II port, under the seats, " +
-                        "the bumper covers and the wheel wells.",
-                    dedupeKey = "vehicle@${entry.address}"
-                )
+                return addressFinding(entry, byAddress + 1, now, tripOwnCar, search = true)
             }
             val signature = signatureOf(entry) ?: return null
             val bySignature = earlierTrips { it.signatures.contains(signature) }
             if (bySignature + 1 >= TRIPS_TO_ALERT) {
                 entry.reported = true
-                val label = entry.tracker?.label ?: entry.name
-                return Finding(
-                    id = "vehicle@$signature@$now",
-                    severity = Severity.HIGH,
-                    title = "A $label has ridden along on ${bySignature + 1} trips",
-                    detail = "A tracker of this type and advertisement shape was present for the length of " +
-                        "${bySignature + 1} separate drives. It rotates its address, so this could be two " +
-                        "different ones — or the same one each time. Search the vehicle.",
-                    dedupeKey = "vehicle@$signature"
-                )
+                return signatureFinding(entry, signature, bySignature + 1, now, tripOwnCar)
             }
             return null
         }
+    }
+
+    /**
+     * The same address on [trips] trips. In the owner's car ([ownCar]) it is in the
+     * vehicle; otherwise it has been on that many journeys, which a bus, a train or a
+     * fellow commuter explains as well, so it is a notch lower and says so. [search]
+     * adds the places to look in a car (the mid-trip wording; the end-of-trip one is shorter).
+     */
+    private fun addressFinding(entry: Seen, trips: Int, now: Long, ownCar: Boolean, search: Boolean): Finding {
+        val places = "the OBD-II port, under the seats, the bumper covers and the wheel wells"
+        return if (ownCar) Finding(
+            id = "vehicle@${entry.address}@$now",
+            severity = Severity.CRITICAL,
+            title = "${entry.name} has been in your vehicle on $trips trips",
+            detail = "Same Bluetooth address (${entry.address}) present for the length of $trips separate drives." +
+                if (search) " Check ${places}." else "",
+            dedupeKey = "vehicle@${entry.address}"
+        ) else Finding(
+            id = "$JOURNEYS_PREFIX${entry.address}@$now",
+            severity = Severity.HIGH,
+            title = "${entry.name} has been on $trips of your journeys",
+            detail = "Same Bluetooth address (${entry.address}) heard for the length of $trips separate journeys. " +
+                "Nothing showed these were in your own car (no car kit connected, Drive mode off), so it may be part " +
+                "of the bus or train you take, or carried by someone who makes the same journeys. If you made them in " +
+                "your own car, check $places.",
+            dedupeKey = "$JOURNEYS_PREFIX${entry.address}",
+            coTraveller = true
+        )
+    }
+
+    /**
+     * A tracker of one type and advertisement shape on [trips] trips: possibly different
+     * units each time, since a rotating tracker's signature is shared by every unit of
+     * its model. Reported at most once a day under one signature.
+     */
+    private fun signatureFinding(entry: Seen, signature: String, trips: Int, now: Long, ownCar: Boolean): Finding {
+        val label = entry.tracker?.label ?: entry.name
+        val first = label.firstOrNull()?.lowercaseChar()
+        val a = if (first != null && first in VOWELS) "An" else "A"
+        return if (ownCar) Finding(
+            id = "vehicle@$signature@$now",
+            severity = Severity.HIGH,
+            title = "$a $label has ridden along on $trips trips",
+            detail = "A tracker of this type and advertisement shape was present for the length of " +
+                "$trips separate drives. It rotates its address, so this could be two " +
+                "different ones — or the same one each time. Search the vehicle.",
+            dedupeKey = "vehicle@$signature",
+            dedupeWindowMs = SIGNATURE_DEDUPE_MS
+        ) else Finding(
+            id = "$JOURNEYS_PREFIX$signature@$now",
+            severity = Severity.MEDIUM,
+            title = "$a $label has been on $trips of your journeys",
+            detail = "A tracker of this type and advertisement shape was heard for the length of $trips separate " +
+                "journeys. It rotates its address, so these may be different ones each time, which on a bus or a " +
+                "train is the likely case, or the same one. Nothing showed these journeys were in your own car; if " +
+                "they were, search it.",
+            dedupeKey = "$JOURNEYS_PREFIX$signature",
+            dedupeWindowMs = SIGNATURE_DEDUPE_MS,
+            coTraveller = true
+        )
     }
 
     /**
@@ -224,6 +295,8 @@ class VehicleTrips(private val store: Store) {
             tripStart = 0L
             val startLat = tripStartLat
             val startLon = tripStartLon
+            val ownCar = tripOwnCar
+            tripOwnCar = false
             if (now - start < MIN_TRIP_MS) {
                 seen.clear(); tripAccessories.clear(); tripStartLat = null; tripStartLon = null
                 return emptyList()
@@ -238,14 +311,7 @@ class VehicleTrips(private val store: Store) {
                 signatureOf(entry)?.let(signatures::add)
                 if (entry.reported) continue
                 val byAddress = earlierTrips { it.addresses.contains(entry.address) } + 1
-                if (byAddress >= TRIPS_TO_ALERT) {
-                    findings.add(Finding(
-                        id = "vehicle@${entry.address}@$now", severity = Severity.CRITICAL,
-                        title = "${entry.name} has been in your vehicle on $byAddress trips",
-                        detail = "Same Bluetooth address (${entry.address}) present for the length of $byAddress separate drives.",
-                        dedupeKey = "vehicle@${entry.address}"
-                    ))
-                }
+                if (byAddress >= TRIPS_TO_ALERT) findings.add(addressFinding(entry, byAddress, now, ownCar, search = false))
             }
             history.add(Trip(start, now, addresses, signatures, startLat, startLon, HashMap(tripAccessories)))
             while (history.size > MAX_TRIPS) history.removeAt(0)
@@ -274,7 +340,10 @@ class VehicleTrips(private val store: Store) {
             tripStartLon = null
             seen.clear()
             tripAccessories.clear()
+            tripOwnCar = false
             history.clear()
+            // The owner's clear: the file goes even if this run could not read it.
+            store.discardUnread()
             store.replace(JSONObject())
         }
     }
@@ -354,7 +423,45 @@ class VehicleTrips(private val store: Store) {
         /** Trips setting off closer together than this count as the same start point. */
         const val DISTINCT_START_M = 500.0
         private const val MAX_SEEN = 2000
+        /** Labels starting with one of these take "An": "An Apple AirTag", "An iBeacon". */
+        private val VOWELS = setOf('a', 'e', 'i', 'o', 'u')
         /** Accessories remembered per trip; nobody has more paired devices than this connected at once. */
         private const val MAX_ACCESSORIES = 16
+        /** A repeat of an address finding stays off the timeline this long: once per trip in practice. */
+        const val ADDRESS_DEDUPE_MS = 30 * 60_000L
+        /** A shared-signature finding, which every separated AirTag shares, at most once a day. */
+        const val SIGNATURE_DEDUPE_MS = 24 * 3_600_000L
+
+        /**
+         * Start of the dedupe key, and so of the timeline row's id, of a finding with no
+         * own-car signal ([Finding.coTraveller]): the timeline opens the co-traveller
+         * explanation below for those rows ([coTravellerEvent]).
+         */
+        const val JOURNEYS_PREFIX = "journeys@"
+
+        /** Whether a timeline row with [eventId] is a co-traveller finding from trip memory. */
+        fun coTravellerEvent(eventId: String): Boolean = eventId.startsWith(JOURNEYS_PREFIX)
+
+        /** The co-traveller explanation of such a finding: what to do. */
+        const val CO_TRAVELLER_WHAT_TO_DO =
+            "If you made these journeys by bus, train or in someone else's car, the device is most likely part of " +
+                "that vehicle or carried by someone who makes the same journeys, and there is nothing to do. If you " +
+                "made them in your own car, or the device keeps turning up when you travel alone, search the car: the " +
+                "OBD-II port under the dashboard, under the seats, the bumper covers and the wheel wells. If you find " +
+                "something, photograph it in place and keep it as evidence."
+
+        /** The co-traveller explanation: what it is. */
+        const val CO_TRAVELLER_WHAT_IS_THIS =
+            "Clairix remembers which Bluetooth devices were present for the length of each journey you make at road " +
+                "speed, and this one has been on several of them. A bus or a train is a journey too, and nothing " +
+                "showed these were in your own car: no car hands-free connected while you travelled, and Drive mode " +
+                "was off. So it may be the vehicle's own electronics, or the phone, watch or earbuds of someone who " +
+                "travels the same way as you."
+
+        /** The co-traveller explanation: how certain. */
+        const val CO_TRAVELLER_HOW_CERTAIN =
+            "That it was present on each of these journeys is certain: it was heard at least three times over at " +
+                "least a minute and a half on each. Where it was, in your car, on the bus or in someone's pocket, " +
+                "cannot be told from the radio."
     }
 }

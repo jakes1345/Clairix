@@ -28,7 +28,21 @@ class MeshStore(private val store: Store) {
 
     init { synchronized(lock) { load() } }
 
+    /**
+     * Told when a bundle is added, the owner's or anyone's: the radio then
+     * runs at full pace ([MeshPacing]). Called on the adding thread; it must
+     * not block.
+     */
+    @Volatile
+    var onChange: (() -> Unit)? = null
+
     val size: Int get() = synchronized(lock) { bundles.size }
+
+    /** How many bundles this phone carries once those past their time are dropped; what [MeshPacing.busy] counts. */
+    fun carrying(now: Long): Int = synchronized(lock) {
+        prune(now)
+        bundles.size
+    }
 
     /**
      * Adds [b] unless it is known, expired, too big or has travelled too far, or
@@ -45,7 +59,7 @@ class MeshStore(private val store: Store) {
         evict()
         save()
         true
-    }
+    }.also { if (it) onChange?.invoke() }
 
     /** Over [MeshProtocol.MAX_STORE]: the oldest carried bundle goes, never one of the owner's own. */
     private fun evict() {
@@ -102,7 +116,7 @@ class MeshStore(private val store: Store) {
         evict()
         save()
         true
-    }
+    }.also { if (it) onChange?.invoke() }
 
     fun clear() = synchronized(lock) {
         bundles.clear(); queued.clear(); delivered.clear(); own.clear()

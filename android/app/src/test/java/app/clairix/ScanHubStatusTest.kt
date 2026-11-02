@@ -2,6 +2,8 @@ package app.clairix
 
 import app.clairix.analysis.CameraFindMethod
 import app.clairix.analysis.CameraFinding
+import app.clairix.analysis.ScannerHealth
+import app.clairix.ui.components.Tone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -38,6 +40,14 @@ class ScanHubStatusTest {
     }
 
     @Test
+    fun aTrackerMarkedFoundNoLongerAlerts() {
+        val found = listOf(detection("A", true).copy(resolvedAt = 1_000L))
+        val s = trackerStatus(ScanStatus(scanning = true, nearbyCount = 1), found, emptySet())
+        assertEquals("1 device nearby, none following", s.text)
+        assertFalse(s.alert)
+    }
+
+    @Test
     fun anUnidentifiedDeviceMovingWithYouIsACautionNotATracker() {
         val s = trackerStatus(ScanStatus(scanning = true, nearbyCount = 5), listOf(detection("B", true, Threat.HIGH)), emptySet())
         assertEquals("1 device travelling with you", s.text)
@@ -51,6 +61,65 @@ class ScanHubStatusTest {
             "Bluetooth is off",
             trackerStatus(ScanStatus(scanning = true, bluetoothOn = false), emptyList(), emptySet()).text
         )
+    }
+
+    @Test
+    fun aScannerThatCannotHearIsACautionNotAQuietAllClear() {
+        val deaf = ScanStatus(scanning = true, nearbyCount = 0, error = ScannerHealth.LOCATION_OFF)
+        val tile = trackerStatus(deaf, emptyList(), emptySet())
+        assertEquals("Scanner cannot hear", tile.text)
+        assertEquals(StatusTone.CAUTION, tile.tone)
+        val hero = hubVerdict(scanning = true, statuses = listOf(tile), error = deaf.error)
+        assertEquals("Scanner cannot hear", hero.headline)
+        assertEquals(ScannerHealth.LOCATION_OFF, hero.body)
+        assertEquals(Tone.Caution, hero.tone)
+        // Bluetooth off is named on the tile, where it used to read as a neutral "Scanner off".
+        val btOff = trackerStatus(ScanStatus(scanning = false, bluetoothOn = false, error = "Bluetooth is off"), emptyList(), emptySet())
+        assertEquals("Bluetooth is off", btOff.text)
+        assertEquals(StatusTone.CAUTION, btOff.tone)
+        // A start Android refused is a scanner that cannot hear, not one the owner turned off.
+        val refused = ScanStatus(scanning = false, error = "Android blocked starting the scanner in the background — open Clairix and tap Start")
+        assertEquals("Scanner cannot hear", trackerStatus(refused, emptyList(), emptySet()).text)
+        // Bluetooth off after the owner stopped the scanner is simply off.
+        assertEquals("Scanner off", trackerStatus(ScanStatus(scanning = false, bluetoothOn = false), emptyList(), emptySet()).text)
+    }
+
+    @Test
+    fun aConfirmedFollowerOutranksADeafScannerAndTheHeroStillSaysSo() {
+        val alert = CategoryStatus("1 tracker following you", StatusTone.ALERT)
+        val hero = hubVerdict(scanning = true, statuses = listOf(alert), error = ScannerHealth.QUIET)
+        assertEquals(Tone.Danger, hero.tone)
+        assertEquals("1 thing needs a look", hero.headline)
+        assertTrue(hero.body, hero.body.contains(ScannerHealth.QUIET))
+    }
+
+    @Test
+    fun aScannerStoppedByTheSystemSaysWhenAndLeadsTheHub() {
+        val at = 1_700_000_000_000L
+        val status = ScanStatus(scanning = false, stoppedBySystem = true, stoppedAt = at)
+        val tile = trackerStatus(status, emptyList(), emptySet())
+        assertEquals("Stopped by the system at ${ScannerHealth.clock(at)}", tile.text)
+        assertEquals(StatusTone.CAUTION, tile.tone)
+        // The tile is itself a caution; the hero names the stop rather than counting it.
+        val hero = hubVerdict(scanning = false, statuses = listOf(tile), stoppedBySystemAt = at)
+        assertEquals("Scanner stopped", hero.headline)
+        assertEquals(ScannerHealth.stoppedBySystemLine(at), hero.body)
+        assertEquals(Tone.Caution, hero.tone)
+        // Once it is running again the flag means nothing.
+        assertEquals("All clear", hubVerdict(scanning = true, statuses = emptyList(), stoppedBySystemAt = at).headline)
+    }
+
+    @Test
+    fun theHubWithoutAScannerProblemReadsAsBefore() {
+        val clear = CategoryStatus("No issues found", StatusTone.CLEAR)
+        assertEquals("All clear", hubVerdict(scanning = true, statuses = listOf(clear)).headline)
+        assertEquals("Standing by", hubVerdict(scanning = false, statuses = listOf(clear)).headline)
+        val caution = CategoryStatus("1 item to review", StatusTone.CAUTION)
+        val look = hubVerdict(scanning = true, statuses = listOf(caution))
+        assertEquals("1 thing needs a look", look.headline)
+        assertEquals(Tone.Caution, look.tone)
+        val alert = CategoryStatus("1 tracker following you", StatusTone.ALERT)
+        assertEquals("2 things need a look", hubVerdict(scanning = true, statuses = listOf(caution, alert)).headline)
     }
 
     @Test
@@ -88,16 +157,37 @@ class ScanHubStatusTest {
     @Test
     fun cameraFindingsSplitStrongFromPossible() {
         fun finding(c: Float) = CameraFinding("id$c", 0L, CameraFindMethod.LENS_GLINT, c, "centre", "", null, null)
-        assertEquals("No findings", cameraStatus(emptyList()).text)
-        assertEquals("2 possible findings to check", cameraStatus(listOf(finding(0.3f), finding(0.5f))).text)
-        assertEquals("1 strong finding", cameraStatus(listOf(finding(0.9f), finding(0.3f))).text)
+        assertEquals("No findings", cameraStatus(emptyList(), lastRunTs = 1L).text)
+        assertEquals("2 possible findings to check", cameraStatus(listOf(finding(0.3f), finding(0.5f)), lastRunTs = 1L).text)
+        assertEquals("1 strong finding", cameraStatus(listOf(finding(0.9f), finding(0.3f)), lastRunTs = 1L).text)
+    }
+
+    @Test
+    fun cameraHubNeverSaysNothingFoundBeforeASweepOrWhenTheWiFiSweepCouldNotLook() {
+        // Nothing has been swept: no verdict either way.
+        val never = cameraStatus(emptyList(), lastRunTs = 0L)
+        assertEquals("Not swept yet", never.text)
+        assertEquals(StatusTone.NEUTRAL, never.tone)
+        // The last Wi-Fi sweep saw only the router: say so rather than "No findings".
+        assertEquals("Nothing found, Wi-Fi sweep inconclusive", cameraStatus(emptyList(), lastRunTs = 5L, networkInconclusive = true).text)
+        // Findings still lead, whatever else is true.
+        val f = CameraFinding("id", 0L, CameraFindMethod.NETWORK, 0.9f, "10.0.0.7", "", null, null)
+        assertEquals("1 strong finding", cameraStatus(listOf(f), lastRunTs = 0L, networkInconclusive = true).text)
     }
 
     @Test
     fun phoneCheckNeverClaimsCleanBeforeAScan() {
         assertEquals("Not checked yet", phoneStatus(PhoneHealth()).text)
-        val clean = PhoneHealth(findingsScannedTs = 1L, facts = listOf(HealthFact("lock", "Lock", "Screen lock", "PIN")))
+        val clean = PhoneHealth(findingsScannedTs = 1L, facts = listOf(HealthFact("lock", "Lock", "Screen lock", "PIN")), spywareScannedTs = 1L)
         assertEquals("No issues found", phoneStatus(clean).text)
+        // Nothing found yet, but the installed apps have not been checked: no all-clear.
+        val unchecked = clean.copy(spywareScannedTs = 0L)
+        assertEquals("Checking installed apps", phoneStatus(unchecked).text)
+        assertEquals(StatusTone.NEUTRAL, phoneStatus(unchecked).tone)
+        // An app the stalkerware check scored HIGH is an issue on the hub.
+        val spy = clean.copy(findings = listOf(PhoneHealthFinding("spy:com.mxspy", Severity.CRITICAL, "Stalkerware", "Copy9 is known stalkerware: TheTruthSpy", "")))
+        assertEquals("1 issue to fix", phoneStatus(spy).text)
+        assertTrue(phoneStatus(spy).alert)
         val bad = PhoneHealth(
             findingsScannedTs = 1L,
             findings = listOf(PhoneHealthFinding("a11y", Severity.HIGH, "Apps", "Accessibility service", "Reads the screen"))

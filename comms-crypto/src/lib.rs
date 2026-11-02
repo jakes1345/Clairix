@@ -31,6 +31,10 @@
 //! [`Identity`], serialised by [`Identity::pickle`] under a 32-byte key the app
 //! keeps in the Android Keystore. Secret key material is wiped from memory when
 //! it is dropped. Nothing here touches the network or disk.
+//!
+//! The owner can also save the long-term part of it (identity and sealing
+//! keys, never a session or a one-time key) to a recovery file under a code
+//! this crate generates: see [`recovery`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -54,6 +58,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 uniffi::setup_scaffolding!();
 
+pub mod recovery;
 pub mod tor;
 
 // ── Errors ─────────────────────────────────────────────────────────────────
@@ -106,6 +111,9 @@ pub enum CryptoError {
     BadPickle { reason: String },
     #[error("malformed envelope: {reason}")]
     Envelope { reason: String },
+    /// A recovery file could not be made or opened ([`recovery`]); `problem` says why.
+    #[error("recovery file: {problem:?}")]
+    Recovery { problem: recovery::RecoveryProblem },
 }
 
 type Result<T> = std::result::Result<T, CryptoError>;

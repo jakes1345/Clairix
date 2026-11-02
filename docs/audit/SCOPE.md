@@ -138,6 +138,13 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
   - `Wiper.kt`: completeness and order.
   - `DuressPhrase.kt`
   - What accessibility services can see behind the lock.
+- **Card Vault and card emulation** (`analysis/CardVault.kt`,
+  `analysis/NfcScanner.kt`'s `capture`/`runIsoDep` path, `CardEmulationService.kt`,
+  full edition only): the auth-bound Keystore key and what is stored at rest; that
+  an ordinary scan records no APDU pairs and only the explicit re-tap does; that a
+  payment card is never recorded or emulable; and that emulation disarms on lock,
+  wipe, screen-off and timeout. See the "Card Vault and card emulation" section of
+  [THREAT-MODEL.md](THREAT-MODEL.md) for what it is and is not.
 - **The offline mesh** (`comms/mesh/`): what a nearby radio learns, flooding,
   and resource exhaustion.
 - **Mixing in the relay** (`mailbox.ts`): what timing still reveals.
@@ -153,7 +160,8 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
   checks, and plate-reader maps. They are best-effort by design.
 - Navigation, maps, traffic and incidents (`nav/`, `comms-worker/src/traffic*`,
   `incidents*`), except where they share the relay's authentication and tokens.
-- The website (`website/`) and the older desktop tool (`src/`).
+- The website (`website/`) and the older desktop tool (`src/` in the tagged
+  releases; removed from the repository after 3.0.0 Beta 8).
 - ClairixCoin's economics. The payment protocol's idempotency and refunds are
   in scope as part of the relay; finding 25 (coin farming) is known.
 - vodozemac itself, Arti, SQLCipher and Android. Report misuse of them, not

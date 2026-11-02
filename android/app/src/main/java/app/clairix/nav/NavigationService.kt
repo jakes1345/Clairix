@@ -14,6 +14,11 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.clairix.BuildConfig
 import app.clairix.MainActivity
+import app.clairix.security.ChannelNames
+import app.clairix.security.DiscreetMode
+import app.clairix.security.NotificationPresentation
+import app.clairix.security.NotificationText
+import app.clairix.security.PlatformAlerts
 
 /**
  * Keeps the process in the foreground while turn-by-turn navigation runs, so fused location keeps
@@ -38,8 +43,10 @@ class NavigationService : Service() {
     }
 
     private fun enterForeground(): Boolean {
+        val channel = ChannelNames.of(CHANNEL_ID, DiscreetMode.on(this))
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Navigation", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, channel.name, NotificationManager.IMPORTANCE_LOW)
+                .apply { description = channel.description }
         )
         return try {
             ServiceCompat.startForeground(
@@ -60,14 +67,20 @@ class NavigationService : Service() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val shown = NotificationPresentation.service(
+            NotificationText("Navigating", "Turn-by-turn guidance is running"), DiscreetMode.on(this)
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_directions)
-            .setContentTitle("Navigating")
-            .setContentText("Turn-by-turn guidance is running")
+            .setSmallIcon(DiscreetMode.smallIcon(this))
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
             .setContentIntent(open)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // On the lock screen: the app's name and that it runs, nothing of where to.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(PlatformAlerts.publicVersion(this, CHANNEL_ID, NotificationPresentation.RUNNING))
             .build()
     }
 

@@ -15,9 +15,21 @@ import org.json.JSONObject
  * record you can actually act on or hand to someone.
  *
  * It is capped so the file cannot grow without bound, dropping the oldest
- * entries first.
+ * entries first. Evidence the owner saved on purpose ([KEPT]) is not aged out
+ * by the retention and is the last to go at the cap: an app's evidence saved
+ * before it was removed cannot be collected again. It leaves only with
+ * [clear] ("Clear all data", a wipe), or at the cap once nothing else is left.
  */
-class EventLog(private val store: Store, private val cap: Int = 500) {
+class EventLog(
+    private val store: Store,
+    private val cap: Int = 500,
+    /**
+     * Told about every event that leaves the log, by [clear], [pruneOlderThan] or
+     * the cap, so a file kept with one ([TimelineEvent.attachment]) goes with it.
+     * Called under the log's lock.
+     */
+    private val onDropped: (List<TimelineEvent>) -> Unit = {}
+) {
 
     private val events = ArrayList<TimelineEvent>()
 
@@ -49,9 +61,14 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
             val recent = events.firstOrNull { it.id.startsWith("$dedupeKey@") }
             if (recent != null && event.ts - recent.ts < dedupeWindowMs) return false
         }
-        events.add(0, event)
-        while (events.size > cap) events.removeAt(events.size - 1)
+        // Newest first by when it happened, not by when it was written: a scanner stop
+        // dated from its last heartbeat is written after events that came later.
+        val at = events.indexOfFirst { it.ts <= event.ts }
+        events.add(if (at < 0) events.size else at, event)
+        val overflow = ArrayList<TimelineEvent>()
+        while (events.size > cap) overflow.add(events.removeAt(overflowIndex()))
         persist()
+        dropped(overflow)
         return true
     }
 
@@ -63,18 +80,33 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
 
     @Synchronized
     fun clear() {
+        val gone = ArrayList(events)
         events.clear()
+        // The owner's clear: the file goes even if this run could not read it.
+        store.discardUnread()
         persist()
+        dropped(gone)
     }
 
-    /** Deletes events before [cutoff]; returns how many. */
+    /** The oldest event that is not [KEPT], or the oldest of all when every one is. */
+    private fun overflowIndex(): Int {
+        val oldestOrdinary = events.indexOfLast { it.kind !in KEPT }
+        return if (oldestOrdinary >= 0) oldestOrdinary else events.size - 1
+    }
+
+    /** Deletes events before [cutoff], other than [KEPT] ones; returns how many. */
     @Synchronized
     fun pruneOlderThan(cutoff: Long): Int {
-        val before = events.size
-        events.removeAll { it.ts < cutoff }
-        val removed = before - events.size
-        if (removed > 0) persist()
-        return removed
+        val gone = events.filter { it.ts < cutoff && it.kind !in KEPT }
+        if (gone.isEmpty()) return 0
+        events.removeAll { it.ts < cutoff && it.kind !in KEPT }
+        persist()
+        dropped(gone)
+        return gone.size
+    }
+
+    private fun dropped(gone: List<TimelineEvent>) {
+        if (gone.isNotEmpty()) runCatching { onDropped(gone) }
     }
 
     private fun persist() {
@@ -97,16 +129,26 @@ class EventLog(private val store: Store, private val cap: Int = 500) {
         put("severity", e.severity.name)
         if (e.lat != null) put("lat", e.lat)
         if (e.lon != null) put("lon", e.lon)
+        if (e.attachment != null) put("attachment", e.attachment)
     }
 
     private fun fromJson(o: JSONObject) = TimelineEvent(
         id = o.optString("id"),
-        kind = runCatching { EventKind.valueOf(o.optString("kind")) }.getOrDefault(EventKind.FOLLOWING),
+        // Stored by name. A kind this build does not know (one written by a newer build)
+        // reads as a plain platform alert, not as a tracker following.
+        kind = runCatching { EventKind.valueOf(o.optString("kind")) }.getOrDefault(EventKind.PLATFORM),
         ts = o.optLong("ts"),
         title = o.optString("title"),
         detail = o.optString("detail"),
         severity = runCatching { Severity.valueOf(o.optString("severity")) }.getOrDefault(Severity.MEDIUM),
         lat = if (o.has("lat")) o.optDouble("lat") else null,
-        lon = if (o.has("lon")) o.optDouble("lon") else null
+        lon = if (o.has("lon")) o.optDouble("lon") else null,
+        // Absent from every event stored before attachments existed.
+        attachment = if (o.has("attachment")) o.optString("attachment").takeIf { it.isNotEmpty() } else null
     )
+
+    companion object {
+        /** Kinds the owner saved on purpose, which the retention does not delete. */
+        val KEPT: Set<EventKind> = setOf(EventKind.EVIDENCE)
+    }
 }

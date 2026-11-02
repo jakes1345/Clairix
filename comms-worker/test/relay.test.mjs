@@ -3,9 +3,10 @@
 // Run with `npm test`.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { advance, makePhone, makeRelay, mockFetch, resetClock } from "./harness/fake-env.mjs";
-import { DAY_MS, HOUR_MS, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
+import { ENROLL_SECRET, advance, makePhone, makeRelay, mockFetch, network, resetClock } from "./harness/fake-env.mjs";
+import { DAY_MS, HOUR_MS, dayFloor, tokenHash, tokenShardName, OTK_CLAIM_WINDOW_MS, PUSH_CHALLENGE_PREFIX } from "../src/comms-logic.ts";
 import { sha256Hex } from "../src/env.ts";
+import { closeReports, listReports, registerOperator, setSuspended } from "../scripts/operator.mjs";
 
 afterEach(() => resetClock());
 
@@ -17,6 +18,12 @@ function everythingStored(relay, filter = () => true) {
     for (const [k, v] of entry.state.storage.data) out.push(`${name} ${k} ${JSON.stringify(v)}`);
   }
   return out.join("\n");
+}
+
+/** The app's fingerprint(): base64url of the first 12 bytes of SHA-256 over the key text, as a lookup's or a payment's pin. */
+async function fingerprint(ed25519) {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ed25519)));
+  return Buffer.from(d.subarray(0, 12)).toString("base64url");
 }
 
 // ── Anonymous sending ──────────────────────────────────────────────────────
@@ -223,7 +230,7 @@ test("each mailbox caps what it accepts from everyone together", async () => {
 });
 
 test("nothing a mailbox stores says when its owner was last here", async () => {
-  const relay = makeRelay();
+  const relay = makeRelay({ COIN: "on", COIN_INITIAL_BALANCE: "10" });
   const alice = await makePhone(relay);
   const bob = await makePhone(relay);
   const fetches = mockFetch(() => new Response("ok"));
@@ -242,6 +249,8 @@ test("nothing a mailbox stores says when its owner was last here", async () => {
     await bob.send(t, alice.number);
     await relay.env.MAILBOX.settle();
     await alice.inbox();
+    const paid = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 1 });
+    assert.equal(paid.status, 200);
     const after = relay.env.MAILBOX.storageOf(alice.number);
     for (const [k, v] of after) {
       if (k === "nonces") {
@@ -249,6 +258,16 @@ test("nothing a mailbox stores says when its owner was last here", async () => {
         for (const seen of Object.values(v)) assert.equal(seen % 60_000, 0, "a nonce is stored with its exact time");
         continue;
       }
+      if (k === "txHistory") {
+        // The payment: its id, amount, direction and hour, never the moment or whom it went to.
+        assert.equal(v.length, 1);
+        for (const tx of v) {
+          assert.deepEqual(Object.keys(tx).sort(), ["amount", "direction", "id", "ts"]);
+          assert.equal(tx.ts, Math.floor(t0 / HOUR_MS) * HOUR_MS, "a transfer keeps something finer than the hour");
+        }
+        continue;
+      }
+      if (k === "balance") continue; // a number of coins, not a time
       if (k.startsWith("q:") || k === "queueCount" || k === "wakeCheck") continue; // the envelope itself, until acked
       if (k.startsWith("hourly:")) {
         assert.equal(v.hour, Math.floor(t0 / HOUR_MS), `${k} keeps something finer than the hour`);
@@ -265,21 +284,25 @@ test("nothing a mailbox stores says when its owner was last here", async () => {
   }
 });
 
-test("a lookup takes the number in the body, and the old paths still answer the same", async () => {
+test("a lookup takes the number in the body, and the old paths that put it in the URL are gone", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);
   const bob = await makePhone(relay, { oneTimeKeys: 5 });
   const byBody = (await alice.lookup(bob.number, undefined, false)).json.identity;
-  const byPath = (await alice.signed("GET", `/v1/identity/${bob.number}`)).json.identity;
-  assert.deepEqual(byBody, byPath);
   assert.equal(byBody.ed25519, bob.ed25519);
   assert.equal((await alice.lookup("123", undefined, false)).status, 400);
   assert.equal((await alice.lookup(bob.number, "wrong-pin")).status, 404);
   const claimed = (await alice.lookup(bob.number)).json.bundle;
   assert.ok(claimed.oneTimeKey);
-  const legacy = (await alice.signed("GET", `/v1/bundle/${bob.number}`)).json.bundle;
-  assert.ok(legacy.oneTimeKey);
-  assert.notEqual(legacy.oneTimeKey.id, claimed.oneTimeKey.id);
+  // Apps since 3.0.0-beta.3 look up by body; the paths betas 1 and 2 used answer nothing now, and claim no key.
+  const keysBefore = await bob.oneTimeKeys();
+  for (const path of [`/v1/identity/${bob.number}`, `/v1/bundle/${bob.number}`, `/v1/bundle/${bob.number}?pin=x`]) {
+    const res = await alice.signed("GET", path);
+    assert.equal(res.status, 404, path);
+    assert.equal(res.json.error, "Not found", path);
+  }
+  assert.equal(await bob.oneTimeKeys(), keysBefore);
+  assert.equal((await relay.call("GET", "/")).json.version, 5);
 });
 
 // ── One-time keys ──────────────────────────────────────────────────────────
@@ -447,6 +470,38 @@ test("the one-time key pool holds 500", async () => {
   assert.equal(await bob.oneTimeKeys(), 500);
 });
 
+test("a phone restored from a recovery file makes its new keys the whole pool", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay, { oneTimeKeys: 5 });
+  // Alice holds a claim on one of the old phone's keys and has not written yet.
+  const claimed = (await alice.bundle(bob.number)).json.bundle;
+  assert.ok(claimed.oneTimeKey && !claimed.oneTimeKey.id.startsWith("restored-"));
+  const fresh = [await bob.signedKey("restored-1"), await bob.signedKey("restored-2"), await bob.signedKey("restored-3")];
+  const res = await bob.signed("PUT", "/v1/keys", { oneTimeKeys: fresh, replace: true });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.oneTimeKeys, 3);
+  // The claim's window passes: the old key is not put back in the pool.
+  advance(OTK_CLAIM_WINDOW_MS + 1);
+  assert.equal(await bob.oneTimeKeys(), 3);
+  // Whoever looks Bob up now gets one of the new keys, never an old one.
+  for (let i = 0; i < 3; i++) {
+    const asker = await makePhone(relay);
+    const k = (await asker.bundle(bob.number)).json.bundle.oneTimeKey;
+    assert.ok(k.id.startsWith("restored-"), `an old key ${k.id} was handed out after the restore`);
+  }
+  // Alice's late send on the old key is still taken, and spends none of the new ones.
+  advance(OTK_CLAIM_WINDOW_MS + 1);
+  const [token] = await alice.tokens(1);
+  assert.equal((await alice.send(token, bob.number, "AAAA", claimed.claim)).status, 202);
+  assert.equal(await bob.oneTimeKeys(), 3);
+  // Without replace (every app before recovery files) keys are added, as before.
+  const added = await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [await bob.signedKey("restored-4")] });
+  assert.equal(added.json.oneTimeKeys, 4);
+  // replace must be a boolean.
+  assert.equal((await bob.signed("PUT", "/v1/keys", { oneTimeKeys: [], replace: "yes" })).status, 400);
+});
+
 // ── TURN ───────────────────────────────────────────────────────────────────
 
 test("every /v1/turn call gets credentials minted for it alone", async () => {
@@ -473,7 +528,7 @@ test("every /v1/turn call gets credentials minted for it alone", async () => {
   }
 });
 
-test("when minting fails a call gets STUN only, never someone else's credentials", async () => {
+test("when minting fails the relay answers 503, never STUN only or someone else's credentials", async () => {
   const relay = makeRelay({ TURN_KEY_ID: "key-id", TURN_KEY_API_TOKEN: "api-token" });
   let fail = false;
   const fetches = mockFetch((call, n) => fail
@@ -484,9 +539,11 @@ test("when minting fails a call gets STUN only, never someone else's credentials
     const bob = await makePhone(relay);
     assert.equal((await alice.signed("GET", "/v1/turn")).json.turn, true);
     fail = true;
-    const res = (await bob.signed("GET", "/v1/turn")).json;
-    assert.equal(res.turn, false);
-    assert.deepEqual(res.iceServers, [{ urls: ["stun:stun.cloudflare.com:3478"] }]);
+    // A passing failure is not "this relay offers no TURN": the app would
+    // record that and set up direct calls, telling the contact its address.
+    const res = await bob.signed("GET", "/v1/turn");
+    assert.equal(res.status, 503);
+    assert.equal(res.json?.iceServers, undefined);
   } finally {
     fetches.restore();
   }
@@ -620,6 +677,25 @@ test("PUSH_HOSTS adds the operator's own push host to the trusted ones", async (
   }
 });
 
+test("PUSH_HOSTS_ONLY trusts the operator's push host alone: an endpoint on ntfy.sh then gets the check", async () => {
+  const relay = makeRelay({ PUSH_HOSTS: "ntfy.example.net", PUSH_HOSTS_ONLY: "on" });
+  const fetches = mockFetch(() => new Response("ok"));
+  try {
+    const alice = await makePhone(relay);
+    const own = await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.example.net/up/x" });
+    assert.equal(own.json.verified, true);
+    assert.equal(fetches.calls.length, 0);
+    const third = await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/up/y" });
+    assert.equal(third.status, 202);
+    assert.equal(third.json.verified, false);
+    assert.equal(fetches.calls.length, 1);
+    assert.equal(fetches.calls[0].url, "https://ntfy.sh/up/y");
+    assert.ok(fetches.calls[0].body.startsWith(PUSH_CHALLENGE_PREFIX));
+  } finally {
+    fetches.restore();
+  }
+});
+
 test("push endpoint changes are rate limited", async () => {
   const relay = makeRelay();
   const fetches = mockFetch(() => new Response("ok"));
@@ -678,6 +754,232 @@ test("a key belongs to one account; deleting the account gives it back", async (
   assert.equal(stillMine, false);
 });
 
+test("the operator deletes an account asked for by email: keys freed, mailbox wiped, and only with the admin secret", async () => {
+  const secret = "operator-secret-0123456789";
+  const relay = makeRelay({ ADMIN_SECRET: secret });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const [token] = await bob.tokens(1);
+  assert.equal((await bob.send(token, alice.number)).status, 202);
+  const path = `/v1/admin/accounts/${alice.number}`;
+  const as = (given) => ({ headers: { "x-admin-secret": given, "cf-connecting-ip": "203.0.113.20" } });
+  // No secret, a wrong one, or another method: nothing happens.
+  assert.equal((await relay.call("DELETE", path, { headers: { "cf-connecting-ip": "203.0.113.20" } })).status, 403);
+  assert.equal((await relay.call("DELETE", path, as("not-the-secret-0123456789"))).status, 403);
+  assert.equal((await relay.call("POST", path, as(secret))).status, 405);
+  assert.ok(relay.env.MAILBOX.storageOf(alice.number).get("profile"));
+  // With it, the account goes as if its owner had deleted it, the number written as people write it.
+  const spaced = `${alice.number.slice(0, 3)}%20${alice.number.slice(3, 6)}%20${alice.number.slice(6)}`;
+  const res = await relay.call("DELETE", `/v1/admin/accounts/${spaced}`, as(secret));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.json, { ok: true, number: alice.number });
+  // The queued envelope, the keys and everything else in the mailbox are gone ...
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).size, 0);
+  assert.equal((await alice.signed("GET", "/v1/me")).status, 401);
+  // ... and the keys belong to nobody: another registration may take them.
+  const free = await relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(`key:${await sha256Hex(alice.ed25519)}`)).claimKey("000000000");
+  assert.equal(free, true);
+  // A number with no account here, and something that is not a number.
+  assert.equal((await relay.call("DELETE", path, as(secret))).status, 404);
+  assert.equal((await relay.call("DELETE", "/v1/admin/accounts/12345", as(secret))).status, 400);
+  assert.equal((await relay.call("DELETE", "/v1/admin/accounts/%E0%A4%A", as(secret))).status, 400);
+  // Bob is untouched.
+  assert.equal((await bob.signed("GET", "/v1/me")).status, 200);
+});
+
+test("without ADMIN_SECRET the operator's delete is off, and guesses at the secret are limited per address", async () => {
+  const off = makeRelay();
+  const alice = await makePhone(off);
+  const offRes = await off.call("DELETE", `/v1/admin/accounts/${alice.number}`, { headers: { "x-admin-secret": "anything-at-all-0123", "cf-connecting-ip": "203.0.113.21" } });
+  assert.equal(offRes.status, 503);
+  assert.ok(off.env.MAILBOX.storageOf(alice.number).get("profile"));
+  const relay = makeRelay({ ADMIN_SECRET: "operator-secret-0123456789" });
+  const statuses = [];
+  for (let i = 0; i < 12; i++) {
+    const res = await relay.call("DELETE", "/v1/admin/accounts/123456789", { headers: { "x-admin-secret": `guess-${i}-0123456789`, "cf-connecting-ip": "203.0.113.22" } });
+    statuses.push(res.status);
+  }
+  assert.deepEqual(statuses.slice(0, 10), Array(10).fill(403));
+  assert.deepEqual(statuses.slice(10), [429, 429]);
+});
+
+// ── Suspension (docs/ABUSE.md) ─────────────────────────────────────────────
+
+const OPERATOR_SECRET = "operator-secret-0123456789";
+
+/** A request signed by [phone] (an operator identity, or not) to an admin route, with [secret] in X-Admin-Secret. */
+async function adminAs(relay, phone, secret, path, body, ip = "203.0.113.30") {
+  const text = JSON.stringify(body);
+  const ts = Date.now();
+  const nonce = `admin-${ts}-${Math.random().toString(36).slice(2)}`;
+  const payload = `${phone.number}\n${ts}\n${nonce}\nPOST\n${path}\n${await sha256Hex(text)}`;
+  const headers = {
+    "x-clairix-number": phone.number,
+    "x-clairix-ts": String(ts),
+    "x-clairix-nonce": nonce,
+    "x-clairix-sig": await phone.sign(payload),
+    "cf-connecting-ip": ip,
+  };
+  if (secret !== null) headers["x-admin-secret"] = secret;
+  return relay.call("POST", path, { body: text, headers });
+}
+
+/** Gives the mailbox of [number] live sockets that record how they were closed (the harness simulates none). */
+function fakeSockets(relay, number) {
+  const closed = [];
+  relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(number)); // the object exists from here on
+  relay.env.MAILBOX.objects.get(number).state.getWebSockets = () => [{ close: (code, reason) => closed.push([code, reason]), send() {} }];
+  return closed;
+}
+
+test("a suspended number cannot sign in, loses its sockets and push endpoint, and reads to everyone else as a number nobody holds; lifting it restores it", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: OPERATOR_SECRET, OPERATOR_CONTACT: "support@clairix.app", COIN: "on", COIN_INITIAL_BALANCE: "10" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const op = await makePhone(relay, { listed: false });
+  relay.env.OPERATOR_KEYS = op.ed25519;
+  const pushes = mockFetch(() => new Response("ok"));
+  try {
+    assert.equal((await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAlice" })).status, 200);
+    assert.equal((await alice.signed("PUT", "/v1/transport", { key: alice.transportKey })).status, 200);
+    // Something waits for Alice before the suspension.
+    const [t1] = await bob.tokens(1);
+    assert.equal((await bob.send(t1, alice.number, "YmVmb3Jl")).status, 202);
+    await relay.env.MAILBOX.settle();
+    const sockets = fakeSockets(relay, alice.number);
+
+    const res = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: alice.number });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { ok: true, number: alice.number, suspended: true, since: dayFloor(Date.now()), already: false });
+    // Her sockets are closed and nothing is left to wake her phone.
+    assert.deepEqual(sockets, [[4003, "suspended"]]);
+    const box = relay.env.MAILBOX.storageOf(alice.number);
+    assert.equal(box.get("push"), undefined);
+    assert.deepEqual(box.get("suspended"), { since: dayFloor(Date.now()) });
+
+    // Her own phone is told, on every signed request, with where to appeal; the transport key too.
+    const me = await alice.signed("GET", "/v1/me");
+    assert.equal(me.status, 403);
+    assert.match(me.json.error, /suspended on this relay/);
+    assert.match(me.json.error, /support@clairix\.app/);
+    assert.equal((await alice.signedTransport("GET", "/v1/inbox")).status, 403);
+    assert.equal((await alice.signed("POST", "/v1/tokens", { count: 5 })).status, 403);
+    assert.equal((await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAgain" })).status, 403);
+    // Someone without her key learns nothing: a forged request is only "rejected".
+    const forged = await relay.call("GET", "/v1/me", {
+      headers: { "x-clairix-number": alice.number, "x-clairix-ts": String(Date.now()), "x-clairix-nonce": "forged-nonce-0123456789", "x-clairix-sig": await bob.sign("anything") },
+    });
+    assert.deepEqual([forged.status, forged.json.error], [401, "Signature rejected"]);
+
+    // To everyone else she is a number nobody holds: a send is answered alike and dropped ...
+    const [t2, t3] = await bob.tokens(2);
+    const toHer = await bob.send(t2, alice.number, "YWZ0ZXI=");
+    const toNobody = await bob.send(t3, "987654321", "YWZ0ZXI=");
+    assert.deepEqual([toHer.status, Object.keys(toHer.json)], [toNobody.status, Object.keys(toNobody.json)]);
+    assert.equal(toHer.status, 202);
+    assert.equal(box.get("queueCount"), 1, "the envelope sent to a suspended number was kept");
+    // ... a lookup finds nothing, with or without the key's fingerprint ...
+    const lookedUp = await bob.lookup(alice.number);
+    const nobody = await bob.lookup("987654321");
+    assert.deepEqual([lookedUp.status, lookedUp.json], [nobody.status, nobody.json]);
+    assert.equal((await bob.lookup(alice.number, await fingerprint(alice.ed25519), false)).status, 404);
+    // ... and a payment is refused before any coin moves.
+    const paid = await bob.signed("POST", "/v1/coin/pay", { to: alice.number, pin: await fingerprint(alice.ed25519), amount: 3 });
+    assert.deepEqual([paid.status, paid.json], [400, { error: "Payment refused" }]);
+    assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 10);
+    assert.deepEqual((await bob.signed("GET", "/v1/coin/history")).json.txs, []);
+    // A second suspension changes nothing but says so.
+    const again = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: alice.number });
+    assert.equal(again.json.already, true);
+
+    // Lifted: she signs in again and collects what waited from before; what was sent meanwhile is gone.
+    const lift = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", { number: alice.number });
+    assert.deepEqual([lift.status, lift.json], [200, { ok: true, number: alice.number, suspended: false, wasSuspended: true }]);
+    assert.equal((await alice.signed("GET", "/v1/me")).status, 200);
+    assert.deepEqual((await alice.inbox()).map((e) => e.data), ["YmVmb3Jl"]);
+    const [t4] = await bob.tokens(1);
+    assert.equal((await bob.send(t4, alice.number, "YmFjaw==")).status, 202);
+    assert.deepEqual((await alice.inbox()).map((e) => e.data), ["YmVmb3Jl", "YmFjaw=="]);
+    assert.equal((await bob.lookup(alice.number)).status, 200);
+    assert.equal((await alice.signed("PUT", "/v1/push", { endpoint: "https://ntfy.sh/upAgain" })).status, 200);
+    // Lifting what is not suspended is not an error.
+    const twice = await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", { number: alice.number });
+    assert.equal(twice.json.wasSuspended, false);
+  } finally {
+    pushes.restore();
+  }
+});
+
+test("suspending takes an operator identity's signature and the admin secret together", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: OPERATOR_SECRET });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const op = await makePhone(relay, { listed: false });
+  const target = { number: alice.number };
+  // No operator keys set: nobody can suspend, secret or not.
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", target)).status, 503);
+  // Listed without padding, the key is still the operator's.
+  relay.env.OPERATOR_KEYS = `not-a-key, ${op.ed25519.replace(/=+$/, "")}`;
+  // The secret alone, unsigned, is not enough ...
+  const unsigned = await relay.call("POST", "/v1/admin/suspend", { body: target, headers: { "x-admin-secret": OPERATOR_SECRET } });
+  assert.equal(unsigned.status, 401);
+  // ... nor is a signature by someone who is not an operator ...
+  const notOperator = await adminAs(relay, bob, OPERATOR_SECRET, "/v1/admin/suspend", target);
+  assert.equal(notOperator.status, 403);
+  assert.match(notOperator.json.error, /not one of this relay's operators/);
+  // ... nor the operator's signature without the secret, or with a wrong one.
+  assert.equal((await adminAs(relay, op, null, "/v1/admin/suspend", target)).status, 403);
+  assert.equal((await adminAs(relay, op, "not-the-secret-0123456789", "/v1/admin/suspend", target)).status, 403);
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).get("suspended"), undefined);
+  // The operator does not suspend itself, a number must be a number, and one nobody holds is said so.
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: op.number })).status, 400);
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: "12345" })).status, 400);
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", { number: "987654321" })).status, 404);
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", { number: "987654321" })).status, 404);
+  // Both together suspend.
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/suspend", target)).status, 200);
+  assert.equal((await alice.signed("GET", "/v1/me")).status, 403);
+  // With ADMIN_SECRET unset nothing works, whatever the identity.
+  delete relay.env.ADMIN_SECRET;
+  assert.equal((await adminAs(relay, op, OPERATOR_SECRET, "/v1/admin/unsuspend", target, "203.0.113.32")).status, 503);
+  assert.equal((await alice.signed("GET", "/v1/me")).status, 403);
+  // Guesses at the secret meet the same per-address limit as the other admin routes.
+  relay.env.ADMIN_SECRET = OPERATOR_SECRET;
+  const statuses = [];
+  for (let i = 0; i < 11; i++) statuses.push((await adminAs(relay, op, `guess-${i}-0123456789`, "/v1/admin/unsuspend", target, "203.0.113.31")).status);
+  assert.deepEqual([statuses.slice(0, 10).every((s) => s === 403), statuses[10]], [true, 429]);
+});
+
+test("the operator's script makes its identity, reads reports, suspends and lifts a suspension", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: OPERATOR_SECRET });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const net = network([relay]);
+  try {
+    const identity = await registerOperator(relay.origin, ENROLL_SECRET);
+    assert.match(identity.number, /^[1-9][0-9]{8}$/);
+    assert.match(identity.privateKey, /BEGIN PRIVATE KEY/);
+    // Registered unlisted: nobody finds the operator's identity by its number.
+    assert.equal((await bob.lookup(identity.number)).status, 404);
+    relay.env.OPERATOR_KEYS = identity.ed25519;
+    const [rt] = await bob.tokens(1, "report");
+    assert.equal((await relay.call("POST", "/v1/report", { body: { number: alice.number, reason: "harassment" }, headers: { "x-clairix-token": rt } })).status, 202);
+    const reports = await listReports(relay.origin, OPERATOR_SECRET);
+    assert.deepEqual([reports.status, reports.body.numbers.map((n) => n.number)], [200, [alice.number]]);
+    const suspended = await setSuspended(identity, OPERATOR_SECRET, alice.number, true);
+    assert.deepEqual([suspended.status, suspended.body.suspended], [200, true]);
+    assert.equal((await alice.signed("GET", "/v1/me")).status, 403);
+    assert.equal((await closeReports(relay.origin, OPERATOR_SECRET, alice.number)).body.closed, 1);
+    const lifted = await setSuspended(identity, OPERATOR_SECRET, alice.number, false);
+    assert.deepEqual([lifted.status, lifted.body.wasSuspended], [200, true]);
+    assert.equal((await alice.signed("GET", "/v1/me")).status, 200);
+    // Without the secret the script gets nowhere.
+    assert.equal((await setSuspended(identity, "wrong-secret-0123456789", alice.number, true)).status, 403);
+  } finally {
+    net.restore();
+  }
+});
+
 test("an account from before keys were recorded has them recorded on its next request", async () => {
   const relay = makeRelay();
   const alice = await makePhone(relay);
@@ -702,20 +1004,7 @@ test("a send to a number that does not exist looks exactly like one that does", 
   // The token was spent all the same.
   assert.equal((await alice.send(t1, "987654321")).status, 403);
   assert.equal((await alice.send(t2, "987654321")).status, 202);
-  // A payer who cannot cover the amount hears the same whether or not the
-  // number exists, so an unlisted number cannot be found by paying it.
-  const bob = await makePhone(relay, { listed: false });
-  for (const to of ["987654321", bob.number]) {
-    const pay = await alice.signed("POST", "/v1/coin/pay", { to, amount: 1 });
-    assert.equal(pay.status, 400);
-    assert.equal(pay.json.error, "Insufficient balance", to);
-  }
-  // One who can is refused for a number that does not exist, and keeps the coins.
-  await relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(alice.number)).setInitialBalance(5);
-  const refused = await alice.signed("POST", "/v1/coin/pay", { to: "987654321", amount: 1 });
-  assert.equal(refused.status, 400);
-  assert.equal(refused.json.error, "Payment refused");
-  assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 5);
+  // Paying is no way round it either: see "a payment tells nobody whether a number exists".
 });
 
 test("a body larger than the relay could ever want is refused before anything else", async () => {
@@ -765,29 +1054,256 @@ test("TURN credentials stop at thirty an hour per account and come back with the
 });
 
 test("a payment repeated under the same txid moves the coins once", async () => {
-  const relay = makeRelay({ COIN_INITIAL_BALANCE: "100" });
+  const relay = makeRelay({ COIN: "on", COIN_INITIAL_BALANCE: "100" });
   const alice = await makePhone(relay);
   const bob = await makePhone(relay);
+  const pin = await fingerprint(bob.ed25519);
   const txid = "0f0e0d0c-0b0a-4908-8706-050403020100";
-  const first = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 5, txid });
+  const credit = "0f0e0d0c-0b0a-4908-8706-0504030201ff";
+  const first = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid, credit });
   assert.equal(first.status, 200);
   assert.equal(first.json.txid, txid);
+  assert.equal(first.json.credit, credit);
   assert.equal(first.json.balance, 95);
   // The same request again, as a phone repeats one whose answer was lost.
-  const again = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 5, txid });
+  const again = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid, credit });
   assert.equal(again.status, 200);
   assert.equal(again.json.balance, 95);
   assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 95);
   assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 105);
-  assert.equal((await bob.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === txid).length, 1);
+  assert.equal((await bob.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === credit).length, 1);
   assert.equal((await alice.signed("GET", "/v1/coin/history")).json.txs.filter((t) => t.id === txid).length, 1);
   // Another id is another payment; an id that is not a UUID is replaced with one the relay mints.
-  assert.equal((await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 5, txid: "1f0e0d0c-0b0a-4908-8706-050403020100" })).json.balance, 90);
-  const minted = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 1, txid: "not-a-uuid" });
+  assert.equal((await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 5, txid: "1f0e0d0c-0b0a-4908-8706-050403020100", credit: "1f0e0d0c-0b0a-4908-8706-0504030201ff" })).json.balance, 90);
+  const minted = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 1, txid: "not-a-uuid" });
   assert.equal(minted.status, 200);
   assert.match(minted.json.txid, /^[0-9a-f-]{36}$/);
   assert.equal(minted.json.balance, 89);
 });
+
+test("a payment that names its txid must name a different credit id, and one that names neither gets two", async () => {
+  const relay = makeRelay({ COIN: "on", COIN_INITIAL_BALANCE: "10" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const pin = await fingerprint(bob.ed25519);
+  const txid = "3f0e0d0c-0b0a-4908-8706-050403020100";
+  for (const body of [
+    { to: bob.number, pin, amount: 1, txid },
+    { to: bob.number, pin, amount: 1, txid, credit: txid },
+    { to: bob.number, pin, amount: 1, txid, credit: txid.toUpperCase() },
+    { to: bob.number, pin, amount: 1, txid, credit: "not-a-uuid" },
+  ]) {
+    const res = await alice.signed("POST", "/v1/coin/pay", body);
+    assert.equal(res.status, 400);
+    assert.match(res.json.error, /credit/);
+  }
+  // Refused on its form: nothing moved and nothing was written.
+  assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 10);
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).has("txHistory"), false);
+  // A request naming neither: two fresh ids, and each ledger holds only its own.
+  const bare = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 2 });
+  assert.equal(bare.status, 200);
+  assert.match(bare.json.credit, /^[0-9a-f-]{36}$/);
+  assert.notEqual(bare.json.credit, bare.json.txid);
+  assert.deepEqual((await alice.signed("GET", "/v1/coin/history")).json.txs.map((t) => t.id), [bare.json.txid]);
+  assert.deepEqual((await bob.signed("GET", "/v1/coin/history")).json.txs.map((t) => t.id), [bare.json.credit]);
+});
+
+test("a payment tells nobody whether a number exists: a missing payee and a wrong pin are refused alike, and no coin moves", async () => {
+  const relay = makeRelay({ COIN: "on" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay, { listed: false });
+  const carol = await makePhone(relay);
+  const boxOf = (phone) => relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName(phone.number));
+  const refusals = async () => [
+    // A number nobody holds, with a pin that would have to be someone's.
+    await alice.signed("POST", "/v1/coin/pay", { to: "987654321", pin: await fingerprint(bob.ed25519), amount: 1 }),
+    // A real (unlisted) number, with the fingerprint of somebody else's key.
+    await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(carol.ed25519), amount: 1 }),
+    await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: "not-a-fingerprint", amount: 1 }),
+  ];
+  // Whether or not the payer could cover the amount.
+  for (const funded of [false, true]) {
+    if (funded) await boxOf(alice).setInitialBalance(5);
+    const answers = await refusals();
+    for (const res of answers) {
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.json, { error: "Payment refused" });
+    }
+    assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, funded ? 5 : 0);
+    assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 0);
+    // Nothing was debited and refunded: neither ledger holds a thing.
+    assert.equal(relay.env.MAILBOX.storageOf(alice.number).has("txHistory"), false);
+    assert.equal(relay.env.MAILBOX.storageOf(bob.number).has("txHistory"), false);
+  }
+  // A payment without a pin is malformed, before anything about the payee is read.
+  const bare = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, amount: 1 });
+  assert.equal(bare.status, 400);
+  assert.match(bare.json.error, /pin/);
+  // With the payee's own fingerprint it goes through.
+  const paid = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 2 });
+  assert.equal(paid.status, 200);
+  assert.equal(paid.json.balance, 3);
+  assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 2);
+  // Past the balance, a payer who knows the key hears that, and nothing moves.
+  const short = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 4 });
+  assert.equal(short.status, 400);
+  assert.equal(short.json.error, "Insufficient balance");
+  assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 2);
+  // A number given up and taken by someone else: the old pin pays nobody.
+  assert.equal((await bob.signed("DELETE", "/v1/me")).status, 200);
+  const gone = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 1 });
+  assert.deepEqual([gone.status, gone.json], [400, { error: "Payment refused" }]);
+  assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 3);
+});
+
+test("a transfer is kept as its id, amount, hour and direction, never who paid whom; a mint names nobody either", async () => {
+  const ADMIN = "admin-secret-0123456789";
+  const relay = makeRelay({ COIN: "on", COIN_INITIAL_BALANCE: "50", ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  advance(17 * 60_000 + 4321);
+  const hour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+  const txid = "2f0e0d0c-0b0a-4908-8706-050403020100";
+  const credit = "2f0e0d0c-0b0a-4908-8706-0504030201ff";
+  const paid = await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 7, txid, credit, note: "for the taxi" });
+  assert.equal(paid.status, 200);
+  const minted = await alice.signed("POST", "/v1/admin/coin/mint", { to: bob.number, amount: 3 });
+  assert.equal(minted.status, 403, "minting needs the admin secret");
+  const mint = await relay.call("POST", "/v1/admin/coin/mint", { body: { to: bob.number, amount: 3 } });
+  assert.equal(mint.status, 401, "and a signed request");
+  const signedMint = await mintAs(relay, alice, ADMIN, { to: bob.number, amount: 3 });
+  assert.deepEqual([signedMint.status, signedMint.json], [200, { ok: true, balance: 60 }]);
+  // What each side's history says: no number, no note, and the hour, not the moment.
+  const out = (await alice.signed("GET", "/v1/coin/history")).json.txs;
+  assert.deepEqual(out, [{ id: txid, amount: 7, ts: hour, direction: "out" }]);
+  const into = (await bob.signed("GET", "/v1/coin/history")).json.txs;
+  assert.equal(into.length, 2);
+  assert.deepEqual(into[1], { id: credit, amount: 7, ts: hour, direction: "in" });
+  assert.deepEqual({ ...into[0], id: "x" }, { id: "x", amount: 3, ts: hour, direction: "in", note: "Minted by the relay" });
+  // And what is stored: neither mailbox names the other, nor the phone that minted, nor the note.
+  const aliceBox = JSON.stringify([...relay.env.MAILBOX.storageOf(alice.number)]);
+  const bobBox = JSON.stringify([...relay.env.MAILBOX.storageOf(bob.number)]);
+  assert.ok(!aliceBox.includes(bob.number), "the payer's mailbox names the payee");
+  assert.ok(!bobBox.includes(alice.number), "the payee's mailbox names the payer or the minter");
+  assert.ok(!aliceBox.includes("taxi") && !bobBox.includes("taxi"), "a note reached the ledger");
+  // Nor do the two ledgers share an id that would join them into who paid whom.
+  assert.ok(!bobBox.includes(txid), "the payee's ledger keeps the payer's txid");
+  assert.ok(!aliceBox.includes(credit), "the payer's ledger keeps the payee's credit id");
+  // A credit for a number nobody holds is not made, and leaves nothing behind.
+  const nobody = relay.env.MAILBOX.get(relay.env.MAILBOX.idFromName("987654321"));
+  assert.equal(await nobody.credit(5, txid), null);
+  assert.equal(relay.env.MAILBOX.storageOf("987654321").size, 0);
+});
+
+test("a transfer is kept 30 days at most, and a hundred at most, whether or not the coin is used again", async () => {
+  const relay = makeRelay({ COIN: "on", COIN_INITIAL_BALANCE: "1000" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const carol = await makePhone(relay);
+  const pin = await fingerprint(bob.ed25519);
+  assert.equal((await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 1 })).status, 200);
+  assert.equal((await carol.signed("POST", "/v1/coin/pay", { to: bob.number, pin, amount: 1 })).status, 200);
+  // A day short of 30, both are there; at 30 days, a look forgets them.
+  advance(29 * DAY_MS);
+  assert.equal((await alice.signed("GET", "/v1/coin/history")).json.txs.length, 1);
+  advance(DAY_MS);
+  assert.deepEqual((await alice.signed("GET", "/v1/coin/history")).json.txs, []);
+  assert.equal(relay.env.MAILBOX.storageOf(alice.number).has("txHistory"), false);
+  // Bob looked at nothing all that time: his daily cleanup forgot both anyway.
+  await relay.env.MAILBOX.runDueAlarms();
+  assert.equal(relay.env.MAILBOX.storageOf(bob.number).has("txHistory"), false);
+  assert.equal(relay.env.MAILBOX.storageOf(carol.number).has("txHistory"), false);
+  // The balances stay.
+  assert.equal((await bob.signed("GET", "/v1/coin/balance")).json.balance, 1002);
+  // A ledger is a hundred deep: the oldest go first.
+  const many = Array.from({ length: 120 }, (_, i) => ({ id: `t${i}`, amount: 1, ts: Math.floor(Date.now() / HOUR_MS) * HOUR_MS, direction: "in" }));
+  relay.env.MAILBOX.storageOf(bob.number).set("txHistory", many);
+  assert.equal((await bob.signed("POST", "/v1/coin/pay", { to: alice.number, pin: await fingerprint(alice.ed25519), amount: 1 })).status, 200);
+  const kept = relay.env.MAILBOX.storageOf(bob.number).get("txHistory");
+  assert.equal(kept.length, 100);
+  assert.equal(kept[0].direction, "out");
+  assert.equal(kept[99].id, "t98");
+  assert.equal((await bob.signed("GET", "/v1/coin/history?limit=500")).json.txs.length, 100);
+});
+
+test("a ledger an earlier version kept gives up its numbers, notes and moments at the first look", async () => {
+  const relay = makeRelay({ COIN: "on" });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const now = Date.now();
+  const old = (to, from) => [
+    { id: "a1", from, to, amount: 4, ts: now - 5 * 60_000 - 123, direction: "out", note: "lunch" },
+    { id: "a2", from: "mint", to, amount: 9, ts: now - DAY_MS - 7, direction: "in", note: "Minted by 123456789" },
+    { id: "a3", from: "222333444", to, amount: 2, ts: now - 31 * DAY_MS, direction: "in" },
+  ];
+  const expected = [
+    { id: "a1", amount: 4, ts: Math.floor((now - 5 * 60_000 - 123) / HOUR_MS) * HOUR_MS, direction: "out" },
+    { id: "a2", amount: 9, ts: Math.floor((now - DAY_MS - 7) / HOUR_MS) * HOUR_MS, direction: "in", note: "Minted by the relay" },
+  ];
+  relay.env.MAILBOX.storageOf(alice.number).set("txHistory", old(bob.number, alice.number));
+  relay.env.MAILBOX.storageOf(bob.number).set("txHistory", old(alice.number, bob.number));
+  // Alice's first coin request of any kind rewrites hers, before it answers.
+  assert.equal((await alice.signed("GET", "/v1/coin/balance")).status, 200);
+  assert.deepEqual(relay.env.MAILBOX.storageOf(alice.number).get("txHistory"), expected);
+  assert.deepEqual((await alice.signed("GET", "/v1/coin/history")).json.txs, expected);
+  // Bob never asks: his mailbox's daily cleanup does the same.
+  advance(DAY_MS + 60_000);
+  await relay.env.MAILBOX.runDueAlarms();
+  const bobs = relay.env.MAILBOX.storageOf(bob.number).get("txHistory");
+  assert.deepEqual(bobs.map((t) => Object.keys(t).sort().join(",")), ["amount,direction,id,ts", "amount,direction,id,note,ts"]);
+  for (const name of [alice.number, bob.number]) {
+    const box = JSON.stringify(relay.env.MAILBOX.storageOf(name).get("txHistory"));
+    for (const gone of [alice.number, bob.number, "123456789", "222333444", "lunch"]) assert.ok(!box.includes(gone), `${gone} left in ${name}'s ledger`);
+  }
+});
+
+test("the coin is on unless the operator switches it off: GET / says so, and switched off no coin route, balance or mint works", async () => {
+  const ADMIN = "admin-secret-0123456789";
+  for (const COIN of ["off", " OFF ", "false", "0", "no"]) {
+    const relay = makeRelay({ COIN, COIN_INITIAL_BALANCE: "100", ADMIN_SECRET: ADMIN });
+    assert.equal((await relay.call("GET", "/")).json.coin, false, String(COIN));
+    const alice = await makePhone(relay);
+    const bob = await makePhone(relay);
+    // No starting balance, whatever COIN_INITIAL_BALANCE says.
+    assert.equal(relay.env.MAILBOX.storageOf(alice.number).has("balance"), false);
+    const answers = [
+      await alice.signed("GET", "/v1/coin/balance"),
+      await alice.signed("GET", "/v1/coin/history"),
+      await alice.signed("POST", "/v1/coin/pay", { to: bob.number, pin: await fingerprint(bob.ed25519), amount: 1 }),
+      await mintAs(relay, alice, ADMIN, { to: bob.number, amount: 5 }),
+    ];
+    for (const res of answers) assert.deepEqual([res.status, res.json], [404, { error: "ClairixCoin is off on this relay" }], String(COIN));
+    assert.equal(relay.env.MAILBOX.storageOf(bob.number).has("balance"), false);
+  }
+  // Unset, as on every relay from before the setting, and anything but an "off" value: on.
+  for (const COIN of [undefined, "", "on", " TRUE ", "yes", "1"]) {
+    const vars = { COIN_INITIAL_BALANCE: "100" };
+    if (COIN !== undefined) vars.COIN = COIN;
+    const relay = makeRelay(vars);
+    assert.equal((await relay.call("GET", "/")).json.coin, true, String(COIN));
+    const alice = await makePhone(relay);
+    assert.equal((await alice.signed("GET", "/v1/coin/balance")).json.balance, 100);
+  }
+});
+
+/** POST /v1/admin/coin/mint as the operator does it: signed by a phone on the relay, with the admin secret. */
+async function mintAs(relay, phone, secret, body) {
+  const text = JSON.stringify(body);
+  const ts = Date.now();
+  const nonce = `mint-${ts}-${Math.random().toString(36).slice(2)}`;
+  const payload = `${phone.number}\n${ts}\n${nonce}\nPOST\n/v1/admin/coin/mint\n${await sha256Hex(text)}`;
+  return relay.call("POST", "/v1/admin/coin/mint", {
+    body: text,
+    headers: {
+      "x-clairix-number": phone.number,
+      "x-clairix-ts": String(ts),
+      "x-clairix-nonce": nonce,
+      "x-clairix-sig": await phone.sign(payload),
+      "x-admin-secret": secret,
+    },
+  });
+}
 
 test("the relay names its alternate addresses: https origins only, trimmed, in order", async () => {
   const relay = makeRelay({ RELAY_ALTERNATES: " https://door-two.example/, https://clairix-relay.example.workers.dev ,http://plain.example, https://bad.example/path, " });
@@ -934,6 +1450,26 @@ test("a sender's alert travels with the envelope, and nothing else is accepted a
 
 // ── Contacts' passes ───────────────────────────────────────────────────────
 
+test("an envelope without the owner's pass loses its alert, so a blocked sender or a stranger cannot ring a locked phone", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const key = randomKey();
+  assert.equal((await bob.signed("PUT", "/v1/pass", { key })).status, 200);
+  const [m1, m2] = await mallory.tokens(2);
+  const [a1] = await alice.tokens(1);
+  assert.equal((await mallory.send(m1, bob.number, "QUFBQQ==", undefined, { alert: "call" })).status, 202);
+  assert.equal((await mallory.send(m2, bob.number, "QkJCQg==", undefined, { alert: "sos", pass: randomKey() })).status, 202);
+  const envelope = "Q0NDQw==";
+  assert.equal((await alice.send(a1, bob.number, envelope, undefined, { alert: "sos", pass: await passFor(key, bob.number, envelope) })).status, 202);
+  const got = queued(relay, bob.number);
+  assert.equal(got.length, 3);
+  assert.deepEqual(got.filter((e) => e.data !== envelope).map((e) => e.alert ?? null), [null, null]);
+  assert.equal(got.find((e) => e.data === envelope).alert, "sos");
+});
+
+
 /** A pass as the app makes one: HMAC-SHA256 under the recipient's pass key over clairix-pass-v1|number|envelope. */
 async function passFor(keyB64, number, envelope) {
   const key = await crypto.subtle.importKey("raw", Buffer.from(keyB64, "base64"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -1061,4 +1597,215 @@ test("a pass in the wrong form is refused before a token is spent", async () => 
   const [t] = await alice.tokens(1);
   assert.equal((await alice.send(t, bob.number, undefined, undefined, { pass: "nope" })).status, 400);
   assert.equal((await alice.send(t, bob.number)).status, 202);
+});
+
+// ── Abuse reports ──────────────────────────────────────────────────────────
+
+const ADMIN = "admin-secret-0123456789";
+const hash = (c) => c.repeat(64);
+
+/** A report as the app files one: a report token, and nothing that names the phone. */
+function fileReport(relay, token, body) {
+  return relay.call("POST", "/v1/report", { body, headers: token === null ? {} : { "x-clairix-token": token } });
+}
+
+/** The operator's view, with the admin secret. */
+function adminReports(relay, method = "GET", body, secret = ADMIN) {
+  return relay.call(method, "/v1/admin/reports", { body, headers: { "x-admin-secret": secret, "cf-connecting-ip": "203.0.113.200" } });
+}
+
+test("a report spends a report token, names nobody, and waits for the operator by the day", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const [t1, t2] = await alice.tokens(2, "report");
+  const res = await fileReport(relay, t1, { number: mallory.number, envelope: hash("a"), reason: "threats" });
+  assert.equal(res.status, 202);
+  // A token buys one report; none, or one of another kind, buys nothing.
+  assert.equal((await fileReport(relay, t1, { number: mallory.number, reason: "spam" })).status, 403);
+  assert.equal((await fileReport(relay, null, { number: mallory.number, reason: "spam" })).status, 401);
+  const [delivery] = await alice.tokens(1);
+  assert.equal((await fileReport(relay, delivery, { number: mallory.number, reason: "spam" })).status, 403);
+  // A report that names its sender is refused outright.
+  const named = await relay.call("POST", "/v1/report", {
+    body: { number: mallory.number, reason: "spam" },
+    headers: { "x-clairix-token": t2, "x-clairix-number": alice.number },
+  });
+  assert.equal(named.status, 400);
+
+  // Kept: who was reported, why, an envelope's hash and the day; nothing about Alice.
+  const stored = everythingStored(relay, (n) => n === "abuse-reports");
+  assert.ok(stored.includes(mallory.number));
+  assert.ok(!stored.includes(alice.number));
+  const kept = [...relay.env.MAILBOX.storageOf("abuse-reports")].filter(([k]) => k.startsWith("r:")).map(([, v]) => v);
+  assert.deepEqual(kept, [{ number: mallory.number, relay: null, envelope: hash("a"), reason: "threats", day: dayFloor(Date.now()) }]);
+
+  const view = await adminReports(relay);
+  assert.equal(view.status, 200);
+  assert.deepEqual(view.json.numbers, [
+    { number: mallory.number, relay: null, reports: 1, reasons: { threats: 1 }, envelopes: [hash("a")], firstDay: dayFloor(Date.now()), lastDay: dayFloor(Date.now()) },
+  ]);
+});
+
+test("a malformed report is refused before its token is spent", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const [t] = await alice.tokens(1, "report");
+  for (const body of [
+    { number: "12345", reason: "spam" },
+    { number: "482913605", reason: "rude" },
+    { number: "482913605", reason: "spam", envelope: "not-a-hash" },
+    { number: "482913605", reason: "spam", envelope: hash("A") },
+    { number: "482913605", reason: "spam", relay: "http://plain.example" },
+  ]) {
+    assert.equal((await fileReport(relay, t, body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await fileReport(relay, t, { number: "482913605", reason: "spam" })).status, 202);
+});
+
+test("a report about a number on this relay that nobody holds is answered alike and not kept", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const mallory = await makePhone(relay);
+  const [t1, t2, t3] = await alice.tokens(3, "report");
+  // Made-up numbers cannot fill the relay's share of reports and crowd out real ones.
+  assert.equal((await fileReport(relay, t1, { number: "482913605", envelope: hash("e"), reason: "spam" })).status, 202);
+  assert.equal((await fileReport(relay, t2, { number: mallory.number, envelope: hash("e"), reason: "threats" })).status, 202);
+  // Another relay's numbers are that relay's to know: kept as reported.
+  assert.equal((await fileReport(relay, t3, { number: "482913605", relay: "https://other.example", reason: "spam" })).status, 202);
+  const numbers = (await adminReports(relay)).json.numbers;
+  assert.deepEqual(numbers.map((n) => [n.number, n.relay]).sort(), [["482913605", "https://other.example"], [mallory.number, null]].sort());
+  assert.equal(relay.env.MAILBOX.storageOf("abuse-reports").get("reportCount"), 2);
+});
+
+test("the same envelope counts once, another relay's number is kept apart, and nothing says how often a number was reported", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const carol = await makePhone(relay);
+  const tokens = await alice.tokens(6, "report");
+  assert.equal((await fileReport(relay, tokens[0], { number: bob.number, envelope: hash("b"), reason: "harassment" })).status, 202);
+  // The same envelope again (a phone retrying): one report.
+  assert.equal((await fileReport(relay, tokens[1], { number: bob.number, envelope: hash("b"), reason: "harassment" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[2], { number: bob.number, envelope: hash("c"), reason: "spam" })).status, 202);
+  // The same digits on another relay are someone else; this relay's own address is no other relay.
+  assert.equal((await fileReport(relay, tokens[3], { number: bob.number, relay: "https://other.example", reason: "impersonation" })).status, 202);
+  assert.equal((await fileReport(relay, tokens[4], { number: carol.number, relay: relay.origin, reason: "other" })).status, 202);
+  const numbers = (await adminReports(relay)).json.numbers;
+  const key = (n) => `${n.number}|${n.relay ?? ""}`;
+  assert.deepEqual(numbers.map((n) => [n.number, n.relay, n.reports]).sort(), [
+    [bob.number, null, 2],
+    [carol.number, null, 1],
+    [bob.number, "https://other.example", 1],
+  ].sort());
+  const bobs = numbers.find((n) => key(n) === `${bob.number}|`);
+  assert.deepEqual(bobs.reasons, { harassment: 1, spam: 1 });
+  assert.deepEqual(bobs.envelopes.sort(), [hash("b"), hash("c")]);
+});
+
+test("the operator closes what was reported about a number, and reports go after 90 days", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const carol = await makePhone(relay);
+  const dave = await makePhone(relay);
+  const [t1, t2, t3] = await alice.tokens(3, "report");
+  await fileReport(relay, t1, { number: bob.number, envelope: hash("d"), reason: "threats" });
+  await fileReport(relay, t2, { number: carol.number, reason: "spam" });
+  const closed = await adminReports(relay, "DELETE", { number: bob.number });
+  assert.equal(closed.status, 200);
+  assert.equal(closed.json.closed, 1);
+  assert.deepEqual((await adminReports(relay)).json.numbers.map((n) => n.number), [carol.number]);
+  assert.equal((await adminReports(relay, "DELETE", { number: "bad" })).status, 400);
+  assert.equal((await adminReports(relay, "POST")).status, 405);
+
+  await fileReport(relay, t3, { number: dave.number, reason: "other" });
+  for (let day = 0; day < 92; day++) {
+    advance(DAY_MS);
+    await relay.env.MAILBOX.runDueAlarms();
+  }
+  assert.deepEqual((await adminReports(relay)).json.numbers, []);
+  assert.equal(relay.env.MAILBOX.storageOf("abuse-reports").size, 0);
+});
+
+test("only the admin secret reads reports, and with none set nobody does", async () => {
+  const relay = makeRelay({ ADMIN_SECRET: ADMIN });
+  assert.equal((await adminReports(relay, "GET", undefined, "wrong-secret-0123456789")).status, 403);
+  assert.equal((await adminReports(relay, "GET", undefined, "")).status, 403);
+  const closedRelay = makeRelay();
+  assert.equal((await adminReports(closedRelay)).status, 503);
+});
+
+// ── Open registration ──────────────────────────────────────────────────────
+
+/** A registration for a new identity, signed as the app signs one, with [secret] (none when null). */
+async function registration(relay, { secret = null, ip = "192.0.2.10", keys = null } = {}) {
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const b64 = (u8) => Buffer.from(u8).toString("base64");
+  const sign = async (t) => b64(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(t))));
+  const ed25519 = b64(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+  const curveKey = () => {
+    const k = crypto.getRandomValues(new Uint8Array(32));
+    k[31] &= 0x3f;
+    return b64(k);
+  };
+  const curve25519 = keys?.curve25519 ?? curveKey();
+  const sealing = keys?.sealing ?? curveKey();
+  const body = JSON.stringify({
+    ts: Date.now(),
+    ...(secret === null ? {} : { secret }),
+    ed25519, curve25519, sealing,
+    signature: await sign(`${curve25519}|${sealing}`),
+    oneTimeKeys: [],
+  });
+  return relay.call("POST", "/v1/register", { body, headers: { "x-clairix-sig": await sign(body), "cf-connecting-ip": ip } });
+}
+
+test("without an invite or the secret a relay gives no number, unless its operator opened registration", async () => {
+  for (const vars of [{}, { OPEN_REGISTRATION: "off" }, { OPEN_REGISTRATION: "yes please" }]) {
+    const relay = makeRelay(vars);
+    const res = await registration(relay);
+    assert.equal(res.status, 403, JSON.stringify(vars));
+    assert.match(res.json.error, /invite/);
+    // An empty secret is no secret.
+    assert.equal((await registration(relay, { secret: "", ip: "192.0.2.11" })).status, 403);
+    // And a wrong one is still refused as before.
+    assert.equal((await registration(relay, { secret: "wrong-secret-0123456789", ip: "192.0.2.12" })).status, 403);
+  }
+});
+
+test("open registration takes phones with no invite or secret up to its daily cap, and keeps only a count", async () => {
+  const relay = makeRelay({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: "2" });
+  assert.equal((await registration(relay, { ip: "192.0.2.21" })).status, 201);
+  assert.equal((await registration(relay, { secret: "", ip: "192.0.2.22" })).status, 201);
+  const third = await registration(relay, { ip: "192.0.2.23" });
+  assert.equal(third.status, 429);
+  assert.match(third.json.error, /invite/);
+  assert.ok(Number(third.headers.get("retry-after")) > 0);
+  // The secret and invites are untouched by the cap.
+  assert.equal((await registration(relay, { secret: "test-enrollment-secret-0123456789", ip: "192.0.2.24" })).status, 201);
+  const opened = [...relay.env.MAILBOX.storageOf("open-registration")];
+  assert.deepEqual(opened, [["openRegistrations", { day: dayFloor(Date.now()), count: 2 }]]);
+  // A new day, a new allowance.
+  advance(DAY_MS);
+  assert.equal((await registration(relay, { ip: "192.0.2.25" })).status, 201);
+});
+
+test("an open registration that fails gives its place back", async () => {
+  const relay = makeRelay({ OPEN_REGISTRATION: "true", OPEN_REGISTRATION_PER_DAY: "1" });
+  const victim = await makePhone(relay);
+  // Someone else's keys: refused, and today's one open registration is still there.
+  const stolen = await registration(relay, { keys: { curve25519: victim.curve25519, sealing: victim.sealing }, ip: "192.0.2.31" });
+  assert.equal(stolen.status, 409);
+  assert.equal((await registration(relay, { ip: "192.0.2.32" })).status, 201);
+  assert.equal((await registration(relay, { ip: "192.0.2.33" })).status, 429);
+});
+
+test("open registration still meets the per-address limit every registration does", async () => {
+  const relay = makeRelay({ OPEN_REGISTRATION: "on", OPEN_REGISTRATION_PER_DAY: "100" });
+  const statuses = [];
+  for (let i = 0; i < 11; i++) statuses.push((await registration(relay, { ip: "192.0.2.40" })).status);
+  assert.deepEqual(statuses.slice(0, 10), Array(10).fill(201));
+  assert.equal(statuses[10], 429);
+  assert.equal((await registration(relay, { ip: "192.0.2.41" })).status, 201);
 });

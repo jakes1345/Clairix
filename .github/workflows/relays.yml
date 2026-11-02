@@ -4,17 +4,26 @@ name: Relay list
 # the `relays` release. Phones fetch it from there, refuse it unless the
 # signature checks, and refuse a list issued earlier than the one they have.
 # Pull requests only check the list; publishing happens on main.
+#
+# Two more files go on the same release (relays/README.md): keys.json, the
+# keys published files may be signed with, signed with the key built into the
+# app and nothing else; and latest.json, the newest version and the oldest
+# still safe, which must name the version android/app/build.gradle.kts builds
+# (so a change to that file runs this too) and is published only once that
+# version's release is out.
 on:
   pull_request:
     paths:
       - 'relays/**'
       - 'tools/relays/**'
+      - 'android/app/build.gradle.kts'
       - '.github/workflows/relays.yml'
   push:
     branches: [main]
     paths:
       - 'relays/**'
       - 'tools/relays/**'
+      - 'android/app/build.gradle.kts'
       - '.github/workflows/relays.yml'
   workflow_dispatch:
 
@@ -26,11 +35,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Tests the checker and checks the list, on pull requests too. No secrets.
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: write
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      keys_changed: ${{ steps.notes.outputs.keys_changed }}
+      latest_changed: ${{ steps.notes.outputs.latest_changed }}
+      tiles_changed: ${{ steps.tiles.outputs.tiles_changed }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -38,39 +51,142 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install pytest and the signing tool
-        run: python -m pip install -r tools/signing/requirements.txt pytest==9.1.1
+      # Hash-pinned: pip refuses any file whose hash the requirements file does not list.
+      - name: Install pytest
+        run: python -m pip install --require-hashes -r tools/requirements-test.txt
 
       - name: Test the list checker
         run: python -m pytest -q tools/relays/test_check.py
 
+      - name: Test the key list and version note checkers
+        run: python -m pytest -q tools/relays/test_check_keys.py tools/relays/test_check_latest.py
+
       # Against the list phones have now: a new one must be issued later, and
       # every relay on it must publish the key it is listed with.
       - name: Check the list
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p published
+          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern relays.json --dir published 2>/dev/null; then
+            if cmp -s relays/relays.json published/relays.json; then
+              echo "relays.json is the list already published"
+              if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+                echo "changed=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              # A pull request that leaves the list as published (one that
+              # changes only relays/README.md, say) proposes no new list, so
+              # there is no later issue date to require: check it as it stands.
+              python tools/relays/check.py relays/relays.json --live
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              python tools/relays/check.py relays/relays.json --published published/relays.json --live
+            fi
+          else
+            python tools/relays/check.py relays/relays.json --live
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # keys.json and latest.json, each against the copy phones have now: one
+      # that changed must be issued later, and only one that changed is
+      # published. latest.json is checked against the app's build file every
+      # time, so a version bump that leaves it behind fails here.
+      - name: Check the key list and the version note
+        id: notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p published dist
-          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern relays.json --dir published 2>/dev/null; then
-            if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-              cmp -s relays/relays.json published/relays.json && { echo "unchanged"; echo "UNCHANGED=1" >> "$GITHUB_ENV"; exit 0; }
+          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern keys.json --dir published 2>/dev/null; then
+            if cmp -s relays/keys.json published/keys.json; then
+              echo "keys.json is the list already published"
+              python tools/relays/check_keys.py relays/keys.json
+            else
+              python tools/relays/check_keys.py relays/keys.json --published published/keys.json
+              echo "keys_changed=true" >> "$GITHUB_OUTPUT"
             fi
-            python tools/relays/check.py relays/relays.json --published published/relays.json --live
           else
-            python tools/relays/check.py relays/relays.json --live
+            python tools/relays/check_keys.py relays/keys.json
+            echo "keys_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          gradle=android/app/build.gradle.kts
+          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir published 2>/dev/null; then
+            if cmp -s relays/latest.json published/latest.json; then
+              echo "latest.json is the note already published"
+              python tools/relays/check_latest.py relays/latest.json --gradle "$gradle"
+            else
+              python tools/relays/check_latest.py relays/latest.json --gradle "$gradle" --published published/latest.json
+              echo "latest_changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            python tools/relays/check_latest.py relays/latest.json --gradle "$gradle"
+            echo "latest_changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # The map's tile server, relays/tiles.json: checked here, signed and added
+      # to the same release on its own in the publish job, so a new server reaches
+      # phones without an app update and whether or not the relay list changed.
+      # Phones refuse a setting issued earlier than the one they hold, and draw
+      # from OpenStreetMap's server while they hold none (nav/TileConfig.kt).
+      - name: Test the tile setting checker
+        run: python -m pytest -q tools/relays/test_check_tiles.py
+
+      - name: Check the tile setting
+        id: tiles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p published-tiles
+          if gh release download relays --repo "$GITHUB_REPOSITORY" --pattern tiles.json --dir published-tiles 2>/dev/null; then
+            if cmp -s relays/tiles.json published-tiles/tiles.json; then
+              echo "tiles.json is the setting already published"
+              python tools/relays/check_tiles.py relays/tiles.json
+            else
+              python tools/relays/check_tiles.py relays/tiles.json --published published-tiles/tiles.json
+              echo "tiles_changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            python tools/relays/check_tiles.py relays/tiles.json
+            echo "tiles_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Signs and publishes a changed list from main: the only job that reads
+  # ASSET_SIGNING_KEY (environment `assets`), and it never runs for a pull request.
+  publish:
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.check.outputs.changed == 'true' || needs.check.outputs.keys_changed == 'true' || needs.check.outputs.latest_changed == 'true' || needs.check.outputs.tiles_changed == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: assets
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the signing tool (hash-pinned)
+        run: python -m pip install --require-hashes -r tools/signing/requirements.txt
+
       - name: Sign
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.UNCHANGED != '1'
+        if: needs.check.outputs.changed == 'true'
         env:
           ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
         run: |
+          mkdir -p dist
           cp relays/relays.json dist/relays.json
           python tools/signing/sign.py dist/relays.json
           python tools/signing/sign.py --verify android/asset-signing.pub dist/relays.json
 
       - name: Publish
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.UNCHANGED != '1'
+        if: needs.check.outputs.changed == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: relays
@@ -85,3 +201,70 @@ jobs:
           files: |
             dist/relays.json
             dist/relays.json.sig
+
+      # keys.json carries the root key's signature (the key built into the app):
+      # one made offline and committed as relays/keys.json.sig when there is one
+      # (relays/README.md), otherwise one made here with the asset key, which is
+      # the root until the key is rotated. Either way it must check against
+      # android/asset-signing.pub, the only key phones take the list from.
+      - name: Sign the key list
+        if: needs.check.outputs.keys_changed == 'true'
+        env:
+          ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
+        run: |
+          mkdir -p dist
+          cp relays/keys.json dist/keys.json
+          if [ -f relays/keys.json.sig ]; then
+            cp relays/keys.json.sig dist/keys.json.sig
+          else
+            python tools/signing/sign.py dist/keys.json
+          fi
+          python tools/signing/sign.py --verify android/asset-signing.pub dist/keys.json
+
+      # Phones are told of a version only once its release can be downloaded,
+      # and the note must check under the keys keys.json accepts, as a phone
+      # holding that list checks it.
+      - name: Sign the version note
+        if: needs.check.outputs.latest_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
+        run: |
+          tag="v$(python tools/relays/check_latest.py relays/latest.json --print-version-name)"
+          assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          if ! grep -qx "clairix-$tag.apk" <<< "$assets"; then
+            echo "::error::latest.json names $tag, and no release $tag with clairix-$tag.apk is published yet. Publish it with the Release workflow, then run this workflow again (Actions, Relay list, Run workflow)."
+            exit 1
+          fi
+          mkdir -p dist
+          cp relays/latest.json dist/latest.json
+          python tools/signing/sign.py dist/latest.json
+          python tools/relays/check_keys.py relays/keys.json --verify-signed dist/latest.json
+
+      - name: Publish the key list and the version note
+        if: needs.check.outputs.keys_changed == 'true' || needs.check.outputs.latest_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEYS_CHANGED: ${{ needs.check.outputs.keys_changed }}
+          LATEST_CHANGED: ${{ needs.check.outputs.latest_changed }}
+        run: |
+          files=()
+          if [ "$KEYS_CHANGED" = true ]; then files+=(dist/keys.json dist/keys.json.sig); fi
+          if [ "$LATEST_CHANGED" = true ]; then files+=(dist/latest.json dist/latest.json.sig); fi
+          gh release upload relays "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Sign the tile setting
+        if: needs.check.outputs.tiles_changed == 'true'
+        env:
+          ASSET_SIGNING_KEY: ${{ secrets.ASSET_SIGNING_KEY }}
+        run: |
+          mkdir -p dist-tiles
+          cp relays/tiles.json dist-tiles/tiles.json
+          python tools/signing/sign.py dist-tiles/tiles.json
+          python tools/relays/check_keys.py relays/keys.json --verify-signed dist-tiles/tiles.json
+
+      - name: Publish the tile setting
+        if: needs.check.outputs.tiles_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload relays dist-tiles/tiles.json dist-tiles/tiles.json.sig --repo "$GITHUB_REPOSITORY" --clobber

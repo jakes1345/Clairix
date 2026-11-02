@@ -1211,7 +1211,7 @@ pre,
   .prose .egress td:nth-child(2)::before { content: 'When'; }
   .prose .egress td:nth-child(3)::before { content: 'What is sent'; }
   .prose .egress td:nth-child(4)::before { content: 'What they can see'; }
-  .prose .deletion td:nth-child(2)::before { content: 'In-app Unpair / Panic Wipe'; }
+  .prose .deletion td:nth-child(2)::before { content: 'In the app'; }
   .prose .deletion td:nth-child(3)::before { content: 'Email request'; }
 }
 

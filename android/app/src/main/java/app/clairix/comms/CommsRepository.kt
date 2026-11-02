@@ -19,13 +19,16 @@ import app.clairix.Registry
 import app.clairix.Severity
 import app.clairix.TimelineEvent
 import app.clairix.TimelineLog
+import app.clairix.analysis.LowPowerMode
 import app.clairix.analysis.TlsCanary
 import app.clairix.security.AppLock
 import app.clairix.security.DuressPhrase
 import app.clairix.security.RelayClock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.channels.Channel
@@ -49,10 +53,13 @@ import uniffi.clairix_comms_crypto.CryptoException
 import uniffi.clairix_comms_crypto.PeerKeys
 import uniffi.clairix_comms_crypto.SealingPrekey
 import uniffi.clairix_comms_crypto.fingerprint
+import uniffi.clairix_comms_crypto.recoveryCodeGenerate
+import uniffi.clairix_comms_crypto.recoveryCodeNormalize
 import uniffi.clairix_comms_crypto.verify
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ln
 
 /**
@@ -75,7 +82,8 @@ import kotlin.math.ln
  *   {"v":1,"t":"media","id":uuid,"ts":ms,"mime":..,"w":..,"h":..,"dur":ms,"size":bytes,"n":chunks,"cap":..,"thumb":b64,...}
  *   {"v":1,"t":"mchunk","id":media uuid,"i":index,"data":base64,...}   — one of "n" pieces of the file
  *   {"v":1,"t":"gmsg","gid":group,"id":uuid,"ts":ms,"body":text,...}   — a group message, one envelope per member
- *   {"v":1,"t":"gctl","gid":group,"op":roster|add|remove|join,...}      — a group's roster, kept by its admins
+ *   {"v":1,"t":"gctl","gid":group,"op":add|join|remove|leave|roster|rosterreq,...} — a group's roster, kept by its admins
+ *   group payloads also carry "rv": the number of the roster the sender holds (RosterSync)
  *   {"v":1,"t":"threat","gid":group,"id":uuid,"ts":ms,"kind":..,"sev":..,"lat":..,"lon":..,"title":..,"detail":..,"exp":ms,...}
  *   {"v":1,"t":"panic","gid":group,"id":uuid,"ts":ms,"lat":..,"lon":..,"note":text,...}
  * The sender's keys ride along so a first message from someone who has our
@@ -134,8 +142,17 @@ object CommsRepository {
     /** How long a shared threat stays on members' maps; a catcher sits still, a follower moves on. */
     private const val THREAT_TTL_MS = 3600_000L
     private const val CATCHER_TTL_MS = 24 * 3600_000L
-    private const val THREAT_EXPIRE_INTERVAL_MS = 3600_000L
     private const val MAX_PANIC_NOTE = 280
+    /** Why a blocked identity is not added again: it is unblocked on the blocked list only. */
+    private const val BLOCKED_ADD = "You blocked this person. To talk to them again, unblock them under Blocked in Comms settings first."
+    /** The line a call from a message request leaves in the request: it never rang. */
+    private const val REQUEST_MISSED_CALL = "Missed call · they are not in your contacts, so it did not ring"
+    /** Report tokens kept on hand: a report never needs a fetch right before it, which would tie it to this phone. */
+    private const val REPORT_TOKENS_BATCH = 2
+    /** How long past its expiry an invite this phone made is still recognised, for word of it that arrives late. */
+    private const val INVITE_ANSWER_GRACE_MS = 7L * 24 * 3600_000L
+    /** An invite code as the relay makes them: 128 bits, base64url. */
+    private val INVITE_CODE = Regex("^[A-Za-z0-9_-]{22}$")
     /** Intent extra naming the group conversation MainActivity should open (with [CommsNotifications.EXTRA_TAB]). */
     const val EXTRA_GROUP = "app.clairix.GROUP"
     const val ACTION_OPEN_GROUP = "app.clairix.OPEN_GROUP"
@@ -214,12 +231,27 @@ object CommsRepository {
      */
     private val tokenRefill = TokenRefill(
         topUp = { topUpTokens() },
+        // Tokens came: the outbox (an SOS waiting on them first) and the receipts.
         retry = { scope.launch { flushOutbox(); flushReceipts() } },
         launch = { block -> scope.launch { block() } },
     )
 
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
+    /**
+     * The same for the group outbox's SOS rows, apart from everything else so
+     * an SOS never waits behind a photo going out or a group text to two
+     * hundred members.
+     */
+    private val sosOutboxLock = Mutex()
+    /** The same for the group outbox's other rows: roster changes, group texts, shared threats. */
+    private val groupOutboxLock = Mutex()
+    /**
+     * Group outbox rows kept in memory only: a covert SOS's, and the roster
+     * request it may send, since the duress phrase writes nothing on this
+     * phone. Everything else is in the store.
+     */
+    private val memoryRows = GroupOutbox.MemoryRows()
     private val receiptsLock = Mutex()
     private val moveNoticesLock = Mutex()
     private val passNoticesLock = Mutex()
@@ -232,9 +264,6 @@ object CommsRepository {
     @Volatile private var retryAtMs = 0L
     @Volatile private var retryBackoffMs = RETRY_MIN_MS
     private const val RETRY_MIN_MS = 5_000L
-    /** The disappearing-messages sweep looks at least this often, and never sooner than [EXPIRY_MIN_WAIT_MS] apart. */
-    private const val EXPIRY_POLL_MS = 60_000L
-    private const val EXPIRY_MIN_WAIT_MS = 250L
     private const val RETRY_MAX_MS = 5 * 60_000L
     /** A key refresh after tokens came for keys not yet pinned: half a minute to five minutes later, at random. */
     private const val KEY_REFRESH_MIN_MS = 30_000L
@@ -334,6 +363,11 @@ object CommsRepository {
         RelayClock.bind(appContext)
         relay.clockListener = { serverMs, localMs -> RelayClock.record(serverMs, localMs) }
         LiveLink.init(appContext)
+        LinkHealth.init(appContext)
+        // Tor runs while this phone keeps its connection or the link is held (the
+        // app on screen, a call); otherwise it sleeps once nothing has used it for
+        // a while, and wakes for the next request (see TorTransport).
+        TorTransport.keepRunningWhile { isRegistered() && state.value.online || LiveLink.held() }
         CallManager.init(appContext)
         // Identities registered before the background connection became the default
         // kept it off, so calls to them could only ring while Clairix was on screen.
@@ -345,32 +379,44 @@ object CommsRepository {
         }
         initialised = true
         watchVault()
-        startExpirySweep()
-        syncCoverTraffic()
+        // Messages whose time came while no process ran go now; with nothing
+        // counting down (or no identity) no sweep runs at all.
+        wakeExpiry()
+        watchCoverTraffic()
         refreshAlternates()
         // Every entry point that initialises comms also arms the duress phrase.
         DuressPhrase.install(appContext)
         publishConfig()
         scope.launch { refreshUnread() }
         if (config.isRegistered && config.online) CommsService.start(appContext)
+        // The TLS canary watches the path to this relay for as long as the phone is
+        // registered with one: every four hours by alarm, and on network changes while
+        // the process runs.
+        if (config.isRegistered) runCatching { TlsCanary.start(appContext) }
         watchNetwork()
         if (config.isRegistered) scope.launch { pruneSessions() }
         scope.launch { runCatching { store.purgeChunks(System.currentTimeMillis() - CHUNK_TTL_MS) } }
-        // Shared threats on the map are forgotten as their time runs out: now, and every hour.
-        scope.launch {
-            while (true) {
-                runCatching { expireSharedThreats() }.onFailure { CommsLog.add("Could not tidy shared threats: ${it.message}") }
-                delay(THREAT_EXPIRE_INTERVAL_MS)
-            }
-        }
         // An SOS (the button, or the duress phrase in an outgoing text) goes to
         // every group this phone is in, with the last known position, and the
-        // flag is lowered once that has been tried.
+        // flag is lowered once that has been tried. What came of it is
+        // published for the button to say and written to the timeline, never
+        // for the covert phrase; members the relay could not take stay in the
+        // group outbox and are tried again for about thirty minutes after the
+        // flag drops (see broadcastPanic).
         scope.launch {
             Registry.panicActive.collect { active ->
                 if (!active) return@collect
                 val covert = Registry.panicCovert
-                runCatching { broadcastPanic(covert) }.onFailure { if (!covert) CommsLog.add("SOS could not be sent: ${it.message}") }
+                val attempt = panicAttempts.incrementAndGet()
+                val result = runCatching { broadcastPanic(attempt, covert) }.getOrElse { e ->
+                    if (!covert) CommsLog.add("SOS could not be sent: ${e.message}")
+                    val s = Registry.status.value
+                    PanicResult(attempt, System.currentTimeMillis(), s.lat, s.lon, error = e.message ?: e.javaClass.simpleName)
+                }
+                if (!covert) {
+                    recordPanicEvent(result)
+                    _panicResult.value = result
+                }
                 Registry.setPanicActive(false)
             }
         }
@@ -482,13 +528,15 @@ object CommsRepository {
      * creates a session before the app knows who sent it, and sessions from
      * senders that were rejected used to stay in the saved state for good,
      * making every save slower. Payloads still waiting for their sender to be
-     * confirmed keep theirs.
+     * confirmed keep theirs, and so do message requests, whose next message
+     * comes on the same session; a blocked number's go.
      */
     private suspend fun pruneSessions() {
         runCatching {
             lock.withLock {
                 if (!identities.exists()) return@withLock
-                val keep = store.contacts().map { it.curve25519 } + store.pending().map { it.senderCurve25519 }
+                val keep = store.contacts().map { it.curve25519 } + store.requestContacts().map { it.curve25519 } +
+                    store.pending().map { it.senderCurve25519 }
                 val dropped = identities.update { it.pruneSessions(keep) }
                 if (dropped > 0u) CommsLog.add("Removed sessions with $dropped sender(s) who are not contacts")
             }
@@ -524,6 +572,7 @@ object CommsRepository {
                 displayName = config.displayName,
                 listed = config.listed,
                 online = config.online,
+                coin = config.relayCoin,
                 pushRegistered = config.pushEndpoint != null
             )
         }
@@ -562,6 +611,13 @@ object CommsRepository {
             // push wake, say) or stopped by Android since. The app on screen may
             // always start it, and starting it again is harmless.
             if (config.isRegistered && config.online) CommsService.start(appContext)
+            if (config.isRegistered) {
+                // A phone without a screen lock never seals the vault, so no
+                // unlock wakes the sweep: the app coming up does. Its timer stops
+                // while the phone sleeps, and a message due meanwhile goes now.
+                wakeExpiry()
+                tidySharedThreats()
+            }
         } else {
             LiveLink.release(HOLD_FOREGROUND)
         }
@@ -579,7 +635,8 @@ object CommsRepository {
             val result = lock.withLock {
                 val url = (invite?.relayUrl ?: relayUrl).trim().trimEnd('/')
                 if (!RelayClient.acceptableRelayUrl(url)) return@withLock Result.failure(RelayException("The relay URL must start with https://"))
-                if (invite == null && secret.isBlank()) return@withLock Result.failure(RelayException("Enter the enrollment secret"))
+                // No secret is the relay's to judge: one whose operator opened
+                // registration takes it (up to its daily limit); any other says why not.
                 if (invite != null && invite.invite == null) return@withLock Result.failure(RelayException("That code is not an invite"))
                 setBusy(true)
                 listedKeyProblem(url)?.let { reason ->
@@ -606,6 +663,8 @@ object CommsRepository {
                     setBusy(false)
                     CommsLog.add("Registered as ${formatClairixNumber(registered.number)} on $url" + if (invite != null) " with ${formatClairixNumber(invite.number)}'s invite" else "")
                     CommsService.start(appContext)
+                    // The relay's key is pinned now, before anything can sit between this phone and it.
+                    runCatching { TlsCanary.start(appContext, runNow = true) }
                     LiveLink.refresh()
                     // Delivery tokens from the start, so the first send has one ready.
                     scope.launch { topUpTokens() }
@@ -621,14 +680,52 @@ object CommsRepository {
             // The inviter's keys came in the invite link, so they are pinned, but
             // not verified: the link passed through other hands (and the relay's
             // invite page) on the way. A first message tells them who joined;
-            // their phone adds this number when it arrives.
+            // their phone adds this number when it arrives, as a contact rather
+            // than a message request, because the invite named comes with it.
             if (invite != null && result.isSuccess) {
                 addContactFromCode(invite.copy(invite = null), source = CodeSource.LINK)
-                    .onSuccess { contact -> send(contact.number, "Joined Clairix with your invite.") }
+                    .onSuccess { contact ->
+                        // Kept until it goes: sent with the outbox, ahead of the text below.
+                        invite.invite?.let { config.setPendingJoined(contact.number, it) }
+                        send(contact.number, "Joined Clairix with your invite.")
+                    }
                     .onFailure { CommsLog.add("Could not add ${formatClairixNumber(invite.number)} from the invite: ${it.message}") }
             }
             result
         }
+
+    /**
+     * Tells the inviter's phone which of its invites this phone registered
+     * with ([CommsWire.T_JOINED], kept in [CommsConfig.pendingJoined]), so it
+     * takes this phone in as a contact and not as a message request. Tried
+     * with the outbox until it is sent or refused for good: right after
+     * registering there may be no delivery token yet. Returns the inviter's
+     * number while it is still waiting, so their messages wait behind it.
+     * Caller holds [outboxLock].
+     */
+    private suspend fun flushJoinedLocked(): String? {
+        val (number, invite) = config.pendingJoined ?: return null
+        val contact = store.contact(number) ?: run { config.clearPendingJoined(); return null }
+        val why = when (val d = deliver(contact, CommsWire.joined(invite))) {
+            Deliver.Sent -> { config.clearPendingJoined(); return null }
+            is Deliver.Offline -> { scheduleRetry(d.retryAfterMs); return number }
+            is Deliver.Failed -> d.reason
+            is Deliver.TooLarge -> d.reason
+        }
+        config.clearPendingJoined()
+        CommsLog.add("Could not tell ${contactLabel(contact)} which of their invites this phone used ($why); they will find it under Requests")
+        return null
+    }
+
+    /** How an invite code is remembered by the phone that made it: SHA-256, hex. */
+    private fun inviteHash(code: String): String =
+        MessageDigest.getInstance("SHA-256").digest(code.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    /** Whether [json] names an invite this phone made, taking it if so: it answers once. */
+    private fun takeInvite(json: JSONObject): Boolean {
+        val code = json.optString(CommsWire.F_INVITE).takeIf { INVITE_CODE.matches(it) } ?: return false
+        return config.takeIssuedInvite(inviteHash(code))
+    }
 
     /**
      * Why this phone must not register at [url], when it is on the relay list
@@ -648,6 +745,80 @@ object CommsRepository {
                 "Someone else may have taken over its address: do not register there."
         }
     }
+
+    // ── Recovery file ─────────────────────────────────────────────────────
+
+    /** Makes and restores recovery files; see [RecoveryRestorer]. */
+    private val recovery by lazy {
+        RecoveryRestorer(
+            config, identities, transportKeys, { store }, ::listedKeyProblem,
+            { identity, url, number -> RelayClient({ identity }, { url }, { number }) },
+            ONE_TIME_KEYS_BATCH.toUInt()
+        )
+    }
+
+    /** A new recovery code, shown to the owner once; nothing on the phone keeps it. */
+    fun newRecoveryCode(): String = recoveryCodeGenerate()
+
+    /** Whether [typed] is [code], however it was spaced or cased; false when either is not a recovery code. */
+    fun sameRecoveryCode(code: String, typed: String): Boolean {
+        val expected = recoveryCodeNormalize(code) ?: return false
+        return recoveryCodeNormalize(typed) == expected
+    }
+
+    /**
+     * This phone's recovery file, encrypted under [code]: the identity keys,
+     * the relay and number, contacts with their pinned keys and verification,
+     * groups and rosters (see [RecoveryRecord]); never a message or an Olm
+     * session. Takes about a second (Argon2id).
+     */
+    suspend fun recoveryFile(code: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        runCatching {
+            val record = lock.withLock { recovery.record(System.currentTimeMillis()) }
+            recovery.seal(record, code)
+        }
+    }
+
+    /** The owner saved a recovery file just now (it reached the place they chose). */
+    fun noteRecoverySaved() {
+        if (initialised) config.setRecoverySavedAt(System.currentTimeMillis())
+    }
+
+    /** When a recovery file was last saved from this phone; 0 if never. */
+    fun recoverySavedAt(): Long = if (initialised) config.recoverySavedAt else 0L
+
+    /**
+     * Brings this phone back from a recovery file, at setup: the same keys on
+     * the same relay, under the same number while the old mailbox is there,
+     * else registered again (with [secret] or [invite] if the relay wants
+     * one) under a new number that every contact is told. No session comes
+     * back; each conversation starts a new one.
+     */
+    suspend fun restoreFromFile(file: ByteArray, code: String, secret: String = "", invite: PairingCode? = null): RestoreOutcome =
+        withContext(Dispatchers.IO) {
+            val outcome = lock.withLock {
+                setBusy(true)
+                // What went wrong is the restore card's to say, not the registration form's.
+                recovery.restore(file, code, secret, invite).also { setBusy(false) }
+            }
+            if (outcome is RestoreOutcome.Restored) {
+                publishConfig()
+                CommsLog.add(
+                    "Restored from a recovery file as ${formatClairixNumber(outcome.number)}: ${outcome.contacts} contact(s), ${outcome.groups} group(s)" +
+                        if (outcome.sameNumber) "" else "; the old number was gone, so contacts are being told the new one"
+                )
+                CommsService.start(appContext)
+                runCatching { TlsCanary.start(appContext, runNow = true) }
+                LiveLink.refresh()
+                bump()
+                scope.launch {
+                    topUpTokens()
+                    flushMoveNotices()
+                    sync()
+                }
+            }
+            outcome
+        }
 
     // ── Moving to another relay ───────────────────────────────────────────
 
@@ -712,6 +883,8 @@ object CommsRepository {
                 // The distributor's endpoint goes to the new relay, which checks it as any relay does.
                 endpoint?.let { onPushEndpoint(it) }
                 CommsService.start(appContext)
+                // A new relay, a new key to pin: checked now rather than at the next four-hour mark.
+                runCatching { TlsCanary.start(appContext, runNow = true) }
                 LiveLink.refresh()
                 bump()
                 scope.launch {
@@ -949,36 +1122,58 @@ object CommsRepository {
         runCatching {
             val code = pairingCode() ?: throw RelayException("Not registered")
             val invite = relay.createInvite()
+            // Remembered (as a hash) so whoever registers with it comes in as a
+            // contact, not as a message request; a week past its expiry at most.
+            config.addIssuedInvite(inviteHash(invite.code), invite.expiresAt + INVITE_ANSWER_GRACE_MS)
             CommsLog.add("Invite made; it works once until ${java.text.DateFormat.getDateInstance().format(java.util.Date(invite.expiresAt))}")
             code.copy(invite = invite.code) to invite.expiresAt
         }
     }
 
-    /** Deletes the mailbox on the relay (best effort) and everything local. */
     /**
      * The relay account deletions, signed now for a wipe to send once the
-     * phone is erased (see [RelayClient.preparedWipe]): this relay's, then the
-     * one on the relay this phone moved away from, while it still has one.
+     * phone is erased, [count] copies [stepMs] apart (see
+     * [RelayClient.preparedWipes]): this relay's, then the one on the relay
+     * this phone moved away from, while it still has one.
      */
-    fun preparedRelayWipes(): List<okhttp3.Request> {
+    fun preparedRelayWipes(count: Int, stepMs: Long): List<RelayClient.PreparedWipe> {
         if (!initialised || !config.isRegistered) return emptyList()
-        return listOfNotNull(relay.preparedWipe(), if (config.previousRelay != null) previousRelay.preparedWipe() else null)
+        return listOfNotNull(
+            relay.preparedWipes(count, stepMs),
+            if (config.previousRelay != null) previousRelay.preparedWipes(count, stepMs) else null
+        )
     }
 
-    fun sendRelayWipe(request: okhttp3.Request, timeoutSec: Long) = relay.sendPrepared(request, timeoutSec)
-
-    suspend fun unpair() = withContext(Dispatchers.IO) {
+    /**
+     * Deletes the mailbox on the relay (best effort) and everything local. Not
+     * cancellable once called: the screens call it from their own scope, and
+     * leaving the screen during the relay's few seconds must not abandon it
+     * halfway (identity still on the phone, no deletion kept for retrying).
+     */
+    suspend fun unpair() = withContext(NonCancellable + Dispatchers.IO) {
         lock.withLock {
             setBusy(true)
+            // Signed now, while the identity exists: if the relay has not confirmed the
+            // deletion in the few seconds below, it waits in a file and is tried again
+            // for a day (security/RelayFarewell.kt), so an offline phone does not leave
+            // the account behind on the relay.
+            val farewells = runCatching { app.clairix.security.RelayFarewell.prepareAll() }.getOrDefault(emptyList())
+            val told = java.util.concurrent.atomic.AtomicBoolean(false)
             // The relay gets a few seconds to delete the account; an unreachable relay
-            // must not hold up what follows (a wipe gives this whole call six). The
-            // call itself blocks on its own thread until the client's timeout.
+            // must not hold up what follows. The call itself blocks on its own thread
+            // until the client's timeout.
             val remote = scope.launch(Dispatchers.IO) {
-                runCatching { relay.wipe() }.onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
+                runCatching { relay.wipe() }
+                    .onSuccess { told.set(true) }
+                    .onFailure { Log.w(TAG, "relay wipe failed: ${it.message}") }
                 // The account this phone moved away from goes too, if that relay answers.
                 if (config.previousRelay != null) runCatching { previousRelay.wipe() }
             }
             withTimeoutOrNull(RELAY_WIPE_BUDGET_MS) { remote.join() }
+            if (!told.get() && farewells.isNotEmpty()) runCatching {
+                app.clairix.security.RelayFarewell.keep(appContext.filesDir, farewells)
+                app.clairix.security.RelayFarewell.arm(appContext, app.clairix.security.RelayFarewell.FIRST_TRY_MS)
+            }
             runCatching { UnifiedPush.unregister(appContext) }
             CommsService.stop(appContext)
             LiveLink.disconnect()
@@ -990,6 +1185,12 @@ object CommsRepository {
             identities.destroy()
             transportKeys.destroy()
             config.clear()
+            // The canary's pin and last result name the relay just left; a phone that has
+            // left it keeps neither. After the config is gone, so no run can find the old
+            // relay and pin it again. A scanner the owner left on starts the canary
+            // afresh for its own proxy check, with no relay to compare keys against.
+            runCatching { TlsCanary.forget(appContext) }
+            runCatching { TlsCanary.startIfWanted(appContext) }
             syncCoverTraffic()
             // What else this phone kept about its comms: the duress phrase (it is
             // typed into comms), the comms log (it names contacts' numbers) and
@@ -1060,12 +1261,12 @@ object CommsRepository {
      * anything to say, so the real messages are not the only traffic there is.
      * What it does not buy: each envelope's recipient is still visible to the
      * relay, one among many, and a contact with no session yet gets no cover
-     * (starting one would be a lookup the relay could see).
+     * (starting one would be a lookup the relay could see). Low power pauses it
+     * ([LowPowerMode]); it is the one sender that carries nothing.
      */
     @Synchronized
     private fun syncCoverTraffic() {
-        val wanted = initialised && config.isRegistered && config.online && config.coverTraffic
-        if (!wanted) {
+        if (!coverWanted()) {
             coverJob?.cancel()
             coverJob = null
             return
@@ -1074,11 +1275,24 @@ object CommsRepository {
         coverJob = scope.launch {
             while (isActive) {
                 delay(nextCoverDelay())
-                if (!(config.online && config.coverTraffic && config.isRegistered)) break
+                if (!coverWanted()) break
                 runCatching { sendCover() }.onFailure { CommsLog.add("Cover envelope not sent: ${it.message}") }
             }
         }
     }
+
+    /**
+     * Starts cover traffic if it is wanted, and follows low power from then on: it
+     * pauses cover traffic, and its end brings it back ([LowPowerMode]). The state
+     * flow hands over its current value at once, which is the first sync.
+     */
+    private fun watchCoverTraffic() {
+        scope.launch { LowPowerMode.state.map { it.active }.distinctUntilChanged().collect { syncCoverTraffic() } }
+    }
+
+    /** The owner wants cover traffic, the phone is registered and online, and low power is off. */
+    private fun coverWanted(): Boolean =
+        initialised && config.isRegistered && config.online && config.coverTraffic && LowPowerMode.pacing.coverTraffic
 
     private fun nextCoverDelay(): Long {
         val u = SecureRandom().nextDouble().coerceIn(1e-9, 1.0)
@@ -1108,10 +1322,11 @@ object CommsRepository {
         }
     }
 
-    /** Keeps the other addresses the relay said it answers at, onion included. */
+    /** Keeps the other addresses the relay said it answers at, onion included, and whether it offers ClairixCoin. */
     private fun keepAddresses(info: RelayClient.Info) {
         if (info.alternates != config.relayAlternates) config.setRelayAlternates(info.alternates)
         if (info.onion != config.relayOnion) config.setRelayOnion(info.onion)
+        keepCoinOffer(info.coin)
     }
 
     /**
@@ -1202,7 +1417,15 @@ object CommsRepository {
 
     fun contacts(): List<Contact> = unlockedOr(emptyList()) { store.contacts() }
     fun contact(number: String): Contact? = unlockedOr(null) { store.contact(number) }
+    /** The row for [number] whatever it is: a contact, a blocked contact kept as a record, or a message request. */
+    fun contactEntry(number: String): Contact? = unlockedOr(null) { store.contactEntry(number) }
     fun threads(): List<ChatThread> = unlockedOr(emptyList()) { store.threads() }
+    /** Message requests: people who wrote first and have not been accepted, most recent first. */
+    fun requests(): List<ChatThread> = unlockedOr(emptyList()) { store.requestThreads() }
+    /** The blocked list, most recent first. */
+    fun blockedList(): List<ContactGate.Blocked> = unlockedOr(emptyList()) { store.blockedKeys() }
+    /** Blocked contacts kept with their conversation, by number. */
+    fun blockedKept(): Map<String, Contact> = unlockedOr(emptyMap()) { store.blockedContacts().associateBy { it.number } }
     fun messages(peer: String): List<ChatMessage> = unlockedOr(emptyList()) { store.messages(peer) }
     fun transactions(peer: String): List<CoinTx> = unlockedOr(emptyList()) { store.transactions(peer) }
     fun allTransactions(): List<CoinTx> = unlockedOr(emptyList()) { store.allTransactions() }
@@ -1248,6 +1471,30 @@ object CommsRepository {
             if (theirRelay == null && code.number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
             if (!verify(code.ed25519, "${code.curve25519}|${code.sealing}".toByteArray(Charsets.UTF_8), code.signature)) {
                 return@withLock Result.failure(RelayException("The code's keys are not signed by its identity key"))
+            }
+            // Unblocking is done in one place, the blocked list, never by
+            // adding someone again (a code scanned by whoever holds the phone).
+            if (ContactGate.isBlocked(store.blockedKeys(), code.ed25519, code.curve25519, code.number, theirRelay)) {
+                return@withLock Result.failure(RelayException(BLOCKED_ADD))
+            }
+            store.contactEntry(code.number)?.takeIf { it.request }?.let { pending ->
+                // Someone whose first message waits as a request: adding them
+                // accepts it, if this code carries the keys it came from.
+                if (pending.relay != theirRelay || pending.curve25519 != code.curve25519 || pending.ed25519 != code.ed25519) {
+                    return@withLock Result.failure(RelayException(
+                        "${formatClairixNumber(code.number)} wrote to you from other keys than this code has; it waits under Requests. " +
+                            "Decline it there first if this code is the one to trust."
+                    ))
+                }
+                acceptRequestLocked(pending)
+            }
+            store.contactEntry(code.number)?.takeIf { it.blocked }?.let { kept ->
+                // Someone else with the same number on another relay; the blocked
+                // contact is kept by number, and one number holds one row.
+                return@withLock Result.failure(RelayException(
+                    "A contact you blocked has the Clairix number ${formatClairixNumber(code.number)}, on ${relayLabel(kept.relay)}. " +
+                        "Clairix cannot keep two people with one number; unblock and delete that contact first."
+                ))
             }
             val existing = store.contact(code.number)
             if (existing != null && existing.relay != theirRelay) {
@@ -1318,7 +1565,19 @@ object CommsRepository {
         lock.withLock {
             val number = parseClairixNumber(rawNumber) ?: return@withLock Result.failure(RelayException("A Clairix number is nine digits"))
             if (number == config.number) return@withLock Result.failure(RelayException("That is your own Clairix number"))
-            store.contact(number)?.let { return@withLock Result.success(it) }
+            if (ContactGate.isBlocked(store.blockedKeys(), null, null, number, null)) return@withLock Result.failure(RelayException(BLOCKED_ADD))
+            store.contactEntry(number)?.let { entry ->
+                when {
+                    entry.blocked -> return@withLock Result.failure(RelayException(BLOCKED_ADD))
+                    // A message request from this number on this relay, whose keys
+                    // the relay confirmed when it came: adding it accepts it.
+                    entry.request && entry.relay == null -> acceptRequestLocked(entry)
+                    entry.request -> return@withLock Result.failure(RelayException(
+                        "${formatClairixNumber(number)} on ${relayLabel(entry.relay)} wrote to you and waits under Requests; Clairix cannot keep two people with one number."
+                    ))
+                }
+                store.contact(number)?.let { bump(); return@withLock Result.success(it) }
+            }
             setBusy(true)
             try {
                 // Only the identity: no one-time key is claimed until there is something
@@ -1327,6 +1586,7 @@ object CommsRepository {
                 if (!verify(keys.ed25519, "${keys.curve25519}|${keys.sealing}".toByteArray(Charsets.UTF_8), keys.signature)) {
                     throw RelayException("The relay returned keys that are not signed by that number's identity key")
                 }
+                if (ContactGate.isBlocked(store.blockedKeys(), keys.ed25519, keys.curve25519, number, null)) throw RelayException(BLOCKED_ADD)
                 store.contactByCurve(keys.curve25519)?.let { other ->
                     // A relay answering with another contact's real keys would otherwise
                     // let messages from that identity land under this number.
@@ -1436,17 +1696,178 @@ object CommsRepository {
     }
 
     suspend fun deleteContact(number: String) = withContext(Dispatchers.IO) {
+        lock.withLock { removeContactLocked(number) }
+        publishPassIfOwed()
+    }
+
+    /**
+     * Deletes everything about [number] (a contact, a blocked contact or a
+     * message request): the sessions, the conversation and its files, the
+     * notifications. Caller holds [lock].
+     */
+    private fun removeContactLocked(number: String) {
+        val removed = store.contactEntry(number)
+        removed?.let { c -> identities.update { it.dropSessions(c.curve25519) } }
+        store.deleteContact(number).forEach { CommsMedia.delete(it) }
+        CommsNotifications.cancel(appContext, number)
+        // The pass they were given stops working: a new key goes to the
+        // relay and to everyone else, so someone deleted for flooding this
+        // phone is a stranger to the mailbox from now on. A message request
+        // or a blocked record never held the current pass, so removing one
+        // leaves the key, and every contact's pass, alone.
+        val heldPass = removed != null && ContactGate.mayHoldPass(removed.request, removed.blocked)
+        if (heldPass && config.isRegistered && config.passKey != null) newPassKey()
+        bump()
+    }
+
+    /** Gives the relay a pass key [newPassKey] made, outside the repository's lock. */
+    private fun publishPassIfOwed() {
+        if (config.isRegistered && !config.passPublished) scope.launch { keysLock.withLock { publishPass() } }
+    }
+
+    /**
+     * Blocks [number] ([ContactGate]): their keys and their number go on the
+     * blocked list, so nothing they send reaches this phone again, whether
+     * they write, call, or post in a group: nothing is kept, no receipt goes
+     * back, nothing rings or shows, and no log line names them. They are not
+     * told. With [delete] their contact, session and conversation are deleted
+     * too, as with [deleteContact]; without it the conversation stays,
+     * read-only, as a record. Either way the pass they were given stops
+     * working, so what they send draws on the share strangers get.
+     */
+    suspend fun block(number: String, delete: Boolean) = withContext(Dispatchers.IO) {
         lock.withLock {
-            store.contact(number)?.let { c -> identities.update { it.dropSessions(c.curve25519) } }
-            store.deleteContact(number).forEach { CommsMedia.delete(it) }
-            CommsNotifications.cancel(appContext, number)
-            // The pass they were given stops working: a new key goes to the
-            // relay and to everyone else, so someone deleted for flooding this
-            // phone is a stranger to the mailbox from now on.
-            if (config.isRegistered && config.passKey != null) newPassKey()
+            val c = store.contactEntry(number) ?: return@withLock
+            if (!ContactGate.isBlocked(store.blockedKeys(), c.ed25519, c.curve25519, c.number, c.relay)) {
+                store.addBlocked(c.ed25519, c.curve25519, c.number, c.relay, c.name, System.currentTimeMillis())
+            }
+            if (delete) {
+                removeContactLocked(number)
+            } else {
+                identities.update { it.dropSessions(c.curve25519) }
+                store.markBlocked(number)
+                CommsNotifications.cancel(appContext, number)
+                if (ContactGate.mayHoldPass(c.request, c.blocked) && config.isRegistered && config.passKey != null) newPassKey()
+                bump()
+            }
+            if (store.requestContacts().isEmpty()) CommsNotifications.cancelRequest(appContext)
+        }
+        publishPassIfOwed()
+    }
+
+    /** Declines a message request: blocks the number and deletes what it sent. */
+    suspend fun declineRequest(number: String) = block(number, delete = true)
+
+    /**
+     * Takes entry [id] off the blocked list. A blocked contact kept as a
+     * record is a contact again, owed this phone's pass; one that was deleted
+     * is simply no longer blocked, and anything they send next comes in as a
+     * message request.
+     */
+    suspend fun unblock(id: Long) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val entry = store.removeBlocked(id) ?: return@withLock
+            val kept = store.contactEntry(entry.number)?.takeIf { it.blocked && ContactGate.matches(entry, it.ed25519, it.curve25519, null, null) }
+            if (kept != null && !ContactGate.isBlocked(store.blockedKeys(), kept.ed25519, kept.curve25519, kept.number, kept.relay)) {
+                store.setBlocked(kept.number, false)
+                store.owePass(kept.number)
+            }
             bump()
         }
-        if (config.isRegistered && !config.passPublished) scope.launch { keysLock.withLock { publishPass() } }
+        scope.launch { flushPassNotices() }
+    }
+
+    /** Unblocks the blocked contact kept as [number]'s record: every entry on the blocked list for them goes. */
+    suspend fun unblockContact(number: String) = withContext(Dispatchers.IO) {
+        val ids = lock.withLock {
+            val c = store.contactEntry(number) ?: return@withLock emptyList<Long>()
+            store.blockedKeys().filter { ContactGate.matches(it, c.ed25519, c.curve25519, c.number, c.relay) }.map { it.id }
+        }
+        for (id in ids) unblock(id)
+    }
+
+    /**
+     * The owner accepts a message request: [number] becomes an ordinary,
+     * unverified contact. What they sent is receipted now, read or delivered
+     * as it stands, an invitation to a group they sent is acted on, and they
+     * are given this phone's pass.
+     */
+    suspend fun acceptRequest(number: String) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val c = store.contactEntry(number)?.takeIf { it.request && !it.blocked } ?: return@withLock
+            acceptRequestLocked(c)
+        }
+        bump()
+    }
+
+    /** See [acceptRequest]. Caller holds [lock]. */
+    private fun acceptRequestLocked(c: Contact) {
+        store.setRequest(c.number, false)
+        val accepted = c.copy(request = false)
+        for ((status, ids) in ContactGate.receiptsOnAccept(store.messages(c.number))) store.queueReceipt(c.number, ids, status)
+        // Held while they were a request (an invitation to a group): acted on
+        // now, if it came from the keys accepted.
+        for (h in store.quarantined(c.number)) {
+            val json = CommsWire.parse(h.payload)
+            if (json != null && h.curve == accepted.curve25519) {
+                runCatching { processPayload(accepted, h.ts, json) }
+                    .onFailure { CommsLog.add("Something held from ${contactLabel(accepted)} could not be acted on: ${it.message}") }
+            }
+            store.deleteQuarantined(h.id)
+        }
+        store.owePass(c.number)
+        CommsLog.add("Message request from ${formatClairixNumber(c.number)} accepted")
+        if (store.requestContacts().isEmpty()) CommsNotifications.cancelRequest(appContext)
+        // After the caller releases the lock.
+        scope.launch {
+            flushReceipts()
+            flushPassNotices()
+        }
+    }
+
+    /**
+     * Reports [number] to this phone's relay, for its operator to act on: the
+     * number and the relay it is on, a fingerprint of the newest envelope they
+     * sent (when one has come since reports existed; [ContactGate.envelopeFingerprint],
+     * never the envelope's own hash, which would tell them who reported) and
+     * [reason] ([ContactGate.reportBody]). Never what they wrote. The request
+     * spends a report token and names nobody, so the operator learns who was
+     * reported, not who reported them. Tokens are fetched only with the
+     * relay sync, never because of a report: a fetch just before one would tie
+     * it to this phone. With none on hand the owner is asked to try later.
+     * Nothing about the report is written to the comms log, which anyone
+     * holding the unlocked app can read.
+     */
+    suspend fun report(number: String, reason: ContactGate.ReportReason): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!config.isRegistered) throw RelayException("Not registered with a relay")
+            val c = store.contactEntry(number) ?: throw RelayException("${formatClairixNumber(number)} is not on this phone")
+            try {
+                val fingerprint = store.lastEnvelope(c.number)?.let { ContactGate.envelopeFingerprint(config.reportSecret(), it) }
+                relay.report(ContactGate.reportBody(c.number, c.relay, fingerprint, reason))
+            } catch (e: RelayException) {
+                when (e.code) {
+                    RelayClient.NO_TOKENS -> throw RelayException(
+                        "This phone has no report token yet. It fetches them by itself the next time it syncs with the relay, " +
+                            "apart from any report; try again later."
+                    )
+                    // A relay from before reports takes the path for a signed request, or knows none.
+                    401, 404, 405 -> throw RelayException("Your relay does not take reports yet: it runs an older version. Write to its operator instead.")
+                    else -> throw e
+                }
+            }
+            Unit
+        }
+    }
+
+    /** Keeps a report token or two on hand, fetched apart from any report (see [report]). */
+    private fun topUpReportTokens() {
+        if (!config.isRegistered) return
+        runCatching { relay.topUpTokens(TokenKind.REPORT, low = 1, batch = REPORT_TOKENS_BATCH) }
+            .onFailure {
+                if ((it as? RelayException)?.code == RelayClient.KEYS_PENDING) scheduleKeyRefresh()
+                else CommsLog.add("Could not fetch a report token: ${it.message}")
+            }
     }
 
     /** The 60-digit safety number shared with [contact]; identical on both phones. */
@@ -1516,14 +1937,21 @@ object CommsRepository {
 
     /**
      * Sends everything queued, oldest first, stopping at the first network
-     * failure and trying again later. The repository lock is held only to
-     * encrypt each message, never across the network round trip, so a slow
-     * network does not hold up envelopes (and call signals) coming in.
+     * failure and trying again later: an SOS still waiting in the group
+     * outbox first, then one-to-one messages, then the group outbox's roster
+     * changes, texts and shared threats ([flushGroupOutbox]). The repository
+     * lock is held only to encrypt each message, never across the network
+     * round trip, so a slow network does not hold up envelopes (and call
+     * signals) coming in.
      */
     suspend fun flushOutbox() = withContext(Dispatchers.IO) {
         if (!config.isRegistered || Vault.sealed.value) return@withContext
+        flushGroupOutbox(SOS_ROWS)
         outboxLock.withLock {
+            // The inviter hears which invite was used before anything else from this phone.
+            val waitingFor = flushJoinedLocked()
             for (m in store.queued()) {
+                if (m.peer == waitingFor) continue
                 // A contact who moved while the queue was read is found under their new number.
                 val contact = store.contact(m.peer) ?: store.message(m.id)?.peer?.let { store.contact(it) }
                 if (contact == null) {
@@ -1565,6 +1993,7 @@ object CommsRepository {
                 }
             }
         }
+        flushGroupOutbox(OTHER_ROWS)
         bump()
     }
 
@@ -1613,7 +2042,8 @@ object CommsRepository {
 
     private sealed class Deliver {
         object Sent : Deliver()
-        class Failed(val reason: String) : Deliver()
+        /** Final; [status] is the relay's HTTP answer when it was one (0 otherwise). */
+        class Failed(val reason: String, val status: Int = 0) : Deliver()
         /** Not now; try again later, or after [retryAfterMs] when the relay said how long. */
         class Offline(val reason: String, val retryAfterMs: Long? = null) : Deliver()
         /** The relay refused the envelope as too large (413): final for this message, but the queue behind it goes on. */
@@ -1637,9 +2067,15 @@ object CommsRepository {
      * to 25 seconds while a network call completes.
      */
     private suspend fun deliver(contact: Contact, payload: JSONObject): Deliver {
+        val type = CommsWire.type(payload)
         // A call being set up and an SOS skip the relay's mixing delay.
-        val urgent = CommsWire.type(payload) in URGENT_TYPES
+        val urgent = type in URGENT_TYPES
         val alert = alertFor(payload)
+        // Let through below the oldest safe version, with the SOS it serves (AppUpdate).
+        val forSos = carriesSos(
+            type, payload.optString(CommsWire.F_OP).ifEmpty { null }, payload.optString(CommsWire.F_GID).ifEmpty { null },
+            if (type == CommsWire.T_GROUP_CTRL) heldSosGroups() else emptySet()
+        )
         // Encryption runs under the lock; anything it needs from the network (a
         // bundle to start a session, the contact's current sealing prekey) is
         // fetched without it, once each, and encryption tried again.
@@ -1647,7 +2083,15 @@ object CommsRepository {
         var prekeyFetched = false
         while (true) {
             when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
-                is Prepared.Ready -> return transmit(contact, p.envelope, urgent, alert)
+                is Prepared.Ready -> {
+                    val sent = transmit(contact, p.envelope, urgent, alert, forSos)
+                    // Format 2 refused past the relay's cutoff: their keys may bring a prekey to seal it in format 3.
+                    if (sent !is Deliver.Failed ||
+                        !LegacyEnvelope.lookUpPrekeyAndRetry(sent.status, store.prekey(contact.number) != null, prekeyFetched)
+                    ) return sent
+                    prekeyFetched = true
+                    if (!learnPrekey(contact)) return sent
+                }
                 is Prepared.Failed -> return Deliver.Failed(p.reason)
                 is Prepared.Offline -> return Deliver.Offline(p.reason)
                 Prepared.NeedBundle -> {
@@ -1675,6 +2119,24 @@ object CommsRepository {
                 }
             }
         }
+    }
+
+    /**
+     * Looks up [contact]'s keys and keeps the sealing prekey they bring
+     * ([notePrekey]); true when a prekey of theirs is held afterwards. For a
+     * format-2 envelope the relay refused ([LegacyEnvelope]).
+     */
+    private fun learnPrekey(contact: Contact): Boolean {
+        val keys = try {
+            relay.identity(contact.number, fingerprint(contact.ed25519), contact.relay)
+        } catch (e: RelayException) {
+            CommsLog.add("Could not look up the current sealing key of ${contactLabel(contact)}: ${e.message}")
+            return false
+        }
+        if (keys.ed25519 == contact.ed25519 && keys.curve25519 == contact.curve25519 && keys.sealing == contact.sealing) {
+            notePrekey(contact, keys.sealingPrekey)
+        }
+        return store.prekey(contact.number) != null
     }
 
     /**
@@ -1790,10 +2252,10 @@ object CommsRepository {
      * outbox's backoff retries it (fetching tokens first), and [tokenRefill]
      * retries once at once if a fetch does bring tokens. No lock is held.
      */
-    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false, alert: String? = null): Deliver {
+    private fun transmit(contact: Contact, envelope: ByteArray, urgent: Boolean = false, alert: String? = null, forSos: Boolean = false): Deliver {
         val claim = claims.get(contact.number, System.currentTimeMillis())
         return try {
-            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert, store.pass(contact.number))
+            relay.send(contact.number, envelope, claim, contact.relay, urgent, alert, store.pass(contact.number), forSos)
             if (claim != null) claims.accepted(contact.number, claim)
             Deliver.Sent
         } catch (e: RelayException) {
@@ -1843,6 +2305,7 @@ object CommsRepository {
         e.code == 401 -> Deliver.Failed("The relay does not accept this phone's signature (is its clock right?)")
         e.code == 403 -> Deliver.Offline(e.message ?: "The relay refused this phone's delivery tokens; trying again later")
         e.code == 413 -> Deliver.TooLarge(e.message ?: "The relay refused the message as too large")
+        e.code == LegacyEnvelope.UPGRADE_REQUIRED -> Deliver.Failed(e.message ?: "The relay asks for a newer Clairix", e.code)
         e.code == RelayClient.NO_TOKENS -> Deliver.Offline("Waiting for delivery tokens from the relay")
         // Busy, not down: the relay said how long to wait, and nothing is wrong
         // with the network, so the backoff does not grow.
@@ -1862,18 +2325,19 @@ object CommsRepository {
      * (the backoff grows to five), and a photo queued behind it waited for that
      * one, since nothing else flushes the outbox while the owner sends nothing
      * (SoakTest, round 330). And a retry that failed again could not schedule
-     * the next, being itself the retry still pending.
+     * the next, being itself the retry still pending. The decision is
+     * [OutboxRetry.next]; the group outbox's rows, an SOS's among them, are
+     * tried on the same schedule.
      */
     @Synchronized
     private fun scheduleRetry(afterMs: Long? = null) {
-        val wait = afterMs?.coerceIn(1_000L, RETRY_MAX_MS) ?: retryBackoffMs
-        val at = System.currentTimeMillis() + wait
-        if (retryJob?.isActive == true && retryAtMs <= at) return
-        if (afterMs == null) retryBackoffMs = (retryBackoffMs * 2).coerceAtMost(RETRY_MAX_MS)
+        val pendingAt = if (retryJob?.isActive == true) retryAtMs else null
+        val next = OutboxRetry.next(System.currentTimeMillis(), retryBackoffMs, afterMs, pendingAt, RETRY_MAX_MS) ?: return
+        retryBackoffMs = next.backoffMs
         retryJob?.cancel()
-        retryAtMs = at
+        retryAtMs = next.atMs
         retryJob = scope.launch {
-            delay(wait)
+            delay(next.waitMs)
             // Its wait is over: from here a failure schedules the next retry,
             // which it could not while this one still counted as pending.
             synchronized(this@CommsRepository) { if (retryJob === coroutineContext[Job]) retryJob = null }
@@ -1890,6 +2354,7 @@ object CommsRepository {
         if (!initialised || !config.isRegistered) return
         retryBackoffMs = RETRY_MIN_MS
         retryJob?.cancel()
+        // The outbox goes now, an SOS waiting on the relay first, rather than at the next pause's end.
         scope.launch {
             flushMoveNotices()
             flushPassNotices()
@@ -1924,6 +2389,16 @@ object CommsRepository {
         // Where this number lives, for a contact on another relay to reply to.
         config.relayUrl?.let { RelayClient.originOf(it) }?.let { o.put(CommsWire.F_RELAY, it) }
     }
+
+    /**
+     * Who a group's message for member [number] goes to: an ordinary contact,
+     * or a message request whose keys are the ones the group's roster records
+     * for them ([ContactGate.rosterVouches]). A group member whose first word
+     * to this phone was a private message still gets the group's texts and
+     * the owner's SOS, as they would had they written to the group first.
+     */
+    private fun groupRecipient(number: String, rosterEd25519: String?): Contact? =
+        store.contact(number) ?: store.contactEntry(number)?.takeIf { ContactGate.rosterVouches(it.request, it.blocked, it.ed25519, rosterEd25519) }
 
     /**
      * Whether [contact] is the group member whose roster entry carries
@@ -2010,13 +2485,29 @@ object CommsRepository {
     //
     // Full edition only. The Play edition is built with CLAIRIX_COIN off: it
     // never asks the relay for a balance, never pays, and does not record
-    // payment notices sent to it.
+    // payment notices sent to it. In the Full edition the balance and the Pay
+    // button show only while the relay says at GET / that its operator turned
+    // the coin on (CoinRules.shown).
 
-    /** This identity's coins on the relay, or -1 when the relay could not say (or the edition has no coin). */
+    /**
+     * Keeps what the relay said about ClairixCoin ([offered]), so the balance
+     * and the Pay button show or go to match; a balance shown before the relay
+     * turned the coin off is forgotten.
+     */
+    private fun keepCoinOffer(offered: Boolean) {
+        config.setRelayCoin(offered)
+        _state.update { it.copy(coin = offered, balance = if (offered) it.balance else -1L) }
+    }
+
+    /** This identity's coins on the relay, or -1 when the relay could not say, does not offer the coin, or the edition has none. */
     suspend fun getBalance(): Long = withContext(Dispatchers.IO) {
-        if (!BuildConfig.CLAIRIX_COIN || !config.isRegistered) return@withContext -1L
+        if (!CoinRules.shown(BuildConfig.CLAIRIX_COIN, config.isRegistered, config.relayCoin)) return@withContext -1L
         runCatching { relay.balance().balance }
-            .onFailure { CommsLog.add("Could not read the coin balance: ${it.message}") }
+            .onFailure {
+                // The relay's operator turned the coin off since the relay last said otherwise.
+                if ((it as? RelayException)?.code == 404) keepCoinOffer(false)
+                CommsLog.add("Could not read the coin balance: ${it.message}")
+            }
             .getOrDefault(-1L)
     }
 
@@ -2028,7 +2519,9 @@ object CommsRepository {
 
     /**
      * Pays [contact] [amount] ClairixCoin. The relay moves the coins (it holds
-     * both balances) on this identity's signed request; the recipient then
+     * both balances) on this identity's signed request, which names the
+     * fingerprint of the contact's pinned key, so the coins go to the key this
+     * phone knows and to nobody given the number since; the recipient then
      * hears about it, with the note, through an encrypted envelope the relay
      * cannot read. Returns the balance left afterwards.
      */
@@ -2036,13 +2529,14 @@ object CommsRepository {
         runCatching {
             if (!BuildConfig.CLAIRIX_COIN) throw UnsupportedOperationException("ClairixCoin is not part of this edition")
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
+            if (!config.relayCoin) throw IllegalStateException("Your relay does not offer ClairixCoin")
             if (amount <= 0L) throw IllegalArgumentException("The amount must be at least 1 $COIN_SYMBOL")
             if (contact.number == config.number) throw IllegalArgumentException("That is your own Clairix number")
             // Coins live in the relay's mailboxes; each relay is its own coin
             // community, and the same number on this relay is someone else.
             if (contact.relay != null) throw IllegalArgumentException("${contactLabel(contact)} is on ${relayLabel(contact.relay)}; ClairixCoin moves only between people on the same relay")
             val text = note?.trim()?.take(MAX_COIN_NOTE)?.takeIf { it.isNotEmpty() }
-            val result = relay.pay(contact.number, amount, null)
+            val result = relay.pay(contact.number, fingerprint(contact.ed25519), amount)
             val id = UUID.randomUUID().toString()
             val ts = System.currentTimeMillis()
             // The coins have moved: recorded before anything else can fail.
@@ -2054,7 +2548,8 @@ object CommsRepository {
             bump()
             CommsLog.add("Paid $amount $COIN_SYMBOL to ${formatClairixNumber(contact.number)}")
             // The notice is what carries the note; only the amount reached the relay.
-            when (val d = deliver(contact, CommsWire.payment(id, result.txid, ts, amount, text))) {
+            // It names the id the payee's record keeps the credit under, which only this notice tells them.
+            when (val d = deliver(contact, CommsWire.payment(id, result.credit, ts, amount, text))) {
                 Deliver.Sent -> Unit
                 is Deliver.Failed -> CommsLog.add("Payment notice to ${formatClairixNumber(contact.number)} failed: ${d.reason}; the coins have been transferred")
                 is Deliver.TooLarge -> CommsLog.add("Payment notice to ${formatClairixNumber(contact.number)} failed: ${d.reason}; the coins have been transferred")
@@ -2070,20 +2565,26 @@ object CommsRepository {
 
     /**
      * Checks a payment notice against the relay's record of this account: a
-     * credit under [txid] from [from] for [amount]. Found, it is recorded and
-     * shown as received; not found, the conversation says so.
+     * credit under [txid] for [amount] (see [CoinRules.confirms]). The relay
+     * does not record who paid; [from] is the contact whose end-to-end
+     * encrypted notice this is. Found, it is recorded and shown as received;
+     * not found, or already counted for another notice, the conversation says so.
      */
     private suspend fun confirmPayment(from: String, id: String, txid: String, amount: Long, ts: Long, note: String) {
         val history = runCatching { relay.coinHistory() }.getOrElse {
+            if ((it as? RelayException)?.code == 404) keepCoinOffer(false)
             CommsLog.add("Could not check a payment notice from ${formatClairixNumber(from)} with the relay: ${it.message}")
             return
         }
-        val found = history.any { it.id == txid && it.direction == "in" && it.from == from && it.amount == amount }
         lock.withLock {
-            if (found) {
+            val counted = store.countsTxid(txid, id)
+            if (CoinRules.confirms(history, txid, amount, counted)) {
                 if (!store.hasTransaction(id)) store.insertTransaction(CoinTx(id, from, Direction.IN, amount, ts, note, txid))
                 store.setMessageBody(id, paymentLine(amount, note, sent = false))
                 CommsLog.add("Received $amount $COIN_SYMBOL from ${formatClairixNumber(from)}")
+            } else if (counted) {
+                store.setMessageBody(id, "Says they sent $amount $COIN_SYMBOL, but that payment is already counted for another message")
+                CommsLog.add("A payment notice from ${formatClairixNumber(from)} for $amount $COIN_SYMBOL names a payment already counted for another notice; not counted")
             } else {
                 store.setMessageBody(id, "Says they sent $amount $COIN_SYMBOL, but the relay has no such payment")
                 CommsLog.add("A payment notice from ${formatClairixNumber(from)} for $amount $COIN_SYMBOL is not in the relay's record; not counted")
@@ -2110,8 +2611,16 @@ object CommsRepository {
     /** The owner's choice about what notifications say; see [CommsConfig.hidePreviews]. */
     fun setHidePreviews(hide: Boolean) = config.setHidePreviews(hide)
 
-    /** See [CommsConfig.relayOnlyCalls]. */
-    fun relayOnlyCalls(): Boolean = initialised && config.relayOnlyCalls
+    /** The owner's choice about relay-only calls, or null while the default applies ([RelayOnlyCalls]). */
+    fun relayOnlyCallsChoice(): Boolean? = if (initialised) config.relayOnlyCallsChoice else null
+
+    /** Whether the relay offered a TURN server for the last call this phone set up; null before the first. */
+    fun relayTurnOffered(): Boolean? = if (initialised) config.relayTurn else null
+
+    /** What the relay's call servers said for a call being set up: whether one of them was a TURN server. */
+    fun noteRelayTurn(offered: Boolean) {
+        if (initialised) config.setRelayTurn(offered)
+    }
 
     fun setRelayOnlyCalls(on: Boolean) = config.setRelayOnlyCalls(on)
 
@@ -2122,7 +2631,11 @@ object CommsRepository {
     /** The newest [limit] messages in [gid], oldest first, as the conversation shows them. */
     fun groupMessages(gid: String, limit: Int = 100): List<ChatMessage> = unlockedOr(emptyList()) { store.groupMessages(gid, limit).asReversed() }
 
-    fun sharedThreats(gid: String? = null): List<SharedThreat> = unlockedOr(emptyList()) { store.sharedThreats(gid) }
+    /** Threats shared in [gid] (in every group when null) whose time has not run out. */
+    fun sharedThreats(gid: String? = null): List<SharedThreat> = unlockedOr(emptyList()) {
+        val now = System.currentTimeMillis()
+        store.sharedThreats(gid).filter { it.expiresAt > now }
+    }
 
     /** Every group with its last message, unread count and size, most recently active first. */
     fun groupThreads(): List<GroupThread> = unlockedOr(emptyList()) {
@@ -2180,49 +2693,86 @@ object CommsRepository {
     }
 
     /**
-     * Sends [payload] to every one of [members] who is a contact on this phone,
-     * one envelope each; returns how many the relay took. Failures are logged
-     * per member. Nothing is queued: a group payload is sent once, and the
-     * caller decides what a complete failure means.
+     * Sends [payload] at once to every one of [members] who is a contact on
+     * this phone (never a blocked one or a message request), one envelope
+     * each; returns how many the relay took. Failures are logged per member.
+     * Nothing is queued: this is for what goes now or not at all, the
+     * invitation to a newcomer (the add is undone when it cannot reach them),
+     * and for what the next message carries anyway, a group's
+     * disappearing-messages change. SOS alerts, group texts, shared threats
+     * and roster changes go through the group outbox ([queueGroupRows]),
+     * which tries again.
      */
-    private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): Int {
+    private suspend fun fanOut(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): Int =
+        fanOutEach(what, members, payload, quiet).count { it.delivery == MemberDelivery.SENT }
+
+    /** [fanOut], member by member: what each one's envelope came to. */
+    private suspend fun fanOutEach(what: String, members: List<GroupMember>, payload: JSONObject, quiet: Boolean = false): List<MemberResult> {
         // A covert SOS leaves no line in the comms log, failures included.
         val log: (String) -> Unit = if (quiet) { _ -> } else CommsLog::add
-        var sent = 0
+        val out = ArrayList<MemberResult>(members.size)
         for (m in members) {
-            val contact = store.contact(m.number)
+            val contact = groupRecipient(m.number, m.ed25519)
             if (contact == null) {
-                log("$what to ${memberLabel(m)} not sent: they are not a contact on this phone")
+                val why = GroupOutbox.NOT_A_CONTACT
+                log("$what to ${memberLabel(m)} not sent: $why")
+                out += MemberResult(m.number, MemberDelivery.FAILED, why)
                 continue
             }
             if (!isGroupMember(contact, m.ed25519)) {
                 // Someone else holds this number on another relay: the group's
                 // messages go to the member the group knows, never to a number.
-                log("$what to ${memberLabel(m)} not sent: the contact with that number is not the person this group knows")
+                val why = GroupOutbox.NOT_THE_MEMBER
+                log("$what to ${memberLabel(m)} not sent: $why")
+                out += MemberResult(m.number, MemberDelivery.FAILED, why)
                 continue
             }
-            when (val d = deliver(contact, payload)) {
-                Deliver.Sent -> sent++
-                is Deliver.Failed -> log("$what to ${memberLabel(m)} failed: ${d.reason}")
-                is Deliver.TooLarge -> log("$what to ${memberLabel(m)} failed: ${d.reason}")
+            out += when (val d = deliver(contact, payload)) {
+                Deliver.Sent -> MemberResult(m.number, MemberDelivery.SENT)
+                is Deliver.Failed -> {
+                    log("$what to ${memberLabel(m)} failed: ${d.reason}")
+                    MemberResult(m.number, MemberDelivery.FAILED, d.reason)
+                }
+                is Deliver.TooLarge -> {
+                    log("$what to ${memberLabel(m)} failed: ${d.reason}")
+                    MemberResult(m.number, MemberDelivery.FAILED, d.reason)
+                }
                 is Deliver.Offline -> {
                     val id = payload.optString(CommsWire.F_ID)
                     val type = payload.optString(CommsWire.F_TYPE)
                     if (type in MESH_TYPES && id.isNotEmpty() && meshQueue(contact, payload, id)) {
                         log("$what to ${memberLabel(m)} is in the offline mesh: the relay is not reachable (${d.reason})")
+                        MemberResult(m.number, MemberDelivery.MESH_QUEUED, d.reason)
                     } else {
                         log("$what to ${memberLabel(m)} not sent: ${d.reason}")
+                        MemberResult(m.number, MemberDelivery.OFFLINE, d.reason)
                     }
                 }
             }
         }
-        return sent
+        return out
     }
 
+    /** An admin's whole roster of [group], numbered [rv] ([CommsWire.OP_ROSTER]). */
+    private fun rosterPayload(group: Group, members: List<GroupMember>, rv: Long): JSONObject =
+        CommsWire.groupCtrl(
+            group.id, CommsWire.OP_ROSTER,
+            mapOf(
+                CommsWire.F_GROUP_NAME to group.name,
+                CommsWire.F_CREATED_BY to group.createdBy,
+                CommsWire.F_CREATED_TS to group.createdTs,
+                CommsWire.F_MEMBERS to rosterJson(members),
+                CommsWire.F_ROSTER_VERSION to rv
+            )
+        )
+
     /**
-     * Adds a contact to a group this phone administers: the roster here, then
-     * the whole roster to the newcomer (so their phone learns the group) and
-     * the new member to everyone already in it.
+     * Adds a contact to a group this phone administers, as the roster's next
+     * number ([RosterSync.next]): the roster here, then the whole roster to
+     * the newcomer at once, so their phone learns the group (the add is
+     * undone when that cannot reach them now), then, through the group
+     * outbox, the new member and the whole numbered roster to everyone
+     * already in it.
      */
     suspend fun addGroupMember(gid: String, number: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -2235,22 +2785,31 @@ object CommsRepository {
             if (ctx.has(number)) throw IllegalArgumentException("${contact.name.ifBlank { formatClairixNumber(number) }} is already in the group")
             if (ctx.members.size >= MAX_GROUP_MEMBERS) throw IllegalArgumentException("A group holds at most $MAX_GROUP_MEMBERS members")
             val now = System.currentTimeMillis()
-            val newcomer = GroupMember(gid, number, contact.name, OrgRole.MEMBER, contact.ed25519, ctx.me, now)
-            lock.withLock { store.insertGroupMember(newcomer) }
+            val rv = RosterSync.next(ctx.group.rosterVersion, ctx.group.rosterSeen)
+            val newcomer = GroupMember(gid, number, contact.name, OrgRole.MEMBER, contact.ed25519, ctx.me, now, rv)
+            lock.withLock {
+                store.insertGroupMember(newcomer)
+                store.setRoster(gid, rv, rv)
+            }
             bump()
             val roster = ctx.members + newcomer
+            val group = ctx.group.copy(rosterVersion = rv, rosterSeen = rv)
             val welcome = CommsWire.groupCtrl(
                 gid, CommsWire.OP_ADD,
                 mapOf(
                     CommsWire.F_GROUP_NAME to ctx.group.name,
                     CommsWire.F_CREATED_BY to ctx.group.createdBy,
                     CommsWire.F_CREATED_TS to ctx.group.createdTs,
-                    CommsWire.F_MEMBERS to rosterJson(roster)
+                    CommsWire.F_MEMBERS to rosterJson(roster),
+                    CommsWire.F_ROSTER_VERSION to rv
                 )
             )
             val welcomed = fanOut("Group invitation", listOf(newcomer), welcome)
             if (welcomed == 0) {
-                lock.withLock { store.removeGroupMember(gid, number) }
+                lock.withLock {
+                    store.removeGroupMember(gid, number)
+                    store.setRoster(gid, ctx.group.rosterVersion, ctx.group.rosterSeen)
+                }
                 bump()
                 throw RelayException("${contact.name.ifBlank { formatClairixNumber(number) }} could not be reached; try again later")
             }
@@ -2260,16 +2819,29 @@ object CommsRepository {
                     CommsWire.F_MEMBER to number,
                     CommsWire.F_MEMBER_NAME to contact.name,
                     CommsWire.F_ROLE to OrgRole.MEMBER.name,
-                    CommsWire.F_MEMBER_ED25519 to contact.ed25519
+                    CommsWire.F_MEMBER_ED25519 to contact.ed25519,
+                    CommsWire.F_ROSTER_VERSION to rv
                 )
             )
-            fanOut("Roster update", ctx.others(), joined)
+            // The change, for apps from before roster numbers, and the whole
+            // numbered roster, which repairs a phone that missed an earlier one.
+            val batch = UUID.randomUUID().toString()
+            queueRosterRows(group, ctx.others(), joined, batch)
+            queueRosterRows(group, ctx.others(), rosterPayload(group, roster, rv), batch)
+            scope.launch { flushOutbox() }
             CommsLog.add("${contact.name.ifBlank { formatClairixNumber(number) }} added to \"${ctx.group.name}\"")
             Unit
         }
     }
 
-    /** Takes a member out of a group this phone administers; they and everyone else are told. */
+    /**
+     * Takes a member out of a group this phone administers, as the roster's
+     * next number. Through the group outbox: the removal to everyone, the
+     * removed member included so their phone drops the group (unless the
+     * owner blocked them: nothing is sent to a blocked identity), and the
+     * whole numbered roster to everyone left, so a phone that missed a change
+     * catches up instead of sending on to the person removed.
+     */
     suspend fun removeGroupMember(gid: String, number: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
@@ -2277,22 +2849,39 @@ object CommsRepository {
             if (ctx.myRole != OrgRole.ADMIN) throw RelayException("Only an admin can remove members")
             if (number == ctx.me) throw IllegalArgumentException("Leave the group instead")
             val target = ctx.members.find { it.number == number } ?: throw IllegalArgumentException("They are not in the group")
-            lock.withLock { store.removeGroupMember(gid, number) }
+            val rv = RosterSync.next(ctx.group.rosterVersion, ctx.group.rosterSeen)
+            lock.withLock {
+                store.removeGroupMember(gid, number)
+                store.setRoster(gid, rv, rv)
+            }
             bump()
-            val notice = CommsWire.groupCtrl(gid, CommsWire.OP_REMOVE, mapOf(CommsWire.F_MEMBER to number))
-            // The removed member hears it too, so their phone drops the group.
-            fanOut("Roster update", ctx.others(), notice)
+            val remaining = ctx.members.filter { it.number != number }
+            val group = ctx.group.copy(rosterVersion = rv, rosterSeen = rv)
+            val batch = UUID.randomUUID().toString()
+            val notice = CommsWire.groupCtrl(gid, CommsWire.OP_REMOVE, mapOf(CommsWire.F_MEMBER to number, CommsWire.F_ROSTER_VERSION to rv))
+            queueRosterRows(group, ctx.others(), notice, batch)
+            queueRosterRows(group, remaining.filter { it.number != ctx.me }, rosterPayload(group, remaining, rv), batch)
+            scope.launch { flushOutbox() }
             CommsLog.add("${memberLabel(target)} removed from \"${ctx.group.name}\"")
             Unit
         }
     }
 
-    /** Leaves a group: the other members are told, then everything about it goes from this phone. */
+    /**
+     * Leaves a group: everything about it goes from this phone, what its
+     * outbox still owed anyone included, and then the other members are told
+     * through the group outbox, which keeps the notice and tries it again
+     * until it reaches them (never anyone the owner blocked).
+     */
     suspend fun leaveGroup(gid: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val ctx = groupContext(gid)
-            if (config.isRegistered) fanOut("Leaving notice", ctx.others(), CommsWire.groupCtrl(gid, CommsWire.OP_LEAVE))
             dropGroupLocally(gid)
+            if (config.isRegistered) {
+                val notice = CommsWire.withRosterVersion(CommsWire.groupCtrl(gid, CommsWire.OP_LEAVE), ctx.group.rosterVersion)
+                queueRosterRows(ctx.group, ctx.others(), notice, UUID.randomUUID().toString())
+                scope.launch { flushOutbox() }
+            }
             Registry.publishSharedThreats(store.sharedThreats(null))
             CommsLog.add("Left \"${ctx.group.name}\"")
             bump()
@@ -2301,14 +2890,19 @@ object CommsRepository {
 
     private suspend fun dropGroupLocally(gid: String) {
         lock.withLock { store.deleteGroup(gid).forEach { CommsMedia.delete(it) } }
+        // The store's outbox rows for the group went with it; a covert SOS's go too.
+        memoryRows.removeIf { it.gid == gid }
         CommsNotifications.cancel(appContext, gid)
     }
 
     /**
      * Sends a text to every member of [gid]. The conversation gets one row at
-     * once; its status is "sent" when at least one member's envelope reached
-     * the relay and "failed" when none did. The fan-out runs on the
-     * repository's scope, so leaving the screen does not cut it short.
+     * once, "queued", and the group outbox one row per member, tried until
+     * the relay takes it or a week has passed. The bubble then says what
+     * happened ([GroupOutbox.textStatus]): sent once every member has it,
+     * sent with "Reached 3 of 4 members" when some could not be reached,
+     * failed when nobody could. The first try runs on the repository's scope,
+     * so leaving the screen does not cut it short.
      */
     suspend fun sendGroupMessage(gid: String, body: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -2326,18 +2920,13 @@ object CommsRepository {
             }
             bump()
             wakeExpiry()
-            scope.launch {
-                val recipients = ctx.others()
-                val sent = if (recipients.isEmpty()) 0 else fanOut("Group message", recipients, CommsWire.groupMsg(gid, text, id, ts, ttl))
-                if (sent > 0 || recipients.isEmpty()) {
-                    store.markSentIfQueued(id)
-                    if (recipients.isNotEmpty() && sent < recipients.size) {
-                        CommsLog.add("Group message to \"${ctx.group.name}\" reached $sent of ${recipients.size} member(s)")
-                    }
-                } else {
-                    store.setStatus(id, "failed", "No member could be reached")
-                }
+            val queued = queueGroupRows(ctx, GroupOutbox.Kind.TEXT, id, id, CommsWire.groupMsg(gid, text, id, ts, ttl), ts, ts + GroupOutbox.TEXT_LIFETIME_MS)
+            if (queued.rows.isEmpty()) {
+                // Nobody else in the group (or only people the owner blocked): nothing to wait for.
+                store.markSentIfQueued(id)
                 bump()
+            } else {
+                scope.launch { flushGroupOutbox(OTHER_ROWS, batch = id) }
             }
             Unit
         }
@@ -2350,8 +2939,10 @@ object CommsRepository {
 
     /**
      * Shares a detection with group [gid]: on this phone's map and timeline at
-     * once, and to every member in one envelope each. [bleJson] and [cellJson]
-     * are optional JSON objects with the raw evidence.
+     * once, and to every member through the group outbox, one row each, tried
+     * until the threat expires. [bleJson] and [cellJson] are optional JSON
+     * objects with the raw evidence. Fails only when nobody could be reached
+     * for good; members the relay could not take now are tried again.
      */
     suspend fun shareThreats(
         gid: String, kind: String, severity: String, lat: Double?, lon: Double?, title: String, detail: String,
@@ -2361,7 +2952,7 @@ object CommsRepository {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
             if (kind !in THREAT_KINDS) throw IllegalArgumentException("Unknown threat kind \"$kind\"")
             if (severity !in THREAT_SEVERITIES) throw IllegalArgumentException("Unknown severity \"$severity\"")
-            if (lat == null || lon == null) throw IllegalArgumentException("No GPS fix to attach; a shared threat needs a position")
+            require(lat != null && lon != null) { "No position to attach; a shared threat needs one. Check that location is on and try again" }
             val ctx = groupContext(gid)
             if (!ctx.has(ctx.me)) throw RelayException("You are no longer in this group")
             val id = UUID.randomUUID().toString()
@@ -2372,44 +2963,750 @@ object CommsRepository {
             lock.withLock { store.insertSharedThreat(threat) }
             Registry.publishSharedThreats(store.sharedThreats(null))
             bump()
-            val sent = fanOut("Shared threat", ctx.others(), CommsWire.threat(gid, id, ts, kind, severity, lat, lon, heading, text, threat.expiresAt, bleJson, cellJson))
-            CommsLog.add("Threat \"$heading\" shared with \"${ctx.group.name}\": $sent of ${ctx.others().size} member(s) reached")
-            if (sent == 0 && ctx.others().isNotEmpty()) throw RelayException("No member could be reached")
+            val payload = CommsWire.threat(gid, id, ts, kind, severity, lat, lon, heading, text, threat.expiresAt, bleJson, cellJson)
+            val queued = queueGroupRows(ctx, GroupOutbox.Kind.THREAT, id, id, payload, ts, threat.expiresAt)
+            val rows = if (queued.rows.isEmpty()) emptyList() else flushGroupOutbox(OTHER_ROWS, batch = id)
+            val reached = rows.count { it.status == GroupOutbox.Status.SENT }
+            val waiting = rows.count { !it.final }
+            CommsLog.add(
+                "Threat \"$heading\" shared with \"${ctx.group.name}\": $reached of ${rows.size} member(s) reached" +
+                    if (waiting > 0) "; $waiting tried again until it expires" else ""
+            )
+            if (rows.isNotEmpty() && reached == 0 && waiting == 0 && rows.none { it.status == GroupOutbox.Status.MESH }) {
+                throw RelayException("No member could be reached")
+            }
             Unit
         }
     }
 
-    /** Sends an SOS to every member of [gid], with this phone's position when it has one. */
-    suspend fun sendPanic(gid: String, lat: Double?, lon: Double?, note: String? = null, covert: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (!config.isRegistered) throw RelayException("Not registered with a relay")
-            val ctx = groupContext(gid)
-            val id = UUID.randomUUID().toString()
-            val ts = System.currentTimeMillis()
-            val text = note?.trim()?.take(MAX_PANIC_NOTE)
-            val sent = fanOut("SOS", ctx.others(), CommsWire.panic(gid, id, ts, lat, lon, text), quiet = covert)
-            if (!covert) CommsLog.add("SOS sent to \"${ctx.group.name}\": $sent of ${ctx.others().size} member(s) reached" + if (lat == null || lon == null) " (no position)" else "")
-            if (sent == 0 && ctx.others().isNotEmpty()) throw RelayException("No member of \"${ctx.group.name}\" could be reached")
-            Unit
+    // ── Group outbox ──────────────────────────────────────────────────────
+    //
+    // One row per member a group payload is still owed to ([GroupOutbox]),
+    // tried by flushOutbox on scheduleRetry's back-off: SOS rows first, then
+    // roster changes, texts and threats. A covert SOS's rows live in
+    // memoryRows only. Who gets a row is GroupOutbox.plan: never this phone,
+    // never anyone the owner blocked, and while the roster is out of date
+    // (RosterSync) only members confirmed in the newer one; the others' rows
+    // are held until it comes.
+
+    private val SOS_ROWS = setOf(GroupOutbox.Kind.SOS)
+    private val OTHER_ROWS = setOf(GroupOutbox.Kind.ROSTER, GroupOutbox.Kind.TEXT, GroupOutbox.Kind.THREAT)
+    /** A group's roster is asked for again at most this often, or this often while an SOS waits on the answer. */
+    private const val ROSTER_ASK_MS = 10 * 60_000L
+    private const val ROSTER_ASK_URGENT_MS = 60_000L
+    /** How long a request for a roster is worth trying. */
+    private const val ROSTER_ASK_LIFETIME_MS = 24 * 3600_000L
+    /** An admin answers one member's requests for one group's roster at most this often. */
+    private const val ROSTER_ANSWER_MS = 60_000L
+
+    /** What [queueGroupRows] made: the rows, and how many members it left out because the owner blocked them. */
+    private class Queued(val rows: List<GroupOutbox.Row>, val skipped: Int)
+
+    /**
+     * Queues [payload], numbered with the sender's roster
+     * ([CommsWire.withRosterVersion]), for [members] of [ctx]'s group (by
+     * default everyone but this phone), one row each as [GroupOutbox.plan]
+     * decides. A member this phone cannot reach gets a row that has already
+     * failed, so the result says who and why; a blocked one gets none and is
+     * counted nowhere. [quiet] (a covert SOS): kept in memory only, nothing
+     * logged. Asks the admins for the roster when rows had to be held for it.
+     */
+    private fun queueGroupRows(
+        ctx: GroupContext,
+        kind: GroupOutbox.Kind,
+        id: String,
+        batch: String,
+        payload: JSONObject,
+        created: Long,
+        deadline: Long,
+        quiet: Boolean = false,
+        members: List<GroupMember> = ctx.others()
+    ): Queued {
+        val text = CommsWire.withRosterVersion(payload, ctx.group.rosterVersion).toString()
+        val blocked = store.blockedKeys()
+        val g = ctx.group
+        var skipped = 0
+        // With no admin to ask for a newer roster, a newer number can never be settled: nobody is held for it.
+        val askable = RosterSync.askable(ctx.members, ctx.me)
+        val rows = ArrayList<GroupOutbox.Row>(members.size)
+        for (m in members) {
+            val contact = groupRecipient(m.number, m.ed25519)
+            val knownAs = contact != null && isGroupMember(contact, m.ed25519)
+            val confirmed = RosterSync.confirmed(m.rv, g.rosterVersion, g.rosterSeen, askable)
+            val status = when (val plan = GroupOutbox.plan(m, ctx.me, contact, knownAs, blocked, confirmed)) {
+                GroupOutbox.Plan.Skip -> {
+                    if (m.number != ctx.me) skipped++
+                    continue
+                }
+                is GroupOutbox.Plan.Fail -> {
+                    if (!quiet) CommsLog.add("${rowLabel(kind, payload)} to ${memberLabel(m)} not sent: ${plan.reason}")
+                    rows += GroupOutbox.Row(id, m.number, g.id, batch, kind, m.ed25519, text, created, deadline, GroupOutbox.Status.FAILED, error = plan.reason)
+                    continue
+                }
+                is GroupOutbox.Plan.Queue -> if (plan.held) GroupOutbox.Status.HELD else GroupOutbox.Status.QUEUED
+            }
+            val why = if (status == GroupOutbox.Status.HELD) GroupOutbox.WAITING_FOR_ROSTER else null
+            rows += GroupOutbox.Row(id, m.number, g.id, batch, kind, m.ed25519, text, created, deadline, status, error = why)
+        }
+        if (quiet) memoryRows.add(rows) else store.insertOutbox(rows)
+        if (rows.any { it.status == GroupOutbox.Status.HELD }) askForRoster(g, urgent = kind == GroupOutbox.Kind.SOS, quiet = quiet)
+        return Queued(rows, skipped)
+    }
+
+    /**
+     * Queues a roster payload ([payload]: a change, a whole roster, a request
+     * for one, a leaving notice) for [recipients], one row each, never for
+     * this phone or anyone the owner blocked. Unlike other rows these go to
+     * the member they were made for whether or not the roster still lists
+     * them: a removed member must hear it, and a leaving notice outlives the
+     * group on this phone.
+     */
+    private fun queueRosterRows(
+        group: Group,
+        recipients: List<GroupMember>,
+        payload: JSONObject,
+        batch: String,
+        quiet: Boolean = false,
+        lifetimeMs: Long = GroupOutbox.ROSTER_LIFETIME_MS
+    ) {
+        val me = config.number ?: return
+        val blocked = store.blockedKeys()
+        val now = System.currentTimeMillis()
+        val id = UUID.randomUUID().toString()
+        val text = payload.toString()
+        val rows = recipients
+            .filter { it.number != me && !GroupOutbox.blockedRecipient(it.number, it.ed25519, blocked) }
+            .map { GroupOutbox.Row(id, it.number, group.id, batch, GroupOutbox.Kind.ROSTER, it.ed25519, text, now, now + lifetimeMs) }
+        if (quiet) memoryRows.add(rows) else store.insertOutbox(rows)
+    }
+
+    /** When each group's roster was last asked for, so a run of newer numbers is not a run of requests. */
+    private val rosterAskedAt = HashMap<String, Long>()
+    /** When each member's request for each group's roster was last answered, by "gid|number". */
+    private val rosterAnsweredAt = HashMap<String, Long>()
+
+    /**
+     * Asks [group]'s admins for its roster ([CommsWire.OP_ROSTER_REQUEST]):
+     * this phone heard a newer roster number than its own, so it missed a
+     * change. At most once every ten minutes, or every minute while an SOS
+     * waits on the answer ([urgent]). [quiet]: kept in memory and not logged
+     * (asked for a covert SOS).
+     */
+    private fun askForRoster(group: Group, urgent: Boolean, quiet: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val every = if (urgent) ROSTER_ASK_URGENT_MS else ROSTER_ASK_MS
+        synchronized(rosterAskedAt) {
+            if (now - (rosterAskedAt[group.id] ?: 0L) < every) return
+            rosterAskedAt[group.id] = now
+        }
+        val me = config.number ?: return
+        val admins = store.groupMembers(group.id).filter { it.role == OrgRole.ADMIN && it.number != me }
+        if (admins.isEmpty()) return
+        val request = CommsWire.withRosterVersion(CommsWire.groupCtrl(group.id, CommsWire.OP_ROSTER_REQUEST), group.rosterVersion)
+        queueRosterRows(group, admins, request, UUID.randomUUID().toString(), quiet, ROSTER_ASK_LIFETIME_MS)
+        if (!quiet) CommsLog.add("The member list of \"${group.name}\" on this phone is out of date; asking its admins for theirs")
+        scope.launch { flushOutbox() }
+    }
+
+    /** The group outbox's rows of [kinds]: the store's and those kept in memory. */
+    private fun groupRows(kinds: Set<GroupOutbox.Kind>): List<GroupOutbox.Row> =
+        store.outbox(kinds) + memoryRows.all().filter { it.kind in kinds }
+
+    /**
+     * The groups with an SOS row still being tried, held for a confirmed member
+     * list or about to be ([carriesSos]): a row is marked held only after the
+     * try that asked for the list, which may already be on its way.
+     */
+    private fun heldSosGroups(): Set<String> =
+        groupRows(setOf(GroupOutbox.Kind.SOS)).filter { !it.final }.mapTo(HashSet()) { it.gid }
+
+    private fun saveRow(row: GroupOutbox.Row) {
+        if (memoryRows.has(row)) memoryRows.update(row) else store.updateOutbox(row)
+    }
+
+    private fun deleteRow(row: GroupOutbox.Row) {
+        if (memoryRows.has(row)) memoryRows.remove(row) else store.deleteOutbox(row.id, row.recipient)
+    }
+
+    private fun deleteBatch(batch: String) {
+        store.deleteOutboxBatch(batch)
+        memoryRows.removeIf { it.batch == batch }
+    }
+
+    /** What a row carries, as the comms log names it. */
+    private fun rowLabel(kind: GroupOutbox.Kind, payload: JSONObject?): String = when (kind) {
+        GroupOutbox.Kind.SOS -> "SOS"
+        GroupOutbox.Kind.TEXT -> "Group message"
+        GroupOutbox.Kind.THREAT -> "Shared threat"
+        GroupOutbox.Kind.ROSTER -> when (payload?.optString(CommsWire.F_OP)) {
+            CommsWire.OP_LEAVE -> "Leaving notice"
+            CommsWire.OP_ROSTER_REQUEST -> "Request for the member list"
+            else -> "Roster update"
         }
     }
 
-    /** The SOS was raised: to every group, with the last known position. */
-    private suspend fun broadcastPanic(covert: Boolean) {
-        if (!config.isRegistered) return
+    /** A row the outbox stops owing anyone, and why. */
+    private enum class Dropped { BLOCKED, REMOVED }
+
+    /** What trying a row came to: an outcome for it, or no row any more. */
+    private sealed class Tried {
+        class Done(val outcome: GroupOutbox.Outcome) : Tried()
+        class Drop(val why: Dropped) : Tried()
+    }
+
+    /**
+     * Tries the group outbox's rows of [kinds] that are due ([GroupOutbox.due]),
+     * or only [batch]'s; SOS rows under a lock of their own. Stops at the
+     * first the relay could not take and schedules the retry, as the
+     * one-to-one outbox does, unless [everyone] (an SOS's first pass, which
+     * tries every member whatever became of the others). Then settles what is
+     * final. Returns [batch]'s rows as they stood after the pass, before
+     * anything final was cleared. Never throws: with the vault sealed the
+     * rows wait for the unlock, and anything else is logged.
+     */
+    private suspend fun flushGroupOutbox(kinds: Set<GroupOutbox.Kind>, batch: String? = null, everyone: Boolean = false): List<GroupOutbox.Row> {
+        if (!config.isRegistered) return emptyList()
+        return (if (GroupOutbox.Kind.SOS in kinds) sosOutboxLock else groupOutboxLock).withLock { groupPass(kinds, batch, everyone) }
+    }
+
+    /** [flushGroupOutbox] with its lock held: one [passGroupOutbox], which never throws out of here. */
+    private suspend fun groupPass(kinds: Set<GroupOutbox.Kind>, batch: String?, everyone: Boolean): List<GroupOutbox.Row> {
+        val sos = GroupOutbox.Kind.SOS in kinds
+        return try {
+            passGroupOutbox(kinds, batch, everyone)
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: VaultSealedException) {
+            emptyList()
+        } catch (e: Exception) {
+            CommsLog.add("The group outbox could not be tried: ${e.message ?: e.javaClass.simpleName}")
+            emptyList()
+        } finally {
+            // An SOS still being tried holds the vault open; with none left, it is let go.
+            if (sos) holdVaultForSos(runCatching { sosPending() }.getOrDefault(false))
+        }
+    }
+
+    private suspend fun passGroupOutbox(kinds: Set<GroupOutbox.Kind>, batch: String?, everyone: Boolean): List<GroupOutbox.Row> {
+        val now = System.currentTimeMillis()
+        // What ran out of time is settled first, and held rows go to whoever the roster now confirms.
+        var rows = groupRows(kinds).map { r ->
+            val e = GroupOutbox.expire(r, now)
+            if (e != r) {
+                saveRow(e)
+                if (e.kind != GroupOutbox.Kind.SOS && !memoryRows.has(e)) {
+                    CommsLog.add("${rowLabel(e.kind, CommsWire.parse(e.payload))} to ${memberName(e.gid, e.recipient)} given up: ${e.error}")
+                }
+            }
+            e
+        }
+        rows = releaseHeld(rows)
+        if (GroupOutbox.Kind.SOS in kinds) {
+            val waiting = rows.filter { it.status == GroupOutbox.Status.QUEUED && (batch == null || it.batch == batch) }
+            if (waiting.isNotEmpty()) topUpTokensForSos(waiting.size, quiet = waiting.all { memoryRows.has(it) })
+        }
+        val due = GroupOutbox.due(rows, now).filter { batch == null || it.batch == batch }
+        var offline = false
+        var backoff = false
+        var retryAfter = Long.MAX_VALUE
+        for (row in due) {
+            val quiet = memoryRows.has(row)
+            when (val t = tryRow(row, quiet)) {
+                is Tried.Drop -> dropRow(row, t.why)
+                is Tried.Done -> {
+                    val o = t.outcome
+                    val next = GroupOutbox.after(row, o, System.currentTimeMillis())
+                    saveRow(next)
+                    if (!quiet) logRow(row, next, o)
+                    if (o is GroupOutbox.Outcome.Offline) {
+                        offline = true
+                        val wait = o.retryAfterMs
+                        if (wait == null) backoff = true else retryAfter = minOf(retryAfter, wait)
+                        if (!everyone) break
+                    }
+                }
+            }
+        }
+        if (offline) scheduleRetry(if (backoff) null else retryAfter)
+        val after = groupRows(kinds)
+        val batchRows = if (batch != null) after.filter { it.batch == batch } else emptyList()
+        settleGroupRows(after, kinds)
+        return batchRows
+    }
+
+    /**
+     * Held rows once the roster may have changed ([GroupOutbox.release]):
+     * queued for members it now confirms, dropped for anyone it no longer
+     * lists. Returns the rows as they now stand.
+     */
+    private fun releaseHeld(rows: List<GroupOutbox.Row>): List<GroupOutbox.Row> {
+        if (rows.none { it.status == GroupOutbox.Status.HELD }) return rows
+        val out = ArrayList<GroupOutbox.Row>(rows.size)
+        for (r in rows) {
+            if (r.status != GroupOutbox.Status.HELD) {
+                out += r
+                continue
+            }
+            val group = store.group(r.gid)
+            val member = if (group != null) store.groupMember(r.gid, r.recipient) else null
+            val confirmed = group != null && member != null &&
+                RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen, RosterSync.askable(store.groupMembers(r.gid), config.number))
+            val next = GroupOutbox.release(r, member, confirmed)
+            when {
+                next == null -> dropRow(r, Dropped.REMOVED)
+                next == r -> out += r
+                else -> {
+                    saveRow(next)
+                    out += next
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * A row the outbox owes nobody any more: the owner blocked its member
+     * (dropped without a word, as everything about a blocked identity is), or
+     * the roster no longer lists them. An SOS being tried counts them as left
+     * out, not as unreached.
+     */
+    private fun dropRow(row: GroupOutbox.Row, why: Dropped) {
+        val quiet = memoryRows.has(row)
+        deleteRow(row)
+        val run = sosRun
+        if (run != null && row.kind == GroupOutbox.Kind.SOS && row.batch == run.batch) {
+            synchronized(run) {
+                val counts = if (why == Dropped.BLOCKED) run.skipped else run.removed
+                counts[row.gid] = (counts[row.gid] ?: 0) + 1
+            }
+        }
+        if (why == Dropped.REMOVED && !quiet && row.kind != GroupOutbox.Kind.SOS) {
+            CommsLog.add("${rowLabel(row.kind, null)} to ${formatClairixNumber(row.recipient)} dropped: they are no longer in the group")
+        }
+    }
+
+    /**
+     * One try at [row]. A member the owner blocked, or one the roster no
+     * longer lists (for anything but a roster row, which goes to whom it was
+     * made for), is dropped. While the roster is out of date, a member not
+     * confirmed in the newer one is held and the admins asked for it. Then as
+     * any envelope: not a contact, or not the person the group knows, is
+     * final; otherwise the relay decides, and when it cannot be reached a
+     * text or an SOS also goes into the offline mesh (when it is on), the
+     * relay still tried until the row is final.
+     */
+    private suspend fun tryRow(row: GroupOutbox.Row, quiet: Boolean): Tried {
+        val blocked = store.blockedKeys()
+        if (GroupOutbox.blockedRecipient(row.recipient, row.recipientEd, blocked)) return Tried.Drop(Dropped.BLOCKED)
+        var key = row.recipientEd
+        if (row.kind != GroupOutbox.Kind.ROSTER) {
+            val group = store.group(row.gid) ?: return Tried.Drop(Dropped.REMOVED)
+            val member = store.groupMember(row.gid, row.recipient) ?: return Tried.Drop(Dropped.REMOVED)
+            if (row.recipientEd.isNotBlank() && member.ed25519.isNotBlank() && member.ed25519 != row.recipientEd) return Tried.Drop(Dropped.REMOVED)
+            if (GroupOutbox.blockedRecipient(member.number, member.ed25519, blocked)) return Tried.Drop(Dropped.BLOCKED)
+            if (!RosterSync.confirmed(member.rv, group.rosterVersion, group.rosterSeen, RosterSync.askable(store.groupMembers(row.gid), config.number))) {
+                askForRoster(group, urgent = row.kind == GroupOutbox.Kind.SOS, quiet = quiet)
+                return Tried.Done(GroupOutbox.Outcome.Hold)
+            }
+            key = member.ed25519
+        }
+        val contact = groupRecipient(row.recipient, key) ?: return Tried.Done(GroupOutbox.Outcome.Failed(GroupOutbox.NOT_A_CONTACT))
+        if (!isGroupMember(contact, key)) return Tried.Done(GroupOutbox.Outcome.Failed(GroupOutbox.NOT_THE_MEMBER))
+        val payload = CommsWire.parse(row.payload) ?: return Tried.Done(GroupOutbox.Outcome.Failed("its record on this phone is unreadable"))
+        val outcome = when (val d = deliver(contact, payload)) {
+            Deliver.Sent -> GroupOutbox.Outcome.Sent
+            is Deliver.Failed -> GroupOutbox.Outcome.Failed(d.reason)
+            is Deliver.TooLarge -> GroupOutbox.Outcome.Failed(d.reason)
+            is Deliver.Offline -> {
+                val mesh = !row.mesh && CommsWire.type(payload) in MESH_TYPES && meshQueue(contact, payload, row.id, quiet)
+                GroupOutbox.Outcome.Offline(d.reason, d.retryAfterMs, mesh)
+            }
+        }
+        return Tried.Done(outcome)
+    }
+
+    /** The comms log's line for one try at a row, when it says something new. */
+    private fun logRow(row: GroupOutbox.Row, next: GroupOutbox.Row, outcome: GroupOutbox.Outcome) {
+        val what = rowLabel(row.kind, if (row.kind == GroupOutbox.Kind.ROSTER) CommsWire.parse(row.payload) else null)
+        val who = memberName(row.gid, row.recipient)
+        when (outcome) {
+            GroupOutbox.Outcome.Sent -> if (row.attempts > 0) CommsLog.add("$what to $who went through on try ${next.attempts}")
+            is GroupOutbox.Outcome.Failed -> CommsLog.add("$what to $who failed: ${outcome.reason}")
+            is GroupOutbox.Outcome.Offline -> when {
+                next.final -> if (row.kind != GroupOutbox.Kind.SOS) CommsLog.add("$what to $who given up: ${next.error}")
+                row.attempts == 0 -> CommsLog.add("$what to $who not sent yet: ${outcome.reason}; it stays queued and is tried again")
+            }
+            GroupOutbox.Outcome.Hold -> Unit
+        }
+    }
+
+    /**
+     * What final rows mean, after a pass. A group text's bubble says how far
+     * it got ([GroupOutbox.textStatus]); a send whose every row is final is
+     * cleared from the outbox; an SOS updates [panicResult] and, once final,
+     * gives its last word ([settleSos]).
+     */
+    private fun settleGroupRows(rows: List<GroupOutbox.Row>, kinds: Set<GroupOutbox.Kind>) {
+        var changed = false
+        for ((batch, batchRows) in rows.groupBy { it.batch }) {
+            val done = batchRows.all { it.final }
+            when (batchRows.first().kind) {
+                GroupOutbox.Kind.SOS -> Unit
+                GroupOutbox.Kind.TEXT -> {
+                    val s = GroupOutbox.textStatus(batchRows)
+                    val current = store.statusOf(batch)
+                    if (current != null && (current.first != s.status || current.second != s.note)) {
+                        store.setStatus(batch, s.status, s.note)
+                        changed = true
+                    }
+                    if (done) deleteBatch(batch)
+                }
+                GroupOutbox.Kind.THREAT -> if (done) {
+                    // One that took more than a try says what came of it; the first try's line is shareThreats'.
+                    if (batchRows.any { it.attempts > 1 }) {
+                        val title = batchRows.firstNotNullOfOrNull { CommsWire.parse(it.payload) }?.optString(CommsWire.F_TITLE).orEmpty()
+                        val name = store.group(batchRows.first().gid)?.name ?: "a group"
+                        val reached = batchRows.count { it.status == GroupOutbox.Status.SENT }
+                        CommsLog.add("Threat \"$title\" shared with \"$name\": $reached of ${batchRows.size} member(s) reached after retrying")
+                    }
+                    deleteBatch(batch)
+                }
+                GroupOutbox.Kind.ROSTER -> if (done) deleteBatch(batch)
+            }
+        }
+        if (changed) bump()
+        if (GroupOutbox.Kind.SOS in kinds) settleSos(rows.filter { it.kind == GroupOutbox.Kind.SOS })
+    }
+
+    // ── SOS ───────────────────────────────────────────────────────────────
+
+    /**
+     * What became of the latest visible SOS (the button's), as it stands: after
+     * its first pass over every member, then after each pass of the group
+     * outbox until it is final. Null before any. A covert SOS (the duress
+     * phrase) is never published here: nothing on this phone may say it was
+     * sent.
+     */
+    private val _panicResult = MutableStateFlow<PanicResult?>(null)
+    val panicResult: StateFlow<PanicResult?> = _panicResult.asStateFlow()
+
+    /** Numbers each raise of the SOS flag, so a caller waiting on [panicResult] knows its own. */
+    private val panicAttempts = AtomicLong(0)
+
+    /**
+     * The latest SOS raised in this process: what its result is made of
+     * besides its rows. [skipped] and [removed] count, per group, members
+     * left out because the owner blocked them or the roster turned out no
+     * longer to list them. A newer SOS replaces it and takes over its rows.
+     */
+    private class SosRun(
+        val attempt: Long,
+        val batch: String,
+        val ts: Long,
+        val lat: Double?,
+        val lon: Double?,
+        val covert: Boolean,
+        val groups: List<Pair<String, String>>,
+        val errors: Map<String, String>,
+        val skipped: HashMap<String, Int>
+    ) {
+        val removed = HashMap<String, Int>()
+        /** Passes over its rows so far: the first, then one per outbox flush that reached them. */
+        var passes = 0
+        /** The sentence last said about it, so a notification goes only when it changes. */
+        var lastHeadline: String? = null
+    }
+
+    @Volatile private var sosRun: SosRun? = null
+    private val sosVaultLock = Any()
+    /** Whether the vault is held open for an SOS still being tried; see [holdVaultForSos]. */
+    private var sosVaultHeld = false
+    /** Lets go of the vault once no SOS is pending, whatever else happens; see [holdVaultForSos]. */
+    private var sosVaultWatch: Job? = null
+    private const val SOS_VAULT_CHECK_MS = 5 * 60_000L
+
+    /**
+     * Whether an SOS raised now would have anyone to go to: what the SOS
+     * button checks before its confirm dialog. Members the owner blocked do
+     * not count: they are sent nothing. Reads the store; call off the main
+     * thread.
+     */
+    fun sosGate(): SosGate {
+        if (!initialised || !config.isRegistered) return SosGate.NOT_REGISTERED
+        val me = config.number ?: return SosGate.NOT_REGISTERED
+        return unlockedOr(SosGate.NO_RECIPIENTS) {
+            val blocked = store.blockedKeys()
+            val groups = store.groups()
+            val others = groups.sumOf { g ->
+                store.groupMembers(g.id).count { it.number != me && !GroupOutbox.blockedRecipient(it.number, it.ed25519, blocked) }
+            }
+            SosGate.decide(true, groups.size, others)
+        }
+    }
+
+    /**
+     * Raises the visible SOS and waits for its first pass over every member of
+     * every group: what the button says, after the sends and not before.
+     * Members the relay could not take stay in the group outbox and are tried
+     * again for about thirty minutes; each pass replaces the result in
+     * [panicResult].
+     */
+    suspend fun sendSos(): PanicResult {
+        // A broadcast still running lowers the flag when it is done; raising it
+        // again before that would be lost.
+        Registry.panicActive.first { !it }
+        val before = _panicResult.value?.attempt ?: 0L
+        Registry.setPanicActive(true)
+        return panicResult.first { it != null && it.attempt > before }!!
+    }
+
+    /**
+     * The SOS was raised: to every group, with the last known position.
+     * Every other member of every group gets a row in the group outbox
+     * ([queueGroupRows]: never anyone the owner blocked, and while a roster
+     * is out of date never someone it may no longer list, until that is
+     * confirmed), delivery tokens are fetched for them ([topUpTokensForSos]),
+     * and the first pass tries each of them at once, whatever became of the
+     * others. The result counts people the relay took, people the offline
+     * mesh carries, people still queued and people nobody could reach; the
+     * outbox tries the queued ones again for about thirty minutes, with the
+     * vault held open meanwhile, each pass replacing [panicResult] ([settleSos]).
+     * A newer SOS takes over from an older one still being tried: everyone it
+     * reaches has the newer alert. A covert SOS's rows are kept in memory only
+     * and nothing about it is logged; the caller records a visible one.
+     */
+    private suspend fun broadcastPanic(attempt: Long, covert: Boolean): PanicResult {
+        val s = Registry.status.value
+        val lat = s.lat
+        val lon = s.lon
+        val position = lat != null && lon != null
+        val ts = System.currentTimeMillis()
+        if (!config.isRegistered) {
+            if (!covert) CommsLog.add("SOS raised, but this phone is not set up for Comms")
+            return PanicResult(attempt, ts, lat, lon, blocked = PanicBlocked.NOT_REGISTERED)
+        }
         val groups = store.groups()
         if (groups.isEmpty()) {
             if (!covert) CommsLog.add("SOS raised, but this phone is in no group to send it to")
-            return
+            return PanicResult(attempt, ts, lat, lon, blocked = PanicBlocked.NO_GROUPS)
         }
-        val s = Registry.status.value
-        for (g in groups) sendPanic(g.id, s.lat, s.lon, null, covert)
+        val batch = UUID.randomUUID().toString()
+        val errors = HashMap<String, String>()
+        val skipped = HashMap<String, Int>()
+        var queued = 0
+        val run = SosRun(attempt, batch, ts, lat, lon, covert, groups.map { it.id to it.name }, errors, skipped)
+        // Under the SOS rows' lock from the first row to the end of the first
+        // pass: no other flush tries this SOS, or settles it, before that.
+        val rows = sosOutboxLock.withLock {
+            store.deleteOutboxKindExcept(GroupOutbox.Kind.SOS, batch)
+            memoryRows.removeIf { it.kind == GroupOutbox.Kind.SOS && it.batch != batch }
+            for (g in groups) {
+                runCatching {
+                    val id = UUID.randomUUID().toString()
+                    val q = queueGroupRows(
+                        groupContext(g.id), GroupOutbox.Kind.SOS, id, batch, CommsWire.panic(g.id, id, ts, lat, lon, null),
+                        ts, ts + GroupOutbox.SOS_LIFETIME_MS, quiet = covert
+                    )
+                    skipped[g.id] = q.skipped
+                    queued += q.rows.size
+                }.onFailure { e ->
+                    if (!covert) CommsLog.add("SOS to \"${g.name}\" could not be tried: ${e.message}")
+                    errors[g.id] = e.message ?: e.javaClass.simpleName
+                }
+            }
+            sosRun = run
+            // Its retries start from the shortest pause, whatever the outbox's back-off had grown to.
+            retryBackoffMs = RETRY_MIN_MS
+            holdVaultForSos(queued > 0)
+            if (queued == 0) emptyList() else groupPass(SOS_ROWS, batch, everyone = true)
+        }
+        if (queued > 0 && rows.isEmpty()) {
+            if (!covert) CommsLog.add("SOS raised, but its first try could not run; it stays queued and is tried again")
+            return PanicResult(attempt, ts, lat, lon, error = "Its first try could not run; it stays queued and is tried again", retrying = true)
+        }
+        val result = PanicResult.fromRows(attempt, ts, lat, lon, run.groups, rows, errors, skipped, run.removed)
+        if (!covert) {
+            for (r in result.groups) CommsLog.add(r.logLine(position, result.retrying))
+            CommsLog.add(result.headline() + " · " + result.detail())
+        }
+        return result
+    }
+
+    /**
+     * After a pass over the SOS rows: the latest SOS's result, published for
+     * the button and, while it is still being tried, as an updated
+     * notification whenever what it says changes ("SOS reached 3 of 4
+     * people; trying 1 more again"); once every row of it is final, its last
+     * word (log line, timeline entry and notification, when it took more than
+     * its first pass) and its rows cleared. An SOS raised before this process
+     * started (the store keeps a visible one's rows) gets its last word too.
+     * A covert SOS says nothing anywhere.
+     */
+    private fun settleSos(rows: List<GroupOutbox.Row>) {
+        val run = sosRun
+        val now = System.currentTimeMillis()
+        for ((batch, batchRows) in rows.groupBy { it.batch }) {
+            if (run == null || run.batch != batch) {
+                if (batchRows.all { it.final }) finishEarlierSos(batch, batchRows)
+                continue
+            }
+            val result = synchronized(run) {
+                run.passes++
+                PanicResult.fromRows(
+                    run.attempt, run.ts, run.lat, run.lon, run.groups, batchRows, run.errors,
+                    HashMap(run.skipped), HashMap(run.removed), pass = run.passes
+                )
+            }
+            val headline = result.headline()
+            // The first pass is broadcastPanic's to report; after it each change is said as it happens.
+            if (run.passes > 1 && !run.covert) {
+                _panicResult.update { cur -> if (cur != null && cur.attempt == run.attempt) result else cur }
+                if (result.retrying && headline != run.lastHeadline) CommsNotifications.notifySosOutcome(appContext, headline, now)
+            }
+            run.lastHeadline = headline
+            if (result.retrying) continue
+            deleteBatch(batch)
+            if (run.passes > 1 && !run.covert) {
+                CommsLog.add("SOS after retrying: $headline · ${result.detail()}")
+                recordPanicEvent(result, retried = true)
+                CommsNotifications.notifySosOutcome(appContext, headline, now)
+            }
+        }
+    }
+
+    /**
+     * The last word of an SOS raised before this process started, now that
+     * every row of it is final: said as its own run would have said it, then
+     * cleared. Only a visible SOS's rows are kept in the store.
+     */
+    private fun finishEarlierSos(batch: String, rows: List<GroupOutbox.Row>) {
+        val covert = rows.any { memoryRows.has(it) }
+        deleteBatch(batch)
+        if (covert) return
+        val payload = rows.firstNotNullOfOrNull { CommsWire.parse(it.payload) }
+        val lat = payload?.optDouble(CommsWire.F_LAT, Double.NaN)?.takeIf { !it.isNaN() }
+        val lon = payload?.optDouble(CommsWire.F_LON, Double.NaN)?.takeIf { !it.isNaN() }
+        val groups = rows.map { it.gid }.distinct().map { gid -> gid to (store.group(gid)?.name ?: "A group") }
+        val result = PanicResult.fromRows(0L, rows.minOf { it.created }, lat, lon, groups, rows)
+        val headline = result.headline()
+        CommsLog.add("SOS after retrying: $headline · ${result.detail()}")
+        recordPanicEvent(result, retried = true)
+        CommsNotifications.notifySosOutcome(appContext, headline, System.currentTimeMillis())
+    }
+
+    /**
+     * Holds the vault open while an SOS is still being tried, as a call
+     * does: with a secure lock screen the screen going off seals the identity
+     * away, and every retry with it, which is just when an SOS is still
+     * needed (pressed, and the phone put away). Let go once none is pending;
+     * the vault then seals if the phone is locked by then. However the SOS
+     * ends (an unpair, a store that cannot be read), the hold does not
+     * outlive its thirty minutes: a check every few minutes lets go once no
+     * SOS row is left within its time.
+     */
+    private fun holdVaultForSos(pending: Boolean) {
+        synchronized(sosVaultLock) {
+            if (pending == sosVaultHeld) return
+            sosVaultHeld = pending
+            sosVaultWatch?.cancel()
+            sosVaultWatch = null
+            if (!pending) {
+                Vault.release()
+                return
+            }
+            Vault.hold()
+            sosVaultWatch = scope.launch {
+                while (isActive) {
+                    delay(SOS_VAULT_CHECK_MS)
+                    if (!runCatching { sosPending() }.getOrDefault(false)) {
+                        holdVaultForSos(false)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /** Whether an SOS is still being tried: one of its rows is neither final nor past its time. */
+    private fun sosPending(): Boolean {
+        if (!initialised || !config.isRegistered) return false
+        val now = System.currentTimeMillis()
+        return groupRows(SOS_ROWS).any { !it.final && now < it.deadline }
+    }
+
+    /**
+     * Fills the delivery-token pool for an SOS to [envelopes] members before
+     * its sends ([SosTokens]): a send never fetches tokens itself, and a
+     * phone back after weeks away has none left and may not hold the relay's
+     * keys for the current fortnight. Those are read at once, with a request
+     * that names nobody, rather than at the random later moment an ordinary
+     * top-up picks. Nothing is logged for a covert SOS ([quiet]).
+     */
+    private fun topUpTokensForSos(envelopes: Int, quiet: Boolean) {
+        if (!config.isRegistered) return
+        var keysRead = false
+        fun readKeys() {
+            keysRead = true
+            runCatching { relay.info() }.onSuccess { keepAddresses(it) }
+        }
+        repeat(SosTokens.MAX_FETCHES) {
+            when (SosTokens.step(relay.tokenCount(), envelopes, keysRead || relay.tokenKeysCurrent())) {
+                SosTokens.Step.ENOUGH -> return
+                SosTokens.Step.READ_KEYS_FIRST -> readKeys()
+                SosTokens.Step.FETCH -> Unit
+            }
+            val before = relay.tokenCount()
+            val held = try {
+                relay.topUpTokens(low = SosTokens.target(envelopes), batch = RelayClient.TOKENS_BATCH)
+            } catch (e: RelayException) {
+                // The relay's fortnight is not the one this phone's clock says: read its keys, then once more.
+                if (e.code == RelayClient.KEYS_PENDING && !keysRead) {
+                    readKeys()
+                    return@repeat
+                }
+                if (!quiet) CommsLog.add("Could not fetch delivery tokens for the SOS: ${e.message}")
+                return
+            } catch (e: Exception) {
+                if (!quiet) CommsLog.add("Could not fetch delivery tokens for the SOS: ${e.message}")
+                return
+            }
+            if (held <= before) return
+        }
+    }
+
+    /**
+     * The visible SOS on the timeline, with who it reached: the record the
+     * owner can look back on. The covert phrase writes none. Written after the
+     * first pass, and again after the retries when there were any, so neither
+     * entry promises a retry that is over.
+     */
+    private fun recordPanicEvent(r: PanicResult, retried: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val event = TimelineEvent(
+            id = "sos_sent@${UUID.randomUUID()}", kind = EventKind.PANIC, ts = now,
+            title = r.copy(retrying = false).headline(),
+            detail = (if (retried) "After retrying · " else if (r.retrying) "Trying the rest again · " else "") + r.detail(),
+            severity = Severity.HIGH, lat = r.lat, lon = r.lon
+        )
+        scope.launch { runCatching { TimelineLog.record(appContext, event) } }
     }
 
     private fun expireSharedThreats() {
         val gone = store.expireSharedThreats(System.currentTimeMillis())
         if (gone > 0) CommsLog.add("$gone expired shared threat(s) forgotten")
         Registry.publishSharedThreats(store.sharedThreats(null))
+    }
+
+    /**
+     * [expireSharedThreats] in the background, whenever the app comes to the
+     * front; a threat arriving runs it too. Not on a timer: the map and the
+     * group page leave out an expired threat in between.
+     */
+    private fun tidySharedThreats() {
+        scope.launch {
+            if (Vault.sealed.value) return@launch
+            runCatching { expireSharedThreats() }.onFailure { CommsLog.add("Could not tidy shared threats: ${it.message}") }
+        }
     }
 
     /** A number's name as this phone knows it: the roster's, then the contact's, then the number. */
@@ -2453,6 +3750,13 @@ object CommsRepository {
             CommsLog.add("$type from $label dropped: they have the number of someone in \"${group.name}\", not their keys")
             return
         }
+        // The roster number the sender holds. A numbered change or roster
+        // keeps its own books (applyGroupCtrl); anything else tells this phone
+        // whether its roster is out of date, and that the sender is in theirs.
+        val rv = CommsWire.rosterVersion(json)
+        val op = json.optString(CommsWire.F_OP)
+        val numberedChange = type == CommsWire.T_GROUP_CTRL && (op == CommsWire.OP_JOIN || op == CommsWire.OP_REMOVE || op == CommsWire.OP_ROSTER)
+        if (rv != null && !numberedChange) heardRosterVersion(group, sender, rv)
         when (type) {
             CommsWire.T_GROUP_MSG -> {
                 val id = CommsWire.messageId(json) ?: return
@@ -2490,7 +3794,8 @@ object CommsRepository {
                 val detail = json.optString(CommsWire.F_DETAIL).trim().take(MAX_THREAT_TEXT)
                 val fromName = memberName(gid, from)
                 store.insertSharedThreat(SharedThreat(id, gid, from, fromName, ts, kind, severity, lat, lon, title, detail, expiresAt))
-                Registry.publishSharedThreats(store.sharedThreats(null))
+                // Arrival is when the list is tidied: what ran out goes, the rest is published.
+                expireSharedThreats()
                 CommsLog.add("Threat \"$title\" shared by $fromName in \"${group.name}\"")
                 val event = TimelineEvent(
                     id = "shared_threat@$id", kind = EventKind.SHARED_THREAT, ts = ts,
@@ -2526,7 +3831,8 @@ object CommsRepository {
      * An invitation: [contact] added this phone to a group. The roster must
      * name them as an admin, or the message is somebody making up a group in
      * other people's names. For a group already here, only an admin's roster
-     * replaces what this phone has.
+     * replaces what this phone has, and when it is numbered ([RosterSync]),
+     * only one newer than the roster held.
      */
     private fun applyGroupAdd(contact: Contact, gid: String, existing: Group?, json: JSONObject) {
         val me = config.number ?: return
@@ -2553,21 +3859,42 @@ object CommsRepository {
             CommsLog.add("Roster for \"${existing.name}\" from $label, who is not one of its admins; dropped")
             return
         }
+        val rv = CommsWire.rosterVersion(json)
+        if (existing != null && rv != null && !RosterSync.replaces(existing.rosterVersion, rv)) {
+            // A late copy of a roster no newer than the one held changes nothing.
+            CommsLog.add("Roster of \"${existing.name}\" from $label is not newer than the one this phone has; kept")
+            return
+        }
         val name = json.optString(CommsWire.F_GROUP_NAME).trim().take(MAX_GROUP_NAME).ifBlank { existing?.name ?: "Group" }
         val createdBy = json.optString(CommsWire.F_CREATED_BY).let { parseClairixNumber(it) } ?: existing?.createdBy ?: from
         val createdTs = existing?.createdTs ?: json.optLong(CommsWire.F_CREATED_TS, System.currentTimeMillis())
         val myRole = roster.find { it.number == me }?.let { runCatching { OrgRole.valueOf(it.role) }.getOrNull() } ?: OrgRole.MEMBER
-        val now = System.currentTimeMillis()
         store.insertGroup(Group(gid, name, createdBy, createdTs, myRole))
+        replaceMembersLocked(gid, roster, from, rv ?: 0L)
+        if (rv != null) {
+            val (v, s) = RosterSync.afterRoster(existing?.rosterVersion ?: 0L, existing?.rosterSeen ?: 0L, rv)
+            store.setRoster(gid, v, s)
+        }
+        CommsLog.add(if (existing == null) "Added to group \"$name\" by $label (${roster.size} members)" else "Roster of \"$name\" updated by $label (${roster.size} members)")
+        // Rows held while the roster was out of date may go now, or be dropped.
+        if (existing != null) scope.launch { flushOutbox() }
+    }
+
+    /**
+     * Replaces [gid]'s members with [roster], keeping who added each one and
+     * when; everyone on it is known to be in roster number [rv]. Caller holds
+     * [lock].
+     */
+    private fun replaceMembersLocked(gid: String, roster: List<CommsWire.RosterEntry>, from: String, rv: Long) {
+        val now = System.currentTimeMillis()
         val known = store.groupMembers(gid).associateBy { it.number }
         for (e in roster) {
             val role = runCatching { OrgRole.valueOf(e.role) }.getOrDefault(OrgRole.MEMBER)
             val ed = e.ed25519.ifBlank { store.contact(e.number)?.ed25519 ?: known[e.number]?.ed25519 ?: "" }
             val memberName = e.name.trim().take(40).ifBlank { store.contact(e.number)?.name ?: known[e.number]?.name ?: "" }
-            store.insertGroupMember(GroupMember(gid, e.number, memberName, role, ed, known[e.number]?.addedBy ?: from, known[e.number]?.addedTs ?: now))
+            store.insertGroupMember(GroupMember(gid, e.number, memberName, role, ed, known[e.number]?.addedBy ?: from, known[e.number]?.addedTs ?: now, rv))
         }
         for (gone in known.keys - roster.map { it.number }.toSet()) store.removeGroupMember(gid, gone)
-        CommsLog.add(if (existing == null) "Added to group \"$name\" by $label (${roster.size} members)" else "Roster of \"$name\" updated by $label (${roster.size} members)")
     }
 
     /** A roster change from [sender], already known to be in [group]. Caller holds [lock]. */
@@ -2579,13 +3906,15 @@ object CommsRepository {
             CommsWire.OP_JOIN -> {
                 if (sender.role != OrgRole.ADMIN) { CommsLog.add("Roster change in \"${group.name}\" from $label, who is not an admin; dropped"); return }
                 val number = parseClairixNumber(json.optString(CommsWire.F_MEMBER)) ?: return
-                if (store.groupMember(gid, number) != null) return
-                if (store.groupMembers(gid).size >= MAX_GROUP_MEMBERS) return
-                val role = runCatching { OrgRole.valueOf(json.optString(CommsWire.F_ROLE)) }.getOrDefault(OrgRole.MEMBER)
-                val name = json.optString(CommsWire.F_MEMBER_NAME).trim().take(40).ifBlank { store.contact(number)?.name ?: "" }
-                val ed = json.optString(CommsWire.F_MEMBER_ED25519).ifBlank { store.contact(number)?.ed25519 ?: "" }
-                store.insertGroupMember(GroupMember(gid, number, name, role, ed, sender.number, System.currentTimeMillis()))
-                CommsLog.add("${name.ifBlank { formatClairixNumber(number) }} joined \"${group.name}\" (added by $label)")
+                val rv = CommsWire.rosterVersion(json)
+                if (store.groupMember(gid, number) == null && store.groupMembers(gid).size < MAX_GROUP_MEMBERS) {
+                    val role = runCatching { OrgRole.valueOf(json.optString(CommsWire.F_ROLE)) }.getOrDefault(OrgRole.MEMBER)
+                    val name = json.optString(CommsWire.F_MEMBER_NAME).trim().take(40).ifBlank { store.contact(number)?.name ?: "" }
+                    val ed = json.optString(CommsWire.F_MEMBER_ED25519).ifBlank { store.contact(number)?.ed25519 ?: "" }
+                    store.insertGroupMember(GroupMember(gid, number, name, role, ed, sender.number, System.currentTimeMillis(), rv ?: 0L))
+                    CommsLog.add("${name.ifBlank { formatClairixNumber(number) }} joined \"${group.name}\" (added by $label)")
+                }
+                if (rv != null) noteChange(group, sender, rv)
             }
             CommsWire.OP_REMOVE -> {
                 if (sender.role != OrgRole.ADMIN) { CommsLog.add("Roster change in \"${group.name}\" from $label, who is not an admin; dropped"); return }
@@ -2596,16 +3925,115 @@ object CommsRepository {
                     CommsLog.add("Removed from \"${group.name}\" by $label")
                     return
                 }
-                val target = store.groupMember(gid, number) ?: return
-                store.removeGroupMember(gid, number)
-                CommsLog.add("${memberLabel(target)} removed from \"${group.name}\" by $label")
+                store.groupMember(gid, number)?.let { target ->
+                    store.removeGroupMember(gid, number)
+                    CommsLog.add("${memberLabel(target)} removed from \"${group.name}\" by $label")
+                }
+                CommsWire.rosterVersion(json)?.let { noteChange(group, sender, it) }
             }
             CommsWire.OP_LEAVE -> {
                 store.removeGroupMember(gid, sender.number)
                 CommsLog.add("$label left \"${group.name}\"")
             }
+            CommsWire.OP_ROSTER -> applyRoster(contact, group, sender, json)
+            CommsWire.OP_ROSTER_REQUEST -> answerRosterRequest(group, sender)
             else -> CommsLog.add("Group operation \"$op\" from $label not understood; ignored")
         }
+    }
+
+    /**
+     * After an admin's numbered change, applied as deltas always were
+     * ([RosterSync.afterDelta]): the roster's number moves on when nothing
+     * was missed in between, and the admin is known to hold it; a gap means a
+     * change was missed, and the admins are asked for the roster. Rows held
+     * for it are looked at again. Caller holds [lock].
+     */
+    private fun noteChange(group: Group, sender: GroupMember, rv: Long) {
+        val (v, s) = RosterSync.afterDelta(group.rosterVersion, group.rosterSeen, rv)
+        store.setRoster(group.id, v, s)
+        store.noteMemberVersion(group.id, sender.number, rv)
+        if (RosterSync.stale(v, s)) askForRoster(group.copy(rosterVersion = v, rosterSeen = s), urgent = false)
+        scope.launch { flushOutbox() }
+    }
+
+    /**
+     * A payload from [sender] named roster number [rv]: they hold that roster,
+     * so they are in it; and a number newer than this phone's means its roster
+     * is out of date, so the admins are asked for theirs while rows for
+     * members not confirmed in it wait. Caller holds [lock].
+     */
+    private fun heardRosterVersion(group: Group, sender: GroupMember, rv: Long) {
+        val raised = rv > sender.rv
+        if (raised) store.noteMemberVersion(group.id, sender.number, rv)
+        val (v, s) = RosterSync.heard(group.rosterVersion, group.rosterSeen, rv)
+        if (s > group.rosterSeen) store.noteRosterSeen(group.id, s)
+        if (!RosterSync.stale(v, s)) return
+        if (s > group.rosterSeen) askForRoster(group.copy(rosterSeen = s), urgent = false)
+        // The sender may now be confirmed in the newer roster: their held rows can go.
+        if (raised) scope.launch { flushOutbox() }
+    }
+
+    /**
+     * An admin's whole numbered roster ([CommsWire.OP_ROSTER]): it replaces the
+     * one held when it is newer ([RosterSync.replaces]); one that no longer
+     * lists this phone means it was removed and missed being told. From an
+     * admin, one at least as new as the roster held also means the roster is
+     * no longer out of date, and the rows held for it go to whoever it lists.
+     * Caller holds [lock].
+     */
+    private fun applyRoster(contact: Contact, group: Group, sender: GroupMember, json: JSONObject) {
+        val me = config.number ?: return
+        val label = memberLabel(sender)
+        if (sender.role != OrgRole.ADMIN) {
+            CommsLog.add("Member list of \"${group.name}\" from $label, who is not an admin; dropped")
+            return
+        }
+        val rv = CommsWire.rosterVersion(json) ?: return
+        if (rv < group.rosterVersion) return
+        val roster = CommsWire.rosterEntries(json).filter { parseClairixNumber(it.number) != null }.distinctBy { it.number }
+        if (roster.none { it.number == sender.number && it.role == OrgRole.ADMIN.name } ||
+            !KeyChangeGuard.mayApplyGroupControl(contact, roster.find { it.number == sender.number }?.ed25519) ||
+            roster.size > MAX_GROUP_MEMBERS
+        ) {
+            CommsLog.add("Member list of \"${group.name}\" from $label dropped: it does not name them as an admin with their keys, or is too long")
+            return
+        }
+        if (RosterSync.replaces(group.rosterVersion, rv)) {
+            if (roster.none { it.number == me }) {
+                // After the caller releases the lock: the group's rows go with its files.
+                scope.launch { dropGroupLocally(group.id); Registry.publishSharedThreats(store.sharedThreats(null)); bump() }
+                CommsLog.add("Removed from \"${group.name}\" by $label")
+                return
+            }
+            replaceMembersLocked(group.id, roster, sender.number, rv)
+            val myRole = roster.find { it.number == me }?.let { runCatching { OrgRole.valueOf(it.role) }.getOrNull() } ?: OrgRole.MEMBER
+            if (myRole != group.myRole) store.setGroupRole(group.id, myRole)
+            CommsLog.add("Member list of \"${group.name}\" brought up to date by $label (${roster.size} members)")
+        }
+        val (v, s) = RosterSync.afterRoster(group.rosterVersion, group.rosterSeen, rv)
+        store.setRoster(group.id, v, s)
+        store.noteMemberVersion(group.id, sender.number, rv)
+        scope.launch { flushOutbox() }
+    }
+
+    /**
+     * A member asks for the roster ([CommsWire.OP_ROSTER_REQUEST]): an admin
+     * answers with its own, numbered, through the group outbox, at most once
+     * a minute for each member. Anyone else ignores it. Caller holds [lock].
+     */
+    private fun answerRosterRequest(group: Group, sender: GroupMember) {
+        val me = config.number ?: return
+        val members = store.groupMembers(group.id)
+        if (members.find { it.number == me }?.role != OrgRole.ADMIN) return
+        val key = "${group.id}|${sender.number}"
+        val now = System.currentTimeMillis()
+        synchronized(rosterAnsweredAt) {
+            if (now - (rosterAnsweredAt[key] ?: 0L) < ROSTER_ANSWER_MS) return
+            rosterAnsweredAt[key] = now
+        }
+        queueRosterRows(group, listOf(sender), rosterPayload(group, members, group.rosterVersion), UUID.randomUUID().toString(), lifetimeMs = ROSTER_ASK_LIFETIME_MS)
+        CommsLog.add("${memberLabel(sender)} asked for the member list of \"${group.name}\"; sending it")
+        scope.launch { flushOutbox() }
     }
 
     /**
@@ -2730,38 +4158,40 @@ object CommsRepository {
      * Seals [payload] for [contact] into a mesh bundle, once per message [id]. Needs a
      * session with them already: starting one takes a key from the relay, which is
      * exactly what is not reachable. Returns true when the message is in the mesh.
+     * [quiet] (a covert SOS) writes no line in the comms log.
      */
-    private suspend fun meshQueue(contact: Contact, payload: JSONObject, id: String): Boolean {
+    private suspend fun meshQueue(contact: Contact, payload: JSONObject, id: String, quiet: Boolean = false): Boolean {
         if (!::appContext.isInitialized || !Mesh.enabled(appContext)) return false
         val mesh = Mesh.store(appContext)
         if (mesh.isQueued(contact.number, id)) return true
         val now = System.currentTimeMillis()
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
+        val log: (String) -> Unit = if (quiet) { _ -> } else CommsLog::add
         return when (val p = lock.withLock { prepareLocked(contact, JSONObject(payload.toString()), null) }) {
             is Prepared.Ready -> {
                 val tag = runCatching { identities.get()?.meshTag(contact.sealing, MeshProtocol.day(now)) }.getOrNull()
                 val b = tag?.let { MeshProtocol.newBundle(p.envelope, it, now) }
                 if (tag == null) {
-                    CommsLog.add("A message to $label could not be addressed for the offline mesh; it waits for the relay")
+                    log("A message to $label could not be addressed for the offline mesh; it waits for the relay")
                     false
                 } else if (b == null) {
-                    CommsLog.add("A message to $label is too long for the offline mesh; it waits for the relay")
+                    log("A message to $label is too long for the offline mesh; it waits for the relay")
                     false
                 } else {
                     mesh.addOwn(contact.number, id, b, now)
-                    CommsLog.add("A message to $label is in the offline mesh: it travels phone to phone until it reaches them")
+                    log("A message to $label is in the offline mesh: it travels phone to phone until it reaches them")
                     true
                 }
             }
             Prepared.NeedBundle -> {
-                CommsLog.add("No session with $label yet, so the offline mesh cannot reach them until one message has gone through the relay")
+                log("No session with $label yet, so the offline mesh cannot reach them until one message has gone through the relay")
                 false
             }
             Prepared.NeedPrekey -> {
                 // Their sealing key was last fetched over two weeks ago (or never);
                 // sealing to an older one, or to their long-term key, would undo
                 // what the rotating keys are for.
-                CommsLog.add("$label's sealing key is out of date, so the offline mesh cannot reach them until the relay is reachable again")
+                log("$label's sealing key is out of date, so the offline mesh cannot reach them until the relay is reachable again")
                 false
             }
             else -> false
@@ -2829,13 +4259,17 @@ object CommsRepository {
             CommsLog.add("Dropped envelope ${shortId(envelope.id)}: ${e.message}")
             return true
         }
-        if (decrypted.evictedRecentSession) {
+        // A blocked identity's envelope leaves no line naming it, and asks the
+        // relay nothing about it; resolveSender drops it below.
+        val blockedSender by lazy(LazyThreadSafetyMode.NONE) { isBlockedSender(decrypted.senderCurve25519, decrypted.senderEd25519) }
+        if (decrypted.evictedRecentSession && !blockedSender) {
             val who = store.contactByCurve(decrypted.senderCurve25519)?.let { contactLabel(it) } ?: "A sender"
             CommsLog.add("$who started yet another session; the least recently used of the sessions kept with them was dropped")
         }
-        if (decrypted.sealedToPrekey) {
+        if (decrypted.sealedToPrekey && !blockedSender) {
+            // Only a contact is written to, so only a contact's prekey is fetched.
             store.contactByCurve(decrypted.senderCurve25519)
-                ?.takeIf { it.ed25519 == decrypted.senderEd25519 && store.prekey(it.number) == null }
+                ?.takeIf { it.ed25519 == decrypted.senderEd25519 && !it.request && store.prekey(it.number) == null }
                 ?.let { refreshPrekeyLater(it) }
         }
         // Durable before anything that can fail: seen and staged in one transaction.
@@ -2872,6 +4306,13 @@ object CommsRepository {
                     store.deletePending(p.id)
                     true
                 }
+                Resolution.Blocked -> {
+                    // From a blocked identity: nothing is kept, receipted, shown or
+                    // logged, and the session its envelope opened goes with it.
+                    identities.update { it.dropSessions(p.senderCurve25519) }
+                    store.deletePending(p.id)
+                    true
+                }
                 Resolution.Unreachable -> { CommsLog.add("Relay unreachable while confirming who sent ${shortId(p.id)}; holding it"); false }
             }
         } catch (e: IllegalStateException) {
@@ -2885,11 +4326,27 @@ object CommsRepository {
 
     /**
      * A payload from [contact] that has been staged: processed, held for review
-     * when the contact's keys changed, or dropped (see [KeyChangeGuard]).
-     * Caller holds [lock].
+     * when the contact's keys changed, or dropped (see [KeyChangeGuard]); from
+     * a message request, as [admitRequestLocked] says. Caller holds [lock].
      */
     private fun admitLocked(contact: Contact, p: CommsStore.PendingInbound, json: JSONObject) {
         val type = CommsWire.type(json)
+        // The staged id is the envelope's hash: kept as the newest from them, which a report names.
+        if (ContactGate.reportable(json)) store.noteEnvelope(contact.number, p.id)
+        if (contact.request) {
+            // A member of one of this phone's groups writing to that group is
+            // a contact ([ContactGate.admit]), even after a first private
+            // message made them a request.
+            val gid = json.optString(CommsWire.F_GID).takeIf { it.isNotBlank() && it.length <= 64 }
+            val rosterKey = gid?.let { store.groupMember(it, contact.number)?.ed25519 }
+            if (ContactGate.admit(json, contact.ed25519, rosterKey, ownRelay = contact.relay == null) == ContactGate.Admission.CONTACT) {
+                acceptRequestLocked(contact)
+                store.contactEntry(contact.number)?.takeIf { !it.request && !it.blocked }?.let { admitLocked(it, p, json) }
+                return
+            }
+            admitRequestLocked(contact, p, json)
+            return
+        }
         when (KeyChangeGuard.inbound(contact, json)) {
             KeyChangeGuard.Action.PROCESS -> processPayload(contact, p.ts, json)
             KeyChangeGuard.Action.QUARANTINE -> {
@@ -2901,6 +4358,33 @@ object CommsRepository {
             KeyChangeGuard.Action.DROP -> CommsLog.add("$type from ${contactLabel(contact)} dropped: their keys changed and have not been checked")
         }
     }
+
+    /**
+     * A payload from a message request ([ContactGate.forRequest]): kept with
+     * no receipt and only the notification that names nobody, a call noted as
+     * missed without ringing, a group invitation held until the owner accepts,
+     * group traffic and the rest acted on as for anyone. Caller holds [lock].
+     */
+    private fun admitRequestLocked(contact: Contact, p: CommsStore.PendingInbound, json: JSONObject) {
+        when (ContactGate.forRequest(json)) {
+            ContactGate.RequestAction.KEEP, ContactGate.RequestAction.PROCESS -> processPayload(contact, p.ts, json)
+            ContactGate.RequestAction.MISSED_CALL -> {
+                val cid = json.optString(CommsWire.F_CALL_ID).takeIf { it.isNotBlank() && it.length <= 64 } ?: return
+                // One line per call, however often its offer comes; read when the request is on screen.
+                val onScreen = openPeer == contact.number && !AppLock.locked.value
+                store.insertMessage(ChatMessage("request-call-$cid", contact.number, Direction.IN, REQUEST_MISSED_CALL, System.currentTimeMillis(), STATUS_CALL, read = onScreen))
+                if (!onScreen) CommsNotifications.notifyRequest(appContext)
+            }
+            ContactGate.RequestAction.HOLD ->
+                store.quarantine(p.id, contact.number, p.senderCurve25519, p.ts, p.payload, KeyChangeGuard.MAX_HELD_PER_CONTACT)
+            ContactGate.RequestAction.IGNORE -> Unit
+        }
+    }
+
+    /** Whether the sender with these keys is blocked: a blocked contact kept as a record, or on the blocked list. */
+    private fun isBlockedSender(curve25519: String, ed25519: String): Boolean =
+        store.contactByCurve(curve25519)?.blocked == true ||
+            ContactGate.isBlocked(store.blockedKeys(), ed25519.takeIf { it.isNotEmpty() }, curve25519, null, null)
 
     /**
      * Something from [senderCurve] could not be decrypted. The envelope's sender
@@ -2917,9 +4401,16 @@ object CommsRepository {
      * would starve ICE candidate processing during an active call.
      */
     private fun recoverSession(senderCurve: String, senderEd: String, sentAtMs: Long, what: String) {
+        // A blocked identity is asked for nothing and leaves nothing in the log.
+        if (isBlockedSender(senderCurve, senderEd)) return
         val contact = store.contactByCurve(senderCurve)
         if (contact == null) {
             CommsLog.add("$what, from someone who is not a contact; dropped")
+            return
+        }
+        if (contact.request) {
+            // A resync would tell someone not yet accepted that this phone read their envelope.
+            CommsLog.add("$what, from a message request; dropped")
             return
         }
         val label = contact.name.ifBlank { formatClairixNumber(contact.number) }
@@ -2956,7 +4447,10 @@ object CommsRepository {
             try {
                 val bundle = relay.bundle(contact.number, fingerprint(contact.ed25519), contact.relay)
                 lock.withLock {
-                    val fresh = store.contactByCurve(senderCurve) ?: return@withLock
+                    // Blocked, or made a request again, while the bundle was on its
+                    // way: no session is started, nothing is sent, nothing logged.
+                    val fresh = store.contactByCurve(senderCurve)?.takeIf { !it.blocked && !it.request } ?: return@withLock
+                    if (isBlockedSender(senderCurve, senderEd)) return@withLock
                     if (bundle.ed25519 == fresh.ed25519) notePrekey(fresh, bundle.sealingPrekey)
                     if (bundle.ed25519 != fresh.ed25519 || bundle.curve25519 != fresh.curve25519 || bundle.sealing != fresh.sealing) {
                         CommsLog.add("$what from $label, but the relay now holds different keys for them; nothing sent")
@@ -3003,9 +4497,20 @@ object CommsRepository {
         store.setPass(contact.number, key, created)
     }
 
-    /** Acts on a decrypted payload from a known contact. Caller holds [lock]. */
+    /**
+     * Acts on a decrypted payload from a known contact, or from a message
+     * request, which gets no receipt and only the notification that names
+     * nobody until the owner accepts it. Caller holds [lock].
+     */
     private fun processPayload(contact: Contact, envelopeTs: Long, json: JSONObject) {
         notePass(contact, json)
+        fun receipt(ids: List<String>, status: String) {
+            if (!contact.request) store.queueReceipt(contact.number, ids, status)
+        }
+        fun notifyArrival() {
+            if (contact.request) CommsNotifications.notifyRequest(appContext)
+            else CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
+        }
         when (CommsWire.type(json)) {
             CommsWire.T_MSG -> {
                 val id = CommsWire.messageId(json) ?: return
@@ -3017,7 +4522,7 @@ object CommsRepository {
                 if (alreadyRead != null) {
                     // A copy of a message already here (they re-sent it after a network
                     // error): receipt it again, since their first receipt may be lost.
-                    store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     return
                 }
                 val body = json.optString(CommsWire.F_BODY).take(MAX_BODY)
@@ -3025,10 +4530,8 @@ object CommsRepository {
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, body, ts, "received", read = onScreen, ttl = disappearAfter(contact.number, json)))
                 if (onScreen) wakeExpiry()
-                store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
-                if (!onScreen) {
-                    CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
-                }
+                receipt(listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                if (!onScreen) notifyArrival()
             }
             CommsWire.T_RECEIPT -> {
                 val status = json.optString(CommsWire.F_STATUS)
@@ -3053,7 +4556,8 @@ object CommsRepository {
                 scope.launch { flushOutbox() }
                 CallManager.onPeerResync(contact)
             }
-            CommsWire.T_CALL -> CallManager.onSignal(contact, json, envelopeTs)
+            // A request's calls never reach the call screen (admitRequestLocked notes them as missed).
+            CommsWire.T_CALL -> if (!contact.request) CallManager.onSignal(contact, json, envelopeTs)
             CommsWire.T_PAYMENT -> {
                 // The coins were moved by the relay when the payer paid; this is
                 // the payer telling us, with the note only we can read.
@@ -3063,7 +4567,7 @@ object CommsRepository {
                 if (!BuildConfig.CLAIRIX_COIN) {
                     // This edition has no ClairixCoin. Receipt the notice so the
                     // payer's phone stops re-sending it, and record nothing.
-                    store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), CommsWire.STATUS_DELIVERED)
                     CommsLog.add("A ClairixCoin payment notice from ${formatClairixNumber(contact.number)} was not shown: this edition has no ClairixCoin")
                     return
                 }
@@ -3074,7 +4578,7 @@ object CommsRepository {
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null || store.hasTransaction(id)) {
                     // A re-sent notice: receipt it again, count nothing twice.
-                    store.queueReceipt(contact.number, listOf(id), if (alreadyRead == true) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), if (alreadyRead == true) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     return
                 }
                 val ts = claimedTs(envelopeTs, json.optLong(CommsWire.F_TS, envelopeTs))
@@ -3084,10 +4588,8 @@ object CommsRepository {
                 // shown as unconfirmed, and becomes a payment received only once
                 // the relay, which moved the coins, shows it in this account's history.
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, paymentClaimLine(amount, note), ts, STATUS_PAYMENT, read = onScreen))
-                store.queueReceipt(contact.number, listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
-                if (!onScreen) {
-                    CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
-                }
+                receipt(listOf(id), if (onScreen) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                if (!onScreen) notifyArrival()
                 scope.launch { confirmPayment(contact.number, id, txid, amount, ts, note) }
             }
             CommsWire.T_VOICEMAIL -> {
@@ -3103,7 +4605,7 @@ object CommsRepository {
                 if (store.belongsElsewhere(id, contact.number)) return
                 val alreadyRead = store.isRead(id)
                 if (alreadyRead != null) {
-                    store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                    receipt(listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     return
                 }
                 val durationMs = json.optLong(CommsWire.F_DURATION, 0L).coerceAtLeast(0L)
@@ -3112,10 +4614,8 @@ object CommsRepository {
                 // owner has not heard it; the conversation marks it read as usual.
                 val onScreen = openPeer == contact.number && !AppLock.locked.value
                 store.insertMessage(ChatMessage(id, contact.number, Direction.IN, VoicemailBody(audioB64, durationMs).encode(), ts, STATUS_VOICEMAIL, read = false, ttl = disappearAfter(contact.number, json)))
-                store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
-                if (!onScreen) {
-                    CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
-                }
+                receipt(listOf(id), CommsWire.STATUS_DELIVERED)
+                if (!onScreen) notifyArrival()
                 CommsLog.add("Voicemail (${durationLabel(durationMs)}) from ${formatClairixNumber(contact.number)}")
             }
             CommsWire.T_MEDIA -> {
@@ -3129,7 +4629,7 @@ object CommsRepository {
                     // The header again (they resent after a network error). A file
                     // already whole is receipted again; one still arriving is not yet.
                     if (store.message(id)?.status != STATUS_RECEIVING) {
-                        store.queueReceipt(contact.number, listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
+                        receipt(listOf(id), if (alreadyRead) CommsWire.STATUS_READ else CommsWire.STATUS_DELIVERED)
                     }
                     return
                 }
@@ -3191,6 +4691,8 @@ object CommsRepository {
             CommsWire.T_MOVED -> applyMove(contact, json)
             // Nothing but their pass, kept above.
             CommsWire.T_PASS -> Unit
+            // They joined with an invite this phone made: a request it came after is accepted.
+            CommsWire.T_JOINED -> if (takeInvite(json) && contact.request) acceptRequestLocked(contact)
             // Cover traffic: nothing is kept, shown or acknowledged.
             CommsWire.T_NOISE -> Unit
             else -> CommsLog.add("Payload of type \"${CommsWire.type(json)}\" from ${formatClairixNumber(contact.number)} not understood; ignored")
@@ -3200,7 +4702,8 @@ object CommsRepository {
     /**
      * Once every chunk of media [id] is here, assembles the file, stores it under
      * the message id and turns the message from "receiving" into a received one:
-     * receipted, and notified unless the conversation is on screen. Caller holds [lock].
+     * receipted, and notified unless the conversation is on screen; from a
+     * message request, neither receipted nor named. Caller holds [lock].
      */
     private fun completeMediaIfWhole(contact: Contact, id: String, body: MediaBody) {
         if (store.chunkCount(id) < body.chunks) return
@@ -3219,13 +4722,17 @@ object CommsRepository {
         store.deleteChunks(id)
         val onScreen = openPeer == contact.number && !AppLock.locked.value
         store.setStatus(id, "received")
-        if (onScreen) {
-            store.queueReceipt(contact.number, store.markRead(contact.number), CommsWire.STATUS_READ)
-        } else {
-            store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
+        when {
+            // A request is told nothing until the owner accepts it.
+            contact.request -> if (onScreen) store.markRead(contact.number)
+            onScreen -> store.queueReceipt(contact.number, store.markRead(contact.number), CommsWire.STATUS_READ)
+            else -> store.queueReceipt(contact.number, listOf(id), CommsWire.STATUS_DELIVERED)
         }
+        // Read on screen, a disappearing photo's clock has started.
+        if (onScreen) wakeExpiry()
         if (!onScreen) {
-            CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
+            if (contact.request) CommsNotifications.notifyRequest(appContext)
+            else CommsNotifications.notifyInbound(appContext, contact, store.unreadInbound(contact.number, 5))
         }
         CommsLog.add("${if (body.isVideo) "Video" else "Photo"} from ${formatClairixNumber(contact.number)} complete (${bytes.size / 1024} KB)")
     }
@@ -3250,15 +4757,21 @@ object CommsRepository {
         class Found(val contact: Contact) : Resolution()
         /** The payload claims a number its keys do not hold, or is malformed; drop it. */
         class Rejected(val reason: String) : Resolution()
+        /** From a blocked identity ([ContactGate]): dropped, leaving no trace of who sent it. */
+        object Blocked : Resolution()
         /** The relay was needed to confirm the sender and could not be reached; retry later. */
         object Unreachable : Resolution()
     }
 
     /**
      * Maps the Olm sender key to a contact. A first message from an unknown
-     * identity carries its keys and Clairix number; those are pinned as an
-     * unverified contact once the relay confirms that number publishes exactly
-     * those keys, so nobody can send as a number they do not hold.
+     * identity carries its keys and Clairix number; those are pinned once the
+     * relay confirms that number publishes exactly those keys, so nobody can
+     * send as a number they do not hold: as an unverified contact when they
+     * are writing to a group this phone is in and its roster names them, and
+     * otherwise as a message request ([ContactGate.admit]). A blocked identity,
+     * by its keys or by the number it claims, is [Resolution.Blocked] before
+     * the relay is asked anything about it.
      */
     private fun resolveSender(senderCurve: String, senderEd: String, json: JSONObject): Resolution {
         // A payload staged before schema 6 recorded no signing key (sender_ed is
@@ -3266,14 +4779,18 @@ object CommsRepository {
         // that alone rather than rejected.
         val legacy = senderEd.isEmpty()
         store.contactByCurve(senderCurve)?.let { c ->
+            if (c.blocked) return Resolution.Blocked
             // Olm vouches for the Curve25519 key; the envelope's signature for the
             // Ed25519 key. Both must be the contact's.
             return if (legacy || c.ed25519 == senderEd) Resolution.Found(c)
             else Resolution.Rejected("signed by a key that is not ${contactLabel(c)}'s")
         }
+        val blocked = store.blockedKeys()
+        if (ContactGate.isBlocked(blocked, senderEd.takeIf { !legacy }, senderCurve, null, null)) return Resolution.Blocked
         val from = parseClairixNumber(json.optString(CommsWire.F_FROM))
             ?: return Resolution.Rejected("sender is not a contact and gave no Clairix number")
         val ed = json.optString(CommsWire.F_ED25519); val curve = json.optString(CommsWire.F_CURVE25519)
+        if (ContactGate.isBlocked(blocked, ed, curve, null, null)) return Resolution.Blocked
         val sealing = json.optString(CommsWire.F_SEALING); val sig = json.optString(CommsWire.F_SIGNATURE)
         if (curve != senderCurve || (!legacy && ed != senderEd) || ed.isBlank() || sealing.isBlank() || sig.isBlank()) {
             return Resolution.Rejected("keys claimed by ${formatClairixNumber(from)} do not match the sender")
@@ -3285,8 +4802,14 @@ object CommsRepository {
         // confirmed there, through this phone's relay, and replies go there.
         val claimedRelay = json.optString(CommsWire.F_RELAY).takeIf { it.isNotBlank() }
         val theirRelay = if (claimedRelay == null || isOwnRelay(claimedRelay)) null
-            else RelayClient.originOf(claimedRelay) ?: return Resolution.Rejected("${formatClairixNumber(from)} gave a relay address Clairix cannot use")
-        store.contact(from)?.let { known ->
+            else RelayClient.originOf(claimedRelay) ?: run {
+                if (blocked.any { it.number == from }) return Resolution.Blocked
+                return Resolution.Rejected("${formatClairixNumber(from)} gave a relay address Clairix cannot use")
+            }
+        // A blocked number on its relay is dropped whatever keys come with it.
+        if (ContactGate.isBlocked(blocked, null, null, from, theirRelay)) return Resolution.Blocked
+        store.contactEntry(from)?.let { known ->
+            if (known.blocked) return Resolution.Blocked
             if (known.relay != theirRelay) {
                 return Resolution.Rejected("${formatClairixNumber(from)} on ${relayLabel(theirRelay)} is not ${contactLabel(known)}, who has that number on ${relayLabel(known.relay)}")
             }
@@ -3303,25 +4826,43 @@ object CommsRepository {
         if (relayView.ed25519 != ed || relayView.curve25519 != curve || relayView.sealing != sealing) {
             return Resolution.Rejected("the relay holds different keys for ${formatClairixNumber(from)}")
         }
-        val existing = store.contact(from)
-        val contact = if (existing != null) {
-            // Same number, different keys: keep the pinned name, flag it, trust
-            // nothing. What comes from the new keys is held until the owner looks.
-            identities.update { it.dropSessions(existing.curve25519) }
-            existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = true)
-        } else {
-            Contact(
-                number = from, name = json.optString(CommsWire.F_NAME).trim().take(40),
-                ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig,
-                verified = false, addedTs = System.currentTimeMillis(), relay = theirRelay
-            )
+        val existing = store.contactEntry(from)
+        val contact = when {
+            existing == null -> {
+                // Someone who joined with this phone's invite, or a group member
+                // writing to the group, comes in as a contact, as they always
+                // have; anyone else waits as a message request.
+                val gid = json.optString(CommsWire.F_GID).takeIf { it.isNotBlank() && it.length <= 64 }
+                val rosterKey = gid?.let { store.groupMember(it, from)?.ed25519 }
+                val invited = CommsWire.type(json) == CommsWire.T_JOINED && takeInvite(json)
+                val admission = ContactGate.admit(json, ed, rosterKey, ownRelay = theirRelay == null, invited = invited)
+                Contact(
+                    number = from, name = json.optString(CommsWire.F_NAME).trim().take(40),
+                    ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig,
+                    verified = false, addedTs = System.currentTimeMillis(), relay = theirRelay,
+                    request = admission == ContactGate.Admission.REQUEST
+                )
+            }
+            existing.request -> {
+                // Nothing from them was accepted, so there is no trust to keep:
+                // the request simply carries on under the keys the relay now holds.
+                identities.update { it.dropSessions(existing.curve25519) }
+                existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = false)
+            }
+            else -> {
+                // Same number, different keys: keep the pinned name, flag it, trust
+                // nothing. What comes from the new keys is held until the owner looks.
+                identities.update { it.dropSessions(existing.curve25519) }
+                existing.copy(ed25519 = ed, curve25519 = curve, sealing = sealing, signature = sig, verified = false, keyChanged = true)
+            }
         }
         store.upsertContact(contact)
         notePrekey(contact, relayView.sealingPrekey)
-        if (existing != null) {
+        if (existing != null && !existing.request) {
             noteKeyChange(contact)
             CommsLog.add("Keys of ${contactLabel(contact)} changed; what they send is held until you verify or accept them")
         }
+        if (existing == null && contact.request) CommsLog.add("A message request arrived from someone not in your contacts")
         return Resolution.Found(contact)
     }
 
@@ -3485,6 +5026,8 @@ object CommsRepository {
         _state.update { it.copy(relayOneTimeKeys = count, listed = me.listed) }
         // Delivery tokens are fetched here, ahead of need and apart from any send.
         runCatching { relay.topUpTokens() }.onFailure { CommsLog.add("Could not fetch delivery tokens: ${it.message}") }
+        // And a report token or two, so that reporting someone never waits on a fetch.
+        topUpReportTokens()
     }
 
     /** Marks a conversation read and tells the sender (retried until it goes). */
@@ -3495,6 +5038,9 @@ object CommsRepository {
         wakeExpiry()
         if (ids.isEmpty()) return@withContext
         bump()
+        // A message request or a blocked number is told nothing; a request's
+        // receipts go when the owner accepts it (acceptRequest).
+        if (store.contact(peer) == null) return@withContext
         store.queueReceipt(peer, ids, CommsWire.STATUS_READ)
         // On the repository's scope: leaving the screen must not cancel the receipt.
         scope.launch { flushReceipts() }
@@ -3571,30 +5117,72 @@ object CommsRepository {
     }
 
     private val expiryWake = Channel<Unit>(Channel.CONFLATED)
+    /** Guards [expiryJob], so a wake never falls between the sweep deciding to stop and stopping. */
+    private val expiryLock = Any()
+    private var expiryJob: Job? = null
 
-    /** Has the sweep look again now: a message's clock started or a new one is counting down. */
+    /**
+     * Has the sweep look again now: a message's clock started, a new one is
+     * counting down, the vault opened or the app came to the front. Starts the
+     * sweep when none runs; it stops by itself while nothing counts down.
+     */
     private fun wakeExpiry() {
-        expiryWake.trySend(Unit)
+        if (!isRegistered()) return
+        synchronized(expiryLock) {
+            if (expiryJob?.isActive == true) {
+                expiryWake.trySend(Unit)
+                return
+            }
+            expiryJob = scope.launch { runExpirySweep() }
+        }
     }
 
     /**
-     * Deletes disappearing messages as their time comes, for as long as the
-     * process lives: at the moment the next one is due, and at least once a
-     * minute. What is past its time is never shown even before this runs (the
-     * store's reads leave it out), and a process that was not running sweeps
-     * the moment it starts.
+     * Deletes disappearing messages as their time comes ([ExpirySchedule]):
+     * sleeps exactly until the next one is due, and stops when nothing counts
+     * down, so a phone with no timed message runs no timer for them at all.
+     * What is past its time is never shown even before this runs (the store's
+     * reads leave it out), and a process that was not running sweeps the
+     * moment it starts.
      */
-    private fun startExpirySweep() {
-        scope.launch {
-            while (true) {
-                // Locked, the database is closed: what is due goes the moment it opens.
-                val next = if (Vault.sealed.value) null else runCatching { sweepExpired() }
-                    .onFailure { CommsLog.add("Deleting disappearing messages failed: ${it.message}") }
-                    .getOrNull()
-                val wait = next?.let { (it - System.currentTimeMillis()).coerceIn(EXPIRY_MIN_WAIT_MS, EXPIRY_POLL_MS) } ?: EXPIRY_POLL_MS
-                withTimeoutOrNull(wait) { expiryWake.receive() }
+    private suspend fun runExpirySweep() {
+        while (true) {
+            var failed = false
+            // Locked, the database is closed: the sweep stops, and the vault
+            // opening wakes it, so what is due goes the moment it opens.
+            val next = if (Vault.sealed.value) null else try {
+                sweepIfDue()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultSealedException) {
+                null
+            } catch (e: Exception) {
+                CommsLog.add("Deleting disappearing messages failed: ${e.message}")
+                failed = true
+                null
             }
+            val wait = ExpirySchedule.waitMs(next, failed, System.currentTimeMillis())
+            if (wait == null) {
+                val stop = synchronized(expiryLock) {
+                    // A wake that came while this pass found nothing: look again.
+                    if (expiryWake.tryReceive().isSuccess) {
+                        false
+                    } else {
+                        expiryJob = null
+                        true
+                    }
+                }
+                if (stop) return
+                continue
+            }
+            withTimeoutOrNull(wait) { expiryWake.receive() }
         }
+    }
+
+    /** Deletes what is due, if anything is; returns when the next message is due, or null when none counts down. */
+    private suspend fun sweepIfDue(): Long? {
+        val next = lock.withLock { store.nextExpiry() }
+        return if (ExpirySchedule.due(next, System.currentTimeMillis())) sweepExpired() else next
     }
 
     /** Deletes what is due now, with its files and notifications; returns when the next is due. */

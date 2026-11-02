@@ -1,0 +1,14 @@
+---
+import DocLayout from '../layouts/DocLayout.astro';
+import { Content, getHeadings } from '../content/docs/advocates.md';
+import { pages } from '../config/site';
+---
+
+<DocLayout meta={pages.advocates} label="For advocates and helpers" title="Know the limits before you hand it over<em>.</em>" headings={getHeadings()} tags={['Updated 1 November 2026', 'Public beta']}>
+  <p class="lede" slot="lede">
+    For domestic-violence advocates, helpline staff and the people who train journalists in security: what Clairix checks,
+    what it cannot detect, how to install it when someone may be watching the phone, and what it does if the person is found
+    with it.
+  </p>
+  <article class="prose"><Content /></article>
+</DocLayout>

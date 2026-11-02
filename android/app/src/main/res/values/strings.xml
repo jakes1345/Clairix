@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Clairix</string>
+    <!-- Discreet mode's neutral launcher entries (security/DiscreetMode.kt); the Play edition has neither. -->
+    <string name="launcher_compass">Compass</string>
+    <string name="launcher_notes">Notes</string>
 </resources>

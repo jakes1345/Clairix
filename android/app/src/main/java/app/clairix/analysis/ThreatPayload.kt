@@ -102,6 +102,8 @@ object ThreatPayload {
         val tracker = d.tracker
         return when {
             d.following && d.threat == Threat.CRITICAL && tracker != null -> "${tracker.label} following you"
+            // Identified, but not as a tracker away from its owner (an AirTag with its owner's phone in range).
+            d.following && tracker != null -> "${tracker.label} travelling with you"
             d.following -> "Unidentified device travelling with you"
             tracker != null -> "${tracker.label} nearby"
             d.persistent -> "Persistent unknown device"
@@ -134,6 +136,7 @@ object ThreatPayload {
         put("conf", d.confidence.name)
         put("first", d.firstSeen)
         put("last", d.lastSeen)
+        if (d.separatedAt != 0L) put("separated", d.separatedAt)
         put("n", d.sightings)
         put("disp", d.displacementM)
         put("places", d.places)

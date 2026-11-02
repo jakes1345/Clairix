@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Checks relays/relays.json before it is signed and published.
+"""Checks relays/relays.json before it is signed and published, and watches it.
 
-    python3 tools/relays/check.py relays/relays.json [--published PATH] [--live]
+    python3 tools/relays/check.py relays/relays.json [--published PATH] [--live | --watch]
 
 The app (android/.../comms/RelayDirectory.kt) parses the same format and
 refuses what this refuses; keep the two in step.
@@ -11,6 +11,11 @@ refuses what this refuses; keep the two in step.
 --live       ask every listed relay for its key (GET /) and fail when one
              answers with a different key. A relay that does not answer is
              only reported: it may be down for an hour.
+--watch      what the Relay watch workflow runs on a schedule: every listed
+             relay must answer GET / as a Clairix relay, with the key (and the
+             onion address, when one is listed) the list gives it. A relay that
+             does not answer, or not like that, is asked twice more a little
+             later and then fails the check.
 """
 import argparse
 import base64
@@ -103,17 +108,55 @@ def check(doc, now=None):
     return relays
 
 
-def live_key(url, timeout=20):
+def live_info(url, timeout=20):
+    """What the relay at [url] says about itself at GET /, as parsed JSON."""
     req = urllib.request.Request(url + "/", headers={"Accept": "application/json", "User-Agent": "clairix-relay-list-check"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp).get("relayKey")
+        return json.load(resp)
+
+
+def live_key(url, timeout=20):
+    return live_info(url, timeout).get("relayKey")
+
+
+def watch_problem(entry, fetch=live_info):
+    """Why the listed relay [entry] is not answering as listed, or None when it is."""
+    try:
+        info = fetch(entry["url"])
+    except Exception as e:  # noqa: BLE001 - any failure to reach it is the finding
+        return f"did not answer ({e})"
+    if not isinstance(info, dict) or info.get("service") != "clairix-comms" or info.get("ok") is not True:
+        return "answered, but not as a Clairix relay"
+    if info.get("relayKey") != entry["key"]:
+        return f"publishes key {info.get('relayKey')}, the list says {entry['key']}"
+    if "onion" in entry and info.get("onion") != entry["onion"]:
+        return f"publishes onion address {info.get('onion')}, the list says {entry['onion']}"
+    return None
+
+
+def watch(relays, fetch=live_info, attempts=3, wait=15.0, sleep=time.sleep):
+    """Each listed relay that does not answer as listed after [attempts] tries [wait] seconds apart, with why."""
+    problems = {}
+    for entry in relays:
+        problem = None
+        for attempt in range(attempts):
+            problem = watch_problem(entry, fetch)
+            if problem is None:
+                break
+            if attempt + 1 < attempts:
+                sleep(wait)
+        if problem is not None:
+            problems[entry["url"]] = problem
+    return problems
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("list")
     ap.add_argument("--published")
-    ap.add_argument("--live", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--live", action="store_true")
+    mode.add_argument("--watch", action="store_true")
     args = ap.parse_args(argv)
     with open(args.list, "rb") as f:
         doc = json.loads(f.read().decode("utf-8"))
@@ -127,6 +170,15 @@ def main(argv=None):
     except Invalid as e:
         print(f"{args.list}: {e}", file=sys.stderr)
         return 1
+    if args.watch:
+        problems = watch(relays, fetch=lambda url: live_info(url, timeout=15))
+        for entry in relays:
+            problem = problems.get(entry["url"])
+            if problem is None:
+                print(f"{entry['url']}: answers with the listed key")
+            else:
+                print(f"{entry['url']}: {problem}", file=sys.stderr)
+        return 1 if problems else 0
     failed = False
     if args.live:
         for entry in relays:

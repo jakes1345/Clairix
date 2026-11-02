@@ -9,6 +9,7 @@ protect, how it is built, what to look at first, and how to build and test it.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The components and how a message, a token, a lookup and a move travel between them |
 | [SCOPE.md](SCOPE.md) | What to audit, in order, with file paths and sizes; the questions we most want answered; what is out of scope |
 | [BUILD-AND-TEST.md](BUILD-AND-TEST.md) | Building every part, running every test suite, standing up two relays locally, and checking a release against the source |
+| [POWER.md](POWER.md) | How battery use is measured on real phones, the targets, the results per release (none recorded yet), and the power budgets the emulator checks |
 | [OTF-SECURITY-LAB-APPLICATION.md](OTF-SECURITY-LAB-APPLICATION.md) | A draft application to the Open Technology Fund's Security Lab |
 
 Also read:
@@ -16,6 +17,10 @@ Also read:
 - [`../SECURITY-FINDINGS.md`](../SECURITY-FINDINGS.md): every finding from our
   own reviews, what was done about it, and what is still open. Please do not
   report those again unless the fix is wrong.
+- [`../OPEN-ISSUES.md`](../OPEN-ISSUES.md): the findings that are not closed,
+  in one table.
+- [`../KEYS.md`](../KEYS.md): the keys that sign the app's downloads, the
+  release checksums and the APKs, and how to check them.
 - [`../../README.md`](../../README.md), "Who it is built against": the claims
   as users read them.
 - [`../../comms-worker/README.md`](../../comms-worker/README.md): what the

@@ -17,22 +17,22 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <!-- Vehicle context: the scanner switches to an intensive sweep when the phone
-         is detected to be in a vehicle, and compares what rides along across trips.
-         A runtime permission; without it the scanner simply never knows. -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
-
-    <!-- Fake incoming call: rings at the exact moment the owner picked, even in Doze. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <!-- Stalkerware scan: Android 11+ hides most installed apps from a package
-         listing without this, and an app hiding on the phone is the whole point. -->
+         listing without this, and an app hiding on the phone is the whole point.
+         The scan reads every installed package on the phone and sends nothing
+         about them anywhere (analysis/StalkwareScanner.kt; the Play declaration
+         is docs/play/query-all-packages.md). -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- Wi-Fi tab: reads the connected network and the scan cache, and asks the
-         platform for a fresh scan when the tab is open (throttled by Android). -->
+    <!-- Wi-Fi checks: read the connected network and the scan cache, and ask the
+         platform for a fresh scan (throttled by Android): while the scanner runs,
+         every two minutes with the screen on or the phone moving and every ten
+         minutes once it has settled with the screen off; with the scanner off,
+         once a minute from the Wi-Fi tab while it is open; and once per tap of
+         "Scan for setup hotspots" under Hidden cameras. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
@@ -56,6 +56,11 @@
          the window manager tell Clairix when its own screen is inside a recording. -->
     <uses-permission android:name="android.permission.DETECT_SCREEN_RECORDING" />
 
+    <!-- Phone check's Advanced Protection row on Android 16+: a normal permission,
+         granted at install, without which the platform refuses to say whether the
+         mode is on. Older releases do not know it and ignore it. -->
+    <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
@@ -64,10 +69,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <!--
-        Device tab: the packages the security check looks for. Package visibility
-        filtering hides every other app from getPackageInfo unless it is named here;
-        this is the list of root managers, hooking frameworks and known stalkerware
-        that PhoneHealthMonitor reports when installed. Nothing else is visible.
+        Device tab: the root managers and hooking frameworks PhoneHealthMonitor
+        reports when installed. While QUERY_ALL_PACKAGES above is held every
+        package is visible anyway, so this list changes nothing today; it is kept
+        so these checks still see their packages if that permission is ever
+        withdrawn (a store review, or a build without it). The stalkerware check
+        does need every package: it matches every installed app against its signed
+        stalkerware list (analysis/StalkwareIoc.kt) by package name and signing
+        certificate, so no stalkerware is named here.
     -->
     <queries>
         <package android:name="com.topjohnwu.magisk" />
@@ -87,25 +96,6 @@
         <package android:name="org.lsposed.manager" />
         <package android:name="com.saurik.substrate" />
         <package android:name="re.frida.server" />
-        <package android:name="com.mspy.lite" />
-        <package android:name="com.mspy.android" />
-        <package android:name="com.flexispy.android" />
-        <package android:name="com.hellospy.system" />
-        <package android:name="com.spyzie.android" />
-        <package android:name="com.cocospy.android" />
-        <package android:name="com.spyic.android" />
-        <package android:name="com.hoverwatch.android" />
-        <package android:name="com.thetruthspy.android" />
-        <package android:name="com.spyhuman.android" />
-        <package android:name="com.xnspy.android" />
-        <package android:name="com.mobistealth.android" />
-        <package android:name="com.ikeymonitor.android" />
-        <package android:name="com.cerberusapp" />
-        <package android:name="com.lsdroid.cerberus" />
-        <package android:name="com.spy2mobile.light" />
-        <package android:name="com.mxspy" />
-        <package android:name="com.pcTattletale" />
-        <package android:name="com.retinax.mobilespy" />
         <!--
             Makes every active device admin visible so its label can be resolved
             through its receiver component; without this the Device tab showed raw
@@ -177,11 +167,12 @@
             android:foregroundServiceType="location" />
 
         <!--
-            Unlock ledger: a device admin with the watch-login policy only
-            (res/xml/unlock_admin.xml), so the platform reports every lock-screen
-            success, failure and credential change. Exported with the system-only
-            BIND_DEVICE_ADMIN permission, as every admin receiver must be; the owner
-            activates it from the Device tab.
+            Unlock ledger: a device admin with the watch-login policy, so the
+            platform reports every lock-screen success, failure and credential
+            change, and force-lock, so the Fake call page's "Schedule and lock" can
+            lock the screen (res/xml/unlock_admin.xml); nothing else. Exported with
+            the system-only BIND_DEVICE_ADMIN permission, as every admin receiver
+            must be; the owner activates it from the Device tab.
         -->
         <receiver
             android:name=".security.UnlockAdminReceiver"
@@ -195,26 +186,9 @@
             </intent-filter>
         </receiver>
 
-        <!--
-            Fake incoming call: a pretend ring the owner schedules as a reason to
-            leave. Its screen shows over the lock screen like a real call and is kept
-            out of recents; only Clairix's own alarm and notification can open it.
-        -->
-        <activity
-            android:name=".security.FakeCallActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:taskAffinity="app.clairix.fakecall"
-            android:excludeFromRecents="true"
-            android:showOnLockScreen="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:theme="@style/Theme.Clairix" />
-
-        <!-- The fake call's alarm and its Decline button. -->
-        <receiver
-            android:name=".security.FakeCallReceiver"
-            android:exported="false" />
+        <!-- The fake call's activity, receiver and ring service are declared in
+             src/main/AndroidManifest.xml: the Comms menu carries Fake call in both
+             editions. -->
 
     </application>
 </manifest>

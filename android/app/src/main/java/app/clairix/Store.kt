@@ -1,14 +1,21 @@
 package app.clairix
 
 import android.content.Context
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import app.clairix.security.Wiper
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
+import java.security.KeyStoreException
+import java.security.ProviderException
+import java.security.UnrecoverableEntryException
+import java.util.concurrent.TimeUnit
+import javax.crypto.AEADBadTagException
 
 /**
  * A small JSON-backed key/value store written atomically to the app's private
@@ -40,7 +47,9 @@ class Store(
     private val file: File,
     /** Where background writes run. A parameter so tests can hold them back. */
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val cipher: StoreCipher = KeystoreStoreCipher
+    private val cipher: StoreCipher = KeystoreStoreCipher,
+    /** Told the file's name when it could not be read and was set aside. A parameter so tests can listen. */
+    private val onSetAside: (String) -> Unit = { name -> reportSetAside(name) }
 ) {
 
     constructor(context: Context, filename: String) : this(File(context.filesDir, filename))
@@ -48,6 +57,67 @@ class Store(
     companion object {
         /** Marks a sealed file. Plain JSON never starts with these bytes. */
         val MAGIC: ByteArray = "CLXS1\n".toByteArray(Charsets.US_ASCII)
+
+        /** Appended to the name of a file that could not be read and was moved out of the way. */
+        const val SET_ASIDE_SUFFIX = ".unreadable"
+
+        /** How long a set-aside file is kept before [pruneSetAside] deletes it. */
+        val SET_ASIDE_KEEP_MS: Long = TimeUnit.DAYS.toMillis(30)
+
+        private const val OPEN_ATTEMPTS = 4
+        private const val RETRY_BACKOFF_MS = 250L
+        /** filesDir, its own folders (the speed cache's) and one below. */
+        private const val PRUNE_DEPTH = 3
+
+        /**
+         * Whether [e], thrown while opening a store, means the file is damaged for
+         * good: an AES-GCM tag that does not match (corrupted, or sealed under a key
+         * that no longer exists), a sealed blob too short to hold anything, a
+         * document that does not parse, a key the Keystore has invalidated. Anything else (the Keystore refusing or not
+         * answering, an I/O error) may pass, and is not taken for damage.
+         */
+        internal fun isDamage(e: Throwable): Boolean = when (e) {
+            // A key the Keystore says is gone for good opens nothing, now or after a restart.
+            is JSONException, is AEADBadTagException, is KeyPermanentlyInvalidatedException -> true
+            is KeyStoreException, is ProviderException, is UnrecoverableEntryException, is IllegalStateException -> false
+            // KeystoreStoreCipher's own check that a blob is long enough to hold an IV and a tag.
+            is IllegalArgumentException -> true
+            else -> false
+        }
+
+        /**
+         * What a store that set a file aside does about it: a plain alert through
+         * [Registry.publishAlert], at most once a day per file.
+         */
+        internal fun reportSetAside(name: String) {
+            val now = System.currentTimeMillis()
+            Registry.publishAlert(
+                Alert(
+                    id = "store_set_aside:$name@$now",
+                    ts = now,
+                    severity = Severity.MEDIUM,
+                    title = "Saved scanner data could not be read",
+                    detail = "Saved scanner data could not be read and was set aside. Clairix has started that part " +
+                        "afresh and keeps what it learns from now on as usual. The unreadable copy is deleted after 30 days.",
+                    kind = EventKind.PLATFORM,
+                    dedupeKey = "store_set_aside:$name"
+                ),
+                dedupeWindowMs = TimeUnit.DAYS.toMillis(1)
+            )
+        }
+
+        /**
+         * Deletes the files stores set aside ([SET_ASIDE_SUFFIX]) under [dir] that
+         * are older than [SET_ASIDE_KEEP_MS] at [now], and returns how many went.
+         * Nothing can read them, and one from a version that kept stores in the
+         * clear is plaintext.
+         */
+        fun pruneSetAside(dir: File, now: Long = System.currentTimeMillis()): Int {
+            val old = dir.walkTopDown().maxDepth(PRUNE_DEPTH)
+                .filter { it.isFile && it.name.endsWith(SET_ASIDE_SUFFIX) && now - it.lastModified() > SET_ASIDE_KEEP_MS }
+                .toList()
+            return old.count { it.delete() }
+        }
     }
 
     /**
@@ -74,29 +144,38 @@ class Store(
      * itself rather than trusting a background write that may never run.
      */
     private var pending: Pair<Long, String>? = null
+    /**
+     * False once a load found the file but the Keystore would not open it, however
+     * often it was asked: nothing is written for the rest of the process, so no
+     * write buries a file the next start will probably read. Guarded by [lock].
+     */
+    private var writable = true
 
     fun load(fallback: () -> JSONObject): JSONObject {
+        var setAside = false
         val reseal = synchronized(lock) {
             data?.let { return it }
             var legacy = false
-            val loaded = try {
-                if (file.exists()) {
-                    val bytes = file.readBytes()
-                    if (isSealed(bytes)) {
-                        JSONObject(cipher.open(bytes.copyOfRange(MAGIC.size, bytes.size)))
-                    } else {
-                        legacy = true
-                        JSONObject(String(bytes, Charsets.UTF_8))
-                    }
-                } else {
+            val loaded = when (val read = readPatiently()) {
+                is Read.Absent -> fallback()
+                is Read.Opened -> {
+                    legacy = read.legacy
+                    read.json
+                }
+                is Read.Damaged -> {
+                    // Damaged for good. Set it aside, once, rather than let the next
+                    // write bury the owner's baseline and location history under an
+                    // empty document; and say so.
+                    runCatching { file.renameTo(setAsideTarget()) }
+                    setAside = true
                     fallback()
                 }
-            } catch (_: Exception) {
-                // Unreadable: a sealed file the Keystore would not open just now, or
-                // a damaged one. Set it aside rather than let the next write bury the
-                // owner's baseline and location history under an empty document.
-                runCatching { file.renameTo(File(file.parentFile, "${file.name}.unreadable")) }
-                fallback()
+                is Read.Unavailable -> {
+                    // The Keystore would not answer. The file stays where it is, and
+                    // this store writes nothing over it until the next start reads it.
+                    writable = false
+                    fallback()
+                }
             }
             data = loaded
             // A document found in the clear goes back to disk sealed before anything
@@ -109,8 +188,70 @@ class Store(
                 null
             }
         }
+        if (setAside) runCatching { onSetAside(file.name) }
         if (reseal != null) ioScope.launch { write(reseal.first, reseal.second) }
         return data!!
+    }
+
+    /**
+     * Said by the owner's own clear ("Clear all data"), before it writes the cleared
+     * document: what is on disk goes, even when this run could not open it. A store
+     * whose file the Keystore would not open writes nothing ([writable]), so without
+     * this a clear changed only memory and the history it was meant to delete came
+     * back at the next start. Returns whether the file on disk had not been read.
+     */
+    fun discardUnread(): Boolean = synchronized(lock) {
+        val unread = !writable
+        writable = true
+        unread
+    }
+
+    /**
+     * Whether everything this store holds is on disk: nothing changed since the last
+     * write, no write still on its way, and a file this run could read. For a caller
+     * that deletes the only other copy once the store has it ([flush] does not say
+     * when its write failed).
+     */
+    fun isWritten(): Boolean = synchronized(lock) { writable && !dirty && pending == null }
+
+    /** Where a damaged file goes: `<name>.unreadable`, or a dated name beside an earlier one, which it must not replace. */
+    private fun setAsideTarget(): File {
+        val first = File(file.parentFile, "${file.name}$SET_ASIDE_SUFFIX")
+        return if (!first.exists()) first else File(file.parentFile, "${file.name}.${System.currentTimeMillis()}$SET_ASIDE_SUFFIX")
+    }
+
+    /** What reading the file found. */
+    private sealed interface Read {
+        data object Absent : Read
+        class Opened(val json: JSONObject, val legacy: Boolean) : Read
+        /** Damaged: no retry will ever open it ([isDamage]). */
+        data object Damaged : Read
+        /** The Keystore did not answer; the file may well be fine. */
+        data object Unavailable : Read
+    }
+
+    /**
+     * Reads and opens the file. A Keystore that fails to answer is asked again a
+     * few times over a second and a half, as [app.clairix.comms.CommsDb] asks for
+     * its key, and is never taken for damage: setting the file aside then would
+     * reset the cell baseline or the timeline over one bad Keystore call.
+     */
+    private fun readPatiently(): Read {
+        repeat(OPEN_ATTEMPTS) { attempt ->
+            if (attempt > 0) Thread.sleep(RETRY_BACKOFF_MS * attempt)
+            val read = runCatching {
+                if (!file.exists()) return Read.Absent
+                val bytes = file.readBytes()
+                if (isSealed(bytes)) {
+                    Read.Opened(JSONObject(cipher.open(bytes.copyOfRange(MAGIC.size, bytes.size))), legacy = false)
+                } else {
+                    Read.Opened(JSONObject(String(bytes, Charsets.UTF_8)), legacy = true)
+                }
+            }
+            read.getOrNull()?.let { return it }
+            if (read.exceptionOrNull()?.let { isDamage(it) } == true) return Read.Damaged
+        }
+        return Read.Unavailable
     }
 
     private fun isSealed(bytes: ByteArray): Boolean {
@@ -210,6 +351,8 @@ class Store(
         if (!dirty) return null
         // A wipe is deleting this file; writing it back would undo that.
         if (Wiper.isActive) return null
+        // The file on disk could not be opened just now; it is not this store's to overwrite.
+        if (!writable) return null
         val text = try {
             d.toString()
         } catch (_: RuntimeException) {

@@ -1,0 +1,9 @@
+{
+  "type": "clairix-latest",
+  "version": 1,
+  "issued": 1793503400,
+  "versionCode": 28,
+  "versionName": "3.0.0-beta.8",
+  "minSafeVersionCode": 27,
+  "notes": "Beta 8 stops a stranger filling your mailbox and makes invites safer. Versions before Beta 7 let a crafted link take over a verified contact."
+}

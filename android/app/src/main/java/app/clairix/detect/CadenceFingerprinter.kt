@@ -103,7 +103,21 @@ class CadenceFingerprinter(
          * then merge histories wholesale; otherwise they should not let the merge
          * extend how long the device appears to have been present.
          */
-        val certain: Boolean
+        val certain: Boolean,
+        /**
+         * Both addresses belong to one tracker family and share every confirming
+         * feature (transmit power, PHY, payload shape and length), as two units of one
+         * product do, so only the cadence and the timing of the hand-over say they are
+         * one device. Never [certain]. Callers should not let such a stitch carry a
+         * verdict the old address earned onto the new one: it may be the other unit.
+         */
+        val indistinguishable: Boolean,
+        /**
+         * The address this one was stitched onto (the quiet predecessor), so a caller
+         * can ask whether a [certain] stitch carries something that address held, such
+         * as the owner's trust. Null when not known.
+         */
+        val from: String? = null
     )
 
     /**
@@ -155,6 +169,10 @@ class CadenceFingerprinter(
         var attempts = 0
         /** Whether the stitch that gave this address its id was [Match.certain]. */
         var stitchCertain = false
+        /** Whether that stitch was [Match.indistinguishable]. */
+        var stitchIndistinguishable = false
+        /** The address that stitch joined this one to ([Match.from]). */
+        var stitchedFrom: String? = null
 
         fun push(deltaMs: Long) {
             deltas[head] = deltaMs
@@ -216,7 +234,7 @@ class CadenceFingerprinter(
         val track = existing ?: Track(address, nowMs).also { tracks[address] = it }
         record(track, packet)
 
-        if (track.stitched) return Match(track.logicalId, track.stitchCertain)
+        if (track.stitched) return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable, track.stitchedFrom)
 
         // A fresh address is scored only once it has measured its own cadence; until
         // then it has nothing that is its own to compare. Packets before that point
@@ -233,7 +251,9 @@ class CadenceFingerprinter(
         track.logicalId = best.candidate.logicalId
         track.stitched = true
         track.stitchCertain = best.certain
-        return Match(track.logicalId, track.stitchCertain)
+        track.stitchIndistinguishable = best.indistinguishable
+        track.stitchedFrom = best.candidate.address
+        return Match(track.logicalId, track.stitchCertain, track.stitchIndistinguishable, track.stitchedFrom)
     }
 
     /**
@@ -361,7 +381,7 @@ class CadenceFingerprinter(
 
     // ── Matching ─────────────────────────────────────────────────────────────
 
-    private class Best(val candidate: Track, val certain: Boolean)
+    private class Best(val candidate: Track, val certain: Boolean, val indistinguishable: Boolean)
 
     /** A score and the facts about the comparison that decide whether a stitch on it is certain. */
     private class Score(val value: Double, val bothMeasured: Boolean, val indistinguishable: Boolean) {
@@ -393,7 +413,7 @@ class CadenceFingerprinter(
         val certain = bestScore.bothMeasured && !bestScore.indistinguishable &&
             best.samples() >= CERTAIN_SAMPLES &&
             bestScore.value >= CERTAIN_SCORE && second < threshold
-        return Best(best, certain)
+        return Best(best, certain, bestScore.indistinguishable)
     }
 
     /**
@@ -523,13 +543,14 @@ class CadenceFingerprinter(
          * Measured advertising cadences. AirTag: Find My payload, type 0x12, length
          * byte 0x19, every two seconds. Tile: service 0xFEED at 1.5 s with a wide
          * spread between generations. SmartTag: Samsung manufacturer data at 1 s.
-         * Chipolo: 400 ms, distinctive on its own.
+         * Chipolo: 400 ms, distinctive on its own, on Chipolo's two SIG-assigned
+         * service UUIDs (0xFE33, 0xFE65), the pair [Signatures.match] recognises.
          */
         val FAMILIES: List<Family> = listOf(
             Family("airtag", "Apple AirTag", 2000, 200, company = 0x004C, mfrType = 0x12, mfrLen = 0x19),
             Family("tile", "Tile", 1500, 500, serviceShorts = setOf(0xFEED, 0xFD84)),
             Family("smarttag", "Samsung SmartTag", 1000, 150, company = 0x0075),
-            Family("chipolo", "Chipolo", 400, 100, serviceShorts = setOf(0xFEBE, 0xFE2B, 0xFE33))
+            Family("chipolo", "Chipolo", 400, 100, serviceShorts = setOf(0xFE33, 0xFE65))
         )
     }
 }

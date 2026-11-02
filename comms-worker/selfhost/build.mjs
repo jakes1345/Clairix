@@ -38,8 +38,9 @@ const allowLoopback = process.argv.includes("--allow-loopback");
 // The settings the Worker reads (src/env.ts), each bound from the environment
 // of the same name. One unset is simply absent, as on Cloudflare.
 export const SETTINGS = [
-  "ENROLL_SECRET", "TURN_KEY_ID", "TURN_KEY_API_TOKEN", "COIN_INITIAL_BALANCE", "ADMIN_SECRET",
-  "WZDX_FEEDS", "HERE_API_KEY", "TOMTOM_API_KEY", "HERE_DAILY_CAP", "TOMTOM_DAILY_CAP", "PUSH_HOSTS",
+  "ENROLL_SECRET", "OPEN_REGISTRATION", "OPEN_REGISTRATION_PER_DAY", "TURN_KEY_ID", "TURN_KEY_API_TOKEN", "COIN", "COIN_INITIAL_BALANCE", "ADMIN_SECRET",
+  "OPERATOR_KEYS", "OPERATOR_CONTACT", "LEGACY_CUTOFF",
+  "WZDX_FEEDS", "HERE_API_KEY", "TOMTOM_API_KEY", "HERE_DAILY_CAP", "TOMTOM_DAILY_CAP", "PUSH_HOSTS", "PUSH_HOSTS_ONLY",
   "RELAY_ALTERNATES", "RELAY_ONION", "DELIVERY_TOKENS_PER_HOUR", "MIX_MAX_MS", "RELAY_KEY", "TOKEN_KEY", "RELAY_ORIGIN", "FEDERATION",
 ];
 

@@ -1,0 +1,6 @@
+3.0.0 Beta 8
+- Contacts get a pass inside your encrypted messages, so strangers share only a small part of your mailbox and cannot fill it.
+- Invites are https://clairix.app/i links that only Clairix opens.
+- Setup names the relay an invite puts you on and whether it is on the signed relay list.
+- Each release is rebuilt from its tag and compared file for file.
+- Licence: GNU GPL version 3.

@@ -234,8 +234,11 @@ class FakeNamespace {
 /** A fresh relay: the Worker's own fetch handler over empty storage. */
 export function makeRelay(vars = {}, origin = RELAY) {
   // Mixing holds envelopes for a random few seconds; the tests that are not
-  // about it turn it off so a send is in the inbox at once.
-  const env = { ENROLL_SECRET, MIX_MAX_MS: "0", ...vars };
+  // about it turn it off so a send is in the inbox at once. The test phones
+  // fetch the old kind of token, which the relay refuses from LEGACY_CUTOFF
+  // (2027-01-01 unless set), so the tests that are not about that date move it
+  // out of their way; the date's own tests pass LEGACY_CUTOFF: undefined.
+  const env = { ENROLL_SECRET, MIX_MAX_MS: "0", LEGACY_CUTOFF: "2100-01-01", ...vars };
   env.MAILBOX = new FakeNamespace(Mailbox, env);
   env.TRAFFIC = new FakeNamespace(Traffic, env);
   env.INCIDENTS = new FakeNamespace(IncidentCache, env);

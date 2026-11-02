@@ -6,7 +6,7 @@ Contact: support@clairix.app
 
 ## 1. What Clairix is
 
-Clairix is a personal security app. It helps you detect hidden cameras, Bluetooth trackers, spyware, suspicious Wi-Fi networks and suspicious cellular activity, and it provides end-to-end encrypted messaging and calls between Clairix users. It also includes emergency tools, offline navigation and NFC reading.
+Clairix is a personal security app. It helps you detect hidden cameras, Bluetooth trackers, spyware, suspicious Wi-Fi networks and suspicious cellular activity, and it provides end-to-end encrypted messaging and calls between Clairix users. It also includes emergency tools, offline navigation (United States only for now: the 50 states, DC and Puerto Rico), a radio receiver for an SDR stick and NFC reading.
 
 Clairix is a detection aid and a private communication channel. It is not an emergency service, a security guard or a guarantee of safety. If you believe you are in danger, contact local emergency services.
 
@@ -16,7 +16,7 @@ You must be at least 18 years old to use the Service. By using it you confirm th
 
 ## 3. Your account
 
-Comms creates an account on the Clairix relay consisting of a random Clairix number and your public keys. There is no password. Your identity key, held on your phone, is the only credential. If you lose the phone or wipe the app, we cannot recover the account, the number or your message history, and we cannot reset anything. Keep your phone and its passcode secure.
+Comms creates an account on the Clairix relay consisting of a random Clairix number and your public keys. There is no password. Your identity key, held on your phone, is the only credential. There is no cloud backup, and we cannot recover the account, the number or your message history for you, or reset anything. If you lose the phone or wipe the app, the account, the number and your contacts are lost unless you saved a recovery file (Comms settings → Save a recovery file), which brings back your keys, number, contacts and groups on a new phone, never your messages. The file and its recovery code are yours to keep: we never see either, and anyone who has both can use your account. Keep your phone, its passcode, and any recovery file and code secure.
 
 You may register through an invite from an existing user. Each account may create a limited number of invites per day. Do not share invites with people you do not know.
 
@@ -35,12 +35,13 @@ You must not use the Service to:
 - Access, probe or interfere with networks, devices, cameras or cards that you do not own or have permission to test. The network sweep is for the Wi-Fi network you are lawfully connected to and the devices on it that you are entitled to inspect.
 - Emulate, clone or present a card or credential you do not own, or use one in a way its issuer forbids (Clairix Full).
 - Break the law in your jurisdiction, including laws about electronic surveillance, radio reception, interception and computer misuse. Some countries restrict decoding certain radio signals or scanning networks. You are responsible for knowing the rules where you are.
+- Receive or record radio traffic where that is not lawful. Receiving, and even more recording, radio traffic that is not broadcast to the public is restricted in some countries and states, and some places restrict a scanner in a vehicle. The app's scanner records only when you turn recording on, and the recordings stay on your phone; whether you may make them, keep them or share them is yours to know.
 - Attack, overload, reverse-proxy or scrape the relay, impersonate another Clairix number, or attempt to defeat rate limits or authentication.
 - Distribute malware or unlawful content through Comms.
 - Resell, sublicense or offer the relay as a service to others without our written permission.
 - Interfere with other users' use of the Service.
 
-We may suspend or terminate accounts that violate these terms. Because the relay holds no content, our ability to detect abuse is limited, and we rely on reports to support@clairix.app.
+We may suspend a Clairix number on our relay that is used in breach of these terms, and delete its account. A suspended number cannot sign in, collect messages or get new tokens on the relay, and messages sent to it are not delivered. Because the relay holds no content, our ability to detect abuse is limited: we act on reports made with Report in the app and on reports to support@clairix.app, and a suspension can be appealed at the same address. How we handle reports and appeals is set out in our [abuse policy](https://github.com/jakes1345/Clairix/blob/main/docs/ABUSE.md).
 
 ## 6. Detection is best-effort
 
@@ -56,7 +57,7 @@ You use the Service at your own risk and remain responsible for your own safety 
 
 ## 7. Clairix Full
 
-Clairix Full is distributed from our website as an APK and includes features not available in the Play edition. It is not reviewed by Google and does not update automatically. You are responsible for verifying the download against the published checksum and for installing updates. Features in Clairix Full that interact with cards or tokens are provided for lawful use with your own property only.
+Clairix Full is distributed from our website as an APK and includes features that the Google Play edition, when it is published, will leave out. It is not reviewed by Google and does not update automatically. You are responsible for verifying the download against the published checksum and for installing updates. Features in Clairix Full that interact with cards or tokens are provided for lawful use with your own property only.
 
 ClairixCoin is an in-app token with no monetary value. It cannot be purchased with money, cannot be redeemed for money or goods from us, and may be reset or discontinued at any time without liability.
 
@@ -72,11 +73,11 @@ You own what you send. You grant us only the limited right to store and forward 
 
 ## 10. Intellectual property
 
-The Clairix name, logo, app and website are owned by Clairix or its licensors. These terms do not grant you any right to use the Clairix name or marks. Map data is from OpenStreetMap contributors under the ODbL. The encryption library vodozemac and other open-source components are used under their respective licences, which are listed in the app.
+The Clairix name, logo, app and website are owned by Clairix or its licensors. These terms do not grant you any right to use the Clairix name or marks. Map data is from OpenStreetMap contributors under the ODbL. The encryption library vodozemac and the other open-source components in the app are used under their respective licences. The app lists them, with their licences, under Settings, About, Third-party licences, and [THIRD-PARTY-NOTICES.md](https://github.com/jakes1345/Clairix/blob/main/THIRD-PARTY-NOTICES.md) in the source code lists the libraries Clairix declares and every Rust crate it compiles in.
 
 ## 11. Third-party services
 
-Clairix uses OpenStreetMap for map tiles and address search, GitHub for offline map downloads, Cloudflare for hosting the relay and call relays, and Google Play for distribution of the Play edition. Your use of those services is subject to their terms. We are not responsible for them.
+Clairix uses OpenStreetMap for map tiles (unless a signed tile setting the project publishes names another tile server) and address search, GitHub for offline map downloads, the signed lists and settings the app keeps up to date and its daily check for a newer version, and Cloudflare for hosting the relay and call relays. Your use of those services is subject to their terms. We are not responsible for them.
 
 ## 12. Disclaimer of warranties
 
@@ -96,7 +97,7 @@ You agree to indemnify and hold Clairix harmless from claims, damages and expens
 
 ## 15. Termination
 
-You may stop using the Service at any time. Panic Wipe or Unpair deletes your relay account. We may suspend or terminate your access if you violate these terms, if required by law, or if we discontinue the Service. Sections 6, 9, 12, 13, 14 and 16 survive termination.
+You may stop using the Service at any time. Wipe Clairix, or Delete identity and number, deletes your relay account (see [how to delete your account](/delete-account)). We may suspend your Clairix number on our relay, or delete your relay account, if you violate these terms (see section 5) or if the law requires it, and we may discontinue the Service. Sections 6, 9, 12, 13, 14 and 16 survive termination.
 
 ## 16. Governing law and disputes
 

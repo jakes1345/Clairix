@@ -10,7 +10,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
-import android.os.PowerManager
 import android.provider.Settings
 import android.widget.MediaController
 import android.widget.Toast
@@ -81,6 +80,7 @@ import app.clairix.comms.ActiveCall
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
 import app.clairix.comms.COIN_SYMBOL
+import app.clairix.comms.CoinRules
 import app.clairix.comms.ChatMessage
 import app.clairix.comms.ChatThread
 import app.clairix.comms.CommsMedia
@@ -99,6 +99,7 @@ import app.clairix.comms.STATUS_PAYMENT
 import app.clairix.comms.STATUS_RECEIVING
 import app.clairix.comms.STATUS_SYSTEM
 import app.clairix.comms.KIND_NOTE
+import app.clairix.comms.LinkHealth
 import app.clairix.comms.ttlLabel
 import app.clairix.comms.TIMER_CHOICES
 import androidx.compose.material3.RadioButton
@@ -112,6 +113,7 @@ import app.clairix.comms.CommsLog
 import app.clairix.comms.CommsNotifications
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.Contact
+import app.clairix.comms.ContactGate
 import app.clairix.comms.Direction
 import app.clairix.comms.PairingCode
 import app.clairix.comms.formatClairixNumber
@@ -130,10 +132,14 @@ import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.ui.graphics.toArgb
 import app.clairix.ui.theme.ClairixBrand
 import app.clairix.ui.components.*
+import app.clairix.ui.makerBackgroundSteps
+import app.clairix.ui.openBatterySettings
+import app.clairix.ui.rememberBatteryUnrestricted
 import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
 import app.clairix.security.AppLock
+import app.clairix.security.NotificationPresentation
 import app.clairix.ui.components.setSensitiveText
 
 // ── Colour tokens local to this file ──────────────────────────────────────────
@@ -248,6 +254,8 @@ fun CommsScreen(
     inviterToAdd?.let { code ->
         AddInviterDialog(code, onDone = { inviterToAdd = null }, onAdded = { page = CommsPage.Thread(it) })
     }
+    // A call that would share this phone's address waits here for the owner's yes.
+    DirectCallDialog()
     when (val p = page) {
         CommsPage.List -> ThreadListScreen(
             onOpen = { page = CommsPage.Thread(it) },
@@ -278,7 +286,10 @@ fun CommsScreen(
         )
         CommsPage.MyCode -> MyCodeScreen(onBack = { page = CommsPage.List })
         CommsPage.Invite -> InviteScreen(onBack = { page = CommsPage.List })
-        CommsPage.Settings -> CommsSettingsScreen(onBack = { page = CommsPage.List }, onAppSettings = onAppSettings, onMove = { page = CommsPage.Move })
+        CommsPage.Settings -> CommsSettingsScreen(
+            onBack = { page = CommsPage.List }, onAppSettings = onAppSettings, onMove = { page = CommsPage.Move },
+            onOpenThread = { page = CommsPage.Thread(it) }
+        )
         CommsPage.Move -> MoveRelayScreen(onBack = { page = CommsPage.Settings })
     }
 }
@@ -479,6 +490,8 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             tone = if (invite != null) Tone.Accent else Tone.Neutral,
             trailing = { LogoMark(size = 48.dp, contentDescription = null) }
         )
+        val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+        app.clairix.ui.UnsafeVersionBanner(update)
 
         if (invite != null) {
             val listedRelay = relayList?.find(RelayClient.originOf(invite.relayUrl) ?: invite.relayUrl)
@@ -526,6 +539,7 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 )
                 GhostButton("Use a relay URL and secret instead", onClick = { onInvite(null) }, tone = Tone.Neutral)
             }
+            Notice(Tone.Caution, NO_CLOUD_BACKUP, title = "No cloud backup")
             Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
             Spacer(Modifier.height(16.dp))
             return@Column
@@ -585,8 +599,9 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             Text("Or enter a relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
                 "Run comms-worker from the Clairix repository (on Cloudflare, or on a server of your own with " +
-                    "selfhost/install.sh) or pick a relay above, then enter its URL and the enrollment " +
-                    "secret. This phone generates its keys here, never shares the private half, and the relay " +
+                    "selfhost/install.sh) or pick a relay above, then enter its URL and its enrollment " +
+                    "secret; leave the secret empty for a relay whose operator has opened registration to anyone. " +
+                    "This phone generates its keys here, never shares the private half, and the relay " +
                     "hands it a random nine-digit Clairix number. Clairix then keeps a quiet background connection to the " +
                     "relay so messages arrive and calls ring while it's closed; Online in Comms settings switches that off.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -601,7 +616,7 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             )
             OutlinedTextField(
                 value = secret, onValueChange = { secret = it },
-                label = { Text("Enrollment secret", style = MaterialTheme.typography.bodyMedium) },
+                label = { Text("Enrollment secret, if the relay asks for one", style = MaterialTheme.typography.bodyMedium) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = clairixTextFieldColors()
@@ -623,10 +638,14 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                 onClick = {
                     scope.launch { CommsRepository.register(url, secret, name, listed) }
                 },
-                enabled = !state.busy && url.isNotBlank() && secret.isNotBlank(),
+                // The relay decides: without a secret it registers only when its operator opened registration.
+                enabled = !state.busy && url.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        Notice(Tone.Caution, NO_CLOUD_BACKUP, title = "No cloud backup")
+        RestoreFromFileCard()
 
         Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
 
@@ -658,6 +677,10 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
     val groupThreads by produceState(initialValue = emptyList<GroupThread>(), version) {
         value = withContext(Dispatchers.IO) { CommsRepository.groupThreads() }
     }
+    // People who wrote first and are not contacts: kept apart until the owner accepts them.
+    val requests by produceState(initialValue = emptyList<ChatThread>(), version) {
+        value = withContext(Dispatchers.IO) { CommsRepository.requests() }
+    }
     var addContact by remember { mutableStateOf(false) }
     var createGroup by remember { mutableStateOf(false) }
     val now = rememberTick()
@@ -665,9 +688,11 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
     if (addContact) AddContactDialog(onDismiss = { addContact = false }, onAdded = { addContact = false; onOpen(it) })
     if (createGroup) CreateGroupDialog(onDismiss = { createGroup = false }, onCreated = { createGroup = false; onOpenGroup(it) })
     // The coin balance is the relay's figure; it is asked for when the list comes up.
-    // Editions built without ClairixCoin (the Play edition) never ask.
-    LaunchedEffect(state.registered) {
-        if (BuildConfig.CLAIRIX_COIN && state.registered) CommsRepository.refreshBalance()
+    // Editions built without ClairixCoin (the Play edition) never ask, and nor does a
+    // phone whose relay does not offer it (its GET / says so).
+    val coinShown = CoinRules.shown(BuildConfig.CLAIRIX_COIN, state.registered, state.coin)
+    LaunchedEffect(coinShown) {
+        if (coinShown) CommsRepository.refreshBalance()
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -703,7 +728,7 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                         }
                     )
                     if (!state.listed) append(" · unlisted")
-                    if (BuildConfig.CLAIRIX_COIN && state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
+                    if (coinShown && state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
                     if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -736,18 +761,36 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
             )
         }
         val batteryFree by rememberBatteryUnrestricted()
-        if (state.online && !batteryFree) {
+        // Android refused twice in a row to restart the background connection (LinkHealth).
+        val linkStopped by LinkHealth.stopped.collectAsStateWithLifecycle()
+        if (state.online && (!batteryFree || linkStopped)) {
             val context = LocalContext.current
+            // The maker's own switch where Clairix knows its path; otherwise where such switches are.
+            val makerSteps = remember { makerBackgroundSteps(Build.MANUFACTURER) }
             Spacer(Modifier.height(6.dp))
             Notice(
                 Tone.Caution,
-                "Battery saving can cut Clairix off in the background, and then calls don't ring. Let Clairix run unrestricted.",
-                action = { GhostButton("Allow", onClick = { openBatterySettings(context) }) }
+                text = buildString {
+                    append(
+                        if (linkStopped) "Android refused twice in a row to restart Clairix's connection in the background, so calls may not ring and messages may wait until Clairix is opened. "
+                        else "Battery saving can cut Clairix off in the background, and then calls don't ring. "
+                    )
+                    if (!batteryFree) append("Let Clairix run unrestricted. ")
+                    append(makerSteps)
+                },
+                title = if (linkStopped) NotificationPresentation.LINK_STOPPED_TITLE else null,
+                action = {
+                    if (!batteryFree) GhostButton("Allow", onClick = { openBatterySettings(context) })
+                    else GhostButton("App info", onClick = { openAppDetails(context) })
+                }
             )
         }
+        // Below the oldest safe version nothing but an SOS is sent; this says why, until the update.
+        val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+        app.clairix.ui.UnsafeVersionBanner(update, Modifier.padding(top = 6.dp))
         Spacer(Modifier.height(8.dp))
 
-        if (threads.isEmpty() && groupThreads.isEmpty()) {
+        if (threads.isEmpty() && groupThreads.isEmpty() && requests.isEmpty()) {
             NoContactsCard()
         } else {
             LazyColumn(
@@ -755,11 +798,17 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                 contentPadding = PaddingValues(bottom = 96.dp),
                 modifier = Modifier.weight(1f)
             ) {
+                if (requests.isNotEmpty()) {
+                    item(key = "§requests") { SectionHeader("Requests", supporting = "${requests.size}", tone = Tone.Caution) }
+                    items(requests, key = { "r:${it.contact.number}" }) { t -> RequestRow(t, onClick = { onOpen(t.contact.number) }) }
+                }
                 // Groups first: a group's stripe is always the accent colour, so
                 // the section label keeps them apart from a contact with unread messages.
                 if (groupThreads.isNotEmpty()) {
                     item(key = "§groups") { SectionHeader("Groups", supporting = "${groupThreads.size}") }
                     items(groupThreads, key = { "g:${it.group.id}" }) { gt -> GroupRow(gt, onClick = { onOpenGroup(gt.group.id) }) }
+                }
+                if (groupThreads.isNotEmpty() || requests.isNotEmpty()) {
                     item(key = "§contacts") { SectionHeader("Contacts", supporting = "${threads.size}") }
                 }
                 if (threads.isEmpty()) {
@@ -957,6 +1006,46 @@ private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
     }
 }
 
+/**
+ * A message request in the conversation list: the number, the name they gave
+ * (theirs to choose, so said as theirs), and how much is waiting, but never
+ * what it says, until the request is opened.
+ */
+@Composable
+private fun RequestRow(t: ChatThread, onClick: () -> Unit) {
+    val c = ClairixTheme.colors
+    val m = t.lastMessage
+    ClairixCard(tone = Tone.Caution, onClick = onClick, onClickLabel = "Open message request", spacing = 4.dp) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Avatar("#", highlighted = t.unread > 0)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        formatClairixNumber(t.contact.number),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = c.text,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (m != null) Text(dateTimeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+                }
+                Text(
+                    buildString {
+                        if (t.contact.name.isNotBlank()) append("Says they are ").append(t.contact.name).append(" · ")
+                        append(if (t.contact.relay != null) "on ${relayHost(t.contact.relay)}" else "not in your contacts")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSubtle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (t.unread > 0) UnreadCount(t.unread)
+        }
+    }
+}
+
 /** A group in the conversation list. Groups carry no per-contact trust state, so no verification pill. */
 @Composable
 private fun GroupRow(gt: GroupThread, onClick: () -> Unit) {
@@ -1117,8 +1206,9 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     val state by CommsRepository.state.collectAsStateWithLifecycle()
     val version by CommsRepository.version.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    // A message request or a blocked contact kept as a record opens here too, read-only.
     val contact by produceState<Contact?>(initialValue = null, version, peer) {
-        value = withContext(Dispatchers.IO) { CommsRepository.contact(peer) }
+        value = withContext(Dispatchers.IO) { CommsRepository.contactEntry(peer) }
     }
     val messages by produceState(initialValue = emptyList<ChatMessage>(), version, peer) {
         value = withContext(Dispatchers.IO) { CommsRepository.messages(peer) }
@@ -1128,6 +1218,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         value = withContext(Dispatchers.IO) { CommsRepository.heldCount(peer) }
     }
     var reviewing by remember(peer) { mutableStateOf(false) }
+    var unblocking by remember(peer) { mutableStateOf(false) }
     var draft by rememberSaveable(peer) { mutableStateOf("") }
     var sendError by remember(peer) { mutableStateOf<String?>(null) }
     var paying by remember(peer) { mutableStateOf(false) }
@@ -1244,10 +1335,18 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     }
     LaunchedEffect(peer, version, onScreen) { if (onScreen) CommsRepository.markRead(peer) }
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
+    // The one "Someone new wrote to you" notification has been answered once a request is read.
+    LaunchedEffect(onScreen, contact?.request) { if (onScreen && contact?.request == true) CommsNotifications.cancelRequest(context) }
 
     val c = contact
-    val placeCall = rememberMicrophoneGate { c?.let { CallManager.place(it) } }
-    if (BuildConfig.CLAIRIX_COIN && paying && c != null) PayDialog(c, onDismiss = { paying = false })
+    // A message request or a blocked contact is read here, never written to or called.
+    val usable = c != null && !c.request && !c.blocked
+    val placeCall = rememberMicrophoneGate { c?.takeIf { usable }?.let { CallManager.place(it) } }
+    var reporting by remember(peer) { mutableStateOf(false) }
+    // Pay shows only where the relay offers ClairixCoin, in an edition built with it.
+    val coinShown = CoinRules.shown(BuildConfig.CLAIRIX_COIN, state.registered, state.coin)
+    if (coinShown && paying && c != null) PayDialog(c, onDismiss = { paying = false })
+    if (reporting && c != null) ReportDialog(c, onDismiss = { reporting = false })
     if (reviewing && c != null) {
         HeldReviewDialog(
             c, held,
@@ -1259,25 +1358,67 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header(c?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
+        Header(c?.takeIf { usable }?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
             val (label, tone) = when {
-                c == null -> "" to Tone.Neutral
+                c == null || !usable -> "" to Tone.Neutral
                 c.keyChanged -> "Keys changed" to Tone.Danger
                 c.verified -> "Verified" to Tone.Safe
                 else -> "Verify" to Tone.Caution
             }
             if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = tone)
-            if (BuildConfig.CLAIRIX_COIN) {
-                GhostButton("Pay", onClick = { paying = true }, enabled = c != null && !c.keyChanged)
+            if (coinShown && usable) {
+                GhostButton("Pay", onClick = { paying = true }, enabled = c?.keyChanged == false)
             }
-            GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c != null && !c.keyChanged)
+            if (usable) GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c?.keyChanged == false)
         }
         Text(
             "${formatClairixNumber(peer)} · end-to-end encrypted · Clairix number, not a phone number",
             style = MaterialTheme.typography.monoSmall,
             color = ClairixTheme.colors.textSubtle
         )
-        DisappearingRow(peer, version, enabled = c != null)
+        if (usable) DisappearingRow(peer, version, enabled = true)
+        if (c?.request == true) {
+            Spacer(Modifier.height(6.dp))
+            ClairixCard(tone = Tone.Caution, spacing = 6.dp) {
+                Text("Someone new wrote to you", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(
+                    (if (c.name.isNotBlank()) "They say they are ${c.name}, a name anyone can type. " else "") +
+                        "${formatClairixNumber(c.number)} is not in your contacts, so they are not told you have read this, " +
+                        "and a call from them is noted here as missed instead of ringing" +
+                        (if (held > 0) "; an invitation to a group from them waits too" else "") + ". " +
+                        "Accept to reply. Decline blocks the number and deletes what it sent.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PrimaryButton("Accept", onClick = { scope.launch { CommsRepository.acceptRequest(c.number) } })
+                    SecondaryButton("Decline", onClick = { scope.launch { CommsRepository.declineRequest(c.number); onBack() } }, tone = Tone.Danger)
+                    GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
+                }
+            }
+        }
+        if (c?.blocked == true) {
+            Spacer(Modifier.height(6.dp))
+            Notice(
+                Tone.Danger,
+                "Nothing they send reaches this phone, and they are not told. This conversation is kept as a record; nothing new is added to it.",
+                title = "You blocked this number",
+                action = {
+                    Row {
+                        GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
+                        GhostButton("Unblock", onClick = { unblocking = true }, tone = Tone.Neutral)
+                    }
+                }
+            )
+            if (unblocking) {
+                UnblockDialog(
+                    who = c.name.ifBlank { formatClairixNumber(c.number) },
+                    kept = true,
+                    onConfirm = { unblocking = false; scope.launch { CommsRepository.unblockContact(c.number) } },
+                    onDismiss = { unblocking = false }
+                )
+            }
+        }
         if (c?.keyChanged == true) {
             Spacer(Modifier.height(6.dp))
             Notice(
@@ -1286,7 +1427,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 title = "This contact's keys changed"
             )
         }
-        if (c != null && (c.keyChanged || held > 0)) {
+        if (c != null && usable && (c.keyChanged || held > 0)) {
             Spacer(Modifier.height(6.dp))
             ClairixCard(tone = Tone.Caution, onClick = { reviewing = true }, onClickLabel = "Review held messages", spacing = 4.dp) {
                 Text(
@@ -1307,7 +1448,8 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             if (messages.isEmpty()) {
                 item(key = "§empty") {
                     Text(
-                        "No messages yet. The first one you send starts an encrypted session with ${c?.let { contactLabel(it) } ?: "this contact"}.",
+                        if (c != null && !usable) "No messages here."
+                        else "No messages yet. The first one you send starts an encrypted session with ${c?.let { contactLabel(it) } ?: "this contact"}.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -1372,13 +1514,24 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { attachMenu = true },
-                enabled = c != null && !c.keyChanged && attachment == null && !preparing,
+                enabled = usable && c?.keyChanged == false && attachment == null && !preparing,
                 shape = ClairixShapes.Card, border = BorderStroke(1.dp, ClairixTheme.colors.border), contentPadding = PaddingValues(0.dp),
                 modifier = Modifier.size(56.dp)
-            ) { PictureGlyph(if (c != null && attachment == null && !preparing) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle, Modifier.size(24.dp)) }
+            ) { PictureGlyph(if (usable && attachment == null && !preparing) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle, Modifier.size(24.dp)) }
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it.take(4000) },
-                placeholder = { Text(if (attachment != null) "Caption (optional)" else "Encrypted message", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
+                placeholder = {
+                    Text(
+                        when {
+                            c?.request == true -> "Accept the request to reply"
+                            c?.blocked == true -> "Unblock to write to them"
+                            attachment != null -> "Caption (optional)"
+                            else -> "Encrypted message"
+                        },
+                        style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
+                    )
+                },
+                enabled = usable || c == null,
                 modifier = Modifier.weight(1f), maxLines = 5, colors = clairixTextFieldColors()
             )
             PrimaryButton(
@@ -1395,7 +1548,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                             else CommsRepository.send(peer, text).onFailure { sendError = it.message ?: "Not sent" }
                         }
                     },
-                enabled = (draft.isNotBlank() || attachment != null) && c != null && !preparing,
+                enabled = (draft.isNotBlank() || attachment != null) && usable && !preparing,
                 modifier = Modifier.height(56.dp)
             )
         }
@@ -1436,6 +1589,71 @@ private fun HeldReviewDialog(c: Contact, held: Int, onVerify: () -> Unit, onAcce
             }
         },
         confirmButton = { GhostButton("Close", onClick = onDismiss, tone = Tone.Neutral) }
+    )
+}
+
+/**
+ * Reports [c] to this phone's relay: a reason, and what goes with it. The
+ * relay's operator learns the number, its relay, the reason and the hash of
+ * the last envelope it sent, never what it said or who reported it.
+ */
+@Composable
+private fun ReportDialog(c: Contact, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var reason by remember { mutableStateOf<ContactGate.ReportReason?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = ClairixTheme.colors.surfaceRaised,
+        shape = ClairixShapes.Sheet,
+        title = { Text("Report ${formatClairixNumber(c.number)}", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Tells the operator of your relay that this number is abusing it: the number, the relay it is on, the reason, and a " +
+                        "fingerprint of the last envelope it sent you. Never what it said, and not who you are. What the operator does " +
+                        "about it is theirs to decide. Reporting does not block them; do that too if you want nothing more from them.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClairixTheme.colors.textSubtle
+                )
+                for (choice in ContactGate.ReportReason.entries) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(ClairixShapes.Tag)
+                            .clickable(enabled = !busy, onClickLabel = "Report for ${choice.label}") { reason = choice }
+                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = reason == choice, onClick = null, enabled = !busy)
+                        Spacer(Modifier.width(8.dp))
+                        Text(choice.label, style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text)
+                    }
+                }
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
+            }
+        },
+        confirmButton = {
+            GhostButton(
+                if (busy) "Sending…" else "Send report",
+                onClick = {
+                    val chosen = reason ?: return@GhostButton
+                    busy = true
+                    error = null
+                    scope.launch {
+                        CommsRepository.report(c.number, chosen)
+                            .onSuccess {
+                                Toast.makeText(context, "Report sent to your relay's operator", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                            .onFailure { busy = false; error = it.message ?: "The report could not be sent" }
+                    }
+                },
+                tone = Tone.Caution,
+                enabled = reason != null && !busy
+            )
+        },
+        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
@@ -1968,7 +2186,8 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
     val safety = remember(c.ed25519) { CommsRepository.safetyNumber(c) }
     var name by rememberSaveable(c.number) { mutableStateOf(c.name) }
     var error by remember { mutableStateOf<String?>(null) }
-    var confirmDelete by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf<ContactAction?>(null) }
+    var reporting by remember { mutableStateOf(false) }
     val scan = rememberCodeScanner { code ->
         when {
             code == null -> error = "That is not a Clairix code"
@@ -1979,21 +2198,33 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
         }
     }
 
-    if (confirmDelete) {
+    if (reporting) ReportDialog(c, onDismiss = { reporting = false })
+    confirm?.let { action ->
+        val label = contactLabel(c)
         AlertDialog(
-            onDismissRequest = { confirmDelete = false },
+            onDismissRequest = { confirm = null },
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet,
-            title = { Text("Remove ${contactLabel(c)}?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
-            text = { Text("Their keys, the encrypted session and every message with them are deleted from this phone.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) },
+            title = { Text("${action.title} $label?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+            text = { Text(action.explanation, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) },
             confirmButton = {
                 GhostButton(
-                    "Remove",
-                    onClick = { confirmDelete = false; scope.launch { CommsRepository.deleteContact(c.number); onDeleted() } },
+                    action.title,
+                    onClick = {
+                        confirm = null
+                        scope.launch {
+                            when (action) {
+                                ContactAction.DELETE -> CommsRepository.deleteContact(c.number)
+                                ContactAction.BLOCK -> CommsRepository.block(c.number, delete = false)
+                                ContactAction.BLOCK_AND_DELETE -> CommsRepository.block(c.number, delete = true)
+                            }
+                            onDeleted()
+                        }
+                    },
                     tone = Tone.Danger
                 )
             },
-            dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = false }, tone = Tone.Neutral) }
+            dismissButton = { GhostButton("Cancel", onClick = { confirm = null }, tone = Tone.Neutral) }
         )
     }
 
@@ -2065,9 +2296,44 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
             Text("Identity key ${c.ed25519.take(16)}…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
         }
 
-        GhostButton("Remove contact", onClick = { confirmDelete = true }, tone = Tone.Danger)
+        ClairixCard {
+            Text("If they are bothering you", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(
+                "Report tells your relay's operator about this number. Block stops everything they send from reaching this phone, " +
+                    "messages, calls and group messages alike, and they are not told. Delete removes them and your conversation; " +
+                    "if they write to you again it arrives as a message request.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClairixTheme.colors.textSubtle
+            )
+            GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
+            GhostButton("Block", onClick = { confirm = ContactAction.BLOCK }, tone = Tone.Danger)
+            GhostButton("Block and delete", onClick = { confirm = ContactAction.BLOCK_AND_DELETE }, tone = Tone.Danger)
+            GhostButton("Delete", onClick = { confirm = ContactAction.DELETE }, tone = Tone.Danger)
+        }
         Spacer(Modifier.height(16.dp))
     }
+}
+
+/** What the contact page can do to a contact, and what each one says before it does it. */
+private enum class ContactAction(val title: String, val explanation: String) {
+    BLOCK(
+        "Block",
+        "Nothing they send reaches this phone again: no messages, calls or group messages, and they are not told. " +
+            "While the phone is locked Clairix cannot yet tell who sent something, so a \"New Clairix message\" notice can still " +
+            "appear until you unlock; it never rings. " +
+            "The conversation stays here, read-only, as a record. Unblock them any time under Blocked in Comms settings."
+    ),
+    BLOCK_AND_DELETE(
+        "Block and delete",
+        "Nothing they send reaches this phone again, and they are not told. Their keys, the session and every message with them " +
+            "are deleted from this phone; their number stays on your blocked list until you unblock it in Comms settings. " +
+            "To report them, do it first: a report names the last envelope they sent."
+    ),
+    DELETE(
+        "Delete",
+        "Their keys, the encrypted session and every message with them are deleted from this phone. They are not blocked: " +
+            "if they write to you again, it arrives as a message request."
+    )
 }
 
 // ── My code ──────────────────────────────────────────────────────────────────
@@ -2234,7 +2500,7 @@ private fun MyCodeScreen(onBack: () -> Unit) {
             ClairixCard {
                 Text("Identity key", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(myKey, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
-                Text("Generated on this phone; the private half never leaves it. A reinstall makes a new identity and a new number.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                Text("Generated on this phone; the private half leaves it only inside a recovery file you save yourself (Comms settings). A reinstall makes a new identity and a new number, unless you restore a recovery file at setup.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -2244,7 +2510,7 @@ private fun MyCodeScreen(onBack: () -> Unit) {
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 @Composable
-private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)? = null, onMove: () -> Unit) {
+private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)? = null, onMove: () -> Unit, onOpenThread: (String) -> Unit = {}) {
     val context = LocalContext.current
     val state by CommsRepository.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -2298,7 +2564,8 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             text = {
                 Text(
                     "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
-                        "Registering again gives a different number; contacts will have to add you afresh.",
+                        "Registering again gives a different number; contacts will have to add you afresh. A recovery file " +
+                        "saved earlier still brings back these keys, contacts and groups, under a new number that contacts are told.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -2325,24 +2592,31 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 title = "Online",
                 checked = state.online,
                 onCheckedChange = { CommsRepository.setOnline(it) },
-                subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. Uses some battery. While Clairix is on screen it is connected either way."
+                subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. " +
+                    "The relay sends a small heartbeat every two to five minutes (two while messages are moving); this phone sends no keep-alive of its own unless one is overdue. " +
+                    "Uses some battery. If Android stops the connection, Clairix tells you. While Clairix is on screen it is connected either way."
             )
             var tor by remember { mutableStateOf(TorTransport.enabled) }
             val torState by TorTransport.state.collectAsStateWithLifecycle()
+            // Read now rather than at Tor's next once-a-minute look.
+            LaunchedEffect(tor) { if (tor) TorTransport.refreshStatus() }
             ToggleRow(
                 title = "Connect through Tor",
                 checked = tor,
                 onCheckedChange = { on -> tor = on; TorTransport.setEnabled(on) },
                 subtitle = "Everything Clairix says to relays goes through Tor, so no relay, this one or another, learns this " +
                     "phone's network address, and the network it is on does not learn which relay it uses. Nothing goes out " +
-                    "directly while Tor is connecting. Slower, and uses more data. Calls do not go through Tor: during a call " +
-                    "the relay's call server sees this phone's address (and so does the contact, unless Relay-only calls is on)."
+                    "directly while Tor is connecting. Slower, and uses more data. With Online off, Tor sleeps when nothing has " +
+                    "needed it for five minutes and starts again with the next request, which then waits a few seconds. Calls do " +
+                    "not go through Tor: during a call the relay's call server sees this phone's address. While Tor is on, a call " +
+                    "goes only through the relay's TURN server, and is refused when the relay offers none, so the contact never learns it."
             )
             if (tor) {
                 val (line, tone) = when (val s = torState) {
                     TorTransport.State.Off -> "Off" to ClairixTheme.colors.textSubtle
                     is TorTransport.State.Starting -> "Connecting to Tor… ${s.percent}%" to ClairixTheme.colors.textMuted
                     TorTransport.State.Ready -> "Connected through Tor" to ClairixTheme.colors.accent
+                    TorTransport.State.Asleep -> "Tor is asleep until Clairix next talks to a relay" to ClairixTheme.colors.textSubtle
                     is TorTransport.State.Blocked -> "Tor is stuck at ${s.percent}%: ${s.reason}" to ClairixTheme.colors.danger
                     is TorTransport.State.Failed -> "Tor did not start: ${s.reason}" to ClairixTheme.colors.danger
                 }
@@ -2355,26 +2629,38 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
                 onCheckedChange = { on -> hidePreviews = on; CommsRepository.setHidePreviews(on) },
                 subtitle = "Notifications say only that a message, a changed safety number or a missed call is waiting, naming nobody and quoting nothing, for a phone that is sometimes in other hands while unlocked. On by default once a passcode is set. Whenever the app locks, the notifications already showing collapse to one \"unlock to read\" either way."
             )
-            var relayOnlyCalls by remember { mutableStateOf(CommsRepository.relayOnlyCalls()) }
+            var relayOnlyChoice by remember { mutableStateOf(CommsRepository.relayOnlyCallsChoice()) }
+            val relayTurn = remember { CommsRepository.relayTurnOffered() }
             ToggleRow(
                 title = "Relay-only calls",
-                checked = relayOnlyCalls,
-                onCheckedChange = { on -> relayOnlyCalls = on; CommsRepository.setRelayOnlyCalls(on) },
-                subtitle = "Call audio always goes through the relay's TURN server, so a contact you call, or who calls you, never learns this phone's network address, and neither does anyone holding their phone. Adds a little delay, and a call cannot connect while the relay has no call servers."
+                // The default is on wherever the relay offers TURN; until a call has
+                // asked, it is shown as the default it will be.
+                checked = relayOnlyChoice ?: (relayTurn != false),
+                onCheckedChange = { on -> relayOnlyChoice = on; CommsRepository.setRelayOnlyCalls(on) },
+                subtitle = "Call audio always goes through the relay's TURN server, so a contact you call, or who calls you, never learns this phone's network address, and neither does anyone holding their phone. Adds a little delay. " +
+                    when (relayOnlyChoice) {
+                        true -> "You switched it on, so a call cannot connect while the relay has no TURN server."
+                        false -> "You switched it off: calls connect directly when both networks allow it, and the other phone learns this phone's address. While Tor is on, calls still go only through the TURN server."
+                        null -> when (relayTurn) {
+                            true -> "On by default, because your relay offers a TURN server."
+                            false -> "On by default whenever your relay offers a TURN server, and it offered none on the last call. Until you choose, Clairix asks before each call you place whether to call directly, which tells the other phone this phone's address, and a call you answer connects directly. Switch it on to refuse calls until it offers one."
+                            null -> "On by default whenever your relay offers a TURN server; Clairix finds out on the first call."
+                        }
+                    }
             )
             var coverTraffic by remember { mutableStateOf(CommsRepository.coverTraffic()) }
             ToggleRow(
                 title = "Cover traffic",
                 checked = coverTraffic,
                 onCheckedChange = { on -> coverTraffic = on; CommsRepository.setCoverTraffic(on) },
-                subtitle = "While the background connection is on, sends a sealed envelope of random size to a random contact every twenty minutes or so; their phone drops it unread. To the relay and to anyone watching the network, this phone then messages its contacts at a steady rate whether or not it has anything to say. Uses a little data and battery; off by default."
+                subtitle = "While the background connection is on, sends a sealed envelope of random size to a random contact every twenty minutes or so; their phone drops it unread. To the relay and to anyone watching the network, this phone then messages its contacts at a steady rate whether or not it has anything to say. Uses a little data and battery; pauses while Low power is on (Settings > Battery); off by default."
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Push wake-ups", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text(
-                        if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing."
-                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap Set up. No Google services are used.",
+                        if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing, but the push server your distributor uses learns when one was sent."
+                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap Set up. No Google services are used. The push server it uses learns when something arrives for you, not what or from whom.",
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -2469,6 +2755,10 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             )
         }
 
+        RecoveryFileCard()
+
+        BlockedCard(onOpen = onOpenThread)
+
         RelayCard(busy = state.busy, relayUrl = state.relayUrl, onMove = onMove)
 
         // The app-wide settings — passcode, biometric unlock, duress code — live on
@@ -2516,6 +2806,54 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             enabled = !state.busy
         )
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+/**
+ * The blocked list: every number blocked, when, and the way to unblock it.
+ * A blocked contact kept as a record opens from here, read-only.
+ */
+@Composable
+private fun BlockedCard(onOpen: (String) -> Unit) {
+    val version by CommsRepository.version.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val blocked by produceState(initialValue = emptyList<ContactGate.Blocked>(), version) {
+        value = withContext(Dispatchers.IO) { CommsRepository.blockedList() }
+    }
+    val kept by produceState(initialValue = emptyMap<String, Contact>(), version) {
+        value = withContext(Dispatchers.IO) { CommsRepository.blockedKept() }
+    }
+    var unblocking by remember { mutableStateOf<ContactGate.Blocked?>(null) }
+    unblocking?.let { b ->
+        UnblockDialog(
+            who = b.name.ifBlank { formatClairixNumber(b.number) },
+            kept = kept[b.number]?.let { ContactGate.matches(b, it.ed25519, it.curve25519, null, null) } == true,
+            onConfirm = { unblocking = null; scope.launch { CommsRepository.unblock(b.id) } },
+            onDismiss = { unblocking = null }
+        )
+    }
+    ClairixCard {
+        Text("Blocked", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+        Text(
+            if (blocked.isEmpty()) "No one is blocked. Block someone from their contact page, or decline a message request."
+            else "Nothing these numbers send reaches this phone, and they are not told. Unblocking does not tell them either.",
+            style = MaterialTheme.typography.bodySmall,
+            color = ClairixTheme.colors.textSubtle
+        )
+        for (b in blocked) {
+            HorizontalDivider(color = ClairixTheme.colors.border)
+            Text(b.name.ifBlank { formatClairixNumber(b.number) }, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(
+                "${formatClairixNumber(b.number)} · ${if (b.relay != null) relayHost(b.relay) else "your relay"} · blocked ${dateTimeFmt.format(Date(b.ts))}",
+                style = MaterialTheme.typography.monoSmall,
+                color = ClairixTheme.colors.textSubtle
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val record = kept[b.number]?.takeIf { ContactGate.matches(b, it.ed25519, it.curve25519, null, null) }
+                if (record != null) GhostButton("Open conversation", onClick = { onOpen(record.number) }, tone = Tone.Neutral)
+                GhostButton("Unblock", onClick = { unblocking = b }, tone = Tone.Accent)
+            }
+        }
     }
 }
 
@@ -2790,30 +3128,6 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
     }
 }
 
-// ── Background reliability and diagnostics ───────────────────────────────────
-
-/**
- * Whether Android exempts Clairix from battery optimisation, re-read whenever the
- * screen resumes (the owner comes back from the system settings page).
- */
-@Composable
-private fun rememberBatteryUnrestricted(): State<Boolean> {
-    val context = LocalContext.current
-    val power = remember { context.getSystemService(PowerManager::class.java) }
-    val unrestricted = remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(context.packageName) == true) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                unrestricted.value = power?.isIgnoringBatteryOptimizations(context.packageName) == true
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    return unrestricted
-}
-
 // ── Group conversation ───────────────────────────────────────────────────────
 
 @Composable
@@ -2953,9 +3267,22 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 if (isOut && msg.status == "failed") {
                                     Spacer(Modifier.width(4.dp))
                                     Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = ClairixTheme.colors.danger, modifier = Modifier.size(12.dp))
+                                } else if (isOut && msg.status == "queued") {
+                                    // Still owed to some members: the outbox is trying them.
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                 }
                             }
                         }
+                    }
+                    // How far it got when not every member has it: "Reached 3 of 4 members; trying 1 more".
+                    if (isOut && msg.error != null) {
+                        Text(
+                            msg.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (msg.status == "failed") ClairixTheme.colors.danger else ClairixTheme.colors.textSubtle,
+                            modifier = Modifier.widthIn(max = 280.dp).padding(top = 2.dp, end = 4.dp)
+                        )
                     }
                 }
             }
@@ -2967,13 +3294,19 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
         }
 
         if (topThreat != null) {
+            // A recognised tracker following you is a tracker; anything else that moved
+            // with you only travelled with you, and is shared as that.
+            val isTracker = topThreat.threat == Threat.CRITICAL
             Spacer(Modifier.height(4.dp))
             Row(
                 Modifier.fillMaxWidth().background(ClairixTheme.colors.danger.copy(alpha = 0.10f), ClairixShapes.Card).padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Active tracker: ${topThreat.tracker?.label ?: topThreat.name}", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger)
+                    Text(
+                        "${if (isTracker) "Active tracker" else "Travelling with you"}: ${topThreat.tracker?.label ?: topThreat.name}",
+                        style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger
+                    )
                     Text("Tap to share with the group", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                 }
                 GhostButton(
@@ -2987,7 +3320,8 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 lat = status.lat,
                                 lon = status.lon,
                                 title = topThreat.tracker?.label ?: topThreat.name,
-                                detail = "Clairix has detected a possible following tracker."
+                                detail = if (isTracker) "Clairix has detected a possible following tracker."
+                                else "Clairix has detected a device travelling with me that does not identify itself as a tracker."
                             ).onFailure { sendError = it.message }
                         }
                     },
@@ -3221,18 +3555,6 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
         },
         dismissButton = { GhostButton("Cancel", onClick = { if (!busy) onDismiss() }, tone = Tone.Neutral, enabled = !busy) }
     )
-}
-
-/**
- * Asks Android to let Clairix run unrestricted. The direct request shows a
- * one-tap system dialog; where a phone does not offer it, the battery
- * optimisation list opens instead so the owner can find Clairix there.
- */
-private fun openBatterySettings(context: Context) {
-    val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    val list = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(direct) }.recoverCatching { context.startActivity(list) }
 }
 
 private val logTimeFmt = SimpleDateFormat("MMM d HH:mm:ss", Locale.US)

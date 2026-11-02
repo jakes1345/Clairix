@@ -8,7 +8,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -16,6 +19,9 @@ import androidx.core.content.ContextCompat
 import app.clairix.CallActivity
 import app.clairix.MainActivity
 import app.clairix.security.AppLock
+import app.clairix.security.ChannelNames
+import app.clairix.security.DiscreetMode
+import app.clairix.security.NotificationPresentation
 
 /**
  * Notifications for the comms module: one per conversation for new messages,
@@ -34,7 +40,12 @@ object CommsNotifications {
      * is a new channel; the old one ("messages") is deleted.
      */
     const val CHANNEL_MESSAGES = "messages_private"
-    const val CHANNEL_LINK = "comms_link"
+    /**
+     * The connection's own notification: secret on the lock screen, since even
+     * "Comms online" says something about the phone. A new channel for the same
+     * reason as above; the old one ("comms_link") is deleted.
+     */
+    const val CHANNEL_LINK = "comms_link_secret"
     const val CHANNEL_CALLS = "calls"
     /**
      * Incoming calls. The original calls channel had vibration off, so a ring
@@ -68,28 +79,40 @@ object CommsNotifications {
     const val LOCKED_CALL_NOTIFICATION_ID = 0x5C00_0005
     const val LOCKED_SOS_NOTIFICATION_ID = 0x5C00_0006
     const val LOCKED_MESSAGES_NOTIFICATION_ID = 0x5C00_0007
+    /** Word on an SOS the owner sent while its retries go on, and the last word once they are over: who it reached. */
+    const val SOS_OUTCOME_NOTIFICATION_ID = 0x5C00_0008
+    /** The one notification for every message request: "Someone new wrote to you", naming no one. */
+    const val REQUEST_NOTIFICATION_ID = 0x5C00_0009
+    /** Android refused, twice in a row, to restart the background connection ([LinkHealth]). */
+    const val LINK_STOPPED_NOTIFICATION_ID = 0x5C00_000A
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        for (old in listOf("messages", "group_sos")) runCatching { manager.deleteNotificationChannel(old) }
+        for (old in listOf("messages", "group_sos", "comms_link")) runCatching { manager.deleteNotificationChannel(old) }
+        // Named by ChannelNames: generic names while discreet mode is on.
+        val discreet = DiscreetMode.on(context)
+        val messages = ChannelNames.of(CHANNEL_MESSAGES, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_MESSAGES, messages.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Encrypted messages to your Clairix number"
+                    description = messages.description
                     lockscreenVisibility = Notification.VISIBILITY_PRIVATE
                 }
         )
+        val link = ChannelNames.of(CHANNEL_LINK, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_LINK, "Comms connection", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_LINK, link.name, NotificationManager.IMPORTANCE_LOW)
                 .apply {
-                    description = "Shown while Clairix keeps its connection to your relay open"
+                    description = link.description
                     setShowBadge(false)
+                    lockscreenVisibility = Notification.VISIBILITY_SECRET
                 }
         )
+        val ringing = ChannelNames.of(CHANNEL_RINGING, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_RINGING, "Incoming calls", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_RINGING, ringing.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Encrypted calls ringing on this phone"
+                    description = ringing.description
                     // The app plays the phone's own ringtone; the channel adds a
                     // vibration that still works when Android mutes the app's own.
                     setSound(null, null)
@@ -98,19 +121,21 @@ object CommsNotifications {
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 }
         )
+        val calls = ChannelNames.of(CHANNEL_CALLS, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_CALLS, "Calls", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_CALLS, calls.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "Incoming and ongoing encrypted calls"
+                    description = calls.description
                     // The app rings with the phone's own ringtone; the channel stays quiet.
                     setSound(null, null)
                     enableVibration(false)
                 }
         )
+        val sos = ChannelNames.of(CHANNEL_SOS, discreet)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_SOS, "Group SOS", NotificationManager.IMPORTANCE_HIGH)
+            NotificationChannel(CHANNEL_SOS, sos.name, NotificationManager.IMPORTANCE_HIGH)
                 .apply {
-                    description = "An SOS sent by a member of one of your groups"
+                    description = sos.description
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 500, 300, 500, 300, 500)
                     lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -156,7 +181,8 @@ object CommsNotifications {
         // The ringing card shows on the lock screen so the call can be answered;
         // with previews hidden it does not say who is calling until unlocked.
         val hidden = previewsHidden(context)
-        val caller = if (hidden) Person.Builder().setName("Clairix call").setImportant(true).build() else person(call.peer)
+        val callName = NotificationPresentation.unbranded("Clairix call", DiscreetMode.on(context))
+        val caller = if (hidden) Person.Builder().setName(callName).setImportant(true).build() else person(call.peer)
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Incoming encrypted call")
@@ -199,8 +225,11 @@ object CommsNotifications {
         )
         // CallStyle titles the notification with the caller's name, so this
         // Person is the title: it names no one. The full-screen ring
-        // (LockedRingActivity) says "Incoming Clairix call".
-        val caller = Person.Builder().setName("Clairix call").setImportant(true).build()
+        // (LockedRingActivity) says "Incoming Clairix call", or "Incoming call" in discreet mode.
+        val caller = Person.Builder()
+            .setName(NotificationPresentation.unbranded("Clairix call", DiscreetMode.on(context)))
+            .setImportant(true)
+            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentText("Unlock to answer")
@@ -225,7 +254,7 @@ object CommsNotifications {
         val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("SOS from a group member")
-            .setContentText("Unlock Clairix to see who and where")
+            .setContentText(NotificationPresentation.unbranded("Unlock Clairix to see who and where", DiscreetMode.on(context)))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setAutoCancel(true)
@@ -410,13 +439,18 @@ object CommsNotifications {
 
     /**
      * Whether a notification posted now must name no one and quote nothing: the
-     * owner's setting, or the app being locked. One that arrives while Clairix is
-     * locked is redacted from the start, not only those showing when it locked.
+     * owner's setting, the app being locked, or discreet mode. One that arrives while
+     * Clairix is locked is redacted from the start, not only those showing when it locked.
      */
-    private fun previewsHidden(context: Context): Boolean = hidePreviews(context) || AppLock.locked.value
+    private fun previewsHidden(context: Context): Boolean =
+        hidePreviews(context) || AppLock.locked.value || DiscreetMode.on(context)
 
     /** The one message notification shown while previews are hidden or the app is locked: it says only that there is something. */
-    private fun unlockToRead(context: Context, title: String, text: String, requestCode: Int): Notification {
+    private fun unlockToRead(context: Context, givenTitle: String, givenText: String, requestCode: Int): Notification {
+        // Discreet mode: the same words without the app's name.
+        val discreet = DiscreetMode.on(context)
+        val title = NotificationPresentation.unbranded(givenTitle, discreet)
+        val text = NotificationPresentation.unbranded(givenText, discreet)
         val open = Intent(context, MainActivity::class.java)
             .putExtra(EXTRA_TAB, COMMS_TAB_INDEX)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -510,6 +544,49 @@ object CommsNotifications {
             )
             .build()
         context.getSystemService(NotificationManager::class.java)?.notify(notificationId(contact.number), notification)
+    }
+
+    /**
+     * Someone who is not a contact wrote, or called: one notification for all
+     * of them, which names nobody and quotes nothing whatever the preview
+     * setting, and opens the conversation list, where requests wait. It
+     * alerts once while it is showing, so a stranger writing again and again
+     * cannot keep the phone buzzing.
+     */
+    fun notifyRequest(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        // With previews hidden or Clairix locked it reads as any other message
+        // does: someone holding the phone must not learn that a new person wrote.
+        if (previewsHidden(context)) {
+            context.getSystemService(NotificationManager::class.java)
+                ?.notify(REQUEST_NOTIFICATION_ID, unlockToRead(context, "New message", "Open Clairix to read", REQUEST_NOTIFICATION_ID))
+            return
+        }
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle("Someone new wrote to you")
+            .setContentText(NotificationPresentation.unbranded("Open Clairix to see the request", DiscreetMode.on(context)))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, REQUEST_NOTIFICATION_ID))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                    .setSmallIcon(android.R.drawable.stat_notify_chat)
+                    .setContentTitle(NotificationPresentation.unbranded("New Clairix message", DiscreetMode.on(context)))
+                    .setContentText("Unlock to read")
+                    .build()
+            )
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(REQUEST_NOTIFICATION_ID, notification)
+    }
+
+    /** No message request is left waiting. */
+    fun cancelRequest(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(REQUEST_NOTIFICATION_ID)
     }
 
     /**
@@ -652,6 +729,45 @@ object CommsNotifications {
     }
 
     /**
+     * What became of the SOS the owner sent, as the members the relay could
+     * not take at first are tried again: [text] is the result's own sentence
+     * ("SOS reached 3 of 4 people; trying 1 more again", then "SOS reached all
+     * 4 people"). Posted when a retry changes what it says, and once more when
+     * the retries are over, so the outcome reaches an owner who has put the
+     * phone away; the button's toast said the first pass. One notification,
+     * updated in place, that sounds only when it first appears. Never posted
+     * for the covert duress phrase.
+     */
+    fun notifySosOutcome(context: Context, text: String, ts: Long) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Your SOS")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(openComms(context, SOS_OUTCOME_NOTIFICATION_ID))
+            .setWhen(ts)
+            .setShowWhen(true)
+            // On a locked phone it says only that there is word on the SOS, not who it reached.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_SOS)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle("Your SOS")
+                    .setContentText("Unlock to see who it reached")
+                    .setCategory(NotificationCompat.CATEGORY_STATUS)
+                    .build()
+            )
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(SOS_OUTCOME_NOTIFICATION_ID, notification)
+    }
+
+    /**
      * Clears every comms notification still showing: messages, missed calls,
      * SOS alerts, calls and the connection's own. Notifications of the rest of
      * the app (the scanner's, say) are left alone.
@@ -676,8 +792,13 @@ object CommsNotifications {
         manager.cancel(missedCallId(peer))
     }
 
-    /** The ongoing notification behind the relay connection service. */
-    fun linkNotification(context: Context, connected: Boolean, number: String?): Notification {
+    /**
+     * The ongoing notification behind the relay connection service. It never
+     * carries the Clairix number, and with previews hidden it says only that
+     * Clairix is connected (see [NotificationPresentation.link]); on the lock
+     * screen its channel is secret and its public version names nothing.
+     */
+    fun linkNotification(context: Context, connected: Boolean): Notification {
         ensureChannels(context)
         val open = Intent(context, MainActivity::class.java)
             .setAction("app.clairix.OPEN_COMMS")
@@ -692,20 +813,82 @@ object CommsNotifications {
             Intent(context, CommsService::class.java).setAction(CommsService.ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val discreet = DiscreetMode.on(context)
+        val shown = NotificationPresentation.link(connected, previewsHidden = hidePreviews(context), discreet = discreet)
+        val lockScreen = NotificationPresentation.link(connected, previewsHidden = true, discreet = discreet)
         return NotificationCompat.Builder(context, CHANNEL_LINK)
             .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
-            .setContentTitle(if (connected) "Comms online" else "Comms reconnecting")
-            .setContentText(
-                number?.let { "Clairix number ${formatClairixNumber(it)} · encrypted messages arrive instantly" }
-                    ?: "Connecting to your relay"
-            )
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(contentIntent)
             .addAction(0, "Go offline", stop)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_LINK)
+                    .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
+                    .setContentTitle(lockScreen.title)
+                    .setContentText(lockScreen.text)
+                    .build()
+            )
             .build()
+    }
+
+    /**
+     * Android refused, twice in a row, to restart the background connection
+     * ([LinkHealth]): the one notification that says so. Tapping it opens the
+     * setting that lets Clairix run: Android's one-tap battery exemption while
+     * Clairix does not have it, otherwise Clairix's App info page, where
+     * Android's battery choice and a phone maker's own switches are. With
+     * previews hidden or Clairix locked it says only that Android stopped
+     * Clairix ([NotificationPresentation.linkStopped]); on the lock screen its
+     * channel shows nothing.
+     */
+    fun linkStopped(context: Context) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val exempt = runCatching {
+            context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
+        }.getOrDefault(false)
+        val packageUri = Uri.parse("package:${context.packageName}")
+        val appInfo = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
+        // A phone that does not offer the one-tap request (or does not let Clairix
+        // see that it does) gets App info, which every phone has.
+        val target = if (!exempt && direct.resolveActivity(context.packageManager) != null) direct else appInfo
+        val contentIntent = PendingIntent.getActivity(
+            context, LINK_STOPPED_NOTIFICATION_ID, target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val discreet = DiscreetMode.on(context)
+        val shown = NotificationPresentation.linkStopped(previewsHidden = previewsHidden(context), discreet = discreet)
+        val lockScreen = NotificationPresentation.linkStopped(previewsHidden = true, discreet = discreet)
+        val notification = NotificationCompat.Builder(context, CHANNEL_LINK)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle(shown.title)
+            .setContentText(shown.text)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_LINK)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle(lockScreen.title)
+                    .setContentText(lockScreen.text)
+                    .build()
+            )
+            .build()
+        context.getSystemService(NotificationManager::class.java)?.notify(LINK_STOPPED_NOTIFICATION_ID, notification)
+    }
+
+    /** The connection runs again: the notification that said Android stopped it goes. */
+    fun cancelLinkStopped(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(LINK_STOPPED_NOTIFICATION_ID)
     }
 
     private fun notificationId(peer: String) = 0x5A00_0000 or (peer.hashCode() and 0x00FF_FFFF)

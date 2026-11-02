@@ -55,9 +55,24 @@ data class Detection(
      * asked. A tracker that answers is by definition away from its owner; one that
      * refuses the connection ([DultResult.error] set, nothing answered) is probably not.
      */
-    val dult: DultResult? = null
+    val dult: DultResult? = null,
+    /**
+     * When a reading of this tracker as "owner nearby" gave way to one as separated
+     * from its owner, or 0: the moment, for a tag riding along, it stopped being
+     * somebody's keys.
+     */
+    val separatedAt: Long = 0L,
+    /**
+     * When the owner marked it found ("I found it"), or 0. A found device no longer
+     * counts as on you anywhere (the Trackers hero, the hub, the map); it stays on the
+     * list, the timeline and the evidence report. See [app.clairix.analysis.Tracker.resolve].
+     */
+    val resolvedAt: Long = 0L
 ) {
     val identified: Boolean get() = tracker != null
+
+    /** Marked found by the owner; see [resolvedAt]. */
+    val resolved: Boolean get() = resolvedAt != 0L
 
     /** "Apple AirTag · serial 3f9a1c2e…" when the tracker identified itself over DULT. */
     val dultLabel: String? get() {
@@ -94,7 +109,23 @@ data class ScanStatus(
     val lon: Double? = null,
     val travelledM: Double = 0.0,
     val error: String? = null,
-    val nearbyCount: Int = 0  // total BLE devices in range including transient ones
+    val nearbyCount: Int = 0,  // total BLE devices in range including transient ones
+    /** When the last Bluetooth advertisement reached the scanner; 0 before the first. */
+    val lastPacketAt: Long = 0L,
+    /** Packets whose handling threw since the service started; shown on the Trackers details card. */
+    val packetErrors: Int = 0,
+    /**
+     * True when the scanner was on and ended without the owner stopping it (an
+     * update, a kill, a battery manager); [stoppedAt] is when it was lost.
+     */
+    val stoppedBySystem: Boolean = false,
+    val stoppedAt: Long = 0L,
+    /**
+     * The scanner service is running, whether or not [scanning] (the Bluetooth scan)
+     * is: with Bluetooth off, a failed scan or no Nearby permission it still polls the
+     * cell, looks at Wi-Fi and checks the phone, and publishes what the tabs show.
+     */
+    val serviceRunning: Boolean = false
 )
 
 // --- Cellular / IMSI catcher ------------------------------------------------
@@ -137,7 +168,15 @@ data class ServingCell(
     /** LTE/NR reference-signal quality, dB. */
     val rsrq: Int? = null,
     /** LTE RSSNR / NR SS-SINR, dB. */
-    val sinr: Int? = null
+    val sinr: Int? = null,
+    /**
+     * True when a voice call was up or ringing as this reading was taken, or ended
+     * less than a minute before it; CellMonitor reads it from the audio mode, which
+     * needs no permission. A phone without VoLTE drops to 3G or 2G for every call —
+     * circuit-switched fallback — so the heuristics a call can trip have to know the
+     * reading was taken in one.
+     */
+    val inCall: Boolean = false
 ) {
     val key: String get() = "${mcc ?: "?"}-${mnc ?: "?"}-${tac ?: "?"}-$cellId"
 
@@ -222,7 +261,10 @@ enum class EventKind {
     BIOMETRIC_ENROLLED,
     /** The screen was being recorded or cast while a Clairix screen was showing. */
     SCREEN_RECORDING,
-    /** The phone was unlocked inside the owner's sleep window. */
+    /**
+     * Someone got at the phone's lock: an unlock inside the owner's sleep window, the screen
+     * lock changed, or the unlock ledger's device admin switched off.
+     */
     UNLOCK_ANOMALY,
     /** A wireless or USB microphone appeared while nothing was playing or in a call. */
     AUDIO_ROUTE,
@@ -234,8 +276,15 @@ enum class EventKind {
     GNSS,
     /** An inaudible beacon tone heard on the ultrasound page. */
     ULTRASOUND,
+    /** Evidence the owner saved: a flagged app's details, from the sheet before its settings open or before the report is exported. */
+    EVIDENCE,
     /** Any other platform-hardening alert. */
-    PLATFORM
+    PLATFORM,
+    /**
+     * A hidden-camera sweep finding, a magnetic anomaly or a photo the owner kept
+     * of one. Stored by name, so events written with the kinds before it still load.
+     */
+    CAMERA
 }
 
 /**
@@ -280,7 +329,13 @@ data class Alert(
     val dedupeKey: String? = null,
     /** Where the phone was, for alerts about a place rather than about the phone; shown on the map. */
     val lat: Double? = null,
-    val lon: Double? = null
+    val lon: Double? = null,
+    /**
+     * True for an alert raised on the screen the owner is looking at (an optical
+     * or magnetic camera finding can only happen on the sweep screen): it goes on
+     * the timeline and [Registry.alerts] like any other, and raises no notification.
+     */
+    val silent: Boolean = false
 )
 
 /**
@@ -297,13 +352,26 @@ data class BiometricTripwireEvent(val timestamp: Long, val previousCheckTs: Long
  */
 data class ScreenRecordingEvent(val timestamp: Long, val packageName: String?)
 
-/** A capture-capable audio input appeared while nothing was playing and no call was up. */
+/**
+ * A wireless or USB microphone the audio-route monitor noticed (analysis/AudioRouteMonitor):
+ * one connected when scanning was switched on, listed and never alerted ([atStart]), or one
+ * that connected while nothing was playing and no call was up, with the alert raised for it
+ * ([alerted]: LOW on the timeline only, MEDIUM when it became the call audio with the screen off).
+ */
 data class AudioRouteEvent(
     val ts: Long,
     /** One of the [android.media.AudioDeviceInfo] TYPE_ constants. */
     val deviceType: Int,
     val deviceName: String,
-    val productName: String
+    val productName: String,
+    /** The Bluetooth address, or null for a USB microphone and one that reports none. */
+    val address: String? = null,
+    /** What "This is my headset" remembers it by: the Bluetooth address, or the kind and product name. */
+    val key: String = if (address != null) "bt:$address" else "name:$deviceType:$productName",
+    /** Connected already when scanning was switched on: listed, not alerted. */
+    val atStart: Boolean = false,
+    /** The alert raised for it, or null when it was only listed. */
+    val alerted: Severity? = null
 ) {
     val deviceTypeLabel: String get() = when (deviceType) {
         7 -> "Bluetooth headset (SCO)"
@@ -350,7 +418,14 @@ data class TimelineEvent(
     val detail: String,
     val severity: Severity,
     val lat: Double? = null,
-    val lon: Double? = null
+    val lon: Double? = null,
+    /**
+     * A file kept with the event, named relative to the app's files directory: a
+     * sealed photo from the camera sweep ([app.clairix.analysis.SweepPhotos]). Null
+     * for every other event, and for every event stored before it existed. Deleted
+     * with the event.
+     */
+    val attachment: String? = null
 )
 
 // --- NFC / HF RFID ----------------------------------------------------------
@@ -377,6 +452,12 @@ enum class CardProfile(val label: String, val hceCapable: Boolean) {
     UNKNOWN("Unknown", false)
 }
 
+/**
+ * A tag read this session. It never carries the recorded APDU conversation: an
+ * ordinary scan does not record one (it stops at identifying the card), and the
+ * pairs captured by an explicit "Record for vault" re-tap live only in the
+ * pending [PendingVaultCapture] and, once saved, in the encrypted [VaultCard].
+ */
 data class NfcTag(
     val uid: String,
     val techs: List<String>,
@@ -389,8 +470,20 @@ data class NfcTag(
     val sak: String? = null,
     val profile: CardProfile = CardProfile.UNKNOWN,
     val paymentNetwork: String? = null,
-    val skimmerFlags: List<String> = emptyList(),
-    val apduPairs: List<Pair<String, String>> = emptyList()
+    val skimmerFlags: List<String> = emptyList()
+)
+
+/**
+ * A card recorded by an explicit "Record for vault" re-tap, held only between the
+ * capture and the moment the owner names it and saves it (or cancels). The recorded
+ * ISO 14443-4 APDU pairs live here and, once saved, in the encrypted [VaultCard];
+ * they are never kept in the scanned-tag list. Cleared when the vault locks.
+ */
+data class PendingVaultCapture(
+    val uid: String,
+    val profile: CardProfile,
+    val type: String,
+    val apduPairs: List<Pair<String, String>>
 )
 
 // --- Card vault -------------------------------------------------------------
@@ -507,6 +600,22 @@ data class WifiNetwork(
     val ageMs: Long?
 )
 
+/**
+ * What can be said about a VPN from this app's own seat. A VPN can be set to carry
+ * only some apps, so "a VPN network exists" says nothing about Clairix's traffic;
+ * Android's default network for this app does. See [app.clairix.analysis.NetworkLeaks.coverage].
+ */
+enum class VpnCoverage {
+    /** No VPN on the phone. */
+    NONE,
+    /** Clairix's own traffic goes through the VPN. */
+    COVERS_APP,
+    /** A VPN is up, but Clairix's traffic does not go through it: it covers only some apps, or a work profile. */
+    EXCLUDES_APP,
+    /** A VPN is up and Clairix has no network at the moment, so which way its traffic would go is unknown. */
+    APP_OFFLINE
+}
+
 /** The network the phone is on right now, from the radio and the IP stack. */
 data class WifiConnection(
     val ssid: String?,
@@ -527,7 +636,8 @@ data class WifiConnection(
     val dnsServers: List<String>,
     /** Hostname of the private (DoT) resolver when one is active, else null. */
     val privateDns: String?,
-    val vpnActive: Boolean,
+    /** Whether Clairix's own traffic goes through a VPN, not merely whether one exists. */
+    val vpn: VpnCoverage,
     /** True when the system judges the network as behind a captive portal. */
     val captivePortal: Boolean,
     val metered: Boolean,
@@ -606,9 +716,18 @@ data class HealthFact(
      * nothing to tap. The Device tab falls back to the security settings page when
      * the phone has no activity for the action.
      */
-    val fixAction: String? = null
+    val fixAction: String? = null,
+    /**
+     * Something only the owner can tell Clairix about this row, offered as a button,
+     * or null when the row asks nothing; for example "I turned 2G off", which Android
+     * gives apps no way to read.
+     */
+    val answer: Answer? = null
 ) {
     val ok: Boolean get() = severity == null
+
+    /** A button on a checklist row: [label] is shown, [id] says what it records (see [app.clairix.analysis.CellularExposure.answer]). */
+    data class Answer(val id: String, val label: String)
 }
 
 data class PhoneHealth(
@@ -634,7 +753,13 @@ data class PhoneHealth(
      * physical camera makes its logical and multi-camera siblings unavailable too, so
      * counting ids reported "3 cameras in use" for one app taking a photo.
      */
-    val cameraInUse: Boolean = false
+    val cameraInUse: Boolean = false,
+    /**
+     * When the stalkerware check behind the apps among [findings] ran (it walks every
+     * installed package, see analysis/StalkwareWatch), or 0 when it has not run in this
+     * process: nothing may say "no known spyware" on the strength of a check not made.
+     */
+    val spywareScannedTs: Long = 0L
 ) {
     val sensorActive: Boolean get() = activeRecordings > 0 || cameraInUse
 

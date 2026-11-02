@@ -28,8 +28,9 @@ read", disarms HCE, and FLAG_SECURE is on for every screen; a reachable wipe
 ("Wipe Clairix") that also cancels notifications, clears the clipboard,
 unregisters push and drops the device-admin role, with the relay call bounded
 to four seconds; a hide-previews setting; sensitive-marked clipboard copies;
-the duress phrase's no-group warning; releases, map graphs and work zones
-signed with a project Ed25519 key and verified in the app; every action
+the duress phrase's no-group warning; map graphs and work zones signed with
+a project Ed25519 key and verified in the app, and the release checksums
+signed with it for anyone to check (`docs/KEYS.md`); every action
 commit-pinned, the release dispatch guarded, the Geofabrik extract checked
 against its MD5, pip pinned; the crate refuses to rebind a Curve25519 key to a
 second identity and keeps a session whose first message fails padding; the
@@ -63,9 +64,10 @@ twice on two machines in CI, which fails unless the two builds agree.
    `/v1/identity/<number>` carry the target in the URL and the caller in
    `X-Clairix-Number`. With observability on, that pair was in Cloudflare's
    logs for days. *Verified.* **Done:** observability off; `POST /v1/lookup`
-   takes the number in the signed body and the app uses it; the GET routes
-   remain for beta-2 phones and are to be removed once they have updated;
-   README rewritten to name the platform as the operator that matters.
+   takes the number in the signed body and the app uses it (since Beta 3);
+   README rewritten to name the platform as the operator that matters. The
+   GET routes, which only Betas 1 and 2 called and no supported release does,
+   are gone in Beta 8 (relay API 5).
 2. **Traffic probes are tied to the sender.** `RelayClient.trafficProbe`
    (`RelayClient.kt:400`) goes through `signed()`, against the comment at
    `:396`. `trafficReport` sends exact lat/lon with the number. The relay's
@@ -132,7 +134,7 @@ twice on two machines in CI, which fails unless the two builds agree.
    verifier, TLS pins), not records of the owner's life. **Retention done**
    (PR #15): `HistoryRetention`, 30 days by default (7, 90 or forever),
    deletes the location log, the timeline, the vehicle trips and the unlock
-   ledger past it, every quarter hour while scanning and at each start.
+   ledger past it, every hour while scanning and at each start.
 7. **`KeystoreBox` key is not user-auth bound and not StrongBox**
    (`KeystoreBox.kt:48-55`). A logical extraction with the device unlocked
    reads everything it protects. *Reported.* **Considered, not done:** a
@@ -168,11 +170,14 @@ twice on two machines in CI, which fails unless the two builds agree.
    uninstalled normally afterwards. `unpair()` calls `relay.wipe()` first
    with a 25 s timeout inside a 6 s budget, so with the relay unreachable the
    notification cancel and push unregister never run. *Reported.* **Done:**
-   "Wipe Clairix" page under the Comms menu (type WIPE, one button); the
-   wipe now cancels every notification, clears the clipboard, unregisters
-   push, deactivates the device admin and disarms the card before touching
-   the files; `unpair()` bounds the relay call to four seconds on its own
-   thread so the local steps always run.
+   "Wipe Clairix" page under the Comms menu (type WIPE, one button), and
+   since the gap audit of 2026-10-31 also in Settings and in the comms-only
+   build; the wipe now cancels every notification (and deletes the
+   notification channels), clears the clipboard, unregisters push,
+   deactivates the device admin and disarms the card before touching the
+   files; `unpair()` bounds the relay call to four seconds on its own thread
+   so the local steps always run, and both it and the wipe keep a deletion the
+   relay did not take for retrying over the next day (`RelayFarewell`).
 10. **HCE stays armed** after vault lock, app lock and screen off
     (`MainActivity.kt:559-565`, `CardEmulationService.kt:59-62`); only the
     device PIN gates it. *Reported.* **Done for the app lock and the wipe:**
@@ -228,8 +233,10 @@ twice on two machines in CI, which fails unless the two builds agree.
     checksum; the work-zones workflow signs every per-region file and the app
     verifies before parsing, and drops a cached copy an earlier version kept
     unverified. A release build fails without the public key; the workflows
-    fail without the secret. **Operator action:** run `keygen.py`, commit
-    the two public files, set the secret, before the next release.
+    fail without the secret. **Operator action, since done:** the two public
+    files were committed in `0ff171b5` and the secret set; every release from
+    3.0.0 Beta 3 on carries a checksum signature that verifies against them
+    (`docs/KEYS.md`).
 17. **Release `SHA256SUMS.txt` is unsigned** (`release.yml:208`). *Reported.*
     **Done:** signed by the same key into `SHA256SUMS.txt.sig`, published
     with the release; the notes say how to check it with `openssl` against
@@ -241,11 +248,35 @@ twice on two machines in CI, which fails unless the two builds agree.
     unchecksummed Geofabrik data and unpinned pip. *Spot-checked.* **Done:**
     every action pinned to a commit (the Rust toolchain action names its
     toolchain explicitly); the Geofabrik extract is checked against the MD5
-    Geofabrik publishes; the builder's and the signing tool's Python
-    dependencies are pinned; `pip install --upgrade pip` is gone; a manual
+    Geofabrik publishes; `pip install --upgrade pip` is gone; a manual
     release run must start from `main`, a `release/v*` branch or a `v*` tag;
     `maps.yml` now triggers on `main` (it named a `master` branch that does
-    not exist). Still open: moving release signing off the CI runner.
+    not exist). The first pass pinned the builder's and the signing tool's
+    Python dependencies by version only, in the same job that held
+    `ASSET_SIGNING_KEY`, so a poisoned PyPI release would have been signed
+    with the project key (gap audit, item 45). **Done since:** every
+    requirements file is compiled with a hash for every file
+    (`pip-compile --generate-hashes`) and installed with `--require-hashes`
+    wherever it is installed (maps, work zones, relay list, stalkerware list,
+    release); Maps and Work zones build in a job without the key and sign in a
+    job of their own that installs only the hash-pinned signing tool and
+    receives only the files to sign; each map release records the extract's
+    URL, MD5 and dates; every job that reads `ASSET_SIGNING_KEY` or the APK
+    keystore names an environment (`release` or `assets`, docs/PROCESS.md).
+    **Operator action:** create the two environments with their branch rules
+    and move the secrets into them; until then they are repository secrets
+    that any workflow run on any branch can read. Still open: moving release
+    signing off the CI runner. The Supply chain workflow's first audit of the
+    lockfiles found three RustSec advisories and four high npm ones. `ctutils`
+    (RUSTSEC-2026-0385) is updated to 0.4.7. `rsa` (RUSTSEC-2023-0071, the
+    Marvin attack) and `crypto-bigint` 0.5 (RUSTSEC-2026-0387) have no fixed
+    version this tree can take, and neither applies: Arti uses `rsa` only to
+    check signatures, and no secret reaches `crypto-bigint`, since the send
+    tokens use Ristretto255 and nothing in Clairix uses a NIST curve.
+    `.cargo/audit.toml` lists both with the reasons and when to look again.
+    The relay's tooling (wrangler's local runtime, miniflare) pinned `undici`
+    7.29.0 and `sharp` 0.35.4; `overrides` in `comms-worker/package.json` take
+    the fixed 7.30.1 and 0.35.5 until a wrangler update carries them.
 
 ## Crypto crate and relay logic
 
@@ -299,8 +330,17 @@ twice on two machines in CI, which fails unless the two builds agree.
 24. **Existence oracle**: send and `coin/pay` return 404 for unknown numbers
     (`mailbox.ts:608`, `index.ts:335`), undoing what the bundle endpoint
     hides. *Reported.* **Done:** a send to a number that does not exist is
-    accepted (202, a fresh id) and dropped, its token spent; a payment to one
-    is "Payment refused" like any other refused payment.
+    accepted (202, a fresh id) and dropped, its token spent. A payment to one
+    was "Payment refused", but a payer who could cover the amount was paid
+    through for a real number, so on a relay that grants a starting balance
+    any account could test unlisted numbers thirty times a minute for
+    nothing. **Done (Beta 8):** a payment names the fingerprint of the
+    payee's identity key, as a lookup of an unlisted number does; the relay
+    reads the payee's keys before any coin moves, and a number that does not
+    exist and a fingerprint that does not match get the same "Payment
+    refused" with both balances untouched. The app sends the fingerprint of
+    the contact's pinned key, so coins also never go to whoever is given a
+    number after the person the payer knew.
 25. **Coin**: every registration gets `COIN_INITIAL_BALANCE` with nothing
     binding a registration to a unique key; invites need no secret. Pay is
     debit-then-credit across two DOs with no idempotency key; a `DELETE
@@ -313,7 +353,12 @@ twice on two machines in CI, which fails unless the two builds agree.
     failure only); a payment refunded under a name is refused under it.
     Farming remains a product question: the coin has no monetary value, and
     the only brake short of a per-identity cost is to grant no starting
-    balance.
+    balance. **Beta 8:** an operator can switch the coin off (`COIN=off`):
+    then no new account gets `COIN_INITIAL_BALANCE`, nobody can mint, every
+    coin route answers 404, and the app shows no balance or Pay button on a
+    relay whose `GET /` says `"coin": false`. Unset, the coin stays on, as it
+    always was. The project relay's settings are its maintainer's, on the
+    live service.
 26. **TURN**: 10/min, 2 h TTL, no daily cap, no call required. *Reported.*
     **Done:** thirty credentials an hour per account on top of the ten a
     minute, as a stored allowance kept to the hour. A call being signalled
@@ -338,9 +383,11 @@ twice on two machines in CI, which fails unless the two builds agree.
     option:** "Relay-only calls" (Comms settings) sets the ICE transport
     policy to relay, so the connection gathers no host or reflexive
     candidates and the contact learns only the TURN server's address; with no
-    TURN server the call is refused with a message. Off by default (a little
-    delay, and the relay must have call servers); with it off, candidates
-    still go out while dialing, as the protocol needs.
+    TURN server the call is refused with a message. On by default since the
+    gap audit of 2026-10-31 whenever the relay offers a TURN server (the
+    `RelayOnlyCalls` default; a choice the owner made is kept); with it off,
+    or on a relay with no TURN server, candidates still go out while dialing,
+    as the protocol needs.
 30. `clairix://invite` is a custom scheme any app can claim; the invite link
     dictates the relay URL at registration (`CommsRepository.kt:365`).
     *Verified for the URL; interception reported.* **Done (Beta 8):** invite
@@ -357,7 +404,10 @@ twice on two machines in CI, which fails unless the two builds agree.
     The `clairix://invite` filter stays for links made before Beta 8 (the
     relay's page reaches it only by an intent naming the package); a link
     still only fills in the setup screen. The Play edition, when published,
-    needs Play's app signing key added to `assetlinks.json`.
+    is to be signed by Play with the release key itself (`android/README.md`,
+    "Cutting a release" step 5a), so the one fingerprint covers it; if Google's
+    own app-signing key is used instead, its fingerprint is added to
+    `assetlinks.json` before the listing goes live (same step).
 31. The duress phrase sends nothing when the phone is in no group
     (`CommsRepository.kt:1459-1468`) and the UI does not warn. *Reported.*
     **Done:** the Duress phrase page says so, in red, while the owner is in
@@ -365,29 +415,48 @@ twice on two machines in CI, which fails unless the two builds agree.
 
 ## README claims to correct
 
-All **done** in PR #14: the root README carries the threat model (who it is
+PR #14 did part of this: the root README carries the threat model (who it is
 built against, what it protects, what it cannot do, what the relay keeps),
 names the "Wipe Clairix" page (9) and the duress phrase's no-group case (31),
-and lists what the relay stores and for how long (1, 2, 3); the website's
-security and privacy pages and the delete-account page say the same, with
-the live-capture caveat (addresses and token-batch fetches are visible in
-flight, never written down), and the privacy policy's effective date moved;
-the in-app privacy text names every network destination; the worker README's
-one-time-key limits match the code.
+and lists what the relay stores and for how long (1, 2, 3); the worker
+README's one-time-key limits match the code. It did not align the website:
+the gap audit of 2026-10-31 (item 9) found the delete-account, privacy,
+terms, security and emergency pages and the home page still sending people to
+"Panic Wipe" and "Unpair", controls no edition has, with the wipe's order and
+timing told the pre-reorder way, and the in-app privacy text naming fewer
+destinations than the code reaches (gap audit items 8 and 10). **Done since
+for the wipe and deletion copy:** every page names Wipe Clairix (Comms menu or
+Settings, type WIPE) and Delete identity and number, says the keys go first
+and the relay is told last and retried for a day, and `npm run check-copy`
+(website) fails the build on either old name.
+
+The relay list left out ClairixCoin, whose ledger kept who paid whom, to the
+millisecond, the 100 most recent transfers per account with no expiry, and
+named the minting phone; only the privacy policy said so. **Done (Beta 8):**
+each mailbox keeps its own transfers as id, amount, hour and direction, for
+30 days and a hundred deep, a mint as "Minted by the relay", and a ledger
+from before is cut down the first time the mailbox's coin is touched or by
+its daily cleanup; the app confirms a payment notice by txid and amount, and
+counts one credit once. The README, the security page, the press kit, the
+privacy policy and the delete-account page list it, and the README says what
+ClairixCoin is.
 
 ## Suggested order
 
 1. Encrypt scanner stores with an unlock-bound key (6, 7). *Done for the
-   stores; the key is not unlock-bound (7), the unlock ledger and prefs are
-   still clear (6).*
+   stores, the unlock ledger and the Comms preferences; the remaining
+   settings files are plain (6). The scanner's key is not unlock-bound; what
+   reads conversations has been since Beta 7 (7).*
 2. Target number out of lookup URLs; drop `lastFetchAt` and bucket
    timestamps; unsign probes (1, 2, 3). *Done.*
 3. Pin the relay certificate; system-only trust elsewhere (15). *Done.*
 4. Sign graphs, work zones and release sums; SHA-pin actions (16, 17, 18).
-   *Done; the operator still has to generate the key and set the secret.*
+   *Done; the public key was committed in `0ff171b5` and the secret set
+   (`docs/KEYS.md`). Release signing still runs on the CI runner (18).*
 5. One-tap wipe with notification, admin and push cleanup; disarm HCE on
-   lock; gate `openPeer`/`markRead` on the lock (8, 9, 10). *Done; HCE on
-   screen-off and vault lock (10) remains.*
+   lock; gate `openPeer`/`markRead` on the lock (8, 9, 10). *Done, and the
+   card is disarmed on screen-off too; a vault re-lock still leaves it armed
+   (10).*
 6. OTK-burn ordering and curve-rebind refusal in the crate (19, 20). *Done.*
 7. README with an explicit threat model. *Done.*
 
@@ -549,7 +618,9 @@ fixed:
   keeps sessions under the canonical text.
 - **Payments told whether an unlisted number exists**, for free: "Payment
   refused" against "Insufficient balance". The debit now comes first, so a
-  payer who cannot cover the amount hears the same either way.
+  payer who cannot cover the amount hears the same either way. A payer who
+  could still learned it (24); since Beta 8 a payment must name the payee's
+  key fingerprint, checked before any coin moves.
 - **The relay fetched any https address for anyone**, before checking a
   signature, again on every request, reading the answer without a limit.
   Relay addresses are port 443 only with no trailing-dot hosts; a failed
@@ -691,13 +762,26 @@ Known and not fixed:
   The second review above was internal; nothing here has had an independent
   audit.
 
-Still open after PR #15: 4, 5, 7 (by decision), 23 (since done, Beta 8), 25 (coin farming),
-30 (since done, Beta 8), and the phase-2 work still ahead: place search beyond road names on the phone, a published release rebuilt and
-matched (since done: Beta 7 rebuilt from its tag matches both published APKs,
-and `verify-release.yml` checks every release as it is published), an audit.
+## What is still open
 
-## Not re-tested
+[`OPEN-ISSUES.md`](OPEN-ISSUES.md) is the list: every finding above that is
+not closed, in one table with what remains of each, brought up to date with
+each release. Of what this paragraph used to list as still open, 23 and 30
+were done in Beta 8, and a published release has been rebuilt from its tag
+and matched: Beta 7 by hand, Beta 8 by `verify-release.yml` as it was
+published, which it now does for every release.
 
-No Gradle, cargo or wrangler run was possible in the audit environment. The
-minify change in this PR is the one edit that can fail a release build;
-check the first release build's R8 output for missing-class warnings.
+## Testing
+
+When this log was begun, against 3.0.0 Beta 2, no Gradle, cargo or wrangler
+run was possible where it was written. CI now runs all three on every change
+to the code each covers: `android.yml` tests the crypto crate (`cargo test`),
+builds every debug variant, runs the Kotlin unit tests, and builds the full
+edition twice on two machines and requires the two to agree; `relay.yml`
+type-checks, tests and bundles the relay (`wrangler deploy --dry-run`) and
+tests its token module; `emulator.yml` drives every screen and runs the
+end-to-end tests against two local relays on Android 12, 13, 14 and 15;
+`release.yml` builds each release, minified, and `verify-release.yml`
+rebuilds it from its tag and compares. The minify change this section once
+warned about has been through the release build of every release from Beta 3
+on.

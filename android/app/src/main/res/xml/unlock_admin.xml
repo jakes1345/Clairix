@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Clairix's device admin exists for one thing: the lock-screen callbacks that feed
-    the unlock ledger (password succeeded / failed / changed). watch-login is the
-    only policy it asks for. It never sets a password policy, locks or wipes the
-    device; the owner can revoke it from Settings at any time, and the ledger
-    records that too.
+    Clairix's device admin exists for two things. watch-login: the lock-screen
+    callbacks that feed the unlock ledger (password succeeded / failed / changed).
+    force-lock: locking the screen when the owner presses "Schedule and lock" on
+    the Fake call page, and at no other time. It never sets a password policy or
+    wipes the device; the owner can revoke it from Settings at any time, and the
+    ledger records that too. An admin approved before force-lock was asked for
+    keeps feeding the ledger; the Fake call page asks for a fresh approval before
+    it locks anything (DevicePolicyManager.hasGrantedPolicy).
 -->
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-policies>
         <watch-login />
+        <force-lock />
     </uses-policies>
 </device-admin>

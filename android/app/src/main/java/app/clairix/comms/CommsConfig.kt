@@ -3,6 +3,7 @@ package app.clairix.comms
 import android.content.Context
 import android.util.Base64
 import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Preference data for the comms module; secrets live in [IdentityStore]. Kept
@@ -40,14 +41,67 @@ class CommsConfig(context: Context) {
     fun setHidePreviews(hide: Boolean) { prefs.edit().putBoolean(KEY_HIDE_PREVIEWS, hide).apply() }
 
     /**
-     * Whether call audio may only travel through the relay's TURN servers, so
-     * no contact, and nobody holding a contact's phone, learns this phone's
-     * network address from a call. Off by default: it costs some delay and
-     * needs the relay to have call servers at all.
+     * The owner's choice about relay-only calls: whether call audio may only
+     * travel through the relay's TURN servers, so no contact, and nobody
+     * holding a contact's phone, learns this phone's network address from a
+     * call. Null while they have not chosen; then it is on whenever the relay
+     * offers a TURN server ([RelayOnlyCalls]). A choice stored before that
+     * default existed was made by the owner too, and is kept.
      */
-    val relayOnlyCalls: Boolean get() = prefs.getBoolean(KEY_RELAY_ONLY_CALLS, false)
+    val relayOnlyCallsChoice: Boolean?
+        get() = if (prefs.contains(KEY_RELAY_ONLY_CALLS)) prefs.getBoolean(KEY_RELAY_ONLY_CALLS, false) else null
 
     fun setRelayOnlyCalls(on: Boolean) { prefs.edit().putBoolean(KEY_RELAY_ONLY_CALLS, on).apply() }
+
+    /**
+     * The invites this phone made that may still be answered, as the SHA-256
+     * (hex) of each code with when to forget it: someone who registers with
+     * one and says so ([CommsWire.T_JOINED]) comes in as a contact rather than
+     * as a message request. The codes themselves are not kept.
+     */
+    private fun issuedInvites(): MutableMap<String, Long> =
+        prefs.getString(KEY_ISSUED_INVITES, null)
+            ?.let { text -> runCatching { JSONObject(text).let { o -> o.keys().asSequence().associateWith { o.getLong(it) } } }.getOrNull() }
+            ?.toMutableMap()
+            ?: mutableMapOf()
+
+    private fun saveIssuedInvites(invites: Map<String, Long>) {
+        val now = System.currentTimeMillis()
+        prefs.edit().putString(KEY_ISSUED_INVITES, JSONObject(invites.filterValues { it > now }).toString()).apply()
+    }
+
+    /** Remembers an invite this phone made ([codeHash]) until [keepUntil]. */
+    fun addIssuedInvite(codeHash: String, keepUntil: Long) {
+        saveIssuedInvites(issuedInvites().apply { put(codeHash, keepUntil) })
+    }
+
+    /** Takes the invite whose code hashes to [codeHash]: true, once, when this phone made it and still remembers it. */
+    fun takeIssuedInvite(codeHash: String): Boolean {
+        val held = issuedInvites()
+        val good = held.remove(codeHash)?.let { it > System.currentTimeMillis() } == true
+        saveIssuedInvites(held)
+        return good
+    }
+
+    /** Whether the relay offered a TURN server for the last call this phone set up (GET /v1/turn); null before the first. */
+    val relayTurn: Boolean?
+        get() = if (prefs.contains(KEY_RELAY_TURN)) prefs.getBoolean(KEY_RELAY_TURN, false) else null
+
+    fun setRelayTurn(offered: Boolean) {
+        if (relayTurn != offered) prefs.edit().putBoolean(KEY_RELAY_TURN, offered).apply()
+    }
+
+    /**
+     * Whether the relay offers ClairixCoin, as its `GET /` last said
+     * ([RelayClient.Info.coin]); true until it says otherwise, since every
+     * relay offered it before the flag existed. The balance and the Pay button
+     * show only while it does ([CoinRules.shown]).
+     */
+    val relayCoin: Boolean get() = prefs.getBoolean(KEY_RELAY_COIN, true)
+
+    fun setRelayCoin(offered: Boolean) {
+        if (relayCoin != offered) prefs.edit().putBoolean(KEY_RELAY_COIN, offered).apply()
+    }
 
     /**
      * Whether this phone sends cover traffic: sealed envelopes nobody reads, to
@@ -117,6 +171,43 @@ class CommsConfig(context: Context) {
 
     fun setPassPublished() { prefs.edit().putBoolean(KEY_PASS_PUBLISHED, true).apply() }
 
+    /**
+     * The inviter (their Clairix number) still to be told which of their
+     * invites this phone registered with, and the invite: kept until the
+     * word is sent or refused for good, so a send that found no delivery
+     * token yet is tried again with the outbox.
+     */
+    val pendingJoined: Pair<String, String>?
+        get() {
+            val number = prefs.getString(KEY_JOINED_NUMBER, null) ?: return null
+            val invite = prefs.getString(KEY_JOINED_INVITE, null) ?: return null
+            return number to invite
+        }
+
+    fun setPendingJoined(number: String, invite: String) {
+        prefs.edit().putString(KEY_JOINED_NUMBER, number).putString(KEY_JOINED_INVITE, invite).apply()
+    }
+
+    fun clearPendingJoined() {
+        prefs.edit().remove(KEY_JOINED_NUMBER).remove(KEY_JOINED_INVITE).apply()
+    }
+
+    /**
+     * The secret a report's envelope fingerprint is made under
+     * ([ContactGate.envelopeFingerprint]), 32 random bytes made on first use.
+     * It never leaves the phone.
+     */
+    @Synchronized
+    fun reportSecret(): ByteArray {
+        prefs.getString(KEY_REPORT_SECRET, null)
+            ?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }
+            ?.takeIf { it.size == 32 }
+            ?.let { return it }
+        val made = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        prefs.edit().putString(KEY_REPORT_SECRET, java.util.Base64.getEncoder().encodeToString(made)).apply()
+        return made
+    }
+
     fun saveRegistration(relayUrl: String, number: String, name: String, listed: Boolean) {
         prefs.edit()
             .putString(KEY_RELAY, relayUrl.trimEnd('/'))
@@ -125,9 +216,12 @@ class CommsConfig(context: Context) {
             .putBoolean(KEY_LISTED, listed)
             .remove(KEY_PUSH)
             .remove(KEY_PASS_PUBLISHED)
-            // Another relay's addresses are no use for this one.
+            // Another relay's addresses are no use for this one, and what it
+            // offered for calls or for ClairixCoin says nothing about this one.
             .remove(KEY_ALTERNATES)
             .remove(KEY_ONION)
+            .remove(KEY_RELAY_TURN)
+            .remove(KEY_RELAY_COIN)
             .apply()
     }
 
@@ -144,6 +238,8 @@ class CommsConfig(context: Context) {
             .remove(KEY_PUSH_PENDING)
             .remove(KEY_ALTERNATES)
             .remove(KEY_ONION)
+            .remove(KEY_RELAY_TURN)
+            .remove(KEY_RELAY_COIN)
             .putLong(KEY_PREKEY_PUBLISHED, 0L)
             .remove(KEY_PASS_PUBLISHED)
             .putString(KEY_PREVIOUS_RELAY, previousRelay.trimEnd('/'))
@@ -168,6 +264,18 @@ class CommsConfig(context: Context) {
     val previousEmptied: Long get() = prefs.getLong(KEY_PREVIOUS_EMPTIED, 0L)
 
     fun setPreviousEmptied(ts: Long) { prefs.edit().putLong(KEY_PREVIOUS_EMPTIED, ts).apply() }
+
+    /**
+     * This phone came back from a recovery file under a new number (its old
+     * mailbox was gone): the date the move notices to its contacts carry.
+     * There is no previous mailbox to empty, so none is recorded.
+     */
+    fun setMovedAt(movedAt: Long) { prefs.edit().putLong(KEY_MOVED_AT, movedAt).apply() }
+
+    /** When the owner last saved a recovery file from this phone; 0 if never. The file itself is theirs, wherever they put it. */
+    val recoverySavedAt: Long get() = prefs.getLong(KEY_RECOVERY_SAVED, 0L)
+
+    fun setRecoverySavedAt(ts: Long) { prefs.edit().putLong(KEY_RECOVERY_SAVED, ts).apply() }
 
     fun forgetPreviousRelay() {
         prefs.edit().remove(KEY_PREVIOUS_RELAY).remove(KEY_PREVIOUS_NUMBER).remove(KEY_PREVIOUS_EMPTIED).apply()
@@ -205,6 +313,9 @@ class CommsConfig(context: Context) {
         const val KEY_PREKEY_PUBLISHED = "prekey_published"
         const val KEY_HIDE_PREVIEWS = "hide_previews"
         const val KEY_RELAY_ONLY_CALLS = "relay_only_calls"
+        const val KEY_RELAY_TURN = "relay_turn"
+        const val KEY_RELAY_COIN = "relay_coin"
+        const val KEY_ISSUED_INVITES = "issued_invites"
         const val KEY_COVER_TRAFFIC = "cover_traffic"
         const val KEY_ALTERNATES = "relay_alternates"
         const val KEY_ONION = "relay_onion"
@@ -215,6 +326,10 @@ class CommsConfig(context: Context) {
         const val KEY_PASS = "pass_key"
         const val KEY_PASS_PUBLISHED = "pass_published"
         const val KEY_PASS_CREATED = "pass_created"
+        const val KEY_RECOVERY_SAVED = "recovery_saved_at"
+        const val KEY_REPORT_SECRET = "report_secret"
+        const val KEY_JOINED_NUMBER = "joined_number"
+        const val KEY_JOINED_INVITE = "joined_invite"
         val LEGACY_KEYS = listOf(
             "worker_url", "device_id", "token_enc", "sync_seq", "sync_updated",
             "push_token", "sync_calls", "voice_token", "voice_at"

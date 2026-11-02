@@ -143,7 +143,7 @@ test("malformed blind requests are refused before anything is evaluated", async 
   assert.equal(await bad(["short"]), 400);
 });
 
-test("tokens from before Beta 6 still work alongside", async () => {
+test("tokens from before Beta 6 still work alongside, until the legacy cutoff", async () => {
   resetClock();
   const relay = makeRelay();
   const alice = await makePhone(relay);
@@ -152,6 +152,58 @@ test("tokens from before Beta 6 still work alongside", async () => {
   const { tokens } = await blindTokens(relay, alice, 1);
   assert.equal((await alice.send(old, bob.number)).status, 202);
   assert.equal((await alice.send(tokens[0], bob.number)).status, 202);
+});
+
+/** An envelope of [format] as its first byte says (comms-crypto: 2 sealed to the long-term key, 3 to a prekey), base64. */
+const envelopeOf = (format) => Buffer.from([format, ...crypto.getRandomValues(new Uint8Array(120))]).toString("base64");
+
+test("from 1 January 2027 the old kind of token and envelopes in format 2 are refused with 426 and a word to update; blind tokens and format 3 go on", async () => {
+  const cutoff = Date.UTC(2027, 0, 1);
+  const day = 24 * 60 * 60_000;
+  resetClock();
+  // The relay's own date (LEGACY_CUTOFF unset), seen from twenty past midnight the day before.
+  advance(cutoff - day + 20 * 60_000 - Date.now());
+  const relay = makeRelay({ LEGACY_CUTOFF: undefined });
+  const alice = await makePhone(relay);
+  const bob = await makePhone(relay);
+  const old = await alice.tokens(3);
+  assert.equal((await alice.send(old[0], bob.number, envelopeOf(2))).status, 202, "the day before, all of it still works");
+
+  advance(day + 60_000);
+  const issued = await alice.signed("POST", "/v1/tokens", { count: 5 });
+  assert.equal(issued.status, 426);
+  assert.match(issued.json.error, /Update Clairix from clairix\.app\/download/);
+  const spent = await alice.send(old[1], bob.number, envelopeOf(3));
+  assert.deepEqual([spent.status, spent.json.error], [426, issued.json.error]);
+  // A format-2 envelope is refused on its first byte alone, before a token is
+  // spent or a mailbox asked: the same answer for a number nobody holds.
+  const { tokens } = await blindTokens(relay, alice, 2);
+  assert.equal(tokens.length, 2, "blind tokens are still issued");
+  assert.equal((await alice.send(tokens[0], bob.number, envelopeOf(2))).status, 426);
+  assert.equal((await alice.send(tokens[0], "987654321", envelopeOf(2))).status, 426);
+  assert.equal((await alice.send(tokens[0], bob.number, envelopeOf(3))).status, 202, "the refused sends spent no token");
+  assert.equal((await alice.send(tokens[1], bob.number, "AAAA")).status, 202);
+  assert.equal((await bob.inbox()).length, 3);
+  // The traffic routes spend tokens the same way.
+  const { tokens: traffic } = await blindTokens(relay, alice, 1, "traffic");
+  assert.equal((await alice.traffic(traffic[0], "GET", "/v1/traffic/live?region=north-america-us-ohio")).status, 200);
+  const [oldTraffic] = old.slice(2);
+  assert.equal((await alice.traffic(oldTraffic, "GET", "/v1/traffic/live?region=north-america-us-ohio")).status, 426);
+  resetClock();
+});
+
+test("LEGACY_CUTOFF moves the date; one that is not a real day keeps 1 January 2027", async () => {
+  resetClock();
+  advance(Date.UTC(2026, 11, 15, 0, 20) - Date.now());
+  const early = makeRelay({ LEGACY_CUTOFF: "2026-12-01" });
+  const alice = await makePhone(early);
+  assert.equal((await alice.signed("POST", "/v1/tokens", { count: 1 })).status, 426);
+  for (const LEGACY_CUTOFF of ["2027-02-30", "soon", "2026-12-01T00:00:00Z"]) {
+    const relay = makeRelay({ LEGACY_CUTOFF });
+    const bob = await makePhone(relay);
+    assert.equal((await bob.signed("POST", "/v1/tokens", { count: 1 })).status, 200, LEGACY_CUTOFF);
+  }
+  resetClock();
 });
 
 test("a blind token has one spelling: the spare bits of its last character cannot make it four", async () => {

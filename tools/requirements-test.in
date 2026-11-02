@@ -1,0 +1,8 @@
+# pytest for the tools' own tests, in the workflows whose output is signed
+# (Maps, Work zones, Relay list, Stalkerware list): a test runner runs code in
+# the same job that builds what is signed, so it is hash-pinned like the rest.
+#
+# requirements-test.txt is generated from this file under Python 3.11:
+#   cd tools && pip-compile --generate-hashes --no-emit-index-url --strip-extras --output-file=requirements-test.txt requirements-test.in
+# and installed with --require-hashes alongside the tool being tested.
+pytest==9.1.1

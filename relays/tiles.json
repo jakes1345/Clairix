@@ -1,0 +1,12 @@
+{
+  "type": "clairix-tile-source",
+  "version": 1,
+  "issued": 1793502000,
+  "name": "OpenStreetMap",
+  "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  "minZoom": 0,
+  "maxZoom": 19,
+  "tileSize": 256,
+  "attribution": "© OpenStreetMap contributors",
+  "attributionUrl": "https://www.openstreetmap.org/copyright"
+}

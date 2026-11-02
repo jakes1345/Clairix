@@ -50,8 +50,13 @@ object Mesh {
         if (on && permitted(app)) ContextCompat.startForegroundService(app, intent) else app.stopService(intent)
     }
 
-    /** Starts the service again if the owner left the mesh on; for app start. */
+    /**
+     * Starts the service again if the owner left the mesh on and it is not
+     * running; for app start. A mesh already running is left as it is, rather
+     * than taken through a foreground start again every time the app opens.
+     */
     fun resume(context: Context) {
+        if (node != null) return
         if (enabled(context) && permitted(context)) runCatching {
             ContextCompat.startForegroundService(context.applicationContext, Intent(context.applicationContext, MeshService::class.java))
         }
@@ -63,7 +68,9 @@ object Mesh {
             context, store(context),
             ownTags = { CommsRepository.meshTags() },
             onDeliver = { data -> CommsRepository.receiveFromMesh(data) },
-            _status = _status
+            _status = _status,
+            // A conversation open on screen: a message may be about to need the mesh.
+            conversationOpen = { CommsRepository.openPeer != null }
         )
         node = n
         _status.value = _status.value.copy(carrying = store(context).size)

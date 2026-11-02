@@ -1,0 +1,428 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:AdsbDecoder.kt$AdsbDecoder$!(m0 > m1 &amp;&amp; m1 &lt; m2 &amp;&amp; m2 > m3 &amp;&amp; m3 &lt; m0 &amp;&amp; m4 &lt; m0 &amp;&amp; m5 &lt; m0 &amp;&amp; m6 &lt; m0 &amp;&amp; m7 > m8 &amp;&amp; m8 &lt; m9 &amp;&amp; m9 > m6)</ID>
+    <ID>ComplexCondition:AdsbDecoder.kt$AdsbDecoder.Companion$rlat0 &lt; -90.0 || rlat0 > 90.0 || rlat1 &lt; -90.0 || rlat1 > 90.0</ID>
+    <ID>ComplexCondition:BleNames.kt$BleNames$cleaned.length >= 8 &amp;&amp; cleaned.all { it.isLetterOrDigit() } &amp;&amp; cleaned.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }</ID>
+    <ID>ComplexCondition:CallManager.kt$CallManager$c != null &amp;&amp; c.phase == CallPhase.INCOMING &amp;&amp; (callId == null || c.id == callId)</ID>
+    <ID>ComplexCondition:CallManager.kt$CallManager$callId == null || peerNumber == null || callId in endedCallIds || c?.id == callId</ID>
+    <ID>ComplexCondition:CallManager.kt$CallManager$current == null || current.id != cid || current.phase == CallPhase.ENDED || current.phase == CallPhase.INCOMING</ID>
+    <ID>ComplexCondition:CameraFeed.kt$KnownCamera.Companion$lat.isNaN() || lon.isNaN() || lat !in -90.0..90.0 || lon !in -180.0..180.0</ID>
+    <ID>ComplexCondition:CameraSweepScreen.kt$granted &amp;&amp; mode == OpticalMode.GLINT &amp;&amp; state.running &amp;&amp; !state.hasTorch</ID>
+    <ID>ComplexCondition:CommsRepository.kt$CommsRepository$curve != senderCurve || (!legacy &amp;&amp; ed != senderEd) || ed.isBlank() || sealing.isBlank() || sig.isBlank()</ID>
+    <ID>ComplexCondition:CommsRepository.kt$CommsRepository$lat.isNaN() || lon.isNaN() || lat !in -90.0..90.0 || lon !in -180.0..180.0</ID>
+    <ID>ComplexCondition:CommsRepository.kt$CommsRepository$roster.none { it.number == sender.number &amp;&amp; it.role == OrgRole.ADMIN.name } || !KeyChangeGuard.mayApplyGroupControl(contact, roster.find { it.number == sender.number }?.ed25519) || roster.size > MAX_GROUP_MEMBERS</ID>
+    <ID>ComplexCondition:CommsRepository.kt$CommsRepository$rows.isNotEmpty() &amp;&amp; reached == 0 &amp;&amp; waiting == 0 &amp;&amp; rows.none { it.status == GroupOutbox.Status.MESH }</ID>
+    <ID>ComplexCondition:CommsRepository.kt$CommsRepository$size &lt;= 0L || size > CommsMedia.MAX_BYTES || chunks &lt;= 0 || chunks > CommsMedia.MAX_CHUNKS || chunks != expectedChunks</ID>
+    <ID>ComplexCondition:CommsScreen.kt$c != null &amp;&amp; usable &amp;&amp; (c.keyChanged || held > 0)</ID>
+    <ID>ComplexCondition:CommsScreen.kt$media != null &amp;&amp; !media.isVideo &amp;&amp; (mine || !receiving)</ID>
+    <ID>ComplexCondition:CommsStore.kt$CommsStore$current != null &amp;&amp; (current.second > ts || (current.second == ts &amp;&amp; current.first == ttl))</ID>
+    <ID>ComplexCondition:GnssIntegrity.kt$GnssIntegrity$prev != null &amp;&amp; prev.satelliteTimeMs == fix.satelliteTimeMs &amp;&amp; prev.lat == fix.lat &amp;&amp; prev.lon == fix.lon</ID>
+    <ID>ComplexCondition:GraphStore.kt$GraphStore$(h[4].toInt() and 0xFF) != GRAPH_VERSION || h[5].toInt() != 0 || h[6].toInt() != 0 || h[7].toInt() != 0</ID>
+    <ID>ComplexCondition:GraphStore.kt$GraphStore$h[0] != 'A'.code.toByte() || h[1] != 'G'.code.toByte() || h[2] != 'R'.code.toByte() || h[3] != '1'.code.toByte()</ID>
+    <ID>ComplexCondition:HiddenCameraScanner.kt$HiddenCameraScanner$mayAlert &amp;&amp; f.confidence >= ALERT_CONFIDENCE &amp;&amp; !f.needsConfirmation &amp;&amp; alerted.add(f.id)</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$cell.neighbors != null &amp;&amp; cell.neighbors == 0 &amp;&amp; tacVisits >= 5 &amp;&amp; data.optBoolean("neighborsEverSeen", false)</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$e.gone &amp;&amp; !e.reportedLoose &amp;&amp; !e.movedDuring &amp;&amp; !e.callDuring &amp;&amp; key != cell.key</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$e.gone &amp;&amp; key != cell.key &amp;&amp; !e.reported &amp;&amp; !e.movedDuring &amp;&amp; !e.callDuring</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$p != null &amp;&amp; p.tac != null &amp;&amp; cell.tac != null &amp;&amp; p.tac != cell.tac</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$stationary &amp;&amp; !inCall &amp;&amp; cell.rat.rank in 1..Rat.UMTS.rank &amp;&amp; recentMaxRank >= Rat.LTE.rank</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$stationary &amp;&amp; prevDbm != null &amp;&amp; curDbm != null &amp;&amp; prev?.key == cell.key</ID>
+    <ID>ComplexCondition:IMSICatcher.kt$IMSICatcher$ta != null &amp;&amp; ta == 0 &amp;&amp; cell.rat == Rat.LTE &amp;&amp; tacVisits >= 5 &amp;&amp; data.optBoolean("taEverNonZero", false) &amp;&amp; !taZeroIsNormal(cellRec, now)</ID>
+    <ID>ComplexCondition:MainActivity.kt$!cell.available &amp;&amp; radio != null &amp;&amp; (radio.operatorName != null || radio.simOperatorName != null)</ID>
+    <ID>ComplexCondition:MainActivity.kt$cell.available &amp;&amp; cell.analysing &amp;&amp; cell.level.ordinal >= Threat.MEDIUM.ordinal &amp;&amp; cell.findings.isNotEmpty()</ID>
+    <ID>ComplexCondition:MainActivity.kt$radio?.roaming == false &amp;&amp; simName != null &amp;&amp; decodedCarrier != null &amp;&amp; !decodedCarrier.contains(simName, ignoreCase = true) &amp;&amp; !simName.contains(decodedCarrier.substringBefore(' '), ignoreCase = true)</ID>
+    <ID>ComplexCondition:MapDownloads.kt$MapDownloads$header[0] != 'A'.code.toByte() || header[1] != 'G'.code.toByte() || header[2] != 'R'.code.toByte() || header[3] != '1'.code.toByte()</ID>
+    <ID>ComplexCondition:NavScreen.kt$options == null &amp;&amp; (search.loading || search.results.isNotEmpty() || search.error != null)</ID>
+    <ID>ComplexCondition:NavViewModel.kt$NavViewModel$dest.lat &lt; g.minLat - OUTSIDE_MARGIN_DEG || dest.lat > g.maxLat + OUTSIDE_MARGIN_DEG || dest.lon &lt; g.minLon - OUTSIDE_MARGIN_DEG || dest.lon > g.maxLon + OUTSIDE_MARGIN_DEG</ID>
+    <ID>ComplexCondition:Navigator.kt$Navigator$c.lat &lt; minLat - dLat || c.lat > maxLat + dLat || c.lon &lt; minLon - dLon || c.lon > maxLon + dLon</ID>
+    <ID>ComplexCondition:Navigator.kt$Navigator$generation != gen || t == null || offCount > 0 || rerouting</ID>
+    <ID>ComplexCondition:NfcScanner.kt$NfcScanner$techs.contains("IsoDep") &amp;&amp; !isPayment &amp;&amp; payload == null &amp;&amp; profile == CardProfile.UNKNOWN</ID>
+    <ID>ComplexCondition:Persistence.kt$Tracker$held != null &amp;&amp; held.nearOwner &amp;&amp; kept != null &amp;&amp; !kept.nearOwner &amp;&amp; entry.separatedAt == 0L</ID>
+    <ID>ComplexCondition:Persistence.kt$Tracker.Entry$held != null &amp;&amp; held.nearOwner &amp;&amp; kept != null &amp;&amp; !kept.nearOwner &amp;&amp; separatedAt == 0L &amp;&amp; other.separatedAt == 0L</ID>
+    <ID>ComplexCondition:ProbeReporter.kt$ProbeReporter$cur != null &amp;&amp; (cur.seg != segmentKey || timeMs - cur.lastTimeMs > MAX_GAP_MS || timeMs - cur.startTimeMs >= SLICE_MS)</ID>
+    <ID>ComplexCondition:RelayClient.kt$RelayClient.Companion$host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")</ID>
+    <ID>ComplexCondition:RelayClient.kt$RelayClient.Companion$host.startsWith("[") || host.all { it.isDigit() || it == '.' } || '.' !in host</ID>
+    <ID>ComplexCondition:RoadClosures.kt$RoadClosures$e !in out &amp;&amp; graph.edgeLengthM(e) &lt;= 2 * STEP_M &amp;&amp; graph.edgeFrom(e) in ends &amp;&amp; graph.edgeTo(e) in starts</ID>
+    <ID>ComplexCondition:RoadGraph.kt$RoadGraph$lat + dLat &lt; g.lat0 || lat - dLat > g.lat0 + g.rows * g.cellLat || lon + dLon &lt; g.lon0 || lon - dLon > g.lon0 + g.cols * g.cellLon</ID>
+    <ID>ComplexCondition:RoadGraph.kt$RoadGraph.Companion$nodeCount &lt; 0 || edgeCount &lt; 0 || shapeCount &lt; 0 || nameCount &lt; 0</ID>
+    <ID>ComplexCondition:ScanService.kt$ScanService$running &amp;&amp; scanActive &amp;&amp; !screenOn &amp;&amp; blePlan(getSystemService(BluetoothManager::class.java)?.adapter) != activeBleScan</ID>
+    <ID>ComplexCondition:ScannerMonitor.kt$ScannerMonitor$failed || !open || !recordingEnabled || w.full</ID>
+    <ID>ComplexCondition:ScannerMonitor.kt$ScannerMonitor$open &amp;&amp; writer == null &amp;&amp; recordingEnabled &amp;&amp; !heldOpen</ID>
+    <ID>ComplexCondition:SmokeTest.kt$SmokeTest$name.startsWith("MISSING") || name.startsWith("LEFT") || name.startsWith("STALE") || name.startsWith("BACK-") || name.startsWith("FROZEN")</ID>
+    <ID>ComplexCondition:StalkwareScanner.kt$StalkwareScanner$f.imeEnabled &amp;&amp; (f.trustedOrigin || yours(f, GrantKind.KEYBOARD)) &amp;&amp; !impostor &amp;&amp; perm in KEYBOARD_PERMISSIONS</ID>
+    <ID>ComplexCondition:SurveillanceHardware.kt$SurveillanceHardware$lower.contains("flocksafety") || lower.contains("flock safety") || lower.contains("flockos") || lower == "flock"</ID>
+    <ID>ComplexCondition:SurveillanceHardware.kt$SurveillanceHardware$serial != null || (xuntong &amp;&amp; (strongName || numericName || flockName)) || strongName</ID>
+    <ID>ComplexCondition:TrackerTools.kt$!running &amp;&amp; advertising &amp;&amp; !detected &amp;&amp; !failed</ID>
+    <ID>ComplexCondition:WifiScanner.kt$WifiScanner$connectedSsid != null &amp;&amp; ssidKey == connectedSsid &amp;&amp; bssid != connectedBssid &amp;&amp; connection != null &amp;&amp; security != connection.security</ID>
+    <ID>ComplexCondition:WifiScanner.kt$WifiScanner$dns.isNotEmpty() &amp;&amp; gateway != null &amp;&amp; dns.all { it == gateway } &amp;&amp; privateDns == null</ID>
+    <ID>ComplexCondition:Wiper.kt$Wiper$key in keep &amp;&amp; value != null &amp;&amp; (value is Boolean || value is Int || value is Long || value is Float || value is String)</ID>
+    <ID>ComplexCondition:WorkZoneFeed.kt$WorkZone.Companion$lat.isNaN() || lon.isNaN() || lat !in -90.0..90.0 || lon !in -180.0..180.0</ID>
+    <ID>ComplexCondition:WorkZoneFeed.kt$WorkZoneFeed$haveFile &amp;&amp; cacheFile.isFile &amp;&amp; meta != null &amp;&amp; meta.optBoolean("signed")</ID>
+    <ID>ConstructorParameterNaming:MeshNode.kt$MeshNode$/** Where the node reports what it is doing; owned by [Mesh] so the page can watch it before the node exists. */ private val _status: MutableStateFlow&lt;MeshStatus></ID>
+    <ID>CyclomaticComplexMethod:AppLock.kt$AppLock$private fun attemptLocked(context: Context, code: String, unlockOnSuccess: Boolean): Verdict</ID>
+    <ID>CyclomaticComplexMethod:CadenceFingerprinter.kt$CadenceFingerprinter$private fun score(fresh: Track, candidate: Track): Score</ID>
+    <ID>CyclomaticComplexMethod:CallManager.kt$CallManager$private suspend fun onOffer(contact: Contact, cid: String, json: JSONObject, envelopeTs: Long)</ID>
+    <ID>CyclomaticComplexMethod:CallManager.kt$CallManager$private suspend fun signalLocked(contact: Contact, json: JSONObject, envelopeTs: Long)</ID>
+    <ID>CyclomaticComplexMethod:CellMonitor.kt$CellMonitor$private fun neighbor(info: CellInfo): NeighborCell?</ID>
+    <ID>CyclomaticComplexMethod:CommsMedia.kt$CommsMedia$fun prepareVideo(context: Context, uri: Uri): Prepared</ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$@Synchronized fun init(context: Context)</ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$private fun applyGroupAdd(contact: Contact, gid: String, existing: Group?, json: JSONObject)</ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$private fun processGroupPayload(contact: Contact, envelopeTs: Long, json: JSONObject)</ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$private fun processPayload(contact: Contact, envelopeTs: Long, json: JSONObject)</ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$private fun resolveSender(senderCurve: String, senderEd: String, json: JSONObject): Resolution</ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$suspend fun addContactFromCode(code: PairingCode, name: String? = null, source: CodeSource): Result&lt;Contact></ID>
+    <ID>CyclomaticComplexMethod:CommsRepository.kt$CommsRepository$suspend fun moveTo(relayUrl: String, secret: String, invite: PairingCode? = null): Result&lt;String></ID>
+    <ID>CyclomaticComplexMethod:DultInterrogator.kt$DultInterrogator$@SuppressLint("MissingPermission") // Checked up front; every call is also wrapped. private fun session(device: BluetoothDevice, context: Context, ops: List&lt;Int>): Flow&lt;DultResult></ID>
+    <ID>CyclomaticComplexMethod:Geo.kt$ObservationArea$fun merge(other: ObservationArea)</ID>
+    <ID>CyclomaticComplexMethod:GlintTracker.kt$GlintTracker$fun process( luma: ByteArray, width: Int, height: Int, rowStride: Int, pixelStride: Int, timestampNs: Long, torchOffConfirmed: Boolean = false, turnXDeg: Float = 0f, turnYDeg: Float = 0f ): Result</ID>
+    <ID>CyclomaticComplexMethod:GnssIntegrity.kt$GnssIntegrity$fun assess(now: Long): GnssAssessment</ID>
+    <ID>CyclomaticComplexMethod:HelpTools.kt$private fun LazyListScope.helpContent( book: Helplines.Book, choice: Helplines.Choice, picked: String?, picking: Boolean, onPicking: (Boolean) -> Unit, onPick: (String) -> Unit, context: Context )</ID>
+    <ID>CyclomaticComplexMethod:HiddenCameraScanner.kt$HiddenCameraScanner$suspend fun scanNetwork(context: Context): List&lt;CameraFinding></ID>
+    <ID>CyclomaticComplexMethod:HiddenCameraScanner.kt$HiddenCameraScanner$suspend fun scanWifiSetupAps(context: Context): List&lt;CameraFinding></ID>
+    <ID>CyclomaticComplexMethod:IMSICatcher.kt$BaselineRetention$fun apply(data: JSONObject, cutoff: Long?, now: Long): Int</ID>
+    <ID>CyclomaticComplexMethod:IMSICatcher.kt$IMSICatcher$private fun runChecks(cell: ServingCell, fix: Fix?, now: Long, stationary: Boolean, inCall: Boolean): List&lt;CatcherFinding></ID>
+    <ID>CyclomaticComplexMethod:IMSICatcher.kt$IMSICatcher$private fun updateBaseline(cell: ServingCell, now: Long)</ID>
+    <ID>CyclomaticComplexMethod:IrSelfTest.kt$IrSelfTest$fun process(luma: ByteArray, width: Int, height: Int, rowStride: Int, pixelStride: Int, timestampNs: Long): Boolean</ID>
+    <ID>CyclomaticComplexMethod:MagneticBaseline.kt$MagneticBaseline$fun sample(fieldUt: Float, nowMs: Long): Reading</ID>
+    <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class) override fun onCreate(savedInstanceState: Bundle?)</ID>
+    <ID>CyclomaticComplexMethod:Maneuvers.kt$Maneuvers$fun build(graph: RoadGraph, edges: IntArray, geometry: List&lt;LatLon>, edgeStartIndex: IntArray): List&lt;Maneuver></ID>
+    <ID>CyclomaticComplexMethod:Navigator.kt$Navigator$private fun announce(t: Track)</ID>
+    <ID>CyclomaticComplexMethod:Navigator.kt$Navigator$private suspend fun process(loc: Location, gen: Int)</ID>
+    <ID>CyclomaticComplexMethod:NetworkLeaks.kt$NetworkLeaks$fun read(context: Context): Picture</ID>
+    <ID>CyclomaticComplexMethod:PatternOfLife.kt$PatternOfLife$fun analyze(raw: List&lt;Fix>): PatternReport</ID>
+    <ID>CyclomaticComplexMethod:PatternOfLife.kt$PatternOfLife$private fun routeRepetition(fixes: List&lt;Fix>, stays: List&lt;Stay>): Triple&lt;Int, Int, Int></ID>
+    <ID>CyclomaticComplexMethod:Persistence.kt$Tracker$@Synchronized fun observe( key: String, address: String, rssi: Int, tracker: TrackerType?, approxMetres: Double?, rotations: Int, addresses: Int, fix: Fix?, hasPosition: Boolean, now: Long, advertisedName: String? = null, manufacturer: String? = null, services: List&lt;String> = emptyList(), radio: String = "BLE", addressKind: String? = null, /** The phone's own odometer ([LocationTrack.travelledM]) at this sighting. */ travelledM: Double = 0.0 ): Observation</ID>
+    <ID>CyclomaticComplexMethod:Persistence.kt$Tracker.Entry$fun absorb(other: Entry, certain: Boolean, indistinguishable: Boolean)</ID>
+    <ID>CyclomaticComplexMethod:PhoneHealthMonitor.kt$PhoneHealthMonitor$fun facts(): List&lt;HealthFact></ID>
+    <ID>CyclomaticComplexMethod:PhoneHealthMonitor.kt$PhoneHealthMonitor$private fun batteryFacts(): List&lt;HealthFact></ID>
+    <ID>CyclomaticComplexMethod:RelayClient.kt$RelayClient.Companion$fun originOf(url: String?): String?</ID>
+    <ID>CyclomaticComplexMethod:RelayFarewell.kt$RelayFarewell$fun fromJson(json: JSONObject): List&lt;Prepared></ID>
+    <ID>CyclomaticComplexMethod:Report.kt$Report$fun toJson( status: ScanStatus, detections: List&lt;Detection>, timeline: List&lt;TimelineEvent>, cell: CellStatus?, wifi: List&lt;WifiAnomaly> = emptyList(), nfc: List&lt;NfcTag> = emptyList() ): String</ID>
+    <ID>CyclomaticComplexMethod:Report.kt$Report$fun toText( status: ScanStatus, detections: List&lt;Detection>, timeline: List&lt;TimelineEvent>, cell: CellStatus, nfc: List&lt;NfcTag>, wifi: List&lt;WifiAnomaly> = emptyList() ): String</ID>
+    <ID>CyclomaticComplexMethod:RoadClosures.kt$RoadClosures$fun match(geom: List&lt;LatLon>, direction: String?, directional: Boolean): IntArray</ID>
+    <ID>CyclomaticComplexMethod:RoadGraph.kt$RoadGraph$fun nearestEdges(lat: Double, lon: Double, radiusM: Double, limit: Int): List&lt;EdgeHit></ID>
+    <ID>CyclomaticComplexMethod:RoadGraph.kt$RoadGraph.Companion$fun open(file: File): RoadGraph</ID>
+    <ID>CyclomaticComplexMethod:Router.kt$Router$private fun runSearch(origins: List&lt;EdgeHit>, dests: List&lt;EdgeHit>, toLat: Double, toLon: Double): Route?</ID>
+    <ID>CyclomaticComplexMethod:ScanService.kt$ScanService$private fun handle(result: ScanResult)</ID>
+    <ID>CyclomaticComplexMethod:ScanService.kt$ScanService$private fun onInfrastructure(hit: SurveillanceHardware.Hit, address: String, rssi: Int, now: Long)</ID>
+    <ID>CyclomaticComplexMethod:ScanService.kt$ScanService$private fun startPublishing()</ID>
+    <ID>CyclomaticComplexMethod:ScannerRecordings.kt$ScannerRecordings$private fun info(file: File): Info</ID>
+    <ID>CyclomaticComplexMethod:SdrUsbDriver.kt$SdrUsbDriver$private fun r82xxSetPll(freqHz: Long)</ID>
+    <ID>CyclomaticComplexMethod:Signatures.kt$Signatures$internal fun match(advert: Advert): TrackerType?</ID>
+    <ID>CyclomaticComplexMethod:SmokeTest.kt$SmokeTest$@Test fun everyScreenOpensWithoutCrashing()</ID>
+    <ID>CyclomaticComplexMethod:SoakTest.kt$SoakTest$private fun conversation(): Unit</ID>
+    <ID>CyclomaticComplexMethod:StalkwareScanner.kt$StalkwareScanner$fun scan(context: Context, acknowledged: Set&lt;String> = emptySet(), ioc: IocList? = StalkwareIoc.current(context)): Result</ID>
+    <ID>CyclomaticComplexMethod:StalkwareScanner.kt$StalkwareScanner$internal fun assess(f: AppFacts): List&lt;Signal></ID>
+    <ID>CyclomaticComplexMethod:SurveillanceHardware.kt$SurveillanceHardware$fun matchBle( name: String?, companyIds: Collection&lt;Int>, manufacturerData: (Int) -> ByteArray?, serviceUuids: Collection&lt;String>, staticAddress: Boolean? ): Hit?</ID>
+    <ID>CyclomaticComplexMethod:TestCity.kt$TestCity$fun write(dir: File): File</ID>
+    <ID>CyclomaticComplexMethod:TlsCanary.kt$TlsCanary$internal fun assess(pinnedSpki: String?, direct: Probe, proxy: ProxyProbe): Assessment</ID>
+    <ID>CyclomaticComplexMethod:Ultrasonic.kt$Ultrasonic.Tracker$fun beacons(): List&lt;Beacon></ID>
+    <ID>CyclomaticComplexMethod:UltrasoundTools.kt$@SuppressLint("MissingPermission") private suspend fun listen(context: Context, selfTest: Boolean, update: ((ListenState) -> ListenState) -> Unit)</ID>
+    <ID>CyclomaticComplexMethod:WifiScanner.kt$WifiScanner$fun classify(results: List&lt;WifiBeacon>, now: Long): List&lt;WifiAnomaly></ID>
+    <ID>CyclomaticComplexMethod:WifiScanner.kt$WifiScanner$private fun connection(app: Context, wifi: WifiManager): WifiConnection?</ID>
+    <ID>CyclomaticComplexMethod:WifiScanner.kt$WifiScanner$suspend fun snapshot(context: Context): WifiStatus</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:MainActivity.kt$val (eyebrow, headline, body, tone) = when { !cell.available -> CellCopy( "Cell towers", "No reading", (cell.reason ?: "Reading the modem…").trimEnd('.') + ". Tower details appear here once the modem reports a serving cell.", Tone.Neutral ) !cell.analysing -> CellCopy("Cell towers", "Not checked", "Tower details are live below. Start scanning to check them for fakes.", Tone.Neutral) cell.level == Threat.CRITICAL -> CellCopy( "Cell towers · analysing", "Fake tower likely", "Several signs point to a fake cell tower nearby. Avoid calls and SMS here; use Clairix calls over Wi-Fi.", Tone.Danger ) cell.level == Threat.HIGH -> CellCopy( "Cell towers · analysing", "Sketchy tower", "This tower doesn't match your baseline. Avoid sensitive calls and SMS until you've moved on.", Tone.Danger ) cell.level == Threat.MEDIUM -> CellCopy( "Cell towers · analysing", "Worth a look", "Some indicators fired. Not conclusive on its own; watch whether more appear.", Tone.Caution ) !cell.mature -> CellCopy( "Cell towers · learning", "Learning", "Clairix is still learning your usual towers. Nothing suspicious so far.", Tone.Neutral ) else -> CellCopy( "Cell towers · analysing", "Towers clear", "Your towers match the baseline. Nothing points to a fake tower.", Tone.Safe ) }</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:RelayClient.kt$RelayClient$val (epoch, key, evaluated, proof) = parsed { val arr = json.getJSONArray("evaluated") Quad(json.getLong("epoch"), json.getString("key"), (0 until arr.length()).map { fromB64url(arr.getString(it)) }, fromB64url(json.getString("proof"))) }</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:RelayClient.kt$RelayClient$val (minLat, minLon, maxLat, maxLon) = bbox.toList()</ID>
+    <ID>EmptyClassBlock:CallActivity.kt$CallActivity.Companion${ }</ID>
+    <ID>EmptyElseBlock:CommsRepository.kt$CommsRepository$if (kind != CommsWire.CALL_ICE) CommsLog.add("Call $kind sent to ${formatClairixNumber(contact.number)}")</ID>
+    <ID>EmptyElseBlock:NavScreen.kt$if (isNotEmpty()) append(" · ")</ID>
+    <ID>EmptyElseBlock:Navigator.kt$Navigator$if (p.lat &lt; minLat) minLat = p.lat</ID>
+    <ID>EmptyElseBlock:Navigator.kt$Navigator$if (p.lon &lt; minLon) minLon = p.lon</ID>
+    <ID>EmptyElseBlock:Ultrasonic.kt$Ultrasonic.Tracker$if (acc.isEmpty() || b - acc.last() >= 2) acc.add(b)</ID>
+    <ID>EmptyFunctionBlock:BluetoothExposure.kt$BluetoothExposure.&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:CallManager.kt$CallManager.&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:CameraSweepScreen.kt$&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:CommsStore.kt$CommsStore.WaitForTheLock${}</ID>
+    <ID>EmptyFunctionBlock:HiddenCameraScanner.kt$HiddenCameraScanner.&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:LockScreen.kt$&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:OwnerCheck.kt$&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:RelayTlsTest.kt$RelayTlsTest.Accepting${}</ID>
+    <ID>EmptyFunctionBlock:RelayTlsTest.kt$RelayTlsTest.Refusing${}</ID>
+    <ID>EmptyFunctionBlock:RssiLocator.kt$RssiLocator.&lt;no name provided>${}</ID>
+    <ID>EmptyFunctionBlock:TlsCanary.kt$TlsCanary.Recording.&lt;no name provided>${}</ID>
+    <ID>FunctionOnlyReturningConstant:CardEmulationBridge.kt$CardEmulationBridge$@Suppress("UNUSED_PARAMETER") fun component(context: Context): ComponentName?</ID>
+    <ID>FunctionOnlyReturningConstant:CardEmulationBridge.kt$CardEmulationBridge$@Suppress("UNUSED_PARAMETER") fun load(hexPairs: List&lt;Pair&lt;String, String>>): Boolean</ID>
+    <ID>InstanceOfCheckForException:CommsRepository.kt$CommsRepository$e is RelayException</ID>
+    <ID>InstanceOfCheckForException:ObdBluetoothManager.kt$ObdBluetoothManager$e !is IOException</ID>
+    <ID>LargeClass:ClairixIcons.kt$ClairixIcons</ID>
+    <ID>LargeClass:CommsNotifications.kt$CommsNotifications</ID>
+    <ID>LargeClass:CommsRepository.kt$CommsRepository</ID>
+    <ID>LargeClass:CommsStore.kt$CommsStore : SQLiteOpenHelper</ID>
+    <ID>LargeClass:HiddenCameraScanner.kt$HiddenCameraScanner</ID>
+    <ID>LargeClass:NavViewModel.kt$NavViewModel : AndroidViewModel</ID>
+    <ID>LargeClass:RelayClient.kt$RelayClient</ID>
+    <ID>LargeClass:Navigator.kt$Navigator</ID>
+    <ID>LargeClass:ScanService.kt$ScanService : LifecycleService</ID>
+    <ID>LargeClass:StalkwareScanner.kt$StalkwareScanner</ID>
+    <ID>LongMethod:CommsRepository.kt$CommsRepository$private fun processPayload(contact: Contact, envelopeTs: Long, json: JSONObject)</ID>
+    <ID>LongMethod:CommsStoreUpgradeTest.kt$CommsStoreUpgradeTest$@Test fun aVersion12DatabaseGainsTheGroupOutboxAndRosterNumbersAndKeepsEveryRow()</ID>
+    <ID>LongMethod:GnssIntegrity.kt$GnssIntegrity$fun assess(now: Long): GnssAssessment</ID>
+    <ID>LongMethod:HiddenCameraScanner.kt$HiddenCameraScanner$suspend fun scanNetwork(context: Context): List&lt;CameraFinding></ID>
+    <ID>LongMethod:IMSICatcher.kt$IMSICatcher$private fun runChecks(cell: ServingCell, fix: Fix?, now: Long, stationary: Boolean, inCall: Boolean): List&lt;CatcherFinding></ID>
+    <ID>LongMethod:MainActivity.kt$MainActivity$@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class) override fun onCreate(savedInstanceState: Bundle?)</ID>
+    <ID>LongMethod:MainActivity.kt$private fun cellExplainerContent(f: CatcherFinding): ExplainerContent</ID>
+    <ID>LongMethod:Maneuvers.kt$Maneuvers$fun build(graph: RoadGraph, edges: IntArray, geometry: List&lt;LatLon>, edgeStartIndex: IntArray): List&lt;Maneuver></ID>
+    <ID>LongMethod:PhoneHealthMonitor.kt$PhoneHealthMonitor$fun facts(): List&lt;HealthFact></ID>
+    <ID>LongMethod:ScanService.kt$ScanService$private fun startPublishing()</ID>
+    <ID>LongMethod:StalkwareScanner.kt$StalkwareScanner$fun scan(context: Context, acknowledged: Set&lt;String> = emptySet(), ioc: IocList? = StalkwareIoc.current(context)): Result</ID>
+    <ID>LongParameterList:CadenceFingerprinter.kt$CadenceFingerprinter.Packet$( val address: String, /** Controller receive time, nanoseconds (see [ScanResult.getTimestampNanos]). */ val timestampNanos: Long, /** Wall-clock time the packet was handled. */ val nowMs: Long, val rssi: Int, val primaryPhy: Int, val advertisingSid: Int, /** False when the scan carried no advertisement record; the fields below are then ignored. */ val hasRecord: Boolean, val txPower: Int?, val company: Int?, val mfrPayload: ByteArray?, val services: Set&lt;Int>, val payloadLength: Int )</ID>
+    <ID>LongParameterList:CommsNotifications.kt$CommsNotifications$(context: Context, group: Group, panicId: String, fromName: String, lat: Double?, lon: Double?, note: String, ts: Long)</ID>
+    <ID>LongParameterList:CommsRepository.kt$CommsRepository.SosRun$( val attempt: Long, val batch: String, val ts: Long, val lat: Double?, val lon: Double?, val covert: Boolean, val groups: List&lt;Pair&lt;String, String>>, val errors: Map&lt;String, String>, val skipped: HashMap&lt;String, Int> )</ID>
+    <ID>LongParameterList:CommsWire.kt$CommsWire$( gid: String, threatId: String, ts: Long, kind: String, severity: String, lat: Double, lon: Double, title: String, detail: String, expiresAt: Long, bleJson: String? = null, cellJson: String? = null )</ID>
+    <ID>LongParameterList:CommsWire.kt$CommsWire$( id: String, ts: Long, mime: String, width: Int, height: Int, durationMs: Long, size: Long, chunks: Int, caption: String?, thumbB64: String?, ttl: Int = 0 )</ID>
+    <ID>LongParameterList:GlintTracker.kt$GlintTracker$( mean: Float, change: Float, bright: Int, washedOut: Boolean, tooBright: Boolean, report: List&lt;Spot>, torch: Boolean?, checking: Boolean, now: Long = -1L )</ID>
+    <ID>LongParameterList:GlintTracker.kt$GlintTracker.Track$(val id: Int, var ax: Float, var ay: Float, var gx: Float, var gy: Float, var radius: Float, var stillSinceNs: Long)</ID>
+    <ID>LongParameterList:Maneuvers.kt$Maneuvers$( graph: RoadGraph, prev: Int, prevFrom: Int, cur: Int, delta: Double, others: List&lt;Double>, prevName: String?, curName: String?, idx: Int, dist: Double, )</ID>
+    <ID>LongParameterList:MiniGraph.kt$MiniGraph.Edge$( val from: Int, val to: Int, val wayId: Long, val name: String?, val shape: List&lt;LatLon>, val maxspeed: Int, val roadClass: Int, val flags: Int, )</ID>
+    <ID>LongParameterList:NavViewModel.kt$NavViewModel.Session$( val slug: String, val graph: RoadGraph, val traffic: TrafficClient, val router: Router, val navigator: Navigator, val workZones: WorkZoneFeed, val closures: RoadClosures, val cameras: CameraFeed, val cameraPenalties: CameraPenalties, )</ID>
+    <ID>LongParameterList:Persistence.kt$Tracker$( key: String, address: String, rssi: Int, tracker: TrackerType?, approxMetres: Double?, rotations: Int, addresses: Int, fix: Fix?, hasPosition: Boolean, now: Long, advertisedName: String? = null, manufacturer: String? = null, services: List&lt;String> = emptyList(), radio: String = "BLE", addressKind: String? = null, /** The phone's own odometer ([LocationTrack.travelledM]) at this sighting. */ travelledM: Double = 0.0 )</ID>
+    <ID>LongParameterList:ProbeReporter.kt$ProbeReporter.Traversal$( val seg: String, firstAlongM: Double, val startTimeMs: Long, var lastTimeMs: Long, val segLat: Double, val segLon: Double, /** [drivenM] when the car entered this segment; a segment entered inside the start zone is never reported. */ val startDrivenM: Double, )</ID>
+    <ID>LongParameterList:RoadGraph.kt$RoadGraph$( private val buf: ByteBuffer, val region: String, val nodeCount: Int, val edgeCount: Int, private val shapeTotal: Int, private val nameCount: Int, val minLat: Double, val minLon: Double, val maxLat: Double, val maxLon: Double, val builtAtEpochSec: Long, private val nameOffsets: IntArray, )</ID>
+    <ID>LongParameterList:RoadGraph.kt$RoadGraph.Grid$( val lat0: Double, val lon0: Double, val cellLat: Double, val cellLon: Double, val rows: Int, val cols: Int, val cellStart: IntArray, val cellEdges: IntArray, )</ID>
+    <ID>LongParameterList:TestCity.kt$TestCity.EdgeRec$( val from: Int, val to: Int, val wayId: Long, val name: String?, val shape: List&lt;LatLon>, val maxspeed: Int, val roadClass: Int, var flags: Int, )</ID>
+    <ID>MatchingDeclarationName:Controls.kt$ButtonKind</ID>
+    <ID>MatchingDeclarationName:SafetyFirstCard.kt$SafetyFirst</ID>
+    <ID>MatchingDeclarationName:SettingsScreen.kt$AppSettings</ID>
+    <ID>NestedBlockDepth:CallManager.kt$CallManager$private suspend fun signalLocked(contact: Contact, json: JSONObject, envelopeTs: Long)</ID>
+    <ID>NestedBlockDepth:CommsRepository.kt$CommsRepository$private fun settleGroupRows(rows: List&lt;GroupOutbox.Row>, kinds: Set&lt;GroupOutbox.Kind>)</ID>
+    <ID>NestedBlockDepth:CommsRepository.kt$CommsRepository$private suspend fun drainPreviousRelay()</ID>
+    <ID>NestedBlockDepth:CommsRepository.kt$CommsRepository$private suspend fun passGroupOutbox(kinds: Set&lt;GroupOutbox.Kind>, batch: String?, everyone: Boolean): List&lt;GroupOutbox.Row></ID>
+    <ID>NestedBlockDepth:CommsStore.kt$CommsStore$fun advanceStatus(peer: String, ids: List&lt;String>, status: String)</ID>
+    <ID>NestedBlockDepth:DriveViewModel.kt$DriveViewModel$private suspend fun playOut(source: PcmSource)</ID>
+    <ID>NestedBlockDepth:GlintTracker.kt$GlintTracker$fun process( luma: ByteArray, width: Int, height: Int, rowStride: Int, pixelStride: Int, timestampNs: Long, torchOffConfirmed: Boolean = false, turnXDeg: Float = 0f, turnYDeg: Float = 0f ): Result</ID>
+    <ID>NestedBlockDepth:GlintTrackerTest.kt$GlintTrackerTest$private fun frame(vararg spots: IntArray, background: Int = 40, width: Int = w, height: Int = h): ByteArray</ID>
+    <ID>NestedBlockDepth:GraphStore.kt$GraphStore$private suspend fun fetchUnpacked(url: String, out: File, slug: String): String</ID>
+    <ID>NestedBlockDepth:HiddenCameraScanner.kt$HiddenCameraScanner$suspend fun listenBle(context: Context, durationMs: Long = 20_000L)</ID>
+    <ID>NestedBlockDepth:HiddenCameraScanner.kt$HiddenCameraScanner$suspend fun scanWifiSetupAps(context: Context): List&lt;CameraFinding></ID>
+    <ID>NestedBlockDepth:IMSICatcher.kt$BaselineRetention$fun apply(data: JSONObject, cutoff: Long?, now: Long): Int</ID>
+    <ID>NestedBlockDepth:IrSelfTest.kt$IrSelfTest$fun process(luma: ByteArray, width: Int, height: Int, rowStride: Int, pixelStride: Int, timestampNs: Long): Boolean</ID>
+    <ID>NestedBlockDepth:IrSelfTestTest.kt$IrSelfTestTest$private fun frame(vararg rects: IntArray): ByteArray</ID>
+    <ID>NestedBlockDepth:LiveLink.kt$LiveLink$private suspend fun connectLoop()</ID>
+    <ID>NestedBlockDepth:LocalGeocoder.kt$LocalGeocoder$private fun build(): List&lt;Entry></ID>
+    <ID>NestedBlockDepth:Maneuvers.kt$Maneuvers$fun build(graph: RoadGraph, edges: IntArray, geometry: List&lt;LatLon>, edgeStartIndex: IntArray): List&lt;Maneuver></ID>
+    <ID>NestedBlockDepth:MapDownloads.kt$MapDownloads$fun gunzipHead(head: ByteArray, n: Int): ByteArray?</ID>
+    <ID>NestedBlockDepth:MeshNode.kt$MeshNode$private fun pump(c: Conn)</ID>
+    <ID>NestedBlockDepth:ObdParser.kt$ObdParser$private fun payloads(lines: List&lt;String>, isCan: Boolean?): List&lt;List&lt;Int>></ID>
+    <ID>NestedBlockDepth:PatternOfLife.kt$PatternOfLife.GridIndex$fun neighbours(i: Int, windowMs: Long): List&lt;Int></ID>
+    <ID>NestedBlockDepth:RelayClient.kt$RelayClient$private fun execute(builder: Request.Builder, client: OkHttpClient = rest): JSONObject</ID>
+    <ID>NestedBlockDepth:RelayFarewell.kt$RelayFarewell$fun fromJson(json: JSONObject): List&lt;Prepared></ID>
+    <ID>NestedBlockDepth:RoadGraph.kt$RoadGraph$fun nearestEdges(lat: Double, lon: Double, radiusM: Double, limit: Int): List&lt;EdgeHit></ID>
+    <ID>NestedBlockDepth:RoadGraph.kt$RoadGraph$private fun buildGrid(): Grid</ID>
+    <ID>NestedBlockDepth:Router.kt$Router$private fun runSearch(origins: List&lt;EdgeHit>, dests: List&lt;EdgeHit>, toLat: Double, toLon: Double): Route?</ID>
+    <ID>NestedBlockDepth:ScanService.kt$ScanService$private fun onInfrastructure(hit: SurveillanceHardware.Hit, address: String, rssi: Int, now: Long)</ID>
+    <ID>NestedBlockDepth:ScannerRecordings.kt$ScannerRecordings$fun importLegacy(legacy: List&lt;LegacyRecording>, now: Long = System.currentTimeMillis(), maxBytes: Long = MAX_TOTAL_BYTES): Int</ID>
+    <ID>NestedBlockDepth:ScannerRecordings.kt$ScannerRecordings$private fun info(file: File): Info</ID>
+    <ID>NestedBlockDepth:ScreenRecordingMonitor.kt$ScreenRecordingMonitor$private suspend fun poll(app: Context)</ID>
+    <ID>NestedBlockDepth:Signatures.kt$Signatures$internal fun match(advert: Advert): TrackerType?</ID>
+    <ID>NestedBlockDepth:SmokeTest.kt$SmokeTest$@Test fun everyScreenOpensWithoutCrashing()</ID>
+    <ID>NestedBlockDepth:SmokeTest.kt$SmokeTest$private fun tapScrolling(t: String)</ID>
+    <ID>NestedBlockDepth:StalkwareScanner.kt$StalkwareScanner$fun scan(context: Context, acknowledged: Set&lt;String> = emptySet(), ioc: IocList? = StalkwareIoc.current(context)): Result</ID>
+    <ID>NestedBlockDepth:Tour.kt$internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOffered: Boolean = false): List&lt;TourStop></ID>
+    <ID>NewLineAtEndOfFile:PatternOfLife.kt$app.clairix.analysis.PatternOfLife.kt</ID>
+    <ID>SwallowedException:AdsbDecoder.kt$AdsbDecoder$e: IllegalStateException</ID>
+    <ID>SwallowedException:AppLock.kt$AppLock$e: Exception</ID>
+    <ID>SwallowedException:AppLock.kt$AppLock$e: KeyPermanentlyInvalidatedException</ID>
+    <ID>SwallowedException:AppLock.kt$AppLock$e: UnrecoverableKeyException</ID>
+    <ID>SwallowedException:AppLock.kt$AppLock.Platform$e: ProviderException</ID>
+    <ID>SwallowedException:BiometricTripwire.kt$BiometricTripwire$e: KeyPermanentlyInvalidatedException</ID>
+    <ID>SwallowedException:BiometricTripwire.kt$BiometricTripwire$e: ProviderException</ID>
+    <ID>SwallowedException:BiometricTripwire.kt$BiometricTripwire$e: UnrecoverableKeyException</ID>
+    <ID>SwallowedException:BiometricTripwire.kt$BiometricTripwire$e: UserNotAuthenticatedException</ID>
+    <ID>SwallowedException:CameraFeed.kt$CameraFeed$e: IOException</ID>
+    <ID>SwallowedException:CameraFeed.kt$CameraFeed$e: JSONException</ID>
+    <ID>SwallowedException:CommsDb.kt$CommsDb$e: javax.crypto.AEADBadTagException</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: CryptoException.BadSignature</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: CryptoException.Duplicate</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: CryptoException.SessionLimit</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: CryptoException.StalePrekey</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: IllegalStateException</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: VaultSealedException</ID>
+    <ID>SwallowedException:CommsRepository.kt$CommsRepository$e: java.io.IOException</ID>
+    <ID>SwallowedException:DriveService.kt$DriveService$e: Exception</ID>
+    <ID>SwallowedException:EndToEndTest.kt$TestPeer$e: CryptoException.StalePrekey</ID>
+    <ID>SwallowedException:Geocoder.kt$Geocoder$e: JSONException</ID>
+    <ID>SwallowedException:Geocoder.kt$Geocoder$e: android.content.pm.PackageManager.NameNotFoundException</ID>
+    <ID>SwallowedException:GraphStore.kt$GraphStore$e: Exception</ID>
+    <ID>SwallowedException:GraphStore.kt$GraphStore$e: IOException</ID>
+    <ID>SwallowedException:IocListTest.kt$IocListTest$e: IllegalArgumentException</ID>
+    <ID>SwallowedException:LocationClient.kt$LocationClient$e: SecurityException</ID>
+    <ID>SwallowedException:MapDownloads.kt$MapDownloads$e: IOException</ID>
+    <ID>SwallowedException:MeshNode.kt$MeshNode$e: SecurityException</ID>
+    <ID>SwallowedException:NavViewModel.kt$NavViewModel$e: Exception</ID>
+    <ID>SwallowedException:NavViewModel.kt$NavViewModel$e: SecurityException</ID>
+    <ID>SwallowedException:NavigationService.kt$NavigationService$e: Exception</ID>
+    <ID>SwallowedException:Navigator.kt$Navigator$e: SecurityException</ID>
+    <ID>SwallowedException:RelayClient.kt$RelayClient$e: Exception</ID>
+    <ID>SwallowedException:RelayClient.kt$RelayClient$e: IOException</ID>
+    <ID>SwallowedException:RelayClient.kt$RelayClient$e: IllegalArgumentException</ID>
+    <ID>SwallowedException:RelayClient.kt$RelayClient$e: JSONException</ID>
+    <ID>SwallowedException:RelayDirectory.kt$RelayList.Companion$e: IllegalArgumentException</ID>
+    <ID>SwallowedException:RelayDirectory.kt$RelayList.Companion$e: JSONException</ID>
+    <ID>SwallowedException:RelayFarewell.kt$RelayFarewell$e: IOException</ID>
+    <ID>SwallowedException:RelayListTest.kt$RelayListTest$e: IllegalArgumentException</ID>
+    <ID>SwallowedException:ScannerMonitor.kt$ScannerMonitor$e: IllegalStateException</ID>
+    <ID>SwallowedException:ScannerRecordings.kt$ScannerRecordings$e: Exception</ID>
+    <ID>SwallowedException:ScannerRecordings.kt$ScannerRecordings.Companion$e: EOFException</ID>
+    <ID>SwallowedException:ScreenRecordingMonitor.kt$ScreenRecordingMonitor$e: Throwable</ID>
+    <ID>SwallowedException:SdrUsbDriver.kt$SdrUsbDriver$e: IOException</ID>
+    <ID>SwallowedException:SosLocation.kt$SosLocation$e: IllegalArgumentException</ID>
+    <ID>SwallowedException:SosLocation.kt$SosLocation$e: SecurityException</ID>
+    <ID>SwallowedException:StalkwareIoc.kt$IocList.Companion$e: IOException</ID>
+    <ID>SwallowedException:StalkwareIoc.kt$IocList.Companion$e: JSONException</ID>
+    <ID>SwallowedException:TorDeviceTest.kt$TorDeviceTest$e: IOException</ID>
+    <ID>SwallowedException:TrafficClient.kt$TrafficClient$e: JSONException</ID>
+    <ID>SwallowedException:TrafficClient.kt$TrafficClient$e: RuntimeException</ID>
+    <ID>SwallowedException:VaultBox.kt$VaultBox$e: AEADBadTagException</ID>
+    <ID>SwallowedException:VaultBox.kt$VaultBox$e: Exception</ID>
+    <ID>SwallowedException:WorkZoneFeed.kt$WorkZoneFeed$e: IOException</ID>
+    <ID>SwallowedException:WorkZoneFeed.kt$WorkZoneFeed$e: JSONException</ID>
+    <ID>SwallowedException:WorkZoneFeedTest.kt$WorkZoneFeedTest$e: IOException</ID>
+    <ID>SwallowedException:WorkZoneFeedTest.kt$WorkZoneFeedTest$e: JSONException</ID>
+    <ID>ThrowsCount:CameraFeed.kt$CameraFeed$private fun download()</ID>
+    <ID>ThrowsCount:CameraFeed.kt$CameraFeed$private fun fetchSignature(url: String): String</ID>
+    <ID>ThrowsCount:CommsMedia.kt$CommsMedia$fun prepareImage(context: Context, uri: Uri): Prepared</ID>
+    <ID>ThrowsCount:CommsMedia.kt$CommsMedia$fun prepareVideo(context: Context, uri: Uri): Prepared</ID>
+    <ID>ThrowsCount:GraphStore.kt$GraphStore$private suspend fun fetchRange(url: String, from: Long, to: Long): Pair&lt;ByteArray, Long></ID>
+    <ID>ThrowsCount:GraphStore.kt$GraphStore$private suspend fun fetchSmall(url: String, what: String): ByteArray</ID>
+    <ID>ThrowsCount:GraphStore.kt$GraphStore$private suspend fun fetchUnpacked(url: String, out: File, slug: String): String</ID>
+    <ID>ThrowsCount:IdentityStore.kt$IdentityStore$fun get(): Identity?</ID>
+    <ID>ThrowsCount:RelayClient.kt$RelayClient$private fun anonymous(kind: TokenKind, method: String, pathAndQuery: String, body: JSONObject?): JSONObject</ID>
+    <ID>ThrowsCount:RelayClient.kt$RelayClient$private fun execute(builder: Request.Builder, client: OkHttpClient = rest): JSONObject</ID>
+    <ID>ThrowsCount:RelayClient.kt$RelayClient$private fun executeOnce(builder: Request.Builder, client: OkHttpClient): JSONObject</ID>
+    <ID>ThrowsCount:RelayClient.kt$RelayClient$private fun fetchBlindTokens(relay: String, kind: TokenKind, count: Int)</ID>
+    <ID>ThrowsCount:RelayClient.kt$RelayClient$private fun signedRequest(method: String, pathAndQuery: String, body: JSONObject?, allowTransport: Boolean = true): Request.Builder</ID>
+    <ID>ThrowsCount:RelayDirectory.kt$RelayList.Companion$fun parse(text: String, nowSec: Long): RelayList</ID>
+    <ID>ThrowsCount:RoadGraph.kt$RoadGraph$private fun validateStructure()</ID>
+    <ID>ThrowsCount:RoadGraph.kt$RoadGraph.Companion$fun open(file: File): RoadGraph</ID>
+    <ID>ThrowsCount:ScannerRecordings.kt$ScannerRecordings$private fun info(file: File): Info</ID>
+    <ID>ThrowsCount:ScannerRecordings.kt$ScannerRecordings.Reader$private fun readHeader(): Header</ID>
+    <ID>ThrowsCount:SdrUsbDriver.kt$SdrUsbDriver$private fun connect(device: UsbDevice)</ID>
+    <ID>ThrowsCount:TlsCanary.kt$TlsCanary$internal fun readConnectStatus( input: InputStream, deadlineAt: Long = Long.MAX_VALUE, now: () -> Long = System::currentTimeMillis ): Int</ID>
+    <ID>ThrowsCount:WorkZoneFeed.kt$WorkZoneFeed$private fun download(): Boolean</ID>
+    <ID>ThrowsCount:WorkZoneFeed.kt$WorkZoneFeed$private fun downloadIndex(): Long?</ID>
+    <ID>ThrowsCount:WorkZoneFeed.kt$WorkZoneFeed$private fun fetchSignature(url: String): String</ID>
+    <ID>TooGenericExceptionCaught:AppLock.kt$AppLock$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:BiometricTripwire.kt$BiometricTripwire$e2: Exception</ID>
+    <ID>TooGenericExceptionCaught:BiometricTripwire.kt$BiometricTripwire$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CallManager.kt$CallManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CallService.kt$CallService$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CameraSweepScreen.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CardVault.kt$CardVault$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CommsDb.kt$CommsDb$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CommsRepository.kt$CommsRepository$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CommsScreen.kt$e: RuntimeException</ID>
+    <ID>TooGenericExceptionCaught:CommsService.kt$CommsService$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CommsService.kt$CommsService.Companion$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:CommsStore.kt$CommsStore$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:DriveService.kt$DriveService$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:DriveViewModel.kt$DriveViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:GraphStore.kt$GraphStore$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:IdentityStore.kt$IdentityStore$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LiveLink.kt$LiveLink$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:MeshService.kt$MeshService$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:NavViewModel.kt$NavViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:NavigationService.kt$NavigationService$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ObdBluetoothManager.kt$ObdBluetoothManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ObdBluetoothManager.kt$ObdBluetoothManager$e: RuntimeException</ID>
+    <ID>TooGenericExceptionCaught:RelayClient.kt$RelayClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ScanService.kt$ScanService$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ScanService.kt$ScanService$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:ScannerRecordings.kt$ScannerRecordings$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ScannerRecordings.kt$ScannerRecordings.Reader$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ScannerRecordings.kt$ScannerRecordings.Writer$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ScreenRecordingMonitor.kt$ScreenRecordingMonitor$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:TorTransport.kt$TorTransport$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:TrafficClient.kt$TrafficClient$e: RuntimeException</ID>
+    <ID>TooGenericExceptionCaught:TrafficClient.kt$e: RuntimeException</ID>
+    <ID>TooGenericExceptionCaught:UltrasoundTools.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:VaultBox.kt$VaultBox$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:VoicemailRecorder.kt$VoicemailRecorder$e: Exception</ID>
+    <ID>UnusedParameter:CaAuditScanner.kt$CaAuditScanner$context: Context</ID>
+    <ID>UnusedParameter:FollowAlertPolicy.kt$FollowAlertPolicy$now: Long</ID>
+    <ID>UnusedParameter:IMSICatcher.kt$IMSICatcher$fix: Fix?</ID>
+    <ID>UnusedParameter:MapMatcher.kt$MapMatcher$prevTo: Int</ID>
+    <ID>UnusedParameter:Persistence.kt$Tracker$now: Long</ID>
+    <ID>UnusedParameter:ScreenRecordingMonitor.kt$ScreenRecordingMonitor$app: Context</ID>
+    <ID>UnusedPrivateProperty:CommsRepository.kt$CommsRepository$page</ID>
+    <ID>UnusedPrivateProperty:CommsScreen.kt$/** Per-group switch: whether threats this phone confirms are sent to the group. Suffixed with the group id. */ private const val KEY_SHARE_THREATS = "share_threats_"</ID>
+    <ID>UnusedPrivateProperty:MeshTest.kt$MeshTest$i</ID>
+    <ID>UnusedPrivateProperty:SdrUsbDriver.kt$SdrUsbDriver$attempt</ID>
+    <ID>UnusedPrivateProperty:SurveillanceHardwareTest.kt$SurveillanceHardwareTest$private val none: (Int) -> ByteArray? = { null }</ID>
+    <ID>UseCheckOrError:AppLock.kt$AppLock$throw IllegalStateException("Could not save the duress passcode")</ID>
+    <ID>UseCheckOrError:AppLock.kt$AppLock$throw IllegalStateException("Could not save the passcode")</ID>
+    <ID>UseCheckOrError:AppLock.kt$AppLock$throw IllegalStateException("Set the app passcode first")</ID>
+    <ID>UseCheckOrError:AppLock.kt$AppLock$throw IllegalStateException("The passcode key is missing")</ID>
+    <ID>UseCheckOrError:CallManager.kt$CallManager$throw IllegalStateException("Relay-only calls need the relay's call servers, and none are available right now")</ID>
+    <ID>UseCheckOrError:CallManager.kt$CallManager$throw IllegalStateException("WebRTC refused to create a connection")</ID>
+    <ID>UseCheckOrError:CommsDb.kt$CommsDb$throw IllegalStateException("could not move the sealed database into place")</ID>
+    <ID>UseCheckOrError:CommsRepository.kt$CommsRepository$throw IllegalStateException("Your relay does not offer ClairixCoin")</ID>
+    <ID>UseCheckOrError:IdentityStore.kt$IdentityStore$throw IllegalStateException("No identity")</ID>
+    <ID>UseCheckOrError:IdentityStore.kt$IdentityStore$throw IllegalStateException("The identity's pickle key is unavailable; the Keystore refused to unwrap it")</ID>
+    <ID>UseCheckOrError:NavViewModel.kt$NavViewModel$throw IllegalStateException("This map is too large for this phone's memory")</ID>
+    <ID>UseCheckOrError:RelayTls.kt$RelayTls$throw IllegalStateException("No X509 trust manager on this platform")</ID>
+    <ID>UseCheckOrError:SdrUsbDriver.kt$SdrUsbDriver$throw IllegalStateException("SDR bulk endpoint missing")</ID>
+    <ID>UseCheckOrError:SdrUsbDriver.kt$SdrUsbDriver$throw IllegalStateException("SDR not open")</ID>
+    <ID>UseCheckOrError:TlsCanary.kt$TlsCanary$throw IllegalStateException("server presented no certificate")</ID>
+    <ID>UseCheckOrError:UltrasoundTools.kt$throw IllegalStateException("read failed ($n)")</ID>
+    <ID>UseCheckOrError:VaultBox.kt$VaultBox$throw IllegalStateException("The vault's Keystore key is gone (a lock screen removed while Clairix was not running)")</ID>
+    <ID>UseCheckOrError:VaultBox.kt$VaultBox$throw IllegalStateException("VaultBox.init has not run")</ID>
+    <ID>UseRequire:AppLock.kt$AppLock$throw IllegalArgumentException("That is the duress passcode; choose a different one")</ID>
+    <ID>UseRequire:AppLock.kt$AppLock$throw IllegalArgumentException("The duress passcode must differ from the app passcode")</ID>
+    <ID>UseRequire:CommsMedia.kt$CommsMedia$throw IllegalArgumentException("That file is not an image this phone can read")</ID>
+    <ID>UseRequire:CommsMedia.kt$CommsMedia$throw IllegalArgumentException("That image is too large to send even after compression")</ID>
+    <ID>UseRequire:CommsMedia.kt$CommsMedia$throw IllegalArgumentException("That video is empty")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("${contact.name.ifBlank { formatClairixNumber(number) }} is already in the group")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("${contactLabel(contact)} is on ${relayLabel(contact.relay)}; ClairixCoin moves only between people on the same relay")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("A group holds at most $MAX_GROUP_MEMBERS members")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("Empty message")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("Give the group a name")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("Leave the group instead")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("No GPS fix to attach; a shared threat needs a position")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("That is your own Clairix number")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("The amount must be at least 1 $COIN_SYMBOL")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("The file is empty")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("The file is too large to send")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("The recording is empty")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("The recording is too long to send")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("Unknown severity \"$severity\"")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("Unknown threat kind \"$kind\"")</ID>
+    <ID>UseRequire:CommsRepository.kt$CommsRepository$throw IllegalArgumentException("You are already in the group")</ID>
+    <ID>UseRequire:RelayDirectory.kt$RelayList.Companion$throw IllegalArgumentException("the relay list is not signed by the Clairix release key")</ID>
+    <ID>UseRequire:StalkwareIoc.kt$IocList.Companion$throw IllegalArgumentException("the stalkerware list is not signed by the Clairix release key")</ID>
+    <ID>VariableNaming:NavViewModel.kt$NavViewModel$/** How far from a dropped pin the road it is named after may be. */ private val PIN_NAME_RADIUS_M = 300.0</ID>
+    <ID>WildcardImport:ActivityTools.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:ActivityTools.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:ActivityTools.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:CameraSweepScreen.kt$import app.clairix.ui.components.*</ID>
+    <ID>WildcardImport:CommsScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:CommsScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:CommsScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:CommsScreen.kt$import app.clairix.ui.components.*</ID>
+    <ID>WildcardImport:DriveScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:DriveScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:DriveScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:LockScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:LockScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:LockScreen.kt$import app.clairix.ui.components.*</ID>
+    <ID>WildcardImport:MainActivity.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:MainActivity.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:MainActivity.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:MainActivity.kt$import app.clairix.ui.components.*</ID>
+    <ID>WildcardImport:NavScreen.kt$import app.clairix.ui.components.*</ID>
+    <ID>WildcardImport:PhoneCheckTools.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:PhoneCheckTools.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:PhoneCheckTools.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:SafetyTools.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:SafetyTools.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:SafetyTools.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import app.clairix.ui.components.*</ID>
+    <ID>WildcardImport:TrackerTools.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:TrackerTools.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:TrackerTools.kt$import androidx.compose.runtime.*</ID>
+  </CurrentIssues>
+</SmellBaseline>

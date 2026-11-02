@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Full edition only (fullSuite and fullComms). SEND_SMS lets an SOS also text the
+    one number the owner set in Settings, SOS ("Also text this number"); it is asked
+    for when that option is turned on, and nothing is texted otherwise. The Play
+    edition never declares it: Google Play allows SEND_SMS only to default SMS apps
+    and approved exceptions, so there the SOS opens the messaging app instead.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- SEND_SMS implies telephony; a phone or tablet without it still installs Clairix. -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+
+</manifest>

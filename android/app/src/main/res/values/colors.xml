@@ -2,4 +2,7 @@
 <resources>
     <!-- Adaptive launcher icon ground: Clairix Ink (Acid theme base, oklch(0.148 0.007 125)). -->
     <color name="ic_launcher_background">#0A0B08</color>
+    <!-- Discreet mode's neutral launcher entries: a plain blue compass and a yellow notepad, nothing of the brand. -->
+    <color name="ic_launcher_compass_background">#1F5C8F</color>
+    <color name="ic_launcher_notes_background">#F2C94C</color>
 </resources>

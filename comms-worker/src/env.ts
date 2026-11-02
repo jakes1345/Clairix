@@ -10,13 +10,54 @@ export interface Env {
   INCIDENTS: DurableObjectNamespace<IncidentCache>;
   /** One-time code typed into Clairix when it registers, so the relay is not open to everyone. */
   ENROLL_SECRET: string;
+  /**
+   * Optional: "on" lets a phone register with neither an invite nor
+   * ENROLL_SECRET, for people with nobody to invite them, up to
+   * OPEN_REGISTRATION_PER_DAY new accounts a UTC day for the whole relay and
+   * within the per-address registration limit. Unset or anything else: off.
+   */
+  OPEN_REGISTRATION?: string;
+  /** Optional: open registrations a UTC day, a whole number from 1 to 100000; default 50. */
+  OPEN_REGISTRATION_PER_DAY?: string;
   /** Optional: Cloudflare Realtime TURN key id + API token, for calls. */
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
-  /** Optional: ClairixCoin minted for every new registration (a whole number, e.g. "100"). Unset or "0": none. */
+  /**
+   * Optional: "off" (or "false", "0", "no") switches ClairixCoin off: the coin
+   * routes answer 404, GET / says coin: false (the app then shows no balance
+   * and no Pay button), COIN_INITIAL_BALANCE is not given and nobody can mint,
+   * whatever ADMIN_SECRET is. Unset or anything else: on, as it always was.
+   */
+  COIN?: string;
+  /** Optional: ClairixCoin minted for every new registration while the coin is on (a whole number, e.g. "100"). Unset or "0": none. */
   COIN_INITIAL_BALANCE?: string;
-  /** Optional: protects POST /v1/admin/coin/mint. Unset: minting is off. */
+  /**
+   * Optional: protects the operator's routes, POST /v1/admin/coin/mint,
+   * DELETE /v1/admin/accounts/:number (a deletion requested by email), the
+   * abuse reports and, with OPERATOR_KEYS, suspending a number. Unset: all of
+   * them are off.
+   */
   ADMIN_SECRET?: string;
+  /**
+   * Optional: the operator identities, Ed25519 public keys in standard
+   * base64 separated by commas, of accounts registered on this relay
+   * (scripts/operator.mjs register makes one). POST /v1/admin/suspend and
+   * /v1/admin/unsuspend need a request signed by one of them as well as
+   * ADMIN_SECRET. Unset: nobody can suspend.
+   */
+  OPERATOR_KEYS?: string;
+  /**
+   * Optional: how to reach this relay's operator about a suspension (an email
+   * address, one line), told to a suspended number's phone so it knows where to
+   * appeal.
+   */
+  OPERATOR_CONTACT?: string;
+  /**
+   * Optional: the UTC day (YYYY-MM-DD) from which the paths kept for apps
+   * before 3.0.0 Beta 7 (the old kind of token, envelopes in format 2) answer
+   * 426 and say to update Clairix. Unset or not a date: 2027-01-01.
+   */
+  LEGACY_CUTOFF?: string;
   /** Optional: comma-separated URLs of WZDx v4 GeoJSON feeds, polled every 10 minutes for work zones. */
   WZDX_FEEDS?: string;
   /** Optional: HERE Traffic API v7 key for GET /v1/traffic/incidents. Unset: HERE is "off". */
@@ -33,6 +74,11 @@ export interface Env {
    * other host is used only once the phone has echoed a code sent through it.
    */
   PUSH_HOSTS?: string;
+  /**
+   * Optional: "on" (or "true") makes PUSH_HOSTS the only trusted push hosts,
+   * so ntfy.sh and up.conversations.im are checked like any other host.
+   */
+  PUSH_HOSTS_ONLY?: string;
   /**
    * Other addresses this same relay answers at (a second domain, the
    * workers.dev name), comma-separated https origins. Phones keep them and

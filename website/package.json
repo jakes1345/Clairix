@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "sync-brand": "node scripts/sync-brand.mjs",
+    "check-copy": "node scripts/copy-check.mjs",
     "predev": "npm run sync-brand",
     "dev": "astro dev",
-    "prebuild": "npm run sync-brand",
+    "prebuild": "npm run sync-brand && npm run check-copy",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "npm run sync-brand && astro check"
+    "check": "npm run sync-brand && npm run check-copy && astro check",
+    "test": "node --test scripts/copy-check.test.mjs"
   },
   "engines": {
     "node": ">=22.22.0"

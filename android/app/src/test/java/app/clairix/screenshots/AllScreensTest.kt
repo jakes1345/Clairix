@@ -118,7 +118,7 @@ class AllScreensTest {
     @Test
     fun nfc() = shot("nfc") {
         Frame(ScanCategory.NFC.title, HomeTab.SCAN, onBack = {}) {
-            NfcScreen(onAddToVault = { _, _, _ -> }, onRemoveVault = {}, onEmulate = {}, onUnlockVault = {}, onLockVault = {}, onEraseVault = {})
+            NfcScreen(onAddToVault = { _, _, _ -> }, onRemoveVault = {}, onEmulate = {}, onUnlockVault = {}, onLockVault = {}, onEraseVault = {}, onAcknowledgeOwnership = {})
         }
     }
 
@@ -143,9 +143,9 @@ class AllScreensTest {
             DriveContent(
                 showRadio = true, showVehicle = true, obd = ObdData(), sdrState = SdrState.Closed,
                 channels = emptyList(), activeChannel = null, squelchOpen = false, isRecording = false,
-                lastRecordingPath = null, aircraft = emptyMap(), driveModeActive = false, squelchLevel = 0.3f,
+                aircraft = emptyMap(), driveModeActive = false, squelchLevel = 0.3f,
                 onSetSquelch = {}, onAddChannel = { _, _ -> }, onRemoveChannel = {}, onSetChannelActive = { _, _ -> },
-                onConnectObd = {}, onDisconnectObd = {}, onToggleDriveMode = {}, onOpenRecording = {}
+                onConnectObd = {}, onDisconnectObd = {}, onToggleDriveMode = {}
             )
         }
     }

@@ -41,11 +41,16 @@ giving them your real number or your identity key.
   phone fetches tokens and sends, so use Tor or a VPN if that matters). Apps
   from before 3.0.0 Beta 6 still fetch the old kind of token, random values the
   relay makes, which a relay that recorded its own answers could match to the
-  account they went to. The first envelope
+  account they went to; from 1 January 2027 the relay refuses that kind (see
+  "Old versions"). The first envelope
   of a new session also carries the claim ticket of the one-time key it was
   built on, which the relay handed to the sender's account with the key; that
   envelope is linkable to that lookup, as the lookup itself already showed who
-  wanted to reach whom. None of this is written down.
+  wanted to reach whom. The relay writes none of this down: its rate limits
+  are counted in memory, its log lines name no address, and Workers
+  observability is off in wrangler.toml. Cloudflare keeps its own records of
+  the traffic it carries (a request its firewall blocks, for example), under
+  its own privacy policy, outside the Worker's control.
 - Whether an envelope came from someone the recipient has written to, though
   not who. The phone gives its relay a pass key and gives its contacts the same
   key inside their end-to-end encrypted messages; their envelopes then carry a
@@ -60,11 +65,28 @@ giving them your real number or your identity key.
   makes a new pass key when its owner deletes a contact and sends it to every
   other contact, so a pass taken from that contact stops working. A pass is
   bound to its envelope, so a relay that forwards one cannot reuse it.
+- What phones report about a number (see "Abuse reports"): the number, a
+  reason, an envelope's fingerprint and the day. Never who reported it, and never
+  anything that was said.
+- Whether its operator suspended a number, and the day the suspension began
+  (see "Suspending a number"). Nothing about why.
+- Where its operator has turned ClairixCoin on (see "ClairixCoin"), each
+  account's balance and its own record of the transfers it made and received:
+  the id, the amount, the hour and which way it went, for 30 days and a
+  hundred deep. Never who paid whom: the payer's record and the payee's
+  record of one transfer carry different ids, both chosen by the payer's
+  phone, so they cannot be joined by id; the same amount in the same hour on
+  two accounts can still hint at a pair. A payment is signed by the payer and
+  names the payee, so the relay sees the pair while it moves the coins, and
+  writes down neither.
 - The UnifiedPush endpoint an owner registers, if any, which it POSTs the word
   "wake" to when a live socket is not connected. Endpoints on ntfy.sh,
   up.conversations.im or a host in `PUSH_HOSTS` are used at once; any other
   host first gets a one-time code the phone must echo back, so the relay cannot
-  be pointed at arbitrary URLs.
+  be pointed at arbitrary URLs (see "Push wake-ups").
+- For each live socket, while it is open and in memory only: when an envelope
+  or an ack last went over it, which sets how often the heartbeat comes (see
+  "The live connection"). It goes when the socket closes.
 
 Authentication is by Ed25519 signature with the same identity key contacts
 verify. There are no passwords or session tokens to leak; a delivery token
@@ -127,7 +149,36 @@ with the wasm32 target), and CI fails if the committed file is not exactly
 what the source builds. Issuing 50 tokens costs the relay about 14 ms of CPU, checking one about 0.3 ms.
 
 Tokens from apps before Beta 6 (32 random bytes the relay made and stored by
-hash) are still accepted.
+hash) are still issued and accepted until 1 January 2027 (see "Old versions").
+
+## Old versions
+
+Three things were kept for apps older than the oldest version Clairix still
+supports (3.0.0 Beta 7; see SECURITY.md), each weaker than what replaced it:
+
+- the old kind of token (`POST /v1/tokens {count}`, and spending one), which
+  the relay makes itself and so could match to the account it went to; apps
+  before Beta 6 use it;
+- envelopes in format 2, whose first byte is 2: sealed to the recipient's
+  long-term key, so whoever logs them and later seizes the phone learns who
+  sent each one, and carrying a sender signature anyone can check. Apps
+  before Beta 7 send nothing else, and newer apps send it only to them;
+- lookups by URL, which went with API version 5.
+
+From **1 January 2027** (00:00 UTC), two months after Beta 7 and Beta 8 came
+out, the relay answers the first two with `426 Upgrade Required` and a message
+that says to update Clairix from clairix.app/download, or, for someone whose
+phone is up to date, that the person they are writing to needs to update
+theirs. A format-2 envelope is refused on its first byte alone, before a token
+is spent or a mailbox is asked, so the answer says nothing about the number it
+was for. Blind tokens and format-3 envelopes, which every supported version
+uses, are untouched.
+
+`LEGACY_CUTOFF` (a UTC day, `YYYY-MM-DD`) moves the date for a relay of your
+own; anything that is not a real day keeps 1 January 2027. The app itself
+learns of newer versions, and of a version too old to be safe, from the
+signed `latest.json` on the `relays` release (relays/README.md), not from the
+relay.
 
 ## One-time setup
 
@@ -191,6 +242,49 @@ delay hides little. A global observer who watches both ends for weeks can
 still correlate by volume. The app's optional cover traffic (Settings, off by
 default) adds dummy envelopes to random contacts, about one every twenty
 minutes, which blurs volume a little but not against that observer.
+
+### The live connection
+
+A phone kept online holds one WebSocket to its mailbox. The relay sends it a
+small `hb` frame, carrying `next`, the most milliseconds until the following
+one: every two minutes for ten minutes after an envelope or an ack went over
+the socket, and after a reconnect; then at the pace the app asked for on the
+upgrade (`X-Clairix-Heartbeat`, two to ten minutes; the app asks for five). The
+app sends no pings on a timer: it pings when a heartbeat is overdue, when
+Clairix comes on screen or a call starts, and after a minute's silence while
+Clairix is on screen or a call is up. An app that does not send the header,
+every version before it, gets a heartbeat every two minutes, as before. The
+heartbeat keeps carrier NAT from dropping the idle connection and lets a
+sleeping phone notice a dead one.
+
+### Push wake-ups
+
+When a phone has no live socket, or does not ack a delivery within eight
+seconds, the relay POSTs the word "wake" to the UnifiedPush endpoint the phone
+registered, at most once until the phone next fetches or 30 seconds have
+passed. The push service behind that endpoint (the server the phone's
+distributor app uses: ntfy.sh unless its owner picked another) learns the
+relay's address and when each wake was sent, which is when something arrived
+while the phone was not connected; never what, or from whom. It also sees the
+phone's own address, through the distributor's connection to it.
+
+Endpoints on a trusted host are used at once; any other host first gets a
+one-time code the phone must echo back. The trusted hosts are ntfy.sh and
+up.conversations.im, plus any in `PUSH_HOSTS`. An operator who runs a push
+server of their own ([ntfy](https://docs.ntfy.sh/install/) is one program) and
+wants it to be the one their people use puts its host name in `PUSH_HOSTS`
+and sets `PUSH_HOSTS_ONLY` to `on`: then only that host is trusted, and an
+endpoint on ntfy.sh or anywhere else still works, after the check. The relay
+cannot choose the server for anyone: each person points their distributor at
+it (in the ntfy app, the default server in its settings) before setting up
+push in Clairix.
+
+```toml
+# wrangler.toml
+[vars]
+PUSH_HOSTS = "push.example.org"
+PUSH_HOSTS_ONLY = "on"
+```
 
 ### Running your own relay, and reaching other relays
 
@@ -312,7 +406,8 @@ under gVisor too, as Magic Containers runs it.
 ### Inviting people
 
 Only the relay's owner needs the URL and the enrollment secret. Everyone else
-joins by invite: in Clairix, COMMS → INVITE makes a one-time invite. Someone
+joins by invite (or, on a relay whose operator opened registration, with the
+URL alone; see below): in Clairix, COMMS → INVITE makes a one-time invite. Someone
 standing next to you scans its QR code from COMMS setup (SCAN INVITE); someone
 far away gets a link, `https://clairix.app/i#…`. On a phone with Clairix it
 opens Clairix straight away: the site names the app and its signing key, so
@@ -330,6 +425,173 @@ passed through other hands, so the two compare safety numbers (or scan each
 other's code) to verify. The part after `#` never reaches any server; the page
 reads it in the browser. Each identity can make 20 invites a day.
 
+### Open registration (off unless you turn it on)
+
+By default a relay gives new numbers only by invite or with the enrollment
+secret, so someone who knows nobody on it cannot get in, however much they
+need to. A relay run for people with nobody to invite them (a support
+service's, say) can let phones register with neither:
+
+```toml
+# wrangler.toml
+[vars]
+OPEN_REGISTRATION = "on"
+OPEN_REGISTRATION_PER_DAY = "50"   # new accounts a UTC day, for the whole relay; 1 to 100000, default 50
+```
+
+On your own server the same two lines go in `/etc/clairix-relay/relay.env`
+(`OPEN_REGISTRATION=on`, `OPEN_REGISTRATION_PER_DAY=50`), and in the container
+they are environment variables. In Clairix the person picks the relay, or
+enters its address, and leaves the enrollment secret empty. Every
+registration attempt still meets the per-address limit (ten a minute,
+counted in memory and never written down), and the only record that a
+registration came in this way is the day's count: nothing says which
+accounts did, nor from where. Past the day's number a phone without an invite or the secret is told
+to try again the next day; invites and the secret keep working. One address
+can use up a day's open registrations, so choose a number you would accept
+going to one person. While the coin is on, `COIN_INITIAL_BALANCE` is given
+to open registrations too. The project's own relay keeps open registration off.
+
+### Abuse reports
+
+Report, on a contact's page or on a message request in Clairix, sends
+`POST /v1/report`: the number reported, the relay it is on when that is not
+this one, a fingerprint of the newest envelope it sent (when the phone has
+one: 64 hex characters, an HMAC of the envelope's SHA-256 under a key only
+the reporting phone can make, never the hash itself) and a reason, one of `harassment`, `threats`, `spam`, `impersonation`
+or `other`. The request spends a report token and names nobody, so the relay
+keeps who was reported and why, never who reported it, and never anything
+that was said, which it cannot read. The same envelope reported twice counts
+once. Reports are kept to the day, for 90 days at most, at most 500 about one
+number and 50,000 in all, and the answer to a report is the same whether the
+number exists or was reported before.
+
+With `ADMIN_SECRET` set, the operator reads them:
+
+```sh
+ADMIN_SECRET=… node scripts/operator.mjs reports https://relay.example.org
+ADMIN_SECRET=… node scripts/operator.mjs close https://relay.example.org "482 913 605"
+# or by hand:
+curl -H "X-Admin-Secret: $ADMIN_SECRET" https://relay.example.org/v1/admin/reports
+curl -X DELETE -H "X-Admin-Secret: $ADMIN_SECRET" -d '{"number":"482913605"}' https://relay.example.org/v1/admin/reports
+```
+
+`reports`, or the first `curl`, lists every reported number with how many
+reports there are, their reasons, the envelope fingerprints and the first and last
+day; `close`, or the second, closes the reports about one number (add
+`"relay"`, or the script's last argument, for a number on another relay) once
+it has been dealt with. A report is
+someone's word: the relay never sees the messages, and a fingerprint only
+lets a report be matched with an envelope by someone the reporter's phone
+gives that report's key. The fingerprint is not the envelope's hash because
+the person reported knows every envelope they sent and to whom: from the hash
+they could tell who reported them. A number on another relay is that relay's
+operator's to act on; this relay's operator can tell that operator the number
+and the reasons, or stop taking that relay's envelopes with `FEDERATION`.
+Do not forward the fingerprints or the days: the other relay's operator may be
+the person reported, and needs neither to act. A few attempts a minute per address are allowed, so the
+secret cannot be guessed; without `ADMIN_SECRET` the endpoint is off. What to
+do with a report, start to finish, is [docs/ABUSE.md](../docs/ABUSE.md).
+
+### Suspending a number
+
+A number that abuses the relay can be suspended, and the suspension lifted
+again. Suspended, the number cannot sign in: it collects nothing, renews
+nothing and is issued no tokens, and every signed request from its phone is
+answered 403 with a sentence saying it is suspended and where to appeal
+(`OPERATOR_CONTACT`, when set). Its live connections are closed and its push
+endpoint is deleted. To everyone else it reads as a number that does not
+exist: envelopes to it are answered exactly as a send to a number nobody holds
+is, and dropped; lookups find nothing; a payment is "Payment refused". So
+nobody learns from the relay that the number was suspended, or that it exists.
+What was queued for it stays, and reaches the phone if the suspension is
+lifted before it expires after 30 days. The relay keeps that the number is
+suspended and the day it began: nothing about why.
+
+Two limits. Sending needs no sign-in, only a token, and the relay cannot tell
+whose tokens are whose (that is what blind tokens are for), so a suspended
+phone can still spend the tokens it already holds, a hundred or so at most,
+over the four weeks they last. And a suspension stops a number, not a person:
+someone suspended can come back with a new number if someone on the relay
+invites them, or while registration is open.
+
+Suspending takes two things together: a request signed by an **operator
+identity**, an account on this relay whose key is in `OPERATOR_KEYS`, and
+`X-Admin-Secret`. A leaked secret alone, or a stolen operator key alone, does
+nothing. To set it up once:
+
+```sh
+ENROLL_SECRET=… node scripts/operator.mjs register https://relay.example.org
+```
+
+It makes an Ed25519 key on your computer (in
+`~/.clairix-operator/<relay host>.json`, readable by you alone, or wherever
+`OPERATOR_IDENTITY` says), registers it on the relay as an unlisted account
+that sends and receives nothing, and prints the key. Add the key to the
+relay's settings (comma-separated, for several operators), and set where
+people appeal:
+
+```toml
+# wrangler.toml
+[vars]
+OPERATOR_KEYS = "<the key register printed>"
+OPERATOR_CONTACT = "abuse@relay.example.org"
+```
+
+On your own server the same go in `/etc/clairix-relay/relay.env`, and in the
+container they are environment variables. Then:
+
+```sh
+ADMIN_SECRET=… node scripts/operator.mjs suspend   https://relay.example.org "482 913 605"
+ADMIN_SECRET=… node scripts/operator.mjs unsuspend https://relay.example.org "482 913 605"
+```
+
+The script signs `POST /v1/admin/suspend` or `POST /v1/admin/unsuspend` with
+`{"number": "…"}` as the app signs a request, with the secret alongside. An
+operator identity cannot suspend itself. Keep the identity file as you keep
+the secret: with both, anyone can suspend anyone on the relay. Deleting an
+account is "Deleting an account on request" below; when the project's own
+relay suspends and when it deletes is set out in docs/ABUSE.md.
+
+### Deleting an account on request
+
+People normally delete their own account from the app (Wipe Clairix, or
+Delete identity and number), which signs `DELETE /v1/me`. Someone who has lost
+the phone, or whose app will not open, can ask by email instead
+(clairix.app/delete-account promises an answer within 30 days). The relay holds
+nothing that could confirm who is asking, so a request that names a Clairix
+number on your relay is acted on as it stands. To do it:
+
+1. Set the admin secret once, if it is not set yet (16 characters at least; it
+   also guards coin minting, the abuse-report listing and, with
+   `OPERATOR_KEYS`, suspending a number):
+
+   ```sh
+   npx wrangler secret put ADMIN_SECRET
+   ```
+
+2. Run the script from this folder with the relay's address and the number
+   from the email. The secret comes from the environment, never the command
+   line:
+
+   ```sh
+   ADMIN_SECRET=… node scripts/delete-account.mjs https://relay.example "482 913 605"
+   ```
+
+   It prints `Deleted …` and exits 0 when the account is gone, or says there is
+   no such account (exit 3), which is also the answer when the owner's own wipe
+   got there first.
+3. Reply to the email that the account is deleted.
+
+The script calls `DELETE /v1/admin/accounts/<number>` with `X-Admin-Secret`.
+It does what the owner's own deletion does: the keys the account claimed are
+released and its mailbox (queued envelopes, push endpoint, pass key, coin
+balance and history) is wiped. Messages already delivered stay on the phones
+that received them. The route needs no signed request (you hold no key of the
+account's), is off while `ADMIN_SECRET` is unset, and takes a few tries a minute
+from one address, so the secret cannot be guessed by brute force; the script
+waits when it is told to.
+
 ### Calls (optional TURN)
 
 Calls are WebRTC audio between the two phones, keyed by DTLS fingerprints that
@@ -346,34 +608,67 @@ npx wrangler secret put TURN_KEY_API_TOKEN
 
 The Worker then mints TURN credentials for every `GET /v1/turn` request: they
 are valid for two hours, go to that caller alone and are never cached or
-shared. A TURN server forwards encrypted packets it cannot decrypt.
+shared. A TURN server forwards encrypted packets it cannot decrypt. If minting
+fails while a key is set, `GET /v1/turn` answers 503 rather than STUN only, so
+the app does not take a passing failure for a relay without TURN and set up a
+direct call that tells the contact the caller's address.
 
-### ClairixCoin (optional)
+### ClairixCoin (off unless you turn it on)
 
 Every relay is its own small currency community. Each Clairix number holds a
 balance of ClairixCoin (`AC`) in its mailbox, and a phone pays another by a
-signed request; the relay moves the coins between the two mailboxes. The
-recipient then hears about the payment, with whatever note the payer wrote,
-inside an encrypted envelope: the relay records who paid whom how much, but
-never the note.
+signed request that names the payee's number and the fingerprint of the
+payee's identity key (the key the payer's phone pinned when it added the
+contact, as a lookup of an unlisted number asks); the relay moves the coins
+between the two mailboxes. A number that does not exist and a fingerprint
+that does not match get the same "Payment refused" before any coin moves, so
+paying tells nobody whether a number is real, and coins never go to whoever
+was given a number after the person the payer knew. The recipient hears
+about the payment, with whatever note the payer wrote, inside an end-to-end
+encrypted envelope, and its phone checks it against its own record by id and
+amount.
 
-Balances start at zero unless the relay mints. Two knobs, both optional:
+Each mailbox keeps a record of its own transfers: the id, the amount, the
+hour and whether it came in or went out, the 100 most recent and none older
+than 30 days. It names nobody: not the other party, not a note, and for a
+mint not who minted it (the record says "Minted by the relay"). Nor does it
+share an id with the other side's record: the payer's phone names the payment
+twice, `txid` for its own record and `credit` for the payee's, and tells the
+payee the second only inside the encrypted notice. What the two records still
+have in common is the amount and the hour. A ledger
+written by an earlier version, which named both parties and the moment, is
+rewritten the first time the mailbox's coin is touched, or by the mailbox's
+daily cleanup, whichever comes first.
+
+The coin is on unless the operator switches it off:
 
 ```toml
 # wrangler.toml
 [vars]
-COIN_INITIAL_BALANCE = "100"    # coins every new registration starts with
+COIN = "off"                    # optional: no balances shown, no payments, no starting balance, no minting
+COIN_INITIAL_BALANCE = "100"    # optional: coins every account registered while the coin is on starts with
 ```
 
 ```sh
-npx wrangler secret put ADMIN_SECRET   # 16+ characters; lets the operator mint
+npx wrangler secret put ADMIN_SECRET   # 16+ characters; lets the operator mint (and delete accounts on request)
 ```
 
-Minting is `POST /v1/admin/coin/mint` with `{"to": "<Clairix number>", "amount": 50}`,
+`GET /` says `"coin": true` while it is on, and the app shows the balance and
+the Pay button only then (a relay from before this setting says nothing, and
+offers the coin, as it always did). While it is off every coin route answers 404,
+nobody can mint and new accounts start with nothing; balances and ledgers
+already there are kept (the ledgers still forget each transfer after 30 days)
+and come back if it is switched on again. Minting is
+`POST /v1/admin/coin/mint` with `{"to": "<Clairix number>", "amount": 50}`,
 signed like any request by a registered identity (the operator's own phone,
-say) and carrying `X-Admin-Secret`. Without `ADMIN_SECRET` the endpoint is off.
-A single transfer moves at most 1,000,000 AC; each mailbox keeps its last 100
-transactions.
+say) and carrying `X-Admin-Secret`; it needs the coin on and
+`ADMIN_SECRET` set. `ADMIN_SECRET` guards the operator's other routes too (the
+abuse reports, for one), so while the coin is on, setting it for them makes
+minting possible as well. A single transfer moves at most 1,000,000 AC.
+
+The project's own relay is configured on the live Worker, not in this
+repository: whether the coin is on there, the starting balance and whether
+anyone can mint are its maintainer's settings.
 
 ### Traffic (navigation)
 
@@ -397,7 +692,8 @@ vehicles and take one vote per vehicle, and reaches back to no phone.
   minutes old) give a segment's speed under the trip pseudonym. Raw probes
   are deleted after two hours, so the most a region ever holds is two hours
   of segment speeds from pseudonymous vehicles. The phone reports nothing for
-  the first 500 m of a drive or the last stretch before its destination.
+  roughly the first kilometre of a drive (a distance that varies per drive) or
+  the last stretch before its destination.
 - **Live** speed is the median over the last ten minutes, one vote per vehicle
   per segment (its latest sample). **Typical** speed is a 168-slot week
   (hour of week, UTC, Monday first) updated with an EWMA (α = 0.2) of each
@@ -483,30 +779,33 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite`; allocates a Clairix number. 409 when a key is already another account's |
+| POST | `/v1/register` | Body signed by the new identity's key, dated (`ts`, ±5 min), with `secret` or a one-time `invite` (or neither, while `OPEN_REGISTRATION` is on and the day's number lasts); allocates a Clairix number. 409 when a key is already another account's |
 | POST | `/v1/invites` | Makes a one-time invite: `{code, expiresAt}` (seven days) |
-| GET | `/` | `{service, version, alternates, relayKey, federation, tokens}`: the relay's other addresses, the public key it signs forwarded requests with, which relays it accepts them from, and its blind-token keys for this epoch and the next |
+| GET | `/` | `{service, version, alternates, onion, relayKey, federation, tokens, coin}`: the relay's other addresses, its onion address, the public key it signs forwarded requests with, which relays it accepts them from, its blind-token keys for this epoch and the next, and whether ClairixCoin is on |
 | GET | `/i` | Invite landing page (unsigned); the invite is in the URL fragment |
 | GET | `/v1/me` | Own profile, one-time-key count, and whether a pass key is set (`pass`) |
 | PUT | `/v1/pass` | `{key}` (32 bytes, base64; or `null`): the key contacts' passes are made with. 20 an hour |
 | DELETE | `/v1/me` | Wipe the mailbox |
 | PUT | `/v1/transport` | `{key}` (or `null` to remove): the phone's transport key, a second Ed25519 key. Requests signed with it carry `X-Clairix-Key: transport` and may only `GET /v1/inbox`, `POST /v1/ack` and `GET /v1/ws`, so a locked phone collects envelopes it cannot yet open; the key reads and sends nothing |
-| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old) |
+| PUT | `/v1/keys` | Replenish one-time keys; rotate the fallback key; publish the next sealing prekey (`sealingPrekey`: `{key, created, signature}`, taken only when newer than the one held, and refused when over two weeks old). `replace: true` makes the one-time keys given the whole pool and retires keys out on a claim instead of returning them: a phone restored from a recovery file sends it, because the keys held were made by the phone it replaces |
 | PUT | `/v1/listed` | Whether the number can be looked up |
 | PUT | `/v1/push` | UnifiedPush endpoint to wake this device, or null |
-| POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6 |
+| POST | `/v1/tokens` | `{kind?, blinded: [up to 100 base64url elements]}` → `{kind, epoch, key, evaluated, proof, expiresAt}`: blind tokens (see above), `delivery` (default), `traffic` or `report`. `{count, kind?}` → `{tokens, expiresAt, kind}` is the old kind, for apps before Beta 6, refused with 426 from `LEGACY_CUTOFF` (see "Old versions") |
 | POST | `/v1/lookup` | `{number, pin?, claim, relay?}`: a contact's keys, with one session key when `claim` is true (unlisted numbers need `pin`, the key's fingerprint). The number is in the body, never in a URL. With `relay`, another relay's address, the lookup is forwarded there |
-| GET | `/v1/bundle/:number`, `/v1/identity/:number` | The same lookups with the number in the path, for apps before 3.0.0-beta.3; to be removed |
-| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope |
+| POST | `/v1/send` | `{to, envelope, claim?, mix?, relay?, alert?, pass?}` with a delivery token: queue a sealed envelope for a contact. A number that does not exist is answered exactly like one that does. `pass` is base64 HMAC-SHA256 under the recipient's pass key over `clairix-pass-v1|to|envelope`; without a good one, a mailbox with a pass key takes the envelope only within the strangers' share (see above). With `mix`, the envelope is held for mixing. With `relay`, another relay's address, it is forwarded there. With `alert` (`call` or `sos`), the envelope is delivered with it, so a locked phone can ring or sound an SOS before it can open the envelope; an envelope without a good pass, to a mailbox that has a pass key, is delivered without its alert, so someone the owner blocked or has not accepted cannot ring a locked phone. An envelope in format 2 is refused with 426 from `LEGACY_CUTOFF`, whatever the number |
+| POST | `/v1/report` | `{number, relay?, envelope?, reason}` with a report token → 202: an abuse report kept for the operator (see "Abuse reports"); the same answer whatever the number |
+| GET, DELETE | `/v1/admin/reports` | With `X-Admin-Secret` and no identity: every reported number, or (`DELETE {number, relay?}`) close the reports about one; off unless `ADMIN_SECRET` is set |
 | POST | `/v1/federate/send`, `/v1/federate/lookup` | The same, forwarded by another relay and signed with its key (`X-Clairix-Relay`, `-Ts`, `-Nonce`, `-Sig`) |
 | GET | `/v1/inbox` | Waiting envelopes |
 | POST | `/v1/ack` | Delete envelopes the app has stored |
-| GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat every two minutes, and `pong` for a client's `{"type":"ping"}` |
-| GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured |
-| GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin |
-| POST | `/v1/coin/pay` | `{to, amount, note?}` → `{txid, balance, ok}`: pays a contact; 30 a minute |
-| GET | `/v1/coin/history` | `{txs}`: the last transactions, newest first (`?limit=`, up to 100) |
-| POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `ADMIN_SECRET` is set |
+| GET | `/v1/ws` | Live delivery over a hibernatable WebSocket: `envelope` frames (acked with `{"type":"ack","ids":[…]}`), a `ready` frame after the backlog, a `hb` heartbeat with `next` (the most milliseconds until the following one: two minutes, or with `X-Clairix-Heartbeat: <ms>` on the upgrade, two minutes for ten minutes after an envelope or an ack and that pace otherwise; see "The live connection"), and `pong` for a client's `{"type":"ping"}` |
+| GET | `/v1/turn` | ICE servers for a call: STUN, plus short-lived TURN credentials when a TURN key is configured (503 when a key is configured and minting fails) |
+| GET | `/v1/coin/balance` | `{balance, symbol: "AC"}`: this identity's ClairixCoin. Every coin route answers 404 while `COIN` is off |
+| POST | `/v1/coin/pay` | `{to, pin, amount, txid?, credit?}` → `{txid, credit, balance, ok}`: pays a contact; `pin` is the payee's key fingerprint, and a number that does not exist or a pin that does not match is "Payment refused" before any coin moves; the payer's record keeps `txid`, the payee's `credit` (a request that names `txid` must name a different `credit`; one that names neither gets two fresh ids); 30 a minute |
+| GET | `/v1/coin/history` | `{txs: [{id, amount, ts, direction, note?}]}`: the last transfers, newest first (`?limit=`, up to 100), each dated to the hour; `note` only on a mint |
+| POST | `/v1/admin/coin/mint` | `{to, amount}` with `X-Admin-Secret` → `{ok, balance}`; off unless `COIN` is on and `ADMIN_SECRET` is set |
+| DELETE | `/v1/admin/accounts/:number` | With `X-Admin-Secret` and no signature → `{ok, number}`: deletes the account as `DELETE /v1/me` does, for a deletion requested by email (`scripts/delete-account.mjs`, see above); 404 for no such account; off unless `ADMIN_SECRET` is set; a few tries a minute per address |
+| POST | `/v1/admin/suspend`, `/v1/admin/unsuspend` | `{number}`, signed by an operator identity (its key in `OPERATOR_KEYS`) and with `X-Admin-Secret` → `{ok, number, suspended, since, already}` or `{ok, number, suspended: false, wasSuspended}` (see "Suspending a number"; `scripts/operator.mjs`); 404 for no such account; off unless both settings are set; a few tries a minute per address |
 | POST | `/v1/traffic/probe` | `{region, trip, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; a traffic token, no identity |
 | GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}`; a traffic token |
 | GET | `/v1/traffic/typical?region=&segs=a,b` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments; a traffic token |

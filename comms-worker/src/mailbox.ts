@@ -2,6 +2,9 @@ import { DurableObject } from "cloudflare:workers";
 import { verifyEd25519 } from "./auth";
 import { timingSafeEqual, type Env } from "./env";
 import {
+  COIN_TX_MAX,
+  coinLedger,
+  coinTx,
   DAY_MS,
   DELIVERY_TOKEN_TTL_MS,
   dayFloor,
@@ -22,8 +25,13 @@ import {
   type LapsedClaim,
   PUSH_CHALLENGE_TTL_MS,
   randomToken,
+  REPORT_TTL_MS,
+  REPORTS_MAX,
+  REPORTS_PER_TARGET_MAX,
   tokenHash,
+  type AbuseReport,
   type Alert,
+  type CoinTx,
   type OtkClaim,
   type SealingPrekey,
   type SignedKey,
@@ -47,12 +55,19 @@ export type { SignedKey } from "./comms-logic";
  * What it does not know is when its owner was last here. Nothing about a
  * request is written beyond its nonce (kept five minutes, to the minute), and
  * the allowances that have to be stored remember the hour they were drawn on,
- * not the moment, and only until they have refilled (see comms-logic.ts).
+ * not the moment, and only until they have refilled (see comms-logic.ts). A
+ * live socket carries, in memory and for as long as it is open, when an
+ * envelope or an ack last went over it, which sets the heartbeat's pace
+ * ([SocketPace]); it goes with the socket.
+ *
+ * If the relay's operator suspended the number (docs/ABUSE.md), it also knows
+ * that, and the day the suspension began: nothing about why.
  *
  * The same class also serves a few objects that are not mailboxes, each named
  * after what it holds: "invite:<code>", "register-guard:<address>" and the
  * token shards "dtok:<xx>" (delivery), "ttok:<xx>" (traffic) and "rtok:<xx>"
- * (incident reports).
+ * (incident and abuse reports), "abuse-reports" (what phones reported, for
+ * the operator) and "open-registration" (today's count of open registrations).
  */
 
 export interface Profile {
@@ -155,6 +170,21 @@ const STRANGER_BURST = 300;
 /** What a pass is made over, before the recipient's number and the envelope. */
 const PASS_CONTEXT = "clairix-pass-v1";
 
+/**
+ * What [Mailbox.authenticate] answers a good signature from a number its
+ * operator suspended: the request is refused with a reason its owner can act
+ * on (an appeal), where a bad signature is only "rejected".
+ */
+export const SUSPENDED = "suspended" as const;
+
+/**
+ * A suspension (see [Mailbox.suspend]): the day it began, as every date here
+ * is kept. Why is not kept on the relay: the operator's case notes are theirs.
+ */
+interface Suspension {
+  since: number;
+}
+
 /** The answer to a send for a number that does not exist; the caller accepts and drops it. */
 const NO_SUCH_NUMBER: EnqueueResult = { ok: false, reason: "no such number", status: 404 };
 /** An envelope from another relay dropped at a limit: answered as NO_SUCH_NUMBER is. */
@@ -184,18 +214,94 @@ const CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
 /** How long a live socket has to ack an envelope before the owner is also woken by push. */
 const UNACKED_WAKE_MS = 8_000;
 /**
- * A connected phone hears from the relay at least this often. The heartbeat
+ * A connected phone hears from the relay at least this often while envelopes
+ * are moving, and always when its app asks for nothing else. The heartbeat
  * keeps carrier NAT from forgetting an idle connection, and briefly wakes a
  * sleeping phone, which lets it notice a connection that has died; the app
  * reconnects when it has heard nothing for a few heartbeats.
  */
-const HEARTBEAT_MS = 120_000;
+export const HEARTBEAT_ACTIVE_MS = 120_000;
+/**
+ * How long after the last envelope or ack on a socket the heartbeat keeps the
+ * two-minute pace: a reply is likeliest then, and a dead connection is worth
+ * noticing quickly.
+ */
+export const HEARTBEAT_ACTIVE_WINDOW_MS = 10 * 60_000;
+/** The longest quiet pace an app may ask for. */
+export const HEARTBEAT_IDLE_MAX_MS = 10 * 60_000;
+/**
+ * Sent by the app on the WebSocket upgrade: the most milliseconds it may go
+ * without a frame on a quiet connection (the app sends no pings of its own and
+ * judges the link by these heartbeats). Apps that do not send it, every app
+ * before this, keep a heartbeat every two minutes, which is what their own
+ * silence rule expects.
+ */
+export const HEARTBEAT_HEADER = "x-clairix-heartbeat";
+
+/**
+ * What the relay keeps with each live socket, in memory and only for as long
+ * as the socket lives (a hibernated socket keeps it; nothing goes to storage):
+ * the quiet pace its app asked for, or null for an app that asked for none,
+ * and when an envelope or an ack last went over it.
+ */
+export interface SocketPace {
+  idle: number | null;
+  trafficAt: number;
+}
+
+/** The quiet pace in an app's heartbeat header, kept between two and ten minutes; null when it sent none. */
+export function heartbeatPreference(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const value = raw.trim();
+  if (!/^[0-9]{1,9}$/.test(value)) return null;
+  const ms = Number(value);
+  if (ms <= 0) return null;
+  return Math.min(HEARTBEAT_IDLE_MAX_MS, Math.max(HEARTBEAT_ACTIVE_MS, ms));
+}
+
+/**
+ * How long until the next heartbeat on a socket: two minutes for an app that
+ * asked for no other pace, and for ten minutes after the last envelope or ack;
+ * the pace the app asked for once the connection has gone quiet.
+ */
+export function heartbeatGap(pace: SocketPace, now: number): number {
+  if (pace.idle === null) return HEARTBEAT_ACTIVE_MS;
+  return now - pace.trafficAt < HEARTBEAT_ACTIVE_WINDOW_MS ? HEARTBEAT_ACTIVE_MS : pace.idle;
+}
+
+/** The pace kept with [ws]; a socket with none (accepted before this, or a test's stand-in) keeps two minutes. */
+function paceOf(ws: WebSocket): SocketPace {
+  try {
+    const kept = ws.deserializeAttachment?.() as Partial<SocketPace> | null | undefined;
+    if (kept && typeof kept.trafficAt === "number") {
+      return { idle: typeof kept.idle === "number" ? kept.idle : null, trafficAt: kept.trafficAt };
+    }
+  } catch {
+    // nothing kept
+  }
+  return { idle: null, trafficAt: 0 };
+}
+
+/**
+ * An envelope or an ack went over [ws] at [now]: the two-minute pace again for
+ * the next ten minutes. Returns true when that brings the next heartbeat
+ * closer (the socket had gone quiet), so the alarm must be brought forward.
+ */
+function noteTraffic(ws: WebSocket, now: number): boolean {
+  const pace = paceOf(ws);
+  const next: SocketPace = { idle: pace.idle, trafficAt: now };
+  try {
+    ws.serializeAttachment?.(next);
+  } catch {
+    // a socket that has closed keeps nothing
+    return false;
+  }
+  return heartbeatGap(next, now) < heartbeatGap(pace, now);
+}
 /** Durable Object storage deletes at most this many keys per call. */
 const DELETE_BATCH = 128;
 /** How long an invite can be used. */
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
-/** ClairixCoin: transactions kept per mailbox, newest first. */
-const MAX_TX_HISTORY = 100;
 /** ClairixCoin: the most one transfer may move. */
 const MAX_SINGLE_TRANSFER = 1_000_000;
 /**
@@ -317,6 +423,20 @@ interface StagedEnvelope {
   releaseAt: number;
 }
 
+/** How many accounts registered openly on [day] (a UTC day's first millisecond). */
+interface OpenRegistrations {
+  day: number;
+  count: number;
+}
+
+/** Reports listed or cleaned up per storage read. */
+const REPORT_PAGE = 500;
+
+/** Where the reports about [number] on [relay] (null: this relay) are kept: "r:<number>|<relay>|". */
+function reportPrefix(number: string, relay: string | null): string {
+  return `r:${number}|${relay ?? ""}|`;
+}
+
 export type EnqueueResult =
   | { ok: true; id: string }
   | { ok: false; reason: string; status: 404 | 413 | 429; retryAfter?: number };
@@ -333,22 +453,14 @@ function timingSafeEqualHex(a: string, b: string): boolean {
 export const TOKEN_TTL_MS = DELIVERY_TOKEN_TTL_MS;
 
 /**
- * One ClairixCoin transfer as this mailbox's owner saw it. Every relay is its
- * own coin community: a balance lives in the owner's mailbox and moves only
- * through requests signed by the owner's identity key. The relay learns who
- * paid whom and how much; the note the payer wrote travels end-to-end
- * encrypted, so what is kept here is only the note the payer chose to give the
- * relay (the app sends none).
+ * One ClairixCoin transfer as this mailbox keeps it (comms-logic.ts): its id,
+ * the amount, the hour and which way it went. Every relay is its own coin
+ * community: a balance lives in the owner's mailbox and moves only through
+ * requests signed by the owner's identity key. The relay moves the coins but
+ * keeps no record of who paid whom; the payer's phone tells the payee, with
+ * any note, inside an end-to-end encrypted payment notice.
  */
-export interface CoinTx {
-  id: string;
-  from: string;
-  to: string;
-  amount: number;
-  ts: number;
-  direction: "in" | "out";
-  note?: string;
-}
+export type { CoinTx } from "./comms-logic";
 
 /** A contact's public identity, without claiming a one-time key. */
 export interface IdentityKeys {
@@ -434,13 +546,17 @@ export class Mailbox extends DurableObject<Env> {
 
   /**
    * Checks a request signature against the owner's key and enforces the
-   * single-use nonce. Returns the profile on success, null otherwise.
+   * single-use nonce. Returns the profile on success, [SUSPENDED] for a good
+   * signature from a suspended number, null otherwise.
    */
-  async authenticate(payload: string, signature: string, nonce: string, ts: number, transport = false): Promise<Profile | null> {
+  async authenticate(payload: string, signature: string, nonce: string, ts: number, transport = false): Promise<Profile | typeof SUSPENDED | null> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     const key = transport ? profile.transportKey : profile.ed25519;
     if (!key || !(await verifyEd25519(key, payload, signature))) return null;
+    // Said only once the signature has checked, so only whoever holds the
+    // number's key learns that it is suspended; nothing is written for it.
+    if (await this.isSuspended()) return SUSPENDED;
     const nonces = (await this.ctx.storage.get<NonceRecord>("nonces")) ?? {};
     const now = Date.now();
     for (const [n, seen] of Object.entries(nonces)) if (now - seen > NONCE_WINDOW_MS) delete nonces[n];
@@ -456,20 +572,38 @@ export class Mailbox extends DurableObject<Env> {
   /**
    * Replaces the fallback key, adds one-time keys, and takes a sealing prekey
    * newer than the one held (an older one, replayed, is ignored).
+   *
+   * With [replace], the keys given are the whole pool: every key held is
+   * dropped first, and keys out on a claim are not put back when their window
+   * passes (their tickets are remembered as lapsed, so a late send still
+   * finds them spent). A phone restored from a recovery file asks for this:
+   * the keys held were made by the phone it replaces, which kept their
+   * secrets, so a contact handed one would write a first message nobody can
+   * read.
    */
-  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null, sealingPrekey: SealingPrekey | null = null): Promise<{ oneTimeKeys: number }> {
+  async putKeys(oneTimeKeys: SignedKey[], fallback: SignedKey | null, sealingPrekey: SealingPrekey | null = null, replace = false): Promise<{ oneTimeKeys: number }> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) throw new Error("unregistered");
-    const existing = (await this.ctx.storage.get<SignedKey[]>("otks")) ?? [];
+    const existing = replace ? [] : ((await this.ctx.storage.get<SignedKey[]>("otks")) ?? []);
+    const claims = (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? [];
     // A key already handed out is spent on the owner's phone; offering it again
     // would make the next contact's first message undecryptable.
     const claimed = new Set((await this.ctx.storage.get<string[]>("claimedOtks")) ?? []);
-    for (const c of (await this.ctx.storage.get<OtkClaim[]>("claims")) ?? []) claimed.add(c.key.id);
+    for (const c of claims) claimed.add(c.key.id);
     const known = new Set(existing.map((k) => k.id));
     const merged = existing.concat(oneTimeKeys.filter((k) => !known.has(k.id) && !claimed.has(k.id))).slice(-MAX_ONE_TIME_KEYS);
     if (fallback) profile.fallback = fallback;
     if (sealingPrekey && sealingPrekey.created > (profile.sealingPrekey?.created ?? -1)) profile.sealingPrekey = sealingPrekey;
-    await this.ctx.storage.put({ otks: merged, profile });
+    const writes: Record<string, unknown> = { otks: merged, profile };
+    if (replace && claims.length > 0) {
+      const now = Date.now();
+      writes.claims = [];
+      writes.lapsedClaims = ((await this.ctx.storage.get<LapsedClaim[]>("lapsedClaims")) ?? [])
+        .concat(claims.map((c) => ({ ticket: c.ticket, keyId: c.key.id, at: dayFloor(now) })))
+        .filter((l) => now - l.at < OTK_LAPSED_TICKET_TTL_MS)
+        .slice(-OTK_LAPSED_TICKETS_MAX);
+    }
+    await this.ctx.storage.put(writes);
     return { oneTimeKeys: merged.length };
   }
 
@@ -526,6 +660,8 @@ export class Mailbox extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     if (requireListed && !profile.listed) return null;
+    // A suspended number is found by nobody, as if it did not exist.
+    if (await this.isSuspended()) return null;
     const now = Date.now();
     const otks = await this.releaseExpiredClaims(now);
     let oneTimeKey: SignedKey | null = null;
@@ -585,6 +721,7 @@ export class Mailbox extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return null;
     if (requireListed && !profile.listed) return null;
+    if (await this.isSuspended()) return null;
     return {
       number: profile.number,
       ed25519: profile.ed25519,
@@ -637,6 +774,53 @@ export class Mailbox extends DurableObject<Env> {
   /** The endpoint in use (null when none); for tests and the owner's own view. */
   async pushEndpoint(): Promise<string | null> {
     return (await this.ctx.storage.get<string>("push")) ?? null;
+  }
+
+  // ── Suspension (the operator's; docs/ABUSE.md) ───────────────────────
+
+  /**
+   * Suspends this number. From now on it cannot sign in ([authenticate]), so
+   * it collects nothing, renews nothing and is issued no tokens; its live
+   * sockets are closed and its push endpoint is deleted, so nothing wakes the
+   * phone; and to everyone else it reads as a number that does not exist:
+   * envelopes to it are dropped and answered as such ([enqueue]), lookups find
+   * nothing ([bundle], [identity]) and payments to it are refused ([credit]).
+   * What is already queued stays, to expire as usual, or to reach the phone
+   * if the suspension is lifted. Returns the day the suspension began, and
+   * whether the number was suspended already (then nothing changes but the
+   * sockets and the push endpoint, which go again).
+   */
+  async suspend(): Promise<{ since: number; already: boolean }> {
+    const held = await this.ctx.storage.get<Suspension>("suspended");
+    const since = held?.since ?? dayFloor(Date.now());
+    if (!held) await this.ctx.storage.put<Suspension>("suspended", { since });
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.close(4003, "suspended");
+      } catch {
+        // already gone
+      }
+    }
+    await this.ctx.storage.delete(["push", "pushPending", "wakeCheck"]);
+    return { since, already: held !== undefined };
+  }
+
+  /**
+   * Lifts a suspension; false when the number was not suspended. Sockets and
+   * the push endpoint are the phone's to set up again, which it does on its
+   * next sync.
+   */
+  async unsuspend(): Promise<boolean> {
+    return this.ctx.storage.delete("suspended");
+  }
+
+  /** The suspension in force, or null; for the operator's routes and tests. */
+  async suspension(): Promise<Suspension | null> {
+    return (await this.ctx.storage.get<Suspension>("suspended")) ?? null;
+  }
+
+  private async isSuspended(): Promise<boolean> {
+    return (await this.ctx.storage.get<Suspension>("suspended")) !== undefined;
   }
 
   // ── Delivery tokens (in shard objects of their own, named "dtok:<xx>") ──
@@ -785,6 +969,7 @@ export class Mailbox extends DurableObject<Env> {
   static readonly PAY_LIMIT = 30;
 
   async getBalance(): Promise<number> {
+    await this.ledger(Date.now());
     return (await this.ctx.storage.get<number>("balance")) ?? 0;
   }
 
@@ -801,17 +986,18 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /**
-   * Takes [amount] off the owner's balance for a payment to [to]. The check
+   * Takes [amount] off the owner's balance for the payment [txid]. The check
    * and the write happen in one call on the one object that holds this
    * balance, so two payments racing each other cannot both spend the same
-   * coins.
+   * coins. The record says how much and in which hour, not to whom.
    */
-  async debit(to: string, amount: number, txid: string, note: string): Promise<{ ok: boolean; balance: number; reason?: string; repeat?: boolean }> {
+  async debit(amount: number, txid: string): Promise<{ ok: boolean; balance: number; reason?: string; repeat?: boolean }> {
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) {
       return { ok: false, balance, reason: "Invalid amount" };
     }
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+    const now = Date.now();
+    const history = await this.ledger(now);
     // A payment already made under this id is not made again. One that was
     // made and then refunded (the recipient vanished before the credit) is
     // over; a new payment needs a new id, so nothing is paid twice for one.
@@ -820,47 +1006,60 @@ export class Mailbox extends DurableObject<Env> {
       return { ok: true, balance, repeat: true };
     }
     if (balance < amount) return { ok: false, balance, reason: "Insufficient balance" };
-    const profile = await this.ctx.storage.get<Profile>("profile");
-    const from = profile?.number ?? "";
     const next = balance - amount;
-    const entries = this.appendTx(history, { id: txid, from, to, amount, ts: Date.now(), direction: "out", note });
-    await this.ctx.storage.put({ balance: next, txHistory: entries });
+    await this.ctx.storage.put({ balance: next, txHistory: this.appendTx(history, coinTx(txid, amount, "out", now)) });
     return { ok: true, balance: next };
   }
 
   /**
-   * Adds [amount] to the owner's balance, for a payment from [from]; returns
-   * the balance afterwards. A credit already made under [txid] is not made
-   * again, so a payment the relay had to repeat lands once.
+   * Adds [amount] to the owner's balance under [txid] ([minted]: the operator
+   * minted it) and returns the balance afterwards, or null when this number
+   * has no account: a mailbox deleted between the payer's debit and this
+   * credit must not keep coins for whoever is given the number next, and the
+   * caller refunds the payer. A suspended number is answered the same way, so
+   * a payment to it is refused like one to a number nobody holds. A credit
+   * already made under [txid] is not made again, so a payment the relay had to
+   * repeat lands once. The record says how much and in which hour, not from whom.
    */
-  async credit(from: string, amount: number, txid: string, note: string): Promise<number> {
+  async credit(amount: number, txid: string, minted = false): Promise<number | null> {
     if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_SINGLE_TRANSFER) throw new Error("Invalid amount");
-    const profile = await this.ctx.storage.get<Profile>("profile");
-    // A mailbox deleted between the payer's debit and this credit must not
-    // keep coins for whoever is given the number next; the payer is refunded.
-    if (!profile) throw new Error("no such number");
+    if (!(await this.ctx.storage.get<Profile>("profile")) || (await this.isSuspended())) return null;
     const balance = (await this.ctx.storage.get<number>("balance")) ?? 0;
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
+    const now = Date.now();
+    const history = await this.ledger(now);
     if (history.some((t) => t.id === txid && t.direction === "in")) return balance;
-    const to = profile.number;
     const next = balance + amount;
-    const entries = this.appendTx(history, { id: txid, from, to, amount, ts: Date.now(), direction: "in", note });
-    await this.ctx.storage.put({ balance: next, txHistory: entries });
+    await this.ctx.storage.put({ balance: next, txHistory: this.appendTx(history, coinTx(txid, amount, "in", now, minted)) });
     return next;
   }
 
   /** The last [limit] transactions, newest first. */
   async txHistory(limit: number): Promise<CoinTx[]> {
-    const history = (await this.ctx.storage.get<CoinTx[]>("txHistory")) ?? [];
-    const n = Math.max(0, Math.min(MAX_TX_HISTORY, Math.floor(limit)));
-    return history.slice(0, n);
+    const history = await this.ledger(Date.now());
+    return history.slice(0, Math.max(0, Math.min(COIN_TX_MAX, Math.floor(limit))));
   }
 
-  /** [history] with [tx] at the front, trimmed to MAX_TX_HISTORY; not yet written. */
+  /** [history] with [tx] at the front, trimmed to COIN_TX_MAX; not yet written. */
   private appendTx(history: CoinTx[], tx: CoinTx): CoinTx[] {
-    const entry: CoinTx = { id: tx.id, from: tx.from, to: tx.to, amount: tx.amount, ts: tx.ts, direction: tx.direction };
-    if (tx.note) entry.note = tx.note;
-    return [entry, ...history].slice(0, MAX_TX_HISTORY);
+    return [tx, ...history].slice(0, COIN_TX_MAX);
+  }
+
+  /**
+   * The transfers this mailbox may still keep at [now] (see coinLedger in
+   * comms-logic.ts): none older than 30 days, at most a hundred, each cut
+   * down to its id, amount, hour and direction. Whatever that drops or
+   * rewrites is written back at once, so the first look at a ledger an
+   * earlier version kept, with both numbers and the moment of each transfer,
+   * leaves none of that behind. Every coin request looks, and so does the
+   * daily cleanup, for owners who never use the coin again.
+   */
+  private async ledger(now: number): Promise<CoinTx[]> {
+    const stored = await this.ctx.storage.get<unknown>("txHistory");
+    if (stored === undefined) return [];
+    const kept = coinLedger(stored, now);
+    if (kept.length === 0) await this.ctx.storage.delete("txHistory");
+    else if (JSON.stringify(kept) !== JSON.stringify(stored)) await this.ctx.storage.put("txHistory", kept);
+    return kept;
   }
 
   /** Deletes everything about this number. */
@@ -962,6 +1161,96 @@ export class Mailbox extends DurableObject<Env> {
     return (await this.allowanceOk("fed-claims", perHour, burst)).ok;
   }
 
+  // ── Abuse reports (in one object of its own, "abuse-reports") ────────
+
+  /**
+   * Keeps [report] for the operator: one entry per number and envelope, so
+   * the same envelope reported twice counts once. Past REPORTS_PER_TARGET_MAX
+   * about one number, or REPORTS_MAX in all, a new report is not kept; the
+   * caller answers the same either way, so a report tells nobody how often a
+   * number was reported before. Kept by the day, never the moment, until the
+   * operator closes it or REPORT_TTL_MS has passed. With [keep] false (a
+   * number on this relay nobody holds) nothing is kept, but the call is made
+   * all the same, so the answer takes as long either way.
+   */
+  async fileReport(report: AbuseReport, keep = true): Promise<void> {
+    if (!keep) return;
+    const prefix = reportPrefix(report.number, report.relay);
+    const key = `${prefix}${report.envelope ?? crypto.randomUUID()}`;
+    if ((await this.ctx.storage.get(key)) !== undefined) return;
+    const total = (await this.ctx.storage.get<number>("reportCount")) ?? 0;
+    if (total >= REPORTS_MAX) return;
+    const aboutThem = await this.ctx.storage.list({ prefix, limit: REPORTS_PER_TARGET_MAX });
+    if (aboutThem.size >= REPORTS_PER_TARGET_MAX) return;
+    await this.ctx.storage.put({ [key]: report, reportCount: total + 1, reportsObject: true });
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + CLEANUP_INTERVAL_MS);
+  }
+
+  /** Every report kept, a page at a time from storage. */
+  async listReports(): Promise<AbuseReport[]> {
+    const out: AbuseReport[] = [];
+    let startAfter: string | undefined;
+    for (;;) {
+      const page = await this.ctx.storage.list<AbuseReport>({ prefix: "r:", startAfter, limit: REPORT_PAGE });
+      if (page.size === 0) break;
+      for (const r of page.values()) out.push(r);
+      startAfter = [...page.keys()].pop();
+    }
+    return out;
+  }
+
+  /** Deletes every report about [number] on [relay] (null: this relay), once the operator has dealt with it; returns how many. */
+  async closeReports(number: string, relay: string | null): Promise<number> {
+    const keys = [...(await this.ctx.storage.list({ prefix: reportPrefix(number, relay) })).keys()];
+    const removed = await this.deleteKeys(keys);
+    const total = (await this.ctx.storage.get<number>("reportCount")) ?? 0;
+    await this.ctx.storage.put("reportCount", Math.max(0, total - removed));
+    return removed;
+  }
+
+  /** Drops reports older than REPORT_TTL_MS, a page at a time; true when any are left. */
+  private async cleanupReports(now: number): Promise<boolean> {
+    const cutoff = dayFloor(now - REPORT_TTL_MS);
+    let startAfter: string | undefined;
+    let left = 0;
+    let removed = 0;
+    for (;;) {
+      const page = await this.ctx.storage.list<AbuseReport>({ prefix: "r:", startAfter, limit: REPORT_PAGE });
+      if (page.size === 0) break;
+      const keys = [...page.keys()];
+      const stale = [...page].filter(([, r]) => r.day < cutoff).map(([k]) => k);
+      if (stale.length > 0) removed += await this.deleteKeys(stale);
+      left += keys.length - stale.length;
+      startAfter = keys[keys.length - 1];
+    }
+    if (removed > 0) await this.ctx.storage.put("reportCount", left);
+    return left > 0;
+  }
+
+  // ── Open registration (one object for the relay, "open-registration") ──
+
+  /**
+   * Takes one of today's open registrations (UTC days) while fewer than
+   * [perDay] have been taken. What is stored is the day and a count: nothing
+   * about who registered, nor from where.
+   */
+  async takeOpenRegistration(perDay: number): Promise<{ ok: boolean; retryAfter: number }> {
+    const now = Date.now();
+    const today = dayFloor(now);
+    const held = (await this.ctx.storage.get<OpenRegistrations>("openRegistrations")) ?? null;
+    const count = held !== null && held.day === today ? held.count : 0;
+    if (count >= perDay) return { ok: false, retryAfter: Math.max(1, Math.ceil((today + DAY_MS - now) / 1000)) };
+    await this.ctx.storage.put<OpenRegistrations>("openRegistrations", { day: today, count: count + 1 });
+    return { ok: true, retryAfter: 0 };
+  }
+
+  /** Gives back an open registration taken today for a registration that did not go through. */
+  async releaseOpenRegistration(): Promise<void> {
+    const held = (await this.ctx.storage.get<OpenRegistrations>("openRegistrations")) ?? null;
+    if (held === null || held.day !== dayFloor(Date.now()) || held.count <= 0) return;
+    await this.ctx.storage.put<OpenRegistrations>("openRegistrations", { day: held.day, count: held.count - 1 });
+  }
+
   // ── Envelopes ───────────────────────────────────────────────────────
 
   /**
@@ -990,6 +1279,10 @@ export class Mailbox extends DurableObject<Env> {
     if (data.length > MAX_ENVELOPE_B64) return { ok: false, reason: "envelope too large", status: 413 };
     const profile = await this.ctx.storage.get<Profile>("profile");
     if (!profile) return NO_SUCH_NUMBER;
+    // A suspended number takes nothing in, and says so exactly as a number
+    // nobody holds would: a sender, or anyone probing, learns from the relay
+    // neither that the number exists nor that it was suspended.
+    if (await this.isSuspended()) return NO_SUCH_NUMBER;
     const count = (await this.ctx.storage.get<number>("queueCount")) ?? 0;
     // Checked before any allowance is drawn on, so envelopes past the
     // strangers' share never use up what contacts' envelopes rely on.
@@ -1025,7 +1318,12 @@ export class Mailbox extends DurableObject<Env> {
     if (claim !== null) await this.confirmClaim(claim);
     const now = Date.now();
     const id = `${now.toString(36)}-${crypto.randomUUID()}`;
-    const envelope: Envelope = alert ? { id, ts: now, data, alert } : { id, ts: now, data };
+    // An envelope without the owner's pass (someone blocked, whose pass was
+    // replaced, or a message request, which never had it) keeps no alert: a
+    // locked phone cannot yet tell who sent it, so it must not ring or sound
+    // an SOS for it. It still arrives, and is sorted once the phone unlocks.
+    const kept = stranger ? null : alert;
+    const envelope: Envelope = kept ? { id, ts: now, data, alert: kept } : { id, ts: now, data };
     // A stranger's envelope is marked, so the strangers' share is given back
     // as it is acknowledged or expires.
     const counts: Record<string, number> = stranger ? { queueCount: count + 1, [strangerKey(id)]: 1, strangerCount: strangers + 1 } : { queueCount: count + 1 };
@@ -1049,19 +1347,27 @@ export class Mailbox extends DurableObject<Env> {
   private async handOver(envelopes: Envelope[], fromRequest: boolean): Promise<void> {
     if (envelopes.length === 0) return;
     const sockets = this.ctx.getWebSockets();
-    let delivered = false;
+    const reached = new Set<WebSocket>();
     for (const envelope of envelopes) {
       for (const ws of sockets) {
         try {
           ws.send(JSON.stringify({ type: "envelope", envelope }));
-          delivered = true;
+          reached.add(ws);
         } catch {
           // a dead socket; the owner will fetch on reconnect
         }
       }
     }
+    const delivered = reached.size > 0;
+    // Traffic: the heartbeat goes back to every two minutes for a while.
+    let quickened = false;
+    const now = Date.now();
+    for (const ws of reached) if (noteTraffic(ws, now)) quickened = true;
     const endpoint = await this.ctx.storage.get<string>("push");
-    if (!endpoint) return;
+    if (!endpoint) {
+      if (quickened) await this.scheduleAlarm();
+      return;
+    }
     if (delivered) {
       // A socket whose phone lost its network still accepts a send without
       // error, so "delivered" only means handed over. If the phone has not
@@ -1132,13 +1438,14 @@ export class Mailbox extends DurableObject<Env> {
   /**
    * Sets the alarm for whichever comes first: the next held envelope's
    * release, the unacked-delivery check, the next heartbeat while a phone is
-   * connected, or the daily cleanup.
+   * connected (see [heartbeatGap]), or the daily cleanup.
    */
   private async scheduleAlarm(rearm = false): Promise<void> {
     const cleanupAt = (await this.ctx.storage.get<number>("cleanupAt")) ?? Date.now() + CLEANUP_INTERVAL_MS;
     const check = await this.ctx.storage.get<WakeCheck>("wakeCheck");
     let next = check ? Math.min(cleanupAt, check.due) : cleanupAt;
-    if (this.ctx.getWebSockets().length > 0) next = Math.min(next, Date.now() + HEARTBEAT_MS);
+    const now = Date.now();
+    for (const ws of this.ctx.getWebSockets()) next = Math.min(next, now + heartbeatGap(paceOf(ws), now));
     const release = await this.nextRelease();
     if (release !== null) next = Math.min(next, release);
     // From inside alarm() the alarm being handled may still read as set, so the
@@ -1210,6 +1517,16 @@ export class Mailbox extends DurableObject<Env> {
       }
       return;
     }
+    if (await this.ctx.storage.get("reportsObject")) {
+      try {
+        if (await this.cleanupReports(now)) await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
+        else await this.ctx.storage.deleteAll();
+      } catch (e) {
+        console.error("report cleanup failed", e);
+        await this.ctx.storage.setAlarm(now + CLEANUP_INTERVAL_MS);
+      }
+      return;
+    }
     try {
       // A release past the batch limit leaves the rest due at once: the
       // re-arm below brings the alarm straight back for them.
@@ -1219,7 +1536,9 @@ export class Mailbox extends DurableObject<Env> {
     }
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(JSON.stringify({ type: "hb", ts: now }));
+        // "next": the most this socket waits for the following heartbeat, so
+        // the app knows how long a silence means a dead connection.
+        ws.send(JSON.stringify({ type: "hb", ts: now, next: heartbeatGap(paceOf(ws), now) }));
       } catch {
         // a dead socket; the phone reconnects when it notices
       }
@@ -1281,6 +1600,13 @@ export class Mailbox extends DurableObject<Env> {
     } catch (e) {
       console.error("allowance cleanup failed", e);
     }
+    try {
+      // ClairixCoin transfers past 30 days go, and so does whatever an
+      // earlier version kept about one (see ledger()).
+      await this.ledger(Date.now());
+    } catch (e) {
+      console.error("coin ledger cleanup failed", e);
+    }
   }
 
   // ── Live delivery ───────────────────────────────────────────────────
@@ -1302,6 +1628,9 @@ export class Mailbox extends DurableObject<Env> {
       }
     }
     this.ctx.acceptWebSocket(server);
+    // The pace its app asked for, if any; a new connection starts at the
+    // two-minute pace, as if traffic had just gone over it.
+    server.serializeAttachment({ idle: heartbeatPreference(request.headers.get(HEARTBEAT_HEADER)), trafficAt: Date.now() } satisfies SocketPace);
     // Anything already waiting goes out immediately, a page at a time; the
     // client fetches the rest through /v1/inbox when told there is more.
     const pending = await this.inbox();
@@ -1322,8 +1651,10 @@ export class Mailbox extends DurableObject<Env> {
     if (parsed.type === "ack" && Array.isArray(parsed.ids)) {
       const ids = parsed.ids.filter((x): x is string => typeof x === "string");
       await this.ack(ids);
+      if (noteTraffic(ws, Date.now())) await this.scheduleAlarm();
       ws.send(JSON.stringify({ type: "acked", ids }));
     } else if (parsed.type === "ping") {
+      // A ping is the app checking the link, not traffic: it leaves the pace alone.
       ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
     }
   }

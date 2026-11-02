@@ -7,13 +7,17 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -22,7 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.clairix.analysis.Report
+import app.clairix.comms.CommsRepository
 import app.clairix.security.AppLock
 import app.clairix.security.HistoryRetention
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import app.clairix.ui.theme.ClairixThemeName
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.Icons
@@ -58,6 +63,21 @@ object AppSettings {
     private const val KEY_RESUME_AFTER_REBOOT = "resume_after_reboot"
     private const val KEY_THEME = "theme"
     private const val KEY_INFRASTRUCTURE_ALERTS = "infrastructure_alerts"
+    private const val KEY_SHOW_ALERT_DETAILS = "show_alert_details"
+
+    /**
+     * What a duress wipe's decoy keeps of these settings (security/Wiper.kt):
+     * the look, discreet mode and how the scanner runs, so the lock screen and
+     * the app behind it look and behave as they did. None of them is a record
+     * of anything.
+     */
+    internal val DECOY_KEYS: Set<String> = setOf(
+        KEY_AGGRESSIVE_SCAN, KEY_FOLLOW_THRESHOLD, KEY_PERSISTENCE_THRESHOLD, KEY_SCAN_ENABLED,
+        KEY_RESUME_AFTER_REBOOT, KEY_THEME, KEY_INFRASTRUCTURE_ALERTS, KEY_SHOW_ALERT_DETAILS,
+        app.clairix.analysis.LowPowerMode.KEY_SWITCH,
+        // Discreet mode: the decoy shows the same launcher entry, notifications and lock screen.
+        app.clairix.security.DiscreetMode.KEY_ON, app.clairix.security.DiscreetMode.KEY_DISGUISE,
+    )
 
     const val DEFAULT_FOLLOW_THRESHOLD_M = 300f
     const val DEFAULT_PERSISTENCE_THRESHOLD_MIN = 10f
@@ -71,6 +91,7 @@ object AppSettings {
     @Volatile private var _scanEnabled = false
     @Volatile private var _resumeAfterReboot = false
     @Volatile private var _infrastructureAlerts = true
+    @Volatile private var _showAlertDetails = false
     private val _theme = MutableStateFlow(ClairixThemeName.ACID)
 
     /**
@@ -79,6 +100,15 @@ object AppSettings {
      * row. On by default: it is the one radio signal of a plate reader the phone can hear.
      */
     val infrastructureAlerts: Boolean get() = _infrastructureAlerts
+
+    /**
+     * Whether an alert notification (a tracker, a cell anomaly, a platform
+     * monitor) may name what it found while Clairix is unlocked. Off by default:
+     * every alert then says only "Unlock to read" and the finding waits in the
+     * app. While Clairix is locked an alert says only that, whatever this is set
+     * to; see [app.clairix.security.NotificationPresentation].
+     */
+    val showAlertDetails: Boolean get() = _showAlertDetails
 
     /**
      * The colour theme the user picked in Settings > Appearance. Acid, the brand's
@@ -120,6 +150,7 @@ object AppSettings {
         _scanEnabled = p.getBoolean(KEY_SCAN_ENABLED, false)
         _resumeAfterReboot = p.getBoolean(KEY_RESUME_AFTER_REBOOT, false)
         _infrastructureAlerts = p.getBoolean(KEY_INFRASTRUCTURE_ALERTS, true)
+        _showAlertDetails = p.getBoolean(KEY_SHOW_ALERT_DETAILS, false)
         // A name from a later version that this one does not know reads as the default.
         val savedTheme = p.getString(KEY_THEME, null)
         _theme.value = ClairixThemeName.entries.firstOrNull { it.name == savedTheme } ?: ClairixThemeName.ACID
@@ -149,6 +180,12 @@ object AppSettings {
             .edit().putBoolean(KEY_INFRASTRUCTURE_ALERTS, value).apply()
     }
 
+    fun setShowAlertDetails(context: Context, value: Boolean) {
+        _showAlertDetails = value
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SHOW_ALERT_DETAILS, value).apply()
+    }
+
     fun setAggressiveScan(context: Context, value: Boolean) {
         _aggressiveScan = value
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -172,19 +209,19 @@ object AppSettings {
 // ── SettingsScreen composable ──────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}) {
+fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () -> Unit = {}, onGetHelp: () -> Unit = {}) {
     val context = LocalContext.current
-    val trusted by Registry.trusted.collectAsStateWithLifecycle()
-    val status by Registry.status.collectAsStateWithLifecycle()
-    val detections by Registry.detections.collectAsStateWithLifecycle()
-    val timeline by Registry.timeline.collectAsStateWithLifecycle()
-    val cell by Registry.cell.collectAsStateWithLifecycle()
-    val nfc by Registry.nfc.collectAsStateWithLifecycle()
+    // One row per device the owner marked, whatever addresses the scanner has linked to it.
+    val trusted by Registry.trustBook.collectAsStateWithLifecycle()
 
     var aggressiveScan by remember { mutableStateOf(AppSettings.aggressiveScan) }
     var infrastructureAlerts by remember { mutableStateOf(AppSettings.infrastructureAlerts) }
+    var showAlertDetails by remember { mutableStateOf(AppSettings.showAlertDetails) }
     var followThreshold by remember { mutableFloatStateOf(AppSettings.followThresholdM) }
     var persistenceThreshold by remember { mutableFloatStateOf(AppSettings.persistenceThresholdMin) }
+    // Where position fixes come from; stored by the positioning code itself, in both editions.
+    var satelliteOnly by remember { mutableStateOf(app.clairix.analysis.Positioning.satelliteOnly(context)) }
+    var networkCrossCheck by remember { mutableStateOf(app.clairix.analysis.Positioning.networkCrossCheck(context)) }
     var showClearDialog by remember { mutableStateOf(false) }
 
     // ── Passcode state ───────────────────────────────────────────────────────
@@ -192,6 +229,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     val biometricEnabled by AppLock.biometricEnabled.collectAsStateWithLifecycle()
     var hasDuress by remember { mutableStateOf(AppLock.hasDuress(context)) }
     var wipeAfter by remember { mutableIntStateOf(AppLock.wipeAfter(context)) }
+    var wipeChosen by remember { mutableStateOf(AppLock.wipeChoiceConfirmed(context)) }
+    val pausedWipe = remember(wipeChosen) { AppLock.pausedWipeAfter(context) }
+    // Answered in the question that follows an unlock (WipeLimitQuestion) while this page sat underneath.
+    val wipeChoiceDue by AppLock.wipeChoiceDue.collectAsStateWithLifecycle()
+    LaunchedEffect(wipeChoiceDue) {
+        wipeAfter = AppLock.wipeAfter(context)
+        wipeChosen = AppLock.wipeChoiceConfirmed(context)
+    }
     var relockAfterMs by remember { mutableLongStateOf(AppLock.relockAfterMs(context)) }
     var showPasscodeSetup by remember { mutableStateOf(false) }
     var showPasscodeDisable by remember { mutableStateOf(false) }
@@ -275,10 +320,15 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     if (showBackgroundDialog) {
         ClairixDialog(
-            title = "Allow location all the time",
-            text = "Android only lets Clairix restart scanning after a reboot if location access is set to " +
-                "\"Allow all the time\". Android opens the location permission page for Clairix: choose " +
-                "\"Allow all the time\" there, then come back.",
+            // Google Play's prominent disclosure for background location: what location is
+            // used for while the app is closed, and that it stays on the phone. The same
+            // sentence is the opening shot of docs/play/background-location.md's video.
+            title = "Allow location all the time?",
+            text = "Clairix uses your location when the app is closed to keep the tracker scan running and " +
+                "to tell whether a Bluetooth device is moving with you, including after the phone restarts. " +
+                "Your location history stays on this phone and is never uploaded.\n\n" +
+                "Android opens the location permission page for Clairix next: choose \"Allow all the time\" " +
+                "there, then come back.",
             confirmLabel = "Continue",
             onConfirm = {
                 showBackgroundDialog = false
@@ -302,7 +352,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     if (showClearDialog) {
         ClairixDialog(
             title = "Clear all data?",
-            text = "This removes every detection, the cell tower baseline and the whole timeline. There's no undo.",
+            text = CLEAR_ALL_DATA_TEXT,
             confirmLabel = "Clear data",
             confirmTone = Tone.Danger,
             onConfirm = {
@@ -320,11 +370,72 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     val theme by AppSettings.theme.collectAsStateWithLifecycle()
     val c = ClairixTheme.colors
 
+    // ── Wipe and delete ──────────────────────────────────────────────────
+    //
+    // The Wipe page opens here as well as from the Comms menu, so it is there to
+    // find in Settings whatever else changes; the relay account can be given up
+    // from here too, without the rest of the app.
+    var showWipe by rememberSaveable { mutableStateOf(false) }
+    var confirmUnpair by remember { mutableStateOf(false) }
+    val comms by CommsRepository.state.collectAsStateWithLifecycle()
+    if (showWipe) {
+        BackHandler { showWipe = false }
+        Column(Modifier.fillMaxSize().background(c.base).navigationBarsPadding()) {
+            WipePage(onBack = { showWipe = false })
+        }
+        return
+    }
+    if (confirmUnpair) {
+        ClairixDialog(
+            title = "Give up this Clairix number?",
+            text = "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
+                "Registering again gives a different number; contacts will have to add you afresh. " +
+                "Everything else in Clairix stays.",
+            confirmLabel = "Delete identity and number",
+            confirmTone = Tone.Danger,
+            onConfirm = {
+                confirmUnpair = false
+                scope.launch { CommsRepository.unpair() }
+            },
+            onDismiss = { confirmUnpair = false }
+        )
+    }
+
+    // A newer version, from the signed note the app reads once a day: offered under About.
+    val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
+    // Which server the maps draw from: the signed tile setting, or OpenStreetMap's.
+    val tileServer by app.clairix.nav.MapTiles.config.collectAsStateWithLifecycle()
+    // About > Third-party licences: the list this build carries, full screen.
+    var showLicences by rememberSaveable { mutableStateOf(false) }
+    if (showLicences) {
+        BackHandler { showLicences = false }
+        Column(Modifier.fillMaxSize().background(c.base).navigationBarsPadding()) {
+            ThirdPartyLicencesPage(onBack = { showLicences = false })
+        }
+        return
+    }
+
     // This screen replaces the whole tab tree, so it does not inherit the insets
     // applied around the tabs and keeps clear of the system bars itself.
     Column(Modifier.fillMaxSize().background(c.base)) {
         ClairixTopBar(title = "Settings", onBack = onBack)
         ScreenList(Modifier.weight(1f).navigationBarsPadding(), bottomPadding = 32) {
+
+            // ── Get help ─────────────────────────────────────────────────────
+            //
+            // First, so it is found without scrolling, in both editions.
+            item(key = "§help") {
+                ListGroup {
+                    ListRow(
+                        title = "Get help",
+                        subtitle = "Helplines for abuse and stalking where you are, to call, text or chat",
+                        icon = Icons.Filled.Call,
+                        iconTone = Tone.Accent,
+                        onClick = onGetHelp,
+                        onClickLabel = "Open Get help"
+                    )
+                }
+            }
 
             // ── Appearance ───────────────────────────────────────────────────
             item(key = "§look-hdr") { SectionHeader("Appearance") }
@@ -486,9 +597,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
                 // ── Trusted devices ──────────────────────────────────────────────
                 item(key = "§trusted-hdr") {
-                    SectionHeader("Trusted devices", supporting = if (trusted.isEmpty()) null else "${trusted.size}")
+                    SectionHeader("Trusted devices", supporting = if (trusted.devices.isEmpty()) null else "${trusted.devices.size}")
                 }
-                if (trusted.isEmpty()) {
+                if (trusted.devices.isEmpty()) {
                     item(key = "§trusted-empty") {
                         EmptyState(
                             title = "No trusted devices yet",
@@ -499,20 +610,95 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                 } else {
                     item(key = "§trusted") {
                         ListGroup {
-                            trusted.sorted().forEachIndexed { i, addr ->
+                            trusted.devices.sortedBy { it.addresses.first() }.forEachIndexed { i, device ->
                                 if (i > 0) Hairline()
                                 Row(
-                                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp),
+                                    Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(addr, style = MaterialTheme.typography.mono, color = c.textMuted, modifier = Modifier.weight(1f))
-                                    GhostButton("Remove", onClick = { Registry.untrust(addr) }, tone = Tone.Danger)
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        device.label?.let { Text(it, style = MaterialTheme.typography.titleSmall, color = c.text) }
+                                        Text(device.addresses.joinToString("\n"), style = MaterialTheme.typography.mono, color = c.textMuted)
+                                        // A device that changes its address is trusted a day at a time.
+                                        if (device.until != 0L) {
+                                            Text(
+                                                "Changes its address; trusted until " +
+                                                    java.text.SimpleDateFormat("MMM d HH:mm", java.util.Locale.US).format(java.util.Date(device.until)) +
+                                                    ", then Clairix asks again",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = c.textSubtle
+                                            )
+                                        }
+                                    }
+                                    GhostButton("Remove", onClick = { Registry.untrust(device.addresses.first()) }, tone = Tone.Danger)
                                 }
                             }
                         }
                     }
                 }
             }
+
+            // ── Battery ──────────────────────────────────────────────────────
+            //
+            // Low power and what each feature runs, in both editions; see BatterySettings.kt.
+            batterySection()
+
+            // ── Location ─────────────────────────────────────────────────────
+            //
+            // Where position fixes come from, in both editions: the Comms edition reads
+            // a position for an SOS. See app.clairix.analysis.Positioning.
+            item(key = "§location-hdr") { SectionHeader("Location") }
+
+            item(key = "§location") {
+                ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                    ToggleRow(
+                        title = "Satellite-only positioning",
+                        subtitle = if (satelliteOnly)
+                            "Positions come from the satellite receiver alone, and Clairix asks for no Wi-Fi or cell " +
+                                "position. Slower to a first fix, often none indoors, and more battery while the phone sits still."
+                        else
+                            "Positions come from Google Play services where the phone has it, otherwise from Android's " +
+                                "own location service. One worked out from Wi-Fi and cell towers sends their identifiers " +
+                                "to that service: to Google, on most phones.",
+                        checked = satelliteOnly,
+                        onCheckedChange = { v ->
+                            satelliteOnly = v
+                            app.clairix.analysis.Positioning.setSatelliteOnly(context, v)
+                        }
+                    )
+                    if (BuildConfig.FULL_ACCESS) {
+                        Hairline()
+                        ToggleRow(
+                            title = "Cross-check GPS against Wi-Fi/cell position",
+                            subtitle = when {
+                                satelliteOnly ->
+                                    "Off while Satellite-only positioning is on, which asks for no Wi-Fi or cell position."
+                                networkCrossCheck ->
+                                    "The GPS check compares the satellite position with one from Wi-Fi and cell towers, " +
+                                        "the check a careful spoofer cannot pass. Asking for it sends the identifiers of the " +
+                                        "networks and towers around you to the phone's location service: Google Play " +
+                                        "services on most phones."
+                                else ->
+                                    "The satellite position is not compared with Wi-Fi and cell towers, and no such " +
+                                        "position is asked for. The other GPS checks still run."
+                            },
+                            checked = networkCrossCheck && !satelliteOnly,
+                            enabled = !satelliteOnly,
+                            onCheckedChange = { v ->
+                                networkCrossCheck = v
+                                app.clairix.analysis.Positioning.setNetworkCrossCheck(context, v)
+                            }
+                        )
+                    }
+                }
+            }
+
+            // ── SOS ──────────────────────────────────────────────────────────
+            //
+            // The SOS sheet's optional text and emergency call, in both editions
+            // (SosExtrasRun.kt). Both off until turned on.
+            item(key = "§sos-hdr") { SectionHeader("SOS") }
+            item(key = "§sos") { SosExtrasSettingsCard() }
 
             // ── Passcode lock ────────────────────────────────────────────────
             item(key = "§lock-hdr") { SectionHeader("App passcode") }
@@ -534,11 +720,32 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                     else
                                         "Clairix locks when you leave. Each run of wrong passcodes locks you out for longer."
                                 else
-                                    "Set a 6 to 12 digit passcode. All app data is wiped after too many wrong guesses.",
+                                    "Set a 6 to 12 digit passcode. Then you choose what wrong passcodes do: lock you " +
+                                        "out for longer each time, or wipe Clairix.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
                         }
+                    }
+                    if (lockEnabled && pausedWipe > 0 && !wipeChosen) {
+                        // Earlier versions armed this limit with every new passcode and asked
+                        // nothing; AppLock holds it back until she answers.
+                        Notice(
+                            Tone.Caution,
+                            pausedWipeNote(pausedWipe) + " Keep it, or pick another under Wrong passcode limit.",
+                            title = "Check your wipe limit",
+                            action = {
+                                GhostButton(
+                                    "Keep $pausedWipe",
+                                    onClick = {
+                                        val keep = pausedWipe
+                                        wipeAfter = keep
+                                        wipeChosen = true
+                                        scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, keep) }
+                                    }
+                                )
+                            }
+                        )
                     }
                     if (lockEnabled) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -567,6 +774,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             label = ::wipeAfterLabel,
                             onSelect = { choice ->
                                 wipeAfter = choice
+                                wipeChosen = true
                                 scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, choice) }
                             }
                         )
@@ -588,7 +796,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 StatusPill(if (hasDuress) "Set" else "Not set", if (hasDuress) Tone.Safe else Tone.Neutral)
                             }
                             Text(
-                                "A second code that quietly wipes Clairix. It looks like any wrong passcode.",
+                                "A second code that quietly wipes Clairix. It looks like any wrong passcode, and Clairix " +
+                                    "stays on its lock screen; from then on this code is the passcode, and opens it empty. " +
+                                    "It works on the lock screen: where Clairix asks again inside the app, it is just a wrong passcode.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
@@ -612,8 +822,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     PasscodeSetupPanel(
                         context = context,
                         isChanging = lockEnabled,
-                        onDone = { showPasscodeSetup = false },
-                        onCancel = { showPasscodeSetup = false }
+                        onDone = {
+                            showPasscodeSetup = false
+                            wipeAfter = AppLock.wipeAfter(context)
+                            wipeChosen = AppLock.wipeChoiceConfirmed(context)
+                        },
+                        onCancel = { showPasscodeSetup = false },
+                        onExportEvidence = if (BuildConfig.FULL_ACCESS) { { EvidenceExport.request() } } else null
                     )
                 }
             }
@@ -648,10 +863,43 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                 }
             }
 
+            // ── Notifications ────────────────────────────────────────────────
+            //
+            // What an alert may say in the shade of the unlocked phone. The lock
+            // screen is not up to this switch: the alert channels are secret there.
+
+            if (BuildConfig.FULL_ACCESS) item(key = "§notif-hdr") { SectionHeader("Notifications") }
+
+            if (BuildConfig.FULL_ACCESS) item(key = "§notif-toggles") {
+                ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                    ToggleRow(
+                        title = "Show alert details in notifications",
+                        subtitle = if (showAlertDetails)
+                            "While Clairix is unlocked, an alert names what it found; locked, it says only " +
+                                "\"Unlock to read\". Alerts never appear on the lock screen either way."
+                        else
+                            "Every alert says only \"Unlock to read\"; what was found waits in the app. " +
+                                "Alerts never appear on the lock screen either way.",
+                        checked = showAlertDetails,
+                        onCheckedChange = { v ->
+                            showAlertDetails = v
+                            AppSettings.setShowAlertDetails(context, v)
+                        }
+                    )
+                }
+            }
+
+            // ── Discreet mode ────────────────────────────────────────────────
+            //
+            // Both editions: a plain launcher entry where the edition allows it,
+            // neutral notifications and lock screen, and quick exit (DiscreetModeSettings.kt).
+
+            discreetModeItems()
+
             // ── Data management ──────────────────────────────────────────────
             //
-            // Evidence export and the scanner's clear-all; Comms keeps its own delete
-            // (Delete identity and number in Comms settings).
+            // Evidence export and the scanner's clear-all. Giving up the Clairix
+            // number is under Wipe and delete below (and in Comms settings).
 
             if (BuildConfig.FULL_ACCESS) item(key = "§data-hdr") { SectionHeader("Data") }
 
@@ -665,7 +913,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
                     SChoiceRow(
                         title = "Keep history for",
-                        subtitle = "The location log, the timeline, vehicle trips and the unlock ledger older than this are deleted: now, at each start, and every quarter hour while scanning. What is gone cannot be taken from the phone. The cell-tower baseline is kept: it is what normal is measured against.",
+                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger, the radio scanner's recordings and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. Evidence you save about an app in Phone check stays on the timeline until you clear all data. The cell-tower baseline is what normal is measured against, so it keeps which towers and areas are usual here and the last day each was seen (the exact time for two days), and forgets one not seen for three times this long (with Forever, never). An exported report is deleted after a day.",
                         choices = HistoryRetention.CHOICES,
                         selected = retentionDays,
                         label = ::retentionLabel,
@@ -677,22 +925,52 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             }
                         }
                     )
-                    PrimaryButton(
-                        "Export evidence",
-                        onClick = {
-                            val intent = Report.share(context, status, detections, timeline, cell, nfc)
-                            context.startActivity(Intent.createChooser(intent, "Share evidence report"))
-                        },
-                        icon = Icons.Filled.Share,
+                    // With a passcode set, each export asks for it (or a biometric) every time.
+                    EvidenceExportButtons("Export evidence", modifier = Modifier.fillMaxWidth(), primary = true)
+                    SecondaryButton("Clear all data", onClick = { showClearDialog = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                }
+            }
+
+            // ── Wipe and delete ──────────────────────────────────────────────
+
+            item(key = "§wipe-hdr") { SectionHeader("Wipe and delete") }
+
+            item(key = "§wipe") {
+                ClairixCard(spacing = 8.dp) {
+                    Text("Wipe Clairix", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(
+                        "Erases everything Clairix holds on this phone and asks the relay to delete your account. " +
+                            "The same page as Comms, menu, Wipe Clairix: type WIPE to confirm.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                    SecondaryButton("Wipe Clairix", onClick = { showWipe = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                    Hairline(Modifier.padding(vertical = 4.dp))
+                    Text("Delete identity and number", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(
+                        if (comms.registered)
+                            "Gives up your Clairix number: the relay deletes the account, and this phone its identity, " +
+                                "contacts and messages. Everything else in Clairix stays."
+                        else
+                            "This phone has no Clairix number to give up.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                    SecondaryButton(
+                        "Delete identity and number",
+                        onClick = { confirmUnpair = true },
+                        tone = Tone.Danger,
+                        enabled = comms.registered && !comms.busy,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    SecondaryButton("Clear all data", onClick = { showClearDialog = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
 
             // ── About ────────────────────────────────────────────────────────
 
             item(key = "§about-hdr") { SectionHeader("About") }
+
+            if (update.offer) item(key = "§update") { app.clairix.ui.UpdateOffer(update) }
 
             item(key = "§about") {
                 ClairixCard(spacing = 8.dp) {
@@ -707,6 +985,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     KeyValueRow("Package", BuildConfig.APPLICATION_ID)
                     KeyValueRow("Edition", if (BuildConfig.FULL_ACCESS) "Full: scanner, tools and Comms" else "Comms only", mono = false)
                     SecondaryButton("Take the tour", onClick = onTour, tone = Tone.Accent)
+                    CrashReportSection()
 
                     if (BuildConfig.FULL_ACCESS) {
                         Hairline(Modifier.padding(vertical = 4.dp))
@@ -731,6 +1010,18 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
+                    if (BuildConfig.FULL_ACCESS) {
+                        Text(
+                            "The stalkerware list is converted from Stalkerware Indicators of Compromise by Julien Voisin and " +
+                                "Tek for Echap (github.com/AssoEchap/stalkerware-indicators), used under the Creative Commons " +
+                                "Attribution 4.0 licence (creativecommons.org/licenses/by/4.0). Clairix keeps only the app " +
+                                "names, package names and certificate fingerprints from it.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = c.textSubtle
+                        )
+                    }
+                    // Map data credit (ODbL) and the third-party licences row.
+                    AboutCredits(onOpenLicences = { showLicences = true })
 
                     Hairline(Modifier.padding(vertical = 4.dp))
                     Text("Privacy", style = MaterialTheme.typography.titleSmall, color = c.text)
@@ -739,16 +1030,30 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             "Detection data stays on this phone. Location history, device identifiers, cell tower " +
                                 "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
                                 " are stored locally, sealed under a key in this phone's secure hardware, and never " +
-                                "uploaded. The map downloads tiles from OpenStreetMap, which sees your IP address and the " +
+                                "uploaded. The map downloads tiles from ${tileServer.name}'s tile server, which sees your IP address and the " +
                                 "area you're looking at; a place search runs on the phone over the offline map's road names " +
-                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps " +
-                                "and work zones come signed from GitHub. Messages, calls and live traffic go through the " +
+                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
+                                "work zones, the stalkerware list and the setting that names the tile server come signed from GitHub, and so, once a day, do the relay list, " +
+                                "the keys those files are signed with and a note of the newest Clairix version. Messages, calls and live traffic go through the " +
                                 "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
-                                "phone only when you export it."
+                                "phone only when you export it. Positions for the scanner, navigation and SOS come from " +
+                                "Google Play services where the phone has it, otherwise from Android's own location " +
+                                "service; one worked out from Wi-Fi and cell towers sends their identifiers to that " +
+                                "service, which on most phones is Google's, and so does the GPS check's comparison. " +
+                                "Satellite-only positioning, under Location above, asks the satellites alone. " +
+                                "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
+                                "unencrypted text through your mobile carrier to that number."
                         else
                             "Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who " +
                                 "sent them. Your keys, contacts and history are stored on this phone only. Location is " +
-                                "read at the moment you press SOS, to attach to that alert, and at no other time.",
+                                "read at the moment you press SOS, to attach to that alert, and at no other time. That " +
+                                "position comes from Google Play services where the phone has it, otherwise from Android's " +
+                                "own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
+                                "to that service. Satellite-only positioning, under Location above, asks the satellites alone. " +
+                                "Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the " +
+                                "newest version from GitHub; nothing about you goes with the request. " +
+                                "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
+                                "unencrypted text through your mobile carrier to that number.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
@@ -790,6 +1095,77 @@ private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
     0 -> "Never, lock out instead"
     1 -> "1 attempt"
     else -> "$attempts attempts"
+}
+
+/**
+ * What Settings, Clear all data removes, as [ScanService]'s clearAllData does it: keep the
+ * two in step. What stays is said too, since a wipe is the control that takes everything.
+ */
+internal const val CLEAR_ALL_DATA_TEXT =
+    "This removes every detection, the whole timeline with any photo kept on it, the location log, vehicle trips, " +
+        "the cell tower baseline, the camera sweep's findings, the spyware check's last findings, when each paired " +
+        "accessory was first seen, and the radio scanner's recordings, older unencrypted ones included. Your settings, " +
+        "trusted devices, the apps and headsets you marked as yours, the unlock ledger and Comms stay. There's no undo."
+
+/** What a wipe takes, in the words the dialog after a new passcode uses. */
+internal val WIPE_WARNING =
+    if (BuildConfig.FULL_ACCESS)
+        "Wiping erases every message, contact, your Clairix number and the evidence timeline. There is no backup and no undo."
+    else
+        "Wiping erases every message, contact and your Clairix number. There is no backup and no undo."
+
+/** What a pick in [WipeChoiceDialog] means, in [AppLock]'s own numbers. */
+internal fun wipeAfterOutcome(choice: Int?): String = when (choice) {
+    null -> "Pick one to go on. You can change it later in Settings."
+    0 -> "Nothing is wiped. After 5 wrong passcodes in a row Clairix waits 30 seconds before the next try, " +
+        "then twice as long after each further wrong one, up to an hour."
+    1 -> "The first wrong passcode wipes Clairix. The lock screen never says that a limit exists."
+    else -> "$choice wrong passcodes in a row wipe Clairix. The lock screen never says how many tries are left."
+}
+
+/**
+ * What wrong passcodes should do, asked the moment a passcode is saved, and
+ * after the next unlock on a phone whose limit an earlier version set
+ * ([WipeLimitQuestion], with a [note] that says so). It has no Cancel and
+ * nothing is picked to begin with, so the owner makes the choice herself:
+ * earlier versions armed a wipe after 3 without a word. Where there is
+ * evidence to lose it offers to export it first. It is a window of its own,
+ * above the lock screen Clairix draws, so callers show it only while Clairix
+ * is unlocked ([wipeQuestionShown]).
+ */
+@Composable
+internal fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, note: String? = null, onChosen: (Int) -> Unit) {
+    var picked by remember { mutableStateOf<Int?>(null) }
+    ClairixDialog(
+        title = "What should happen after wrong passcodes?",
+        // Back and a tap outside do nothing: this needs an answer.
+        onDismiss = {},
+        confirmLabel = "Save",
+        onConfirm = { picked?.let(onChosen) },
+        confirmEnabled = picked != null,
+        dismissLabel = null
+    ) {
+        // Scrolls when large text makes it taller than the dialog.
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (note != null) Text(note, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
+            Text(WIPE_WARNING, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
+            ChoiceChips<Int?>(
+                choices = AppLock.WIPE_AFTER_CHOICES,
+                selected = picked,
+                label = { wipeAfterLabel(it ?: 0) },
+                onSelect = { picked = it }
+            )
+            Text(wipeAfterOutcome(picked), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            if (onExportEvidence != null) {
+                SecondaryButton(
+                    "Export evidence",
+                    onClick = onExportEvidence,
+                    icon = Icons.Filled.Share,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
 }
 
 private fun relockLabel(ms: Long): String = when (ms) {
@@ -866,12 +1242,20 @@ private fun WarningText(text: String) {
     Text(text, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
 }
 
+/**
+ * Setting or changing the passcode, step by step: in Settings, inline on the
+ * onboarding page that asks whether anyone else uses the phone, and under the
+ * banner on the pages that show the owner's routine. Saving a passcode on a
+ * phone where nobody has chosen what wrong passcodes do goes straight on to
+ * [WipeChoiceDialog]; [onDone] comes once that is answered.
+ */
 @Composable
-private fun PasscodeSetupPanel(
+internal fun PasscodeSetupPanel(
     context: Context,
     isChanging: Boolean,
     onDone: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onExportEvidence: (() -> Unit)? = null
 ) {
     var step by remember { mutableIntStateOf(if (isChanging) 0 else 1) }
     // step 0 = confirm current, step 1 = enter new, step 2 = confirm new
@@ -879,7 +1263,24 @@ private fun PasscodeSetupPanel(
     var code2 by remember { mutableStateOf("") }
     var currentCode by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    var choosingWipe by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val locked by AppLock.locked.collectAsStateWithLifecycle()
+
+    // Hidden while the lock is up, and back once it is passed: its Export and its
+    // limits are for the owner alone.
+    if (wipeQuestionShown(asking = choosingWipe, locked = locked)) {
+        WipeChoiceDialog(
+            onExportEvidence = onExportEvidence,
+            onChosen = { choice ->
+                scope.launch {
+                    withContext(Dispatchers.IO) { AppLock.setWipeAfter(context, choice) }
+                    choosingWipe = false
+                    onDone()
+                }
+            }
+        )
+    }
 
     CodePanel(
         title = when {
@@ -922,7 +1323,10 @@ private fun PasscodeSetupPanel(
                         val r = withContext(Dispatchers.IO) {
                             AppLock.setPasscode(context, code1)
                         }
-                        r.onSuccess { onDone() }.onFailure { error = it.message ?: "Couldn't save the passcode" }
+                        r.onSuccess {
+                            // A first passcode never arms a wipe by itself: the owner picks.
+                            if (AppLock.wipeChoiceConfirmed(context)) onDone() else choosingWipe = true
+                        }.onFailure { error = it.message ?: "Couldn't save the passcode" }
                     }
                 }
             }

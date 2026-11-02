@@ -11,6 +11,17 @@ export const PLAY_URL = 'https://play.google.com/store/apps/details?id=app.clair
  * coming soon, so no button on the site leads to a missing store page.
  */
 export const PLAY_LIVE = false;
+/**
+ * True once the APKs Google Play delivers are signed with the same certificate
+ * as the APKs on GitHub Releases: at the first Play upload the release key was
+ * enrolled in Play App Signing ("Use an existing key", android/README.md,
+ * "Cutting a release" step 5a) and a Play-delivered APK's certificate digest
+ * was checked against the one the release workflow prints. Only then does
+ * /download say that one edition installs over the other; while it is false
+ * and PLAY_LIVE is true, the page says they cannot replace each other without
+ * uninstalling.
+ */
+export const PLAY_SAME_SIGNING_KEY = false;
 /** Where the site sends people to get the app right now. */
 export const GET_APP_URL = PLAY_LIVE ? PLAY_URL : '/download#full-title-card';
 export const PACKAGE_NAME = 'app.clairix';
@@ -53,6 +64,7 @@ export const footerColumns: { title: string; links: NavLink[] }[] = [
       { label: 'What leaves your phone', href: '/security#egress' },
       { label: 'Privacy Policy', href: '/privacy' },
       { label: 'Terms of Service', href: '/terms' },
+      { label: 'Legal process', href: '/legal-process' },
       { label: 'Delete your account', href: '/delete-account' },
     ],
   },
@@ -60,6 +72,7 @@ export const footerColumns: { title: string; links: NavLink[] }[] = [
     title: 'Help',
     links: [
       { label: 'Support', href: '/support' },
+      { label: 'For advocates and helpers', href: '/advocates' },
       { label: 'Report a vulnerability', href: `mailto:${SECURITY_EMAIL}` },
       { label: 'Contact', href: `mailto:${SUPPORT_EMAIL}` },
     ],
@@ -134,6 +147,14 @@ export const pages = {
     ogImage: '/og/terms.png',
     ogImageAlt: 'Clairix Terms of Service',
   },
+  legalProcess: {
+    title: 'Legal process and transparency – Clairix',
+    description:
+      'Who would receive a demand for Clairix users’ data, what the relay could hand over and what it does not hold, how users are told, and how many requests have arrived.',
+    ogTitle: 'Clairix legal process and transparency',
+    ogImage: '/og/security.png',
+    ogImageAlt: 'Your data stays on your phone.',
+  },
   deleteAccount: {
     title: 'Delete your account – Clairix',
     description:
@@ -157,6 +178,14 @@ export const pages = {
     ogTitle: 'Clairix press kit',
     ogImage: '/og/press.png',
     ogImageAlt: 'Clairix press kit',
+  },
+  advocates: {
+    title: 'For advocates and helpers – Clairix',
+    description:
+      'For domestic-violence advocates, helpline staff and security trainers: what Clairix checks, what it cannot detect, how to install it when the phone may be watched, and how to verify it.',
+    ogTitle: 'Clairix for advocates and helpers',
+    ogImage: '/og/security.png',
+    ogImageAlt: 'Your data stays on your phone.',
   },
   invite: {
     title: 'Clairix invite',

@@ -220,18 +220,39 @@ All of this is in `CommsRepository.handleLocked` and `processStagedLocked`.
 ## The wipe
 
 `Wiper.start`, from the duress passcode, the wrong-passcode limit or the Wipe
-page, runs in this order:
+page (Comms menu or Settings), runs in this order:
 
-1. Sign the relay account deletion in memory, for each relay the phone has an
-   account on.
+1. Write the "wipe pending" marker with the plan: what a duress decoy keeps
+   (theme, scanner and lock settings), and the relay account deletion for each
+   relay the phone has an account on, signed in memory for every four minutes
+   of the next day (`RelayFarewell`; the relay takes a signature only within
+   five minutes of its time).
 2. Delete every Keystore key.
-3. Stop the services.
-4. Clear notifications, the clipboard and push.
-5. Delete the preferences, databases and files.
-6. Send the signed deletions.
-7. Kill the process.
+3. Duress only: make the decoy's lock (a new key, the duress code's verifier)
+   and write it into the marker.
+4. Stop every foreground service the app declares (`Wiper.FOREGROUND_SERVICES`,
+   checked against the manifests by `WiperTest`) and the alarms the system
+   keeps for the app, a scheduled fake call among them.
+5. Clear notifications and delete the notification channels, the clipboard,
+   push, the device-admin role and an armed card.
+6. Delete the preferences, databases and files.
+7. Duress only: write the decoy's settings and lock.
+8. Keep the signed deletions in a plain file; ones signed with Tor on are tried
+   through Tor before the process ends, only while Tor runs in that process,
+   and never sent directly.
+9. Delete the marker.
+10. Otherwise than for duress, try the file's deletions for a few seconds. Then,
+    once the stopped services have left the foreground, delete the
+    notification channels again. Duress: end the process and bring the lock
+    screen back in a fresh one (`WipeRelaunchActivity`). Otherwise: end the
+    process.
 
-A marker file makes the next start finish an interrupted wipe.
+The marker makes the next start finish an interrupted wipe with the same plan;
+Tor is not started in that process, so its Tor deletions are dropped unsent.
+The file of signed deletions is sent by the decoy as it starts, at any later
+start and on an alarm (`RelayFarewellAlarm`, armed before each try) until the
+relay takes one or a day has passed. The JVM
+test `WiperTest` runs steps 2 to 9 over a temporary directory tree.
 
 ## Moving to another relay
 

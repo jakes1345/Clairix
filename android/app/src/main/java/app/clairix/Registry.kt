@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 
 /** Shared state between the scanning service, the NFC reader and the UI. */
@@ -82,21 +81,32 @@ object Registry {
     val wifiStatus: StateFlow<WifiStatus> = _wifiStatus.asStateFlow()
     fun publishWifiStatus(status: WifiStatus) { _wifiStatus.value = status }
 
+    /** Whether the Karma trap is set, for the WIFI tab; see [app.clairix.detect.KarmaCanary]. Off until the scanner says otherwise. */
+    private val _karmaTrap = MutableStateFlow(app.clairix.detect.KarmaTrap())
+    val karmaTrap: StateFlow<app.clairix.detect.KarmaTrap> = _karmaTrap.asStateFlow()
+    fun publishKarmaTrap(trap: app.clairix.detect.KarmaTrap) { _karmaTrap.value = trap }
+
     /** Read-modify-write of the cell status; the service and the activity both write it. */
     fun updateCell(block: (CellStatus) -> CellStatus) { _cell.update(block) }
 
     // --- Trusted devices -----------------------------------------------------
     //
-    // Keyed on the Bluetooth address, which is what the scanner has in hand when it
-    // decides whether to skip a device. It used to be keyed on the identity id
-    // instead — a counter handed out fresh on every service start — so marking
-    // something safe silenced nothing, and after a restart the saved id belonged to
-    // whatever device happened to be seen seventh.
-    //
-    // Addresses on a rotating device are not stable by design, but the devices worth
-    // trusting are the user's own headphones, watch and car, and those keep one.
+    // Kept as devices, each a set of Bluetooth addresses ([TrustBook]); [trusted] is
+    // every address of every device, which is what the screens and the scanner check.
+    // An address is what the owner sees when marking a device, and the scanner carries
+    // that trust on to a new address only when it can prove it is the same unit
+    // ([extendTrust], [app.clairix.analysis.TrustedIdentities]), so earbuds that rotate
+    // their address stay the owner's for the day the trust lasts, while a tracker's new
+    // address, which another unit of the product could share, is asked about again. (It used to be keyed on the identity id instead, a counter handed
+    // out fresh on every service start, so marking something safe silenced nothing.)
 
     private const val TRUSTED_KEY = "trusted_addresses"
+    private const val TRUSTED_DEVICES_KEY = "trusted_devices"
+
+    private val trustLock = Any()
+
+    private val _trustBook = MutableStateFlow(TrustBook.EMPTY)
+    internal val trustBook: StateFlow<TrustBook> = _trustBook.asStateFlow()
 
     private val _trusted = MutableStateFlow<Set<String>>(emptySet())
     val trusted: StateFlow<Set<String>> = _trusted.asStateFlow()
@@ -109,24 +119,55 @@ object Registry {
     fun bindTrustStore(context: Context) {
         val app = context.applicationContext
         appContext = app
-        _trusted.value = app
-            .getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)
-            .getStringSet(TRUSTED_KEY, emptySet())
-            ?.toSet() ?: emptySet()
+        val prefs = app.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)
+        val book = TrustBook.from(
+            prefs.getString(TRUSTED_DEVICES_KEY, null),
+            prefs.getStringSet(TRUSTED_KEY, emptySet())?.toSet() ?: emptySet()
+        )
+        synchronized(trustLock) {
+            _trustBook.value = book
+            _trusted.value = book.addresses
+        }
+        // Trust that lapsed while nothing was running goes now, on disk too.
+        expireTrust()
     }
 
-    fun trust(address: String) = setTrusted { it + address }
+    /**
+     * Marks [address] as the owner's. When the device [rotating]ly changes its address
+     * ([TrustBook.rotating]) the trust holds for a day, carried across the changes the
+     * scanner links, and then lapses so the owner is asked again; otherwise for good.
+     */
+    fun trust(address: String, label: String? = null, rotating: Boolean = false) =
+        setTrust { it.trust(address, label, rotating, System.currentTimeMillis()) }
 
-    fun untrust(address: String) = setTrusted { it - address }
+    /** Takes trust back from the device [address] belongs to, every address of it included. */
+    fun untrust(address: String) = setTrust { it.untrust(address) }
 
-    private fun setTrusted(change: (Set<String>) -> Set<String>) {
-        val next = _trusted.updateAndGet(change)
+    /**
+     * The scanner linked [address] to a trusted device it knows by [knownAddress]: the
+     * owner's device under a new address. Keeps that device's expiry.
+     */
+    fun extendTrust(address: String, knownAddress: String) = setTrust { it.extend(address, knownAddress) }
+
+    /** Drops trust that has lapsed by [now]; the scanner calls this as it publishes. */
+    fun expireTrust(now: Long = System.currentTimeMillis()) = setTrust { it.expire(now) }
+
+    private fun setTrust(change: (TrustBook) -> TrustBook) {
+        val next: TrustBook
+        synchronized(trustLock) {
+            val current = _trustBook.value
+            next = change(current)
+            if (next === current) return
+            _trustBook.value = next
+            _trusted.value = next.addresses
+        }
         appContext
             ?.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)
             ?.edit()
-            // A defensive copy: SharedPreferences must not be handed a set that is
-            // later mutated, and callers keep a reference to the flow's value.
-            ?.putStringSet(TRUSTED_KEY, HashSet(next))
+            // A fresh set: SharedPreferences must not be handed one that is later
+            // mutated. The plain set stays alongside the devices for older versions.
+            ?.putStringSet(TRUSTED_KEY, HashSet(next.addresses))
+            ?.putString(TRUSTED_DEVICES_KEY, next.toJson())
             ?.apply()
     }
 
@@ -173,6 +214,18 @@ object Registry {
     val gnss: StateFlow<app.clairix.analysis.GnssAssessment> = _gnss.asStateFlow()
     fun publishGnss(a: app.clairix.analysis.GnssAssessment) { _gnss.value = a }
 
+    /**
+     * Where position fixes come from, whether the GPS check can hold the satellites against
+     * a Wi-Fi/cell position, and whether an app is faking positions; see
+     * [app.clairix.analysis.Positioning]. Written by the location clients, the GPS check and
+     * the scanner, so read-modify-write.
+     */
+    private val _positioning = MutableStateFlow(app.clairix.analysis.PositionState())
+    val positioning: StateFlow<app.clairix.analysis.PositionState> = _positioning.asStateFlow()
+    fun updatePositioning(block: (app.clairix.analysis.PositionState) -> app.clairix.analysis.PositionState) {
+        _positioning.update(block)
+    }
+
     private val _phoneHealth = MutableStateFlow(PhoneHealth())
     val phoneHealth: StateFlow<PhoneHealth> = _phoneHealth.asStateFlow()
     fun publishPhoneHealth(h: PhoneHealth) { _phoneHealth.value = h }
@@ -188,7 +241,42 @@ object Registry {
     private val _vault = MutableStateFlow<VaultState>(VaultState.Locked)
     val vault: StateFlow<VaultState> = _vault.asStateFlow()
     fun publishVault(state: VaultState) { _vault.value = state }
-    fun lockVault() { _vault.value = VaultState.Locked }
+    fun lockVault() {
+        _vault.value = VaultState.Locked
+        // A re-tap in progress and any pairs captured but not yet saved do not
+        // outlive the vault closing: locking happens when the app leaves the
+        // screen or the app lock engages.
+        _vaultCaptureArm.value = null
+        _pendingVaultCapture.value = null
+    }
+
+    /**
+     * Whether the owner has acknowledged the vault-ownership notice. Seeded from
+     * [app.clairix.analysis.CardVault.hasOwnershipAck] at launch so the NFC tab can
+     * gate the first save on it without reading preferences on the main thread.
+     */
+    private val _ownershipAck = MutableStateFlow(false)
+    val ownershipAck: StateFlow<Boolean> = _ownershipAck.asStateFlow()
+    fun setOwnershipAck(acknowledged: Boolean) { _ownershipAck.value = acknowledged }
+
+    /**
+     * The UID of the tag the owner asked to record for the vault, or null. While it
+     * is set the NFC read path runs a full [app.clairix.analysis.NfcScanner.capture]
+     * on the next tap instead of an ordinary identify-only scan.
+     */
+    private val _vaultCaptureArm = MutableStateFlow<String?>(null)
+    val vaultCaptureArm: StateFlow<String?> = _vaultCaptureArm.asStateFlow()
+    fun armVaultCapture(uid: String) { _vaultCaptureArm.value = uid }
+    fun cancelVaultCapture() { _vaultCaptureArm.value = null }
+
+    /**
+     * A card recorded by a re-tap, waiting for the owner to name and save it. The
+     * recorded APDU pairs live only here (and, once saved, in the encrypted card),
+     * never in the scanned-tag list.
+     */
+    private val _pendingVaultCapture = MutableStateFlow<PendingVaultCapture?>(null)
+    val pendingVaultCapture: StateFlow<PendingVaultCapture?> = _pendingVaultCapture.asStateFlow()
+    fun setPendingVaultCapture(capture: PendingVaultCapture?) { _pendingVaultCapture.value = capture }
 
     /**
      * The vault card currently being emulated via HCE, or null. Holds the label as
@@ -236,6 +324,16 @@ object Registry {
     val inviteRequest: StateFlow<String?> = _inviteRequest.asStateFlow()
     fun requestInvite(text: String) { _inviteRequest.value = text }
     fun takeInviteRequest(): String? = _inviteRequest.getAndUpdate { null }
+
+    /**
+     * The Get help page, asked for from inside a screen that cannot reach the
+     * shell: a safety card, the sheet shown before a flagged app's settings.
+     * The shell opens the page over whatever is showing and consumes the request.
+     */
+    private val _helpRequest = MutableStateFlow(false)
+    val helpRequest: StateFlow<Boolean> = _helpRequest.asStateFlow()
+    fun requestHelp() { _helpRequest.value = true }
+    fun takeHelpRequest(): Boolean = _helpRequest.getAndUpdate { false }
 
     // --- Organisation / community -------------------------------------------
 
@@ -287,9 +385,10 @@ object Registry {
     /**
      * Raises [alert]: onto [alerts], onto the timeline as an event of [Alert.kind]
      * (deduplicated by [Alert.dedupeKey] within [dedupeWindowMs]), and as a
-     * notification when it is MEDIUM or worse. Safe to call from any thread; the
-     * timeline and the notification need [bindTrustStore] to have run in this
-     * process, which the activity and the service both do on create.
+     * notification when it is MEDIUM or worse and not [Alert.silent]. Safe to
+     * call from any thread; the timeline and the notification need
+     * [bindTrustStore] to have run in this process, which the activity and the
+     * service both do on create.
      */
     fun publishAlert(alert: Alert, dedupeWindowMs: Long = 30 * 60_000L) {
         _alerts.update { current -> (listOf(alert) + current.filter { it.id != alert.id }).take(ALERT_CAP) }
@@ -307,7 +406,7 @@ object Registry {
                 if (ok) publishTimeline(log.snapshot())
                 ok
             }.getOrDefault(true)
-            if (recorded && alert.severity.ordinal >= Severity.MEDIUM.ordinal) {
+            if (recorded && !alert.silent && alert.severity.ordinal >= Severity.MEDIUM.ordinal) {
                 runCatching { PlatformAlerts.notify(ctx, alert) }
             }
         }

@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -36,7 +37,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -73,17 +73,29 @@ import androidx.compose.ui.viewinterop.AndroidView
 import app.clairix.CatcherFinding
 import app.clairix.analysis.CardVault
 import app.clairix.analysis.CellMonitor
+import app.clairix.analysis.CellularExposure
 import app.clairix.analysis.NfcScanner
+import app.clairix.analysis.Report
+import app.clairix.analysis.ScanPacing
+import app.clairix.analysis.ScanRecord
+import app.clairix.analysis.ScannerHealth
 import app.clairix.analysis.WifiScanner
 import app.clairix.security.AppLock
 import app.clairix.security.LockScreen
+import app.clairix.security.QuickExit
 import app.clairix.analysis.PhoneHealthMonitor
+import app.clairix.analysis.SpywareHealth
+import app.clairix.analysis.StalkwareWatch
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
+import app.clairix.security.SosLocation
+import app.clairix.security.EmergencyNumbers
+import app.clairix.security.SosExtras
 import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
-import app.clairix.analysis.Report
 import app.clairix.detect.BleNames
+import app.clairix.detect.KarmaTrap
+import app.clairix.detect.VehicleTrips
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
 import app.clairix.comms.CommsNotifications
@@ -91,12 +103,9 @@ import app.clairix.comms.CommsRepository
 import app.clairix.comms.CommsSecureWindow
 import app.clairix.comms.KeepOffScreen
 import app.clairix.comms.PairingCode
+import app.clairix.comms.PanicResult
+import app.clairix.comms.SosGate
 import android.nfc.cardemulation.CardEmulation
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
-import com.google.android.gms.tasks.Tasks
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -104,9 +113,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration as OsmConfig
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import android.content.ComponentName
@@ -141,6 +148,8 @@ import app.clairix.ui.theme.monoSmall
 import app.clairix.ui.theme.monoLarge
 import app.clairix.ui.theme.mono
 import app.clairix.ui.components.setSensitiveText
+import app.clairix.ui.SafetyFirst
+import app.clairix.ui.SafetyFirstCard
 
 // ── Permissions ─────────────────────────────────────────────────────────
 
@@ -241,6 +250,13 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         AppSettings.load(this)
         AppLock.init(this)
+        // Back from the duress wipe in a fresh process: the lock screen says what the last one said,
+        // once (not when Android restores or recreates this screen from the same intent).
+        AppLock.noteWipeRelaunch(
+            this,
+            relaunched = savedInstanceState == null &&
+                intent?.getBooleanExtra(app.clairix.security.WipeRelaunchActivity.EXTRA_NOTICE, false) == true,
+        )
         // Nothing this app shows belongs in a screenshot, a screen recording or
         // the Recents thumbnail: a card's UID and APDUs, the timeline with its
         // positions, a conversation, the Device tab. Secure always, passcode or
@@ -279,6 +295,11 @@ class MainActivity : AppCompatActivity() {
             // reboots — and would keep routing readers to the service. Drop them.
             if (Registry.emulating.value == null) clearHceAids()
 
+            // Seed whether the vault-ownership notice has been acknowledged, so the
+            // NFC tab can gate the first save without reading preferences on the main
+            // thread. Only the editions with the vault (CARD_VAULT) ever ask.
+            if (BuildConfig.CARD_VAULT) Registry.setOwnershipAck(cardVault.hasOwnershipAck())
+
             // Show the stored timeline even before the scanner has run this session.
             lifecycleScope.launch(Dispatchers.IO) { runCatching { TimelineLog.publish(applicationContext) } }
         }
@@ -299,6 +320,12 @@ class MainActivity : AppCompatActivity() {
 
         CommsRepository.init(applicationContext)
         CommsNotifications.ensureChannels(this)
+        // The alert channel is secret on the lock screen; made now so an existing
+        // install drops the old channel at once, not at its next alert.
+        app.clairix.security.PlatformAlerts.ensureChannel(this)
+        // Discreet mode: the launcher entry and the channel names follow the stored choice
+        // (back to Clairix's after "Wipe Clairix"; kept by the duress decoy).
+        app.clairix.security.DiscreetMode.reconcile(this)
 
         handleOpenThreadIntent(intent)
 
@@ -402,6 +429,10 @@ class MainActivity : AppCompatActivity() {
                                     onUnlockVault = { unlockVault() },
                                     onLockVault = { Registry.lockVault() },
                                     onEraseVault = { eraseVault() },
+                                    onAcknowledgeOwnership = {
+                                        cardVault.setOwnershipAck()
+                                        Registry.setOwnershipAck(true)
+                                    },
                                     onRefreshDeviceHealth = { refreshDeviceHealth() },
                                     onRefreshCell = { refreshCell() },
                                     onRefreshWifi = { refreshWifi() }
@@ -418,6 +449,12 @@ class MainActivity : AppCompatActivity() {
                         ) {
                             LockScreen()
                         }
+                        // Once past the lock: wrong passcodes entered while she was away.
+                        WrongPasscodeNotice()
+                        // An evidence export asked for anywhere: its period, warning and share.
+                        EvidenceExportHost()
+                        // Then, on a phone an earlier version armed a wipe on unasked: what wrong passcodes should do.
+                        WipeLimitQuestion()
                     }
                 }
             }
@@ -446,6 +483,36 @@ class MainActivity : AppCompatActivity() {
         startService(intent)
     }
 
+    /**
+     * The scanner is meant to be running whenever the owner last left it on. An
+     * update or a system kill ends the service without turning that off, and the
+     * hub then read "Scanner off" as if she had stopped it. On every return to the
+     * foreground the scanner is started again when it can be, and its own start
+     * puts the lost time on the timeline (ScanService.onStartCommand). When it
+     * cannot be (a permission taken away since), the gap is recorded here and the
+     * status says when the scanner was lost, so the hub and the Trackers screen can
+     * say so and offer to resume.
+     */
+    private fun reconcileScanner() {
+        if (!BuildConfig.FULL_ACCESS || !AppSettings.scanEnabled) return
+        if (Registry.status.value.scanning) return
+        if (ESSENTIAL.all { granted(it) }) {
+            startScanning()
+            return
+        }
+        val app = applicationContext
+        lifecycleScope.launch(Dispatchers.IO) {
+            // A live service that cannot scan says why in its error; only a dead one was
+            // "stopped by the system", dated by its own record or, when the process was
+            // killed outright (an update, a low-memory kill), by its last heartbeat.
+            if (Registry.status.value.error != null) return@launch
+            // A kill leaves no row behind; the gap in cover goes on the timeline once.
+            ScanRecord.claimSystemStop(app, scanEnabled = true)?.let { TimelineLog.record(app, ScannerHealth.systemStopEvent(it)) }
+            val at = ScanRecord.systemStopAt(app, scanEnabled = true) ?: return@launch
+            Registry.update { if (it.scanning) it else it.copy(stoppedBySystem = true, stoppedAt = at) }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         resumed = true
@@ -454,6 +521,7 @@ class MainActivity : AppCompatActivity() {
         app.clairix.comms.Vault.check()
         applyNfcMode()
         if (BuildConfig.FULL_ACCESS) refreshDeviceHealth()
+        reconcileScanner()
         // Envelopes that arrived while the app was closed are pulled on every
         // return to the foreground; the push endpoint is renewed if it was lost.
         // While the app stays on screen the relay socket is held open, so what
@@ -461,6 +529,10 @@ class MainActivity : AppCompatActivity() {
         CommsRepository.onAppVisible(true)
         CommsRepository.registerPushIfPossible()
         CommsRepository.syncInBackground()
+        // At most once a day, in both editions: the relay list, the asset key
+        // list and the note of the newest and oldest safe version (Settings >
+        // About, the Scan and Comms banners, the brake on sending).
+        lifecycleScope.launch { runCatching { app.clairix.comms.RelayDirectory.refreshIfStale(applicationContext) } }
     }
 
     override fun onPause() {
@@ -540,10 +612,30 @@ class MainActivity : AppCompatActivity() {
         intent.action = null
         Registry.requestTab(ROUTE_NFC)
         // Parsing talks to the tag over the air and must not block the main thread.
-        lifecycleScope.launch(Dispatchers.IO) {
+        lifecycleScope.launch(Dispatchers.IO) { scanTag(tag) }
+    }
+
+    /**
+     * Reads a tapped tag. An ordinary scan only identifies the card and keeps no APDU
+     * pairs; a tap while a "Record for vault" re-tap is armed (full edition only)
+     * records the ISO 14443-4 conversation and stages it as a pending vault capture,
+     * whose pairs never enter the scanned-tag list.
+     */
+    private fun scanTag(tag: Tag) {
+        val mifare = NfcScanner.readsMifareClassic(this@MainActivity)
+        if (BuildConfig.CARD_VAULT && Registry.vaultCaptureArm.value != null) {
+            val capture = try {
+                NfcScanner.capture(tag, mifare)
+            } catch (_: Exception) { Registry.cancelVaultCapture(); return }
+            Registry.cancelVaultCapture()
+            Registry.addNfc(capture.tag)
+            runCatching { recordNfc(capture.tag) }
+            // A payment card held to the phone instead stages nothing: it is never savable.
+            Registry.setPendingVaultCapture(NfcScanner.stagedCapture(capture))
+        } else {
             val parsed = try {
-                NfcScanner.parse(tag, NfcScanner.readsMifareClassic(this@MainActivity))
-            } catch (_: Exception) { return@launch }
+                NfcScanner.parse(tag, mifare)
+            } catch (_: Exception) { return }
             Registry.addNfc(parsed)
             runCatching { recordNfc(parsed) }
         }
@@ -554,6 +646,10 @@ class MainActivity : AppCompatActivity() {
      * and brings the unlock ledger up to date from the usage log while it is there.
      */
     private fun refreshDeviceHealth() {
+        // The stalkerware check behind "no known spyware": at most once a day, alongside, and on
+        // the owner's screen, so what it finds goes on the timeline without a notification. It
+        // adds its result to Phone check itself.
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { StalkwareWatch.checkIfDue(applicationContext, foreground = true) } }
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching { phoneHealthMonitor.scanAndPublish() }
             runCatching { UnlockLedger.refresh(applicationContext) }
@@ -566,7 +662,7 @@ class MainActivity : AppCompatActivity() {
      * must not overwrite that with a reading nothing has judged.
      */
     private fun refreshCell() {
-        if (Registry.status.value.scanning) return
+        if (ScanPacing.scannerPublishes(Registry.status.value)) return
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 val reason = cellMonitor.unavailableReason()
@@ -576,7 +672,7 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
                 val snapshot = cellMonitor.sampleFull()
-                if (Registry.status.value.scanning) return@launch
+                if (ScanPacing.scannerPublishes(Registry.status.value)) return@launch
                 if (snapshot == null) {
                     Registry.publishCell(
                         CellStatus(
@@ -597,14 +693,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Refreshes the scan and reads the connected network and what is in range for the WIFI tab. */
+    /**
+     * Refreshes the scan and reads the connected network and what is in range for the
+     * WIFI tab while the scanner is off. While it is on, the service asks for a scan
+     * every two minutes with the screen on and publishes what the tab shows; this must
+     * not ask Android for more of them.
+     */
     private fun refreshWifi() {
+        if (ScanPacing.scannerPublishes(Registry.status.value)) return
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 // The snapshot requests a scan and waits for its results itself.
                 Registry.publishWifiStatus(WifiScanner.snapshot(applicationContext))
                 // The judgement on what is in range is cheap and service-free too.
-                if (!Registry.status.value.scanning) Registry.publishWifi(WifiScanner.scan(applicationContext))
+                if (!ScanPacing.scannerPublishes(Registry.status.value)) Registry.publishWifi(WifiScanner.scan(applicationContext))
             }
         }
     }
@@ -658,13 +760,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Runs on an NFC binder thread, so the timeline's disk write is fine here. */
-    private val readerCallback = NfcAdapter.ReaderCallback { tag ->
-        val parsed = try {
-            NfcScanner.parse(tag, NfcScanner.readsMifareClassic(this@MainActivity))
-        } catch (_: Exception) { return@ReaderCallback }
-        Registry.addNfc(parsed)
-        runCatching { recordNfc(parsed) }
-    }
+    private val readerCallback = NfcAdapter.ReaderCallback { tag -> scanTag(tag) }
 
     private fun recordNfc(t: NfcTag) {
         val now = System.currentTimeMillis()
@@ -794,13 +890,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun addToVault(tag: NfcTag, label: String, replace: Boolean) {
         if (!BuildConfig.CARD_VAULT) return
+        // A payment card is never stored or emulated, however the save was reached.
+        if (NfcScanner.isPaymentProfile(tag.profile)) return
+        // Emulation pairs come only from a matching "Record for vault" re-tap, held in
+        // the pending capture; a card saved without one (e.g. MIFARE Classic, kept for
+        // identification) stores none.
+        val pending = Registry.pendingVaultCapture.value?.takeIf { it.uid == tag.uid }
         val card = VaultCard(
             id        = UUID.randomUUID().toString(),
             uid       = tag.uid,
             label     = label,
             profile   = tag.profile,
             addedTs   = System.currentTimeMillis(),
-            apduPairs = tag.apduPairs
+            apduPairs = pending?.apduPairs ?: emptyList()
         )
         Registry.setReplacePrompt(null)
         writeVault(VaultOp.Add(card, replace))
@@ -835,7 +937,11 @@ class MainActivity : AppCompatActivity() {
                     // state comes from this list, so it has to be current.
                     publishUnlocked(result.cards)
                     when (op) {
-                        is VaultOp.Add -> toast("Saved \"${op.card.label}\" to the vault")
+                        is VaultOp.Add -> {
+                            // The capture (if any) is now in the encrypted card; drop the copy.
+                            Registry.setPendingVaultCapture(null)
+                            toast("Saved \"${op.card.label}\" to the vault")
+                        }
                         is VaultOp.Remove -> if (Registry.emulating.value?.id == op.id) stopEmulation()
                     }
                 }
@@ -1101,11 +1207,34 @@ private fun rememberNow(periodMs: Long = 1000L): Long {
     return now
 }
 
+/**
+ * Calls [refresh] at once and then every [periodMs] while the screen is started, and
+ * stops when the app goes to the background; a null period refreshes nothing. A plain
+ * LaunchedEffect loop outlived ON_STOP until its composition was disposed, so a tab
+ * left open kept reading the modem, the phone's settings or the Wi-Fi for nobody.
+ */
+@Composable
+private fun RefreshWhileStarted(periodMs: Long?, refresh: () -> Unit) {
+    val current by rememberUpdatedState(refresh)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(periodMs, lifecycle) {
+        if (periodMs == null) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                current()
+                delay(periodMs)
+            }
+        }
+    }
+}
+
 // ── Threat explainer target ─────────────────────────────────────────────────
 
 private sealed class ExplainerTarget {
     data class BleDevice(val detection: Detection) : ExplainerTarget()
     data class CellIndicator(val finding: CatcherFinding) : ExplainerTarget()
+    /** A trip-memory finding nothing tied to the owner's car: "has been on 3 of your journeys". */
+    data class Journeys(val event: TimelineEvent) : ExplainerTarget()
 }
 
 // ── SOS button ────────────────────────────────────────────────────────────
@@ -1115,14 +1244,36 @@ private const val SOS_HOLD_MS = 1500L
 
 /**
  * The SOS button: an octagon, like a stop sign and like the mark, in the danger
- * colour. Holding it fills it from the bottom; once [SOS_HOLD_MS] has passed a
- * confirm dialog appears, and [onConfirmed] runs only after the user taps Send.
+ * colour. Holding it fills it from the bottom; once [SOS_HOLD_MS] has passed,
+ * [gate] (run off the main thread) says whether anyone would receive an SOS.
+ * If so a confirm dialog appears, and [onConfirmed] runs only after the user
+ * taps Send; if not, the dialog says that nobody would receive it and offers
+ * [onSetUpComms] instead, so no one confirms an alert that goes nowhere. The
+ * defaults are for previews and screenshots; the shell passes the real gate.
+ *
+ * Both dialogs also carry the extras the owner turned on in Settings, SOS
+ * (SosExtrasRun.kt): a text to one number, sent with the SOS or, with nobody in
+ * Clairix to send to, on its own; and a button that opens the phone app with the
+ * local emergency number. Each says what came of it.
  */
 @Composable
-internal fun SosButton(onConfirmed: () -> Unit) {
+internal fun SosButton(
+    onConfirmed: () -> Unit,
+    gate: suspend () -> SosGate = { SosGate.SEND },
+    onSetUpComms: () -> Unit = {}
+) {
+    val context = LocalContext.current
     var sosProgress by remember { mutableFloatStateOf(0f) }
     var sosPressing by remember { mutableStateOf(false) }
+    // Held long enough; the gate is being asked. Its own effect, so a finger
+    // lifting meanwhile (which restarts the hold effect) cannot cut it short.
+    var sosHeld by remember { mutableStateOf(false) }
     var showSosConfirm by remember { mutableStateOf(false) }
+    var sosBlocked by remember { mutableStateOf<SosGate?>(null) }
+    // The extras as set when the button was held, and what they came to after Send.
+    var extras by remember { mutableStateOf(SosExtras.Config.OFF) }
+    var emergency by remember { mutableStateOf(EmergencyNumbers.choose(null, null)) }
+    var showExtrasResult by remember { mutableStateOf(false) }
 
     LaunchedEffect(sosPressing) {
         if (sosPressing) {
@@ -1130,16 +1281,26 @@ internal fun SosButton(onConfirmed: () -> Unit) {
             while (sosPressing) {
                 sosProgress = (System.currentTimeMillis() - start) / SOS_HOLD_MS.toFloat()
                 if (sosProgress >= 1f) {
-                    showSosConfirm = true
+                    sosHeld = true
                     sosPressing = false
                     break
                 }
                 delay(16)
             }
-            if (!showSosConfirm) sosProgress = 0f
-        } else if (!showSosConfirm) {
+            if (!showSosConfirm && sosBlocked == null && !sosHeld) sosProgress = 0f
+        } else if (!showSosConfirm && sosBlocked == null && !sosHeld) {
             sosProgress = 0f
         }
+    }
+
+    LaunchedEffect(sosHeld) {
+        if (!sosHeld) return@LaunchedEffect
+        val who = withContext(Dispatchers.IO) { runCatching { gate() }.getOrDefault(SosGate.NOT_REGISTERED) }
+        extras = withContext(Dispatchers.IO) { runCatching { SosExtras.config(context) }.getOrDefault(SosExtras.Config.OFF) }
+        emergency = EmergencyNumbers.local(context)
+        SosExtrasRun.reset()
+        if (who == SosGate.SEND) showSosConfirm = true else sosBlocked = who
+        sosHeld = false
     }
 
     val c = ClairixTheme.colors
@@ -1178,15 +1339,58 @@ internal fun SosButton(onConfirmed: () -> Unit) {
     if (showSosConfirm) {
         ClairixDialog(
             title = "Send an SOS?",
-            text = "Your groups get an alert with your location right away.",
+            text = "Every member of your groups gets an alert with your position right away. You are told how many people it reached.",
             confirmLabel = "Send SOS",
             confirmTone = Tone.Danger,
             onConfirm = {
                 showSosConfirm = false
                 sosProgress = 0f
                 onConfirmed()
+                extras.textTo?.let { SosExtrasRun.sendText(context, it) }
+                if (extras.any) showExtrasResult = true
             },
-            onDismiss = { showSosConfirm = false; sosProgress = 0f }
+            onDismiss = { showSosConfirm = false; sosProgress = 0f },
+            content = if (extras.any) {
+                { SosExtrasSheet(extras, emergency, offerText = false) }
+            } else {
+                null
+            }
+        )
+    }
+
+    if (showExtrasResult) {
+        SosExtrasResultDialog(extras, emergency, onDismiss = { showExtrasResult = false })
+    }
+
+    // The honest state when there is no one to send to: said before anything
+    // is sent, instead of a "sent" that would be false.
+    sosBlocked?.let { why ->
+        val notRegistered = why == SosGate.NOT_REGISTERED
+        // With an extra set up there is still something to do here, and "nothing was
+        // sent" would turn false once the text goes: the sentence names Clairix.
+        val nothing = if (extras.any) "No Clairix SOS was sent." else "Nothing was sent."
+        ClairixDialog(
+            title = "Nobody would receive this",
+            text = if (notRegistered) {
+                "An SOS goes to the members of your Clairix groups, and this phone is not set up for Comms. " +
+                    "Set it up, then make a group or accept an invitation to one. $nothing"
+            } else {
+                "An SOS goes to the members of your Clairix groups, and this phone is in no group with anyone else in it. " +
+                    "Make a group in Comms, or accept an invitation to one. $nothing"
+            },
+            content = if (extras.any) {
+                { SosExtrasSheet(extras, emergency, offerText = true) }
+            } else {
+                null
+            },
+            confirmLabel = if (notRegistered) "Set up Comms" else "Open Comms",
+            onConfirm = {
+                sosBlocked = null
+                sosProgress = 0f
+                onSetUpComms()
+            },
+            onDismiss = { sosBlocked = null; sosProgress = 0f },
+            dismissLabel = "Not now"
         )
     }
 }
@@ -1219,6 +1423,7 @@ private fun MainApp(
     onUnlockVault: () -> Unit,
     onLockVault: () -> Unit,
     onEraseVault: () -> Unit,
+    onAcknowledgeOwnership: () -> Unit,
     onRefreshDeviceHealth: () -> Unit,
     onRefreshCell: () -> Unit,
     onRefreshWifi: () -> Unit
@@ -1236,13 +1441,17 @@ private fun MainApp(
     var phoneSub by rememberSaveable { mutableIntStateOf(0) }
     var activitySub by rememberSaveable { mutableIntStateOf(0) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    // The Get help page, drawn over everything else when Settings, a safety card
+    // or the sheet before a flagged app's settings opens it.
+    var showHelp by rememberSaveable { mutableStateOf(false) }
 
     val tab = enumByName<HomeTab>(tabName)?.takeIf { it in tabs } ?: tabs.first()
     val category = enumByName<ScanCategory>(categoryName)
-    // The tracker actions belong to the Trackers category and the Comms menu to
-    // the full build; a saved name outside those is dropped rather than shown.
+    // The tracker actions belong to the Trackers category, and the Comms menu
+    // holds what this edition has (commsActionsFor); a saved name outside those
+    // is dropped rather than shown.
     val trackerAction = enumByName<TrackerAction>(trackerActionName)?.takeIf { category == ScanCategory.TRACKERS }
-    val commsAction = enumByName<CommsAction>(commsActionName)?.takeIf { BuildConfig.FULL_ACCESS }
+    val commsAction = enumByName<CommsAction>(commsActionName)?.takeIf { it in commsActionsFor(BuildConfig.FULL_ACCESS) }
 
     val status by Registry.status.collectAsStateWithLifecycle()
     val unreadMessages by CommsRepository.unread.collectAsStateWithLifecycle()
@@ -1278,8 +1487,14 @@ private fun MainApp(
         trackerActionName = null
     }
 
+    // "Tap to resume" on the hub and the timeline: the scanner starts straight away
+    // when it may; otherwise the Trackers screen asks for what it still needs.
+    val resumeScan: () -> Unit = {
+        if (hasPermissions()) onStart() else { openTab(HomeTab.SCAN); openCategory(ScanCategory.TRACKERS) }
+    }
+
     // A call ringing or in progress takes the Comms tab regardless of where the
-    // user was. Settings, the Comms safety pages and the explainer sheet are drawn
+    // user was. Settings, Get help, the Comms safety pages and the explainer sheet are drawn
     // over or instead of it, so they close too; otherwise the call's ACCEPT button
     // sat hidden behind them.
     LaunchedEffect(activeCall?.id, activeCall?.phase) {
@@ -1287,6 +1502,7 @@ private fun MainApp(
             tabName = HomeTab.COMMS.name
             commsActionName = null
             showSettings = false
+            showHelp = false
             showTour = false
             explainerTarget = null
         }
@@ -1309,6 +1525,26 @@ private fun MainApp(
                 showSettings = false
             }
             else -> Unit
+        }
+    }
+    // A safety card, or the sheet before a flagged app's settings, asks for the
+    // Get help page: it opens over whatever is showing, the explainer sheet included.
+    val helpRequest by Registry.helpRequest.collectAsStateWithLifecycle()
+    LaunchedEffect(helpRequest) {
+        if (helpRequest && Registry.takeHelpRequest()) {
+            explainerTarget = null
+            showHelp = true
+        }
+    }
+    // Locking closes Get help, so an unlock someone else makes the owner do does
+    // not open on a page of helplines. It closes the explainer sheet too: a sheet
+    // is a window of its own, above the lock screen Clairix draws, and it carries
+    // the safety card's export.
+    LaunchedEffect(locked) {
+        if (locked) {
+            showHelp = false
+            explainerTarget = null
+            if (commsActionName == CommsAction.GET_HELP.name) commsActionName = null
         }
     }
     val threadRequest by Registry.threadRequest.collectAsStateWithLifecycle()
@@ -1357,11 +1593,18 @@ private fun MainApp(
         return
     }
 
+    // Over Settings when opened from there, so its back arrow returns to Settings.
+    if (showHelp) {
+        GetHelpPage(onBack = { showHelp = false })
+        return
+    }
+
     if (showSettings) {
         SettingsScreen(
             onBack = { showSettings = false },
             onClearData = onClearData,
-            onTour = { showSettings = false; showTour = true }
+            onTour = { showSettings = false; showTour = true },
+            onGetHelp = { showHelp = true }
         )
         return
     }
@@ -1379,14 +1622,17 @@ private fun MainApp(
         HomeTab.DRIVE, HomeTab.ACTIVITY -> null
     }
     BackHandler(enabled = popUp != null) { popUp?.invoke() }
+    // Quick exit: Back on the first screen (the Scan hub; Comms in the comms-only build)
+    // sends Clairix to the background and locks it at once when a passcode is set.
+    BackHandler(enabled = popUp == null && tab == tabs.first()) { QuickExit.leave(context) }
 
     val title = when (tab) {
         HomeTab.SCAN -> trackerAction?.title ?: category?.title ?: HomeTab.SCAN.label
         HomeTab.COMMS -> commsAction?.title ?: HomeTab.COMMS.label
         HomeTab.DRIVE, HomeTab.ACTIVITY -> tab.label
     }
-    val menu = if (tab == HomeTab.COMMS && commsAction == null && BuildConfig.FULL_ACCESS) {
-        CommsAction.entries.map { action -> ShellMenuItem(action.title, action.icon) { commsActionName = action.name } }
+    val menu = if (tab == HomeTab.COMMS && commsAction == null) {
+        commsActionsFor(BuildConfig.FULL_ACCESS).map { action -> ShellMenuItem(action.title, action.icon) { commsActionName = action.name } }
     } else {
         emptyList()
     }
@@ -1422,28 +1668,41 @@ private fun MainApp(
         // phone is locked; no animation needed for a critical safety button.
         sos = if (locked) null else {
             {
-                SosButton(onConfirmed = {
-                    scope.launch(Dispatchers.IO) {
-                        suspend fun toast(text: String) = withContext(Dispatchers.Main) {
-                            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                SosButton(
+                    // Who would receive it is checked before the confirm dialog: with
+                    // no Clairix number, or no group with anyone else in it, the dialog
+                    // says so and offers Comms instead of a send that goes nowhere.
+                    gate = { CommsRepository.sosGate() },
+                    onSetUpComms = { openTab(HomeTab.COMMS) },
+                    onConfirmed = {
+                        scope.launch(Dispatchers.IO) {
+                            suspend fun toast(text: String) = withContext(Dispatchers.Main) {
+                                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                            }
+                            // Members the relay could not take are tried again for a
+                            // while; the last word follows when it differs from the first.
+                            fun followUp(sent: PanicResult, subject: String) = launch {
+                                val last = CommsRepository.panicResult.first { it == null || it.attempt != sent.attempt || !it.retrying }
+                                if (last != null && last.attempt == sent.attempt && last.reached != sent.reached) toast(last.headline(subject))
+                            }
+                            // The alert goes out at once with whatever position is known;
+                            // a fix found afterwards follows as a second alert. The toast
+                            // says what happened: it comes after the sends, never before.
+                            val s = Registry.status.value
+                            val hadFix = s.lat != null && s.lon != null
+                            val first = CommsRepository.sendSos()
+                            val findingFix = !hadFix && first.blocked == null && first.error == null
+                            toast(first.headline() + if (findingFix) ". Finding your location…" else "")
+                            if (first.retrying) followUp(first, "SOS")
+                            if (!findingFix) return@launch
+                            // Never an app's faked position, and the toast says why there is none.
+                            SosLocation.missing(SosLocation.locate(context))?.let { toast(it); return@launch }
+                            val second = CommsRepository.sendSos()
+                            toast(second.headline("Your location"))
+                            if (second.retrying) followUp(second, "Your location")
                         }
-                        // The alert goes out at once with whatever position is known.
-                        // Waiting for a fix first held it up by several seconds; now a
-                        // fix found afterwards follows as a second alert.
-                        val s = Registry.status.value
-                        val hadFix = s.lat != null && s.lon != null
-                        Registry.setPanicActive(true)
-                        toast(if (hadFix) "SOS sent with your location" else "SOS sent. Finding your location…")
-                        if (hadFix) return@launch
-                        val loc = sosLocation(context)
-                        if (loc == null) { toast("No GPS fix to attach to the SOS"); return@launch }
-                        // The first broadcast lowers the flag when it is done; a second
-                        // raise before that would be lost, so wait for it.
-                        Registry.panicActive.first { !it }
-                        Registry.setPanicActive(true)
-                        toast("Your location followed the SOS")
                     }
-                })
+                )
             }
         }
     ) {
@@ -1455,7 +1714,11 @@ private fun MainApp(
                 category == null -> ScanHub(
                     scanning = status.scanning,
                     statuses = statuses,
-                    onOpen = { openCategory(it) }
+                    onOpen = { openCategory(it) },
+                    error = status.error,
+                    stoppedBySystemAt = status.stoppedAt.takeIf { status.stoppedBySystem && it > 0L },
+                    scanEnabled = AppSettings.scanEnabled,
+                    onResumeScan = resumeScan
                 )
                 category == ScanCategory.TRACKERS -> if (trackerSub == 0) {
                     ScanScreen(
@@ -1463,7 +1726,8 @@ private fun MainApp(
                         onShowExplainer = { d -> explainerTarget = ExplainerTarget.BleDevice(d) }
                     )
                 } else {
-                    MapScreen()
+                    // The trail of where she has been: behind the passcode whenever one is set.
+                    OwnerGate(title = "Map", purpose = "open the map", onBack = null) { MapScreen() }
                 }
                 category == ScanCategory.CAMERAS -> CameraSweepScreen()
                 category == ScanCategory.CELL -> CellScreen(
@@ -1479,18 +1743,21 @@ private fun MainApp(
                     onEmulate = onEmulate,
                     onUnlockVault = onUnlockVault,
                     onLockVault = onLockVault,
-                    onEraseVault = onEraseVault
+                    onEraseVault = onEraseVault,
+                    onAcknowledgeOwnership = onAcknowledgeOwnership
                 )
                 category == ScanCategory.PHONE -> when (phoneSub) {
-                    0 -> DeviceScreen(onShown = onRefreshDeviceHealth)
+                    0 -> DeviceScreen(onShown = onRefreshDeviceHealth, onOpenAccounts = { phoneSub = ACCOUNTS_SUB_TAB })
                     1 -> StalkerwarePage()
-                    else -> CertificatesPage()
+                    2 -> CertificatesPage()
+                    else -> AccountChecklistPage()
                 }
             }
             HomeTab.COMMS -> {
                 // Every comms screen keeps the window out of screenshots while it is up.
                 KeepOffScreen()
                 when (commsAction) {
+                    CommsAction.GET_HELP -> GetHelpPage()
                     CommsAction.FAKE_CALL -> FakeCallPage()
                     CommsAction.DURESS -> DuressPage()
                     CommsAction.MESH -> MeshPage()
@@ -1508,7 +1775,10 @@ private fun MainApp(
             }
             HomeTab.DRIVE -> DriveScreen()
             HomeTab.ACTIVITY -> when (activitySub) {
-                0 -> TimelineScreen()
+                0 -> TimelineScreen(
+                    onResumeScan = resumeScan,
+                    onShowExplainer = { e -> explainerTarget = ExplainerTarget.Journeys(e) }
+                )
                 1 -> PatternOfLifePage()
                 else -> UnlockLedgerPage()
             }
@@ -1530,30 +1800,6 @@ private fun MainApp(
     }
 }
 
-/**
- * A position for an SOS when the scanner has none (scanner off, or the
- * comms-only build, which has no scanner): the platform's last known position,
- * else a fresh fix with a short wait. Whatever is found is put in the status the
- * panic broadcast reads. Null when location is not granted or nothing could be
- * found in time.
- */
-private fun sosLocation(context: Context): LatLon? {
-    val granted = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-        .any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
-    if (!granted) return null
-    val client = LocationServices.getFusedLocationProviderClient(context)
-    val fix = runCatching { Tasks.await(client.lastLocation, 2, TimeUnit.SECONDS) }.getOrNull()
-        ?: runCatching {
-            Tasks.await(
-                client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token),
-                6, TimeUnit.SECONDS
-            )
-        }.getOrNull()
-        ?: return null
-    Registry.update { it.copy(lat = fix.latitude, lon = fix.longitude) }
-    return LatLon(fix.latitude, fix.longitude)
-}
-
 // ── Scan (BLE) screen ────────────────────────────────────────────────────
 
 @Composable
@@ -1566,10 +1812,7 @@ internal fun ScanScreen(
     val detections by Registry.detections.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val trusted by Registry.trusted.collectAsStateWithLifecycle()
-    val timeline by Registry.timeline.collectAsStateWithLifecycle()
     val cell by Registry.cell.collectAsStateWithLifecycle()
-    val nfc by Registry.nfc.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val now = rememberNow()
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -1588,6 +1831,7 @@ internal fun ScanScreen(
             TrackerStatusHero(
                 status = status,
                 live = live,
+                now = now,
                 onToggle = {
                     if (status.scanning) onStop()
                     else if (hasPermissions()) onStart()
@@ -1601,7 +1845,7 @@ internal fun ScanScreen(
         }
 
         if (status.scanning || status.error != null) {
-            item(key = "§details") { ScanDetailsCard(status, detections, trusted) }
+            item(key = "§details") { ScanDetailsCard(status, detections, trusted, now) }
         }
 
         // ── Findings ──
@@ -1610,7 +1854,10 @@ internal fun ScanScreen(
             if (status.scanning) item(key = "§empty") {
                 EmptyState(
                     title = "Nothing flagged yet",
-                    body = "Proving something follows you takes 10 minutes of presence and a 300 m move. Leave it running.",
+                    // The thresholds as set in Settings, not the defaults.
+                    body = "Proving something follows you takes " +
+                        FollowerStatus.proof(AppSettings.persistenceThresholdMin, AppSettings.followThresholdM) +
+                        ". Leave it running.",
                     icon = ClairixIcons.BluetoothSearching,
                     tone = Tone.Safe
                 )
@@ -1635,41 +1882,83 @@ internal fun ScanScreen(
 
         // ── Actions ──
         item(key = "§export") {
-            SecondaryButton(
-                "Export evidence report",
-                onClick = {
-                    val i = Report.share(context, status, detections, timeline, cell, nfc)
-                    context.startActivity(Intent.createChooser(i, "Share evidence report"))
-                },
-                icon = Icons.Filled.Share,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-            )
+            // With a passcode set, each export asks for it (or a biometric) every time;
+            // then the period and the warning, then the share sheet.
+            EvidenceExportButtons("Export evidence report", modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
         }
     }
 }
 
 /** The verdict the Trackers screen leads with, and the start/stop switch under it. */
 @Composable
-private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggle: () -> Unit) {
-    val following = live.filter { it.following }
-    val persistent = live.count { it.persistent }
+private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, now: Long, onToggle: () -> Unit) {
+    val context = LocalContext.current
+    // Branch on the threat, not on `following` alone: a recognised tracker that moved
+    // with you is a tracker on you; an unidentified device that did is travelling with
+    // you, which a companion's phone also does. Only what was heard in the last half
+    // hour is on you now; a device marked found counts for nothing here.
+    val trackers = live.filter { FollowerStatus.onYouNow(it, now) && it.threat == Threat.CRITICAL }
+    val riders = live.filter { FollowerStatus.onYouNow(it, now) && it.threat != Threat.CRITICAL }
+    val earlier = live.filter { FollowerStatus.followedEarlier(it, now) && it.threat == Threat.CRITICAL }
+    val persistent = live.count { it.persistent && !it.resolved }
+    val error = status.error
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
+    val faking = positioning.faking(System.currentTimeMillis())
     val (headline, body, tone) = when {
+        // Wanted on and unable to scan (Bluetooth off, a refused restart): the cause,
+        // which is what there is to act on, as the hub puts it first too.
+        !status.scanning && error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
+        // Ended by an update, a kill or a battery manager: said so, not "off" as if she had.
+        !status.scanning && status.stoppedBySystem -> Triple(
+            "Scanner stopped",
+            ScannerHealth.stoppedBySystemLine(status.stoppedAt),
+            Tone.Caution
+        )
         !status.scanning -> Triple(
             "Scanner off",
             "Start scanning to check for Bluetooth trackers travelling with you.",
             Tone.Neutral
         )
-        following.size == 1 -> Triple(
+        trackers.size == 1 -> Triple(
             "Tracker on you",
-            "${following[0].name} was heard ${following[0].displacementM.roundToInt()} m apart while you moved. " +
+            "${trackers[0].name} was heard ${trackers[0].displacementM.roundToInt()} m apart while you moved. " +
                 "Open it below to see where to look.",
             Tone.Danger
         )
-        following.size > 1 -> Triple(
-            "${following.size} trackers on you",
+        trackers.size > 1 -> Triple(
+            "${trackers.size} trackers on you",
             "They were heard in different places while you moved. Open each one below to see where to look.",
             Tone.Danger
         )
+        riders.size == 1 -> Triple(
+            "A device is travelling with you",
+            "${riders[0].name} was heard ${riders[0].displacementM.roundToInt()} m apart while you moved. " +
+                "It is not recognised as a tracker away from its owner: a companion's phone, watch or keys, or the " +
+                "vehicle's own electronics, look the same. If you are alone, open it below and check the car.",
+            Tone.Caution
+        )
+        riders.size > 1 -> Triple(
+            "${riders.size} devices are travelling with you",
+            "They were heard in different places while you moved. None is recognised as a tracker away from its " +
+                "owner: companions' phones, watches and keys, or the vehicle's own electronics, look the same. " +
+                "If you are alone, open each one below and check the car.",
+            Tone.Caution
+        )
+        // Confirmed earlier and quiet since: asleep, out of range, or still where it was put.
+        earlier.isNotEmpty() -> Triple(
+            if (earlier.size == 1) "A tracker followed you earlier" else "${earlier.size} trackers followed you earlier",
+            (if (earlier.size == 1) "${earlier[0].name} was last heard ${fmtAgo(now, earlier[0].lastSeen)}. "
+            else "The last was heard ${fmtAgo(now, earlier.maxOf { it.lastSeen })}. ") +
+                "A tracker can sleep or be out of range and still be where it was put, so search the car and your " +
+                "bags. Once you have found one, open it below and tap I found it.",
+            Tone.Caution
+        )
+        // Registered and hearing nothing (Location off, five quiet minutes): a confirmed
+        // follower or rider above still stands, but "nothing following" below would be unproven.
+        error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
+        // An app supplies the phone's positions: following can be neither confirmed nor
+        // ruled out, so "nothing following" below would be unproven too.
+        faking -> Triple("Position faked", app.clairix.analysis.PositionText.FAKED, Tone.Caution)
         persistent > 0 -> Triple(
             "Keep watching",
             "${plural(persistent, "device")} keep showing up. Following is only confirmed once you move about " +
@@ -1690,9 +1979,21 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, onToggl
         modifier = Modifier.padding(top = 8.dp),
         footer = {
             if (status.scanning) {
+                if (error == ScannerHealth.LOCATION_OFF) {
+                    SecondaryButton(
+                        "Open Location settings",
+                        onClick = { openExternal(context, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
+                        tone = Tone.Accent,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 SecondaryButton("Stop scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
             } else {
-                PrimaryButton("Start scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
+                PrimaryButton(
+                    if (status.stoppedBySystem) "Resume scanning" else "Start scanning",
+                    onClick = onToggle,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     )
@@ -1720,7 +2021,11 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
             StatTile("${status.nearbyCount}", "In range", Modifier.weight(1f))
             StatTile(
                 "${detections.size}", "Flagged", Modifier.weight(1f),
-                tone = if (live.any { it.following }) Tone.Danger else Tone.Neutral
+                tone = when {
+                    live.any { it.following && it.threat == Threat.CRITICAL } -> Tone.Danger
+                    live.any { it.following } -> Tone.Caution
+                    else -> Tone.Neutral
+                }
             )
         }
         ClairixCard(spacing = 8.dp) {
@@ -1745,7 +2050,9 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
 
 /** What the scan is working with: position, filtered noise, trusted devices, errors. */
 @Composable
-private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, trusted: Set<String>) {
+private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, trusted: Set<String>, now: Long) {
+    // Where fixes come from, whether the GPS check can compare, whether an app fakes positions.
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
     ClairixCard(spacing = 4.dp) {
         val scanText = when {
             !status.scanning -> "Idle"
@@ -1757,6 +2064,23 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
         if (status.scanning && filtered > 0) {
             KeyValueRow("Filtered out", "$filtered passing signals")
         }
+        // The scan's own pulse: a scan that is registered but hears nothing shows it here
+        // first. The time is published to the half minute (see ScannerHealth), so it reads
+        // to the minute.
+        if (status.scanning) {
+            val heard = status.lastPacketAt
+            KeyValueRow(
+                "Last heard",
+                when {
+                    heard == 0L -> "nothing yet"
+                    now - heard < 60_000L -> "within the last minute"
+                    else -> fmtAgo(now, heard)
+                }
+            )
+        }
+        if (status.packetErrors > 0) {
+            KeyValueRow("Packet errors", "${status.packetErrors}", valueColor = ClairixTheme.colors.caution)
+        }
         if (status.hasFix) {
             KeyValueRow("Position", "%.4f, %.4f".format(Locale.US, status.lat ?: 0.0, status.lon ?: 0.0))
             KeyValueRow(
@@ -1764,7 +2088,17 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
                 "${if (status.moving) "Moving" else "Still"} · %.1f km".format(Locale.US, status.travelledM / 1000.0)
             )
         } else {
-            WarningLine("No GPS fix. Following can't be confirmed without one.", Tone.Caution)
+            WarningLine(app.clairix.analysis.PositionText.noFix(positioning.source, positioning.faking(now)), Tone.Caution)
+        }
+        // Said when fixes do not come from Google Play services, and when the satellites
+        // cannot be held against a Wi-Fi/cell position here.
+        app.clairix.analysis.PositionText.source(positioning.source)?.let { line ->
+            if (app.clairix.analysis.PositionText.sourceIsProblem(positioning.source)) WarningLine(line, Tone.Caution)
+            else Text(line, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+        }
+        app.clairix.analysis.PositionText.network(positioning.networkCheck)?.let { line ->
+            if (app.clairix.analysis.PositionText.networkIsProblem(positioning.networkCheck)) WarningLine(line, Tone.Caution)
+            else Text(line, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         }
         if (trusted.isNotEmpty()) {
             KeyValueRow("Marked safe", "${plural(trusted.size, "device")}, left out of the threat level", mono = false)
@@ -1818,7 +2152,7 @@ private fun DetectionRow(
 
     ClairixCard(
         tone = tone,
-        emphasis = d.following && !trusted,
+        emphasis = FollowerStatus.withYou(d) && d.threat == Threat.CRITICAL && !trusted,
         onClick = { expanded = !expanded },
         onClickLabel = if (expanded) "Hide details" else "Show details"
     ) {
@@ -1835,8 +2169,11 @@ private fun DetectionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (trusted) StatusPill("Trusted", Tone.Neutral)
-            else StatusPill(if (d.following) followingPill(d) else levelLabel(d.threat.name), d.threat.tone())
+            when {
+                trusted -> StatusPill("Trusted", Tone.Neutral)
+                d.resolved -> StatusPill("Found", Tone.Neutral)
+                else -> StatusPill(if (d.following) followingPill(d) else levelLabel(d.threat.name), d.threat.tone())
+            }
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
@@ -1866,8 +2203,18 @@ private fun DetectionRow(
             RssiBar(d.rssi)
         }
 
-        if (d.following && !trusted) {
-            WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
+        if (d.resolved && !trusted) {
+            Text(
+                "Marked found at ${fmtClock(d.resolvedAt)}. It no longer counts as on you.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = c.textMuted
+            )
+        } else if (d.following && !trusted) {
+            if (d.threat == Threat.CRITICAL) {
+                WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
+            } else {
+                WarningLine("Travelling with you: heard ${d.displacementM.roundToInt()} m apart. Not recognised as a tracker away from its owner.", Tone.Caution)
+            }
         }
 
         if (expanded) DetectionDetail(d, trusted, onShowExplainer)
@@ -1882,9 +2229,13 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
 
         // ── Follow assessment first: it is the answer to "is this on me?" ──
         SectionHeader("Is it following you?")
+        // No position because an app supplies fake ones, said as that rather than as no GPS.
+        val positioning by Registry.positioning.collectAsStateWithLifecycle()
+        val faking = positioning.faking(System.currentTimeMillis())
         val (line, lineTone) = when (d.confidence) {
             FollowConfidence.NONE -> "Not enough data yet" to Tone.Neutral
-            FollowConfidence.NO_POSITION -> "No GPS, so movement can't be confirmed" to Tone.Caution
+            FollowConfidence.NO_POSITION ->
+                (if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE else "No position fix, so movement can't be confirmed") to Tone.Caution
             FollowConfidence.NOT_MOVED_ENOUGH -> "Nearby, not following" to Tone.Caution
             FollowConfidence.CONFIRMED ->
                 if (d.threat == Threat.CRITICAL) "Following you" to Tone.Danger else "Travelling with you" to Tone.Caution
@@ -1895,19 +2246,20 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                 if (d.identified) "Known tracker type, but heard too briefly to show a pattern."
                 else "Watching for a pattern of it staying with you."
             FollowConfidence.NO_POSITION ->
-                "It keeps showing up. A GPS fix is needed to prove it moves with you."
+                if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE_DETAIL
+                else "It keeps showing up. A position fix is needed to prove it moves with you."
             FollowConfidence.NOT_MOVED_ENOUGH ->
                 "It keeps showing up, but only ${d.displacementM.roundToInt()} m of shared travel so far. " +
-                    "Confirming it needs about 300 m."
+                    "Confirming it needs about ${AppSettings.followThresholdM.roundToInt()} m."
             FollowConfidence.CONFIRMED ->
                 if (d.threat == Threat.CRITICAL) {
                     "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
                         "Check wheel wells, bumper covers, the OBD-II port, under seats and bag linings."
                 } else {
-                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, but it does not identify itself as a " +
-                        "tracker. It may be the phone, earbuds or watch of someone travelling with you, or your vehicle's own " +
-                        "electronics. A hardwired GPS tracker looks the same: if you are alone, check the OBD-II port, under the " +
-                        "dash, wheel wells and bumpers. Mark it as yours if you recognise it."
+                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, but it is not recognised as a " +
+                        "tracker away from its owner. It may be the phone, earbuds, watch or keys of someone travelling with you, " +
+                        "or your vehicle's own electronics. A hardwired GPS tracker looks the same: if you are alone, check the " +
+                        "OBD-II port, under the dash, wheel wells and bumpers. Mark it as yours if you recognise it."
                 }
         }
         Text(explanation, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
@@ -1972,6 +2324,8 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
         }
 
         // ── Actions ──
+        val context = LocalContext.current
+        val scanning = Registry.status.collectAsStateWithLifecycle().value.scanning
         if (trusted) {
             SecondaryButton(
                 "Put it back in the threat level",
@@ -1982,14 +2336,46 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
             if (onShowExplainer != null) {
                 PrimaryButton("What is this, and what do I do?", onClick = onShowExplainer, modifier = Modifier.fillMaxWidth())
             }
+            // Found and dealt with: it stops counting as on you, without teaching the
+            // app to ignore it if it comes back. Acts on the running scanner's record.
+            if (d.resolved) {
+                SecondaryButton(
+                    "Not found after all",
+                    onClick = { ScanService.sendFound(context, d.key, found = false) },
+                    enabled = scanning,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else if (d.following || d.persistent) {
+                SecondaryButton(
+                    "I found it",
+                    onClick = { ScanService.sendFound(context, d.key, found = true) },
+                    tone = Tone.Accent,
+                    enabled = scanning,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Once you have found and removed it. It stops counting as on you and stays in the timeline and " +
+                        "the evidence report; if it is heard again after an hour away, Clairix watches it afresh.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSubtle
+                )
+            }
+            val rotating = TrustBook.rotating(d)
             SecondaryButton(
                 "Mark as mine",
-                onClick = { Registry.trust(d.address) },
+                onClick = { Registry.trust(d.address, label = d.name, rotating = rotating) },
                 tone = Tone.Safe,
                 modifier = Modifier.fillMaxWidth()
             )
             Text(
-                "Marking it as yours removes it from the threat level. You can undo this here or in Settings.",
+                if (rotating) {
+                    "Marking it as yours removes it from the threat level. This device changes its Bluetooth address: " +
+                        "Clairix keeps it as yours across a change only when it can prove it is the same device, which " +
+                        "it cannot for a tracker tag (two of one make look alike), and asks you again after 24 hours. " +
+                        "You can undo this here or in Settings."
+                } else {
+                    "Marking it as yours removes it from the threat level. You can undo this here or in Settings."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = c.textSubtle
             )
@@ -2074,7 +2460,10 @@ private fun MapScreen() {
     val context = LocalContext.current
 
     val cellHot = cell.available && cell.level.ordinal >= Threat.HIGH.ordinal
-    val followingTrails = mapData.devices.count { it.following }
+    // A recognised tracker moving with you is a tracker on you; anything else that did
+    // is only travelling with you, as a companion's phone does.
+    val followingTrails = mapData.devices.count { it.following && it.threat == Threat.CRITICAL }
+    val travellingTrails = mapData.devices.count { it.following && it.threat != Threat.CRITICAL }
     val theme = ClairixTheme.colors
     val palette = MarkerPalette(
         danger = theme.danger.toArgb(),
@@ -2086,18 +2475,27 @@ private fun MapScreen() {
 
     val mapView = remember {
         configureOsm(context)
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+        // The tile server is the signed tile setting's (OpenStreetMap's until one
+        // names another), and every tile answer is counted for the notice below.
+        app.clairix.nav.MapTiles.newMapView(context).apply {
             // Tiles are 256 px; drawn unscaled, a phone screen at zoom 17 is around
             // fifty of them, and every pan, zoom or visit to this tab fetched that
             // many. Scaled to the display density it is a dozen or so, and the map
             // labels become legible at arm's length.
             setTilesScaledToDpi(true)
             setMultiTouchControls(true)
+            // The zoom buttons stand at the right edge, so the bottom edge stays
+            // free for the map credit and the banners above it.
+            zoomController.display.setPositions(
+                false,
+                org.osmdroid.views.CustomZoomButtonsDisplay.HorizontalPosition.RIGHT,
+                org.osmdroid.views.CustomZoomButtonsDisplay.VerticalPosition.CENTER
+            )
             controller.setZoom(17.0)
             isFlingEnabled = true
         }
     }
+    app.clairix.nav.FollowTileServer(mapView)
 
     // Only center the map on the very first GPS fix; after that the user controls it.
     var hasCentered by remember { mutableStateOf(false) }
@@ -2263,13 +2661,18 @@ private fun MapScreen() {
                 tone = if (status.hasFix) Tone.Neutral else Tone.Caution
             )
             if (cellHot) MapChip("Sketchy cell tower nearby · ${levelLabel(cell.level.name)}", Tone.Caution)
+            app.clairix.nav.TilesUnavailableNotice("Your position, the devices and their trails are still drawn.")
         }
+
+        // The data credit the licence asks for, on the map and clear of the SOS
+        // button; the banners below sit above it.
+        app.clairix.nav.MapAttribution(Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp))
 
         if (followingTrails > 0) {
             Row(
                 Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(start = 12.dp, end = 88.dp, bottom = 16.dp)
+                    .padding(start = 12.dp, end = 88.dp, bottom = 36.dp)
                     .background(ClairixTheme.colors.danger, ClairixShapes.Control)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2280,6 +2683,13 @@ private fun MapScreen() {
                     if (followingTrails == 1) "1 tracker on you" else "$followingTrails trackers on you",
                     style = MaterialTheme.typography.titleSmall,
                     color = ClairixTheme.colors.onDanger
+                )
+            }
+        } else if (travellingTrails > 0) {
+            Box(Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 88.dp, bottom = 36.dp)) {
+                MapChip(
+                    if (travellingTrails == 1) "1 device travelling with you" else "$travellingTrails devices travelling with you",
+                    Tone.Caution
                 )
             }
         }
@@ -2305,8 +2715,12 @@ private fun MapChip(text: String, tone: Tone) {
 
 // ── Timeline screen ──────────────────────────────────────────────────────
 
+/**
+ * The timeline. [onShowExplainer] opens the co-traveller explanation for a trip-memory
+ * finding nothing tied to the owner's car ([VehicleTrips.coTravellerEvent]).
+ */
 @Composable
-internal fun TimelineScreen() {
+internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer: ((TimelineEvent) -> Unit)? = null) {
     val events by Registry.timeline.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(60_000L)
@@ -2314,6 +2728,12 @@ internal fun TimelineScreen() {
     val groups = remember(events, now / 60_000L) { events.groupBy { dayLabel(it.ts, now) } }
     val flagged = remember(events) { events.count { it.severity.ordinal >= Severity.HIGH.ordinal || it.kind == EventKind.PANIC } }
     val today = groups[dayLabel(now, now)]?.size ?: 0
+    // The newest stop on record. When it was the system's and the scanner is still
+    // down, its row offers to resume; older stops are history.
+    val latestStop = remember(events) { events.firstOrNull { it.kind == EventKind.SCAN_STOP } }
+    // What the retention deletes, read again as the log changes (it prunes by the setting).
+    val context = LocalContext.current
+    val retentionFooter = remember(events) { Report.timelineFooter(HistoryRetention.days(context)) }
 
     ScreenList {
         // ── Status first: how much is on record and how much of it matters ──
@@ -2335,7 +2755,27 @@ internal fun TimelineScreen() {
         } else {
             groups.forEach { (label, list) ->
                 item(key = "§day-$label") { SectionHeader(label, supporting = plural(list.size, "event")) }
-                items(list, key = { it.id }) { TimelineRow(it, status) }
+                items(list, key = { it.id }) { e ->
+                    val resumable = onResumeScan != null && e.id == latestStop?.id &&
+                        e.id.startsWith(ScannerHealth.SYSTEM_STOP_ID_PREFIX) && !status.scanning && AppSettings.scanEnabled
+                    val explain = onShowExplainer?.takeIf { VehicleTrips.coTravellerEvent(e.id) }
+                    TimelineRow(
+                        e, status,
+                        onResume = if (resumable) onResumeScan else null,
+                        onExplain = explain?.let { show -> { show(e) } }
+                    )
+                }
+            }
+        }
+        // Always there, history or none: what goes, and how to keep it. Nothing when kept forever.
+        retentionFooter?.let { footer ->
+            item(key = "§retention") {
+                Text(
+                    footer,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClairixTheme.colors.textSubtle,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                )
             }
         }
     }
@@ -2364,7 +2804,12 @@ private fun eventTone(e: TimelineEvent): Tone = when (e.kind) {
 }
 
 @Composable
-private fun TimelineRow(e: TimelineEvent, status: ScanStatus) {
+private fun TimelineRow(
+    e: TimelineEvent,
+    status: ScanStatus,
+    onResume: (() -> Unit)? = null,
+    onExplain: (() -> Unit)? = null
+) {
     var open by remember(e.id) { mutableStateOf(false) }
     val tone = eventTone(e)
     val tag = eventKindTag(e.kind)
@@ -2403,10 +2848,19 @@ private fun TimelineRow(e: TimelineEvent, status: ScanStatus) {
                 overflow = TextOverflow.Ellipsis
             )
         }
+        // A scanner the system stopped, still down: "tap to resume" means this row.
+        if (onResume != null) GhostButton("Resume scanning", onClick = onResume)
+        // A device on several journeys that nothing tied to her car: the co-traveller explanation.
+        if (onExplain != null) GhostButton("What is this, and what do I do?", onClick = onExplain)
         if (lat != null && lon != null) {
             Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         }
+        // A photo the owner kept from the camera sweep, sealed on the phone until opened here.
+        e.attachment?.takeIf { app.clairix.analysis.SweepPhotos.isPhoto(it) }?.let { SweepPhotoButton(it) }
         if (open) {
+            // An unlock while you slept, a changed PIN or an added fingerprint: what
+            // the alert tells you to do next can also tell whoever did it.
+            if (SafetyFirst.forEvent(e.kind)) SafetyFirstCard(title = SafetyFirst.TITLE_PHONE)
             Hairline(Modifier.padding(vertical = 4.dp))
             KeyValueRow("Time", fmtTime(e.ts))
             KeyValueRow("Kind", e.kind.name.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }, mono = false)
@@ -2482,13 +2936,9 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
     val now = rememberNow(5_000L)
 
     // With the scanner off, the tab takes its own reading every 15 s while it is on
-    // screen; with it on, the service's judged readings arrive on the same cadence.
-    LaunchedEffect(status.scanning) {
-        while (true) {
-            onShown()
-            delay(15_000L)
-        }
-    }
+    // screen and in front; with it on, the service's judged readings arrive on the
+    // same cadence while the screen is on. See [ScanPacing.tabRefreshMs].
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.CELL, status), onShown)
 
     val radio = cell.radio
     val c = cell.cell
@@ -2519,7 +2969,8 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
                 item(key = "§no-indicators") {
                     Notice(
                         Tone.Safe,
-                        "Twelve checks run every 15 s against your baseline: forced 2G/3G downgrades, a tower in the " +
+                        "Twelve checks run against your baseline with every reading, every 15 s while the phone is in use " +
+                            "or moving and up to a minute apart while it rests: forced 2G/3G downgrades, a tower in the " +
                             "wrong area, area changes while you stand still, signal above the area's record, unknown " +
                             "cells in familiar places, towers that appear and vanish, rapid switching, no neighbours, " +
                             "a transmitter within 78 m, signal spikes and technology flip-flopping.",
@@ -2885,6 +3336,14 @@ private val CardProfile.hceLimited: Boolean
 private const val HCE_LIMITED_CAVEAT = "Static replay only — readers that challenge the card will reject it"
 
 /**
+ * The line shown on the tag row and in the one-time acknowledgement before the first
+ * save: the vault is for the owner's own cards, and replaying someone else's
+ * credential may be a crime.
+ */
+private const val VAULT_OWNERSHIP_NOTICE =
+    "Only cards issued to you. Recording and replaying someone else's card or credential may be a crime."
+
+/**
  * The NFC tab: the tags read this session and, in the full edition, the card
  * vault and card emulation. The Play edition is built with CARD_VAULT off, so
  * the tab there is the tag reader and skimmer check alone: no vault section, no
@@ -2897,12 +3356,16 @@ internal fun NfcScreen(
     onEmulate: (VaultCard?) -> Unit,
     onUnlockVault: () -> Unit,
     onLockVault: () -> Unit,
-    onEraseVault: () -> Unit
+    onEraseVault: () -> Unit,
+    onAcknowledgeOwnership: () -> Unit
 ) {
     val tags       by Registry.nfc.collectAsStateWithLifecycle()
     val vaultState by Registry.vault.collectAsStateWithLifecycle()
     val armed      by Registry.emulating.collectAsStateWithLifecycle()
     val replace    by Registry.replacePrompt.collectAsStateWithLifecycle()
+    val ownershipAck   by Registry.ownershipAck.collectAsStateWithLifecycle()
+    val captureArm     by Registry.vaultCaptureArm.collectAsStateWithLifecycle()
+    val pendingCapture by Registry.pendingVaultCapture.collectAsStateWithLifecycle()
     val emulId = armed?.id
     // Cards exist here only while the vault is unlocked.
     val vault = (vaultState as? VaultState.Unlocked)?.cards.orEmpty()
@@ -2910,6 +3373,27 @@ internal fun NfcScreen(
     var confirmErase by remember { mutableStateOf(false) }
 
     val vaultEnabled = BuildConfig.CARD_VAULT
+
+    // The one-time ownership acknowledgement, shown before the first save. The action
+    // the owner was about to take is held and run once they confirm.
+    var ackAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val pendingAck = ackAction
+    if (vaultEnabled && pendingAck != null) {
+        ClairixDialog(
+            title = "Only cards issued to you",
+            text = VAULT_OWNERSHIP_NOTICE,
+            confirmLabel = "I understand",
+            confirmTone = Tone.Caution,
+            onConfirm = { ackAction = null; onAcknowledgeOwnership(); pendingAck() },
+            dismissLabel = "Cancel",
+            onDismiss = { ackAction = null }
+        )
+    }
+    // Runs [action] straight away once the owner has acknowledged ownership, or shows
+    // the acknowledgement first and runs it on confirm.
+    val guardOwnership: (() -> Unit) -> Unit = { action ->
+        if (ownershipAck) action() else ackAction = action
+    }
 
     // The vault refused to overwrite a stored card with this UID; ask.
     val pendingReplace = replace
@@ -3003,8 +3487,11 @@ internal fun NfcScreen(
                     vaultEnabled = vaultEnabled,
                     inVault = vault.any { it.uid == tag.uid },
                     vaultOpen = vaultOpen,
+                    armedForCapture = captureArm == tag.uid,
+                    captureReady = pendingCapture?.uid == tag.uid,
                     onAddToVault = { label -> onAddToVault(tag, label, false) },
-                    onUnlockVault = onUnlockVault
+                    onUnlockVault = onUnlockVault,
+                    guardOwnership = guardOwnership
                 )
             }
         }
@@ -3146,18 +3633,27 @@ private fun NfcTagRow(
     vaultEnabled: Boolean,
     inVault: Boolean,
     vaultOpen: Boolean,
+    armedForCapture: Boolean,
+    captureReady: Boolean,
     onAddToVault: (String) -> Unit,
-    onUnlockVault: () -> Unit
+    onUnlockVault: () -> Unit,
+    guardOwnership: (() -> Unit) -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(t.uid) { mutableStateOf(false) }
     var addingLabel by remember(t.uid) { mutableStateOf(false) }
     var labelText by remember(t.uid) { mutableStateOf("") }
     LaunchedEffect(copied) { if (copied) { delay(1500L); copied = false } }
+    // A re-tap has recorded this card: open the label field with a sensible default.
+    LaunchedEffect(captureReady) {
+        if (captureReady && labelText.isBlank()) labelText = t.profile.label
+    }
+    // The label field is shown either for a recorded ISO-DEP card (captureReady) or
+    // for a card saved for identification only (addingLabel).
+    val namingCard = captureReady || addingLabel
     val c = ClairixTheme.colors
 
-    val isPayment = t.profile in setOf(CardProfile.EMV_VISA, CardProfile.EMV_MASTERCARD,
-        CardProfile.EMV_AMEX, CardProfile.EMV_OTHER)
+    val isPayment = NfcScanner.isPaymentProfile(t.profile)
     val tone = when {
         t.suspicious -> Tone.Danger
         isPayment    -> Tone.Caution
@@ -3206,14 +3702,29 @@ private fun NfcTagRow(
         // Play edition reads and checks tags but does not store or emulate them.
         if (vaultEnabled && !isPayment) {
             if (t.profile.hceLimited) {
-                Text("Replay only: $HCE_LIMITED_CAVEAT. Save it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
+                Text("Replay only: $HCE_LIMITED_CAVEAT. Record it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
             } else if (t.profile.hceCapable) {
-                Text("Your phone can stand in for this card. Save it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+                Text("Your phone can stand in for this card. Record it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
             }
         }
 
-        // Add-to-vault inline input
-        if (vaultEnabled && addingLabel) {
+        // The ownership line, wherever the row offers a way into the vault.
+        if (vaultEnabled && !isPayment && !inVault) {
+            WarningLine(VAULT_OWNERSHIP_NOTICE, Tone.Caution)
+        }
+
+        // Waiting for the re-tap that records the card for the vault.
+        if (vaultEnabled && armedForCapture && !captureReady) {
+            Notice(
+                Tone.Info,
+                "Hold the card to the back of the phone again to record it for the vault.",
+                title = "Ready to record",
+                action = { GhostButton("Cancel", onClick = { Registry.cancelVaultCapture() }, tone = Tone.Neutral) }
+            )
+        }
+
+        // Name-and-save inline input, for a recorded card or an identification-only save.
+        if (vaultEnabled && namingCard) {
             ClairixTextField(
                 value = labelText,
                 onValueChange = { labelText = it },
@@ -3232,7 +3743,14 @@ private fun NfcTagRow(
                     enabled = labelText.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
-                GhostButton("Cancel", onClick = { addingLabel = false; labelText = "" }, tone = Tone.Neutral)
+                GhostButton(
+                    "Cancel",
+                    onClick = {
+                        if (captureReady) Registry.setPendingVaultCapture(null)
+                        addingLabel = false; labelText = ""
+                    },
+                    tone = Tone.Neutral
+                )
             }
         }
 
@@ -3243,13 +3761,18 @@ private fun NfcTagRow(
             // the key's auth window still warm, a save from here used to go
             // through without a prompt and replace the stored card unseen.
             // Without a vault (the Play edition) the row offers only Copy UID.
+            // An ISO-DEP card the phone can emulate is recorded by an explicit
+            // re-tap (so the APDU capture never runs on an ordinary scan); a card
+            // kept for identification only is saved straight away. Both pass the
+            // one-time ownership acknowledgement first.
             if (vaultEnabled) {
-                if (!vaultOpen && !isPayment) {
-                    GhostButton("Unlock to save", onClick = onUnlockVault)
-                } else if (!inVault && !isPayment && !addingLabel) {
-                    GhostButton("Save to vault", onClick = { addingLabel = true; labelText = t.profile.label })
-                } else if (inVault) {
-                    StatusPill("In vault", Tone.Safe)
+                when {
+                    !vaultOpen && !isPayment -> GhostButton("Unlock to save", onClick = onUnlockVault)
+                    isPayment || inVault || namingCard || armedForCapture -> if (inVault) StatusPill("In vault", Tone.Safe)
+                    t.profile.hceCapable ->
+                        GhostButton("Record for vault", onClick = { guardOwnership { Registry.armVaultCapture(t.uid) } })
+                    else ->
+                        GhostButton("Save to vault", onClick = { guardOwnership { addingLabel = true; labelText = t.profile.label } })
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -3265,23 +3788,31 @@ private fun NfcTagRow(
 // ── Device health screen ────────────────────────────────────────────────
 
 @Composable
-internal fun DeviceScreen(onShown: () -> Unit) {
+internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
-    // Live microphone and camera monitoring only runs inside the scanner service;
-    // the static findings are re-checked by the Activity whenever this tab appears,
-    // and every 30 s while it stays up so battery, USB and VPN rows stay current.
+    // Live microphone and camera monitoring only runs inside the scanner service. With
+    // the scanner off, the static findings are re-checked by the Activity whenever this
+    // tab appears and every 30 s while it stays in front, so battery, USB and VPN rows
+    // stay current; with it on, the service re-checks them every 30 s while the screen
+    // is on. See [ScanPacing.tabRefreshMs].
     val liveMonitoring = status.scanning
-    LaunchedEffect(Unit) {
-        while (true) {
-            onShown()
-            delay(30_000L)
-        }
-    }
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.DEVICE, status), onShown)
     val problems = health.problems
     val checked = health.facts.size
     val issues = health.findings.size + problems.size
     val c = ClairixTheme.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // A row's answer ("I turned 2G off") is stored off the main thread, then the
+    // checklist is read again so the row shows what it now knows.
+    val onAnswer: (String) -> Unit = { id ->
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { CellularExposure.answer(context.applicationContext, id) } }
+            onShown()
+        }
+    }
+    val audioInputs = rememberAudioInputs()
 
     ScreenList {
         // ── Status first ───────────────────────────────────────────────────
@@ -3342,8 +3873,16 @@ internal fun DeviceScreen(onShown: () -> Unit) {
             item(key = "findings_head") {
                 SectionHeader("Apps with spy-level access", supporting = "${health.findings.size}", tone = Tone.Danger)
             }
+            // These say how to revoke or uninstall, so the safety card comes first, as on the Stalkerware page.
+            item(key = "findings_safety_first") { SafetyFirstCard(title = SafetyFirst.TITLE_APP) }
             items(health.findings, key = { it.id }) { f -> HealthFindingRow(f) }
         }
+
+        // ── Microphones that attached themselves, and the owner's own headsets ──
+        audioInputItems(audioInputs)
+
+        // ── Who else can see this phone: when the accounts checklist was last done ──
+        accountChecklistSummaryItems(onOpenAccounts)
 
         // ── Checklist ───────────────────────────────────────────────────────
         if (health.facts.isNotEmpty()) {
@@ -3359,7 +3898,7 @@ internal fun DeviceScreen(onShown: () -> Unit) {
                     ListGroup {
                         rows.forEachIndexed { i, f ->
                             if (i > 0) Hairline()
-                            HealthFactRow(f)
+                            HealthFactRow(f, onAnswer)
                         }
                     }
                 }
@@ -3396,13 +3935,22 @@ private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
         )
         sensor != null -> Triple(
             sensor,
-            "No spyware or risky settings found in $checked checks. Something is using a sensor right now; see below.",
+            (if (health.spywareScannedTs > 0L) "No spyware or risky settings found in $checked checks. "
+            else "No risky settings found in $checked checks; installed apps are still being checked. ") +
+                "Something is using a sensor right now; see below.",
             Tone.Caution
+        )
+        // "Known spyware" is only said once the stalkerware check has run.
+        health.spywareScannedTs == 0L -> Triple(
+            "Checking apps",
+            "$checked checks passed. No root, debug access or unknown admins. Installed apps are still being checked for spyware.",
+            Tone.Neutral
         )
         else -> Triple(
             "Phone clear",
+            // Two times: the settings pass runs often, the check of installed apps (the "known spyware") less often.
             "$checked checks passed. No root, debug access, unknown admins or known spyware. " +
-                "Checked ${fmtClock(health.findingsScannedTs)}.",
+                "Settings checked ${fmtClock(health.findingsScannedTs)}, apps checked ${fmtTime(health.spywareScannedTs)}.",
             Tone.Safe
         )
     }
@@ -3416,11 +3964,13 @@ private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
 }
 
 @Composable
-private fun HealthFactRow(f: HealthFact) {
+private fun HealthFactRow(f: HealthFact, onAnswer: (String) -> Unit) {
     val c = ClairixTheme.colors
+    val context = LocalContext.current
     // Purely informational rows (a version number, a battery level) get a neutral
-    // mark; a check that passed gets safe; a problem gets its severity's tone.
-    val informational = f.severity == null && INFORMATIONAL_FACTS.contains(f.id)
+    // mark, as do granted-access rows and the stock keyboard (SpywareHealth.informational);
+    // a check that passed gets safe; a problem gets its severity's tone.
+    val informational = f.severity == null && (INFORMATIONAL_FACTS.contains(f.id) || SpywareHealth.informational(f.id))
     val tone = when {
         f.severity != null -> f.severity.tone()
         informational -> Tone.Neutral
@@ -3435,35 +3985,57 @@ private fun HealthFactRow(f: HealthFact) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .semantics(mergeDescendants = true) {},
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(Modifier.size(8.dp).background(mark, ClairixShapes.Tag))
-            Text(f.label, style = MaterialTheme.typography.bodyMedium, color = c.text, modifier = Modifier.weight(1f))
-            Text(
-                f.value,
-                style = MaterialTheme.typography.mono,
-                color = if (f.severity == null) c.textMuted else tone.color(),
-                textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f)
-            )
+        // The text reads as one item; the buttons under it stay buttons of their own.
+        Column(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(8.dp).background(mark, ClairixShapes.Tag))
+                Text(f.label, style = MaterialTheme.typography.bodyMedium, color = c.text, modifier = Modifier.weight(1f))
+                Text(
+                    f.value,
+                    style = MaterialTheme.typography.mono,
+                    color = if (f.severity == null) c.textMuted else tone.color(),
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (f.detail != null) {
+                Text(
+                    f.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (f.severity == null) c.textSubtle else tone.color(),
+                    modifier = Modifier.padding(start = 20.dp)
+                )
+            }
         }
-        if (f.detail != null) {
-            Text(
-                f.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (f.severity == null) c.textSubtle else tone.color(),
-                modifier = Modifier.padding(start = 20.dp)
-            )
+        // The page where the row is put right, and what only the owner can tell Clairix.
+        val fix = f.fixAction
+        val answer = f.answer
+        if (fix != null || answer != null) {
+            Row(Modifier.padding(start = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (fix != null) GhostButton("Open settings", onClick = { openFix(context, fix) })
+                if (answer != null) GhostButton(answer.label, onClick = { onAnswer(answer.id) })
+            }
         }
     }
 }
 
+/**
+ * Opens the Settings page a checklist row names. A phone without that page (an OEM
+ * that renamed or dropped it) gets the security settings page instead, as
+ * [HealthFact.fixAction] promises.
+ */
+private fun openFix(context: Context, action: String) {
+    val opened = runCatching { context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+    if (!opened) openExternal(context, Intent(Settings.ACTION_SECURITY_SETTINGS))
+}
+
 /** Checklist rows that describe rather than judge, so a safe mark would overclaim. */
 private val INFORMATIONAL_FACTS = setOf(
-    "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always"
+    "integrity_api", "android", "model", "build", "kernel", "cpu", "battery", "vpn", "pdns", "vpn_always", "profiles",
+    CellularExposure.NOTIFICATIONS_FACT_ID
 )
 
 @Composable
@@ -3484,34 +4056,39 @@ private fun HealthFindingRow(f: PhoneHealthFinding) {
 
 private fun wifiReason(reason: String): String = when (reason) {
     "known_catcher_ssid" -> "Default SSID of known interception equipment"
-    "carrier_open_network" -> "Carrier name on an unencrypted network — likely bait"
+    "carrier_open_network" -> "Open carrier hotspot — captive portal, unencrypted; use a VPN on it"
     "open_twin_of_secured" -> "Open copy of a network that is encrypted nearby — evil twin"
     "open_unsecured" -> "Open, unsecured network — traffic can be intercepted"
     else -> reason.replace('_', ' ').replaceFirstChar { it.uppercase(Locale.US) }
 }
 
+/** When the Karma trap was armed, as the Wi-Fi tab says it. Main thread only, like the formatters above. */
+private val trapSinceFmt = SimpleDateFormat("MMM d, HH:mm", Locale.US)
+
 @Composable
 internal fun WifiScreen(onShown: () -> Unit = {}) {
     val anomalies by Registry.wifi.collectAsStateWithLifecycle()
     val wifi by Registry.wifiStatus.collectAsStateWithLifecycle()
+    val status by Registry.status.collectAsStateWithLifecycle()
+    val trap by Registry.karmaTrap.collectAsStateWithLifecycle()
     val now = rememberNow(5_000L)
     val sorted = remember(anomalies) {
         anomalies.sortedWith(compareByDescending<WifiAnomaly> { it.threat.ordinal }.thenByDescending { it.ts })
     }
 
-    // Android allows four scan requests per two minutes in the foreground; every
-    // 30 s uses that budget exactly while the screen is open.
-    LaunchedEffect(Unit) {
-        while (true) {
-            onShown()
-            delay(30_000L)
-        }
-    }
+    // While the scanner runs the tab shows the scanner's own results, from the scan it
+    // asks for every two minutes while the screen is on, and requests none itself. With
+    // the scanner off it asks for one a minute while it is in front: Android allows four
+    // in two minutes. See [ScanPacing.tabRefreshMs].
+    RefreshWhileStarted(ScanPacing.tabRefreshMs(ScanPacing.Tab.WIFI, status), onShown)
 
     val conn = wifi.connection
     val flagged = wifi.nearby.count { it.flags.isNotEmpty() }
     val open = wifi.nearby.count { !it.security.secure }
     val high = sorted.count { it.threat.ordinal >= Threat.HIGH.ordinal }
+    // Open carrier hotspots are noted, not flagged as bait: xfinitywifi and attwifi are
+    // open captive portals by design. When they are all there is, say what they are.
+    val onlyHotspots = sorted.isNotEmpty() && sorted.all { it.reason == WifiScanner.REASON_OPEN_CARRIER_HOTSPOT }
     val c = ClairixTheme.colors
 
     ScreenList {
@@ -3519,17 +4096,21 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         item(key = "§hero") {
             StatusHero(
                 eyebrow = "Wi-Fi",
+                // Being joined to an open network outranks notes about networks nearby,
+                // as the tone below already does.
                 headline = when {
                     high > 0 -> if (high == 1) "Bait network" else "$high bait networks"
-                    sorted.isNotEmpty() -> "Worth a look"
                     conn != null && !conn.security.secure -> "Open network"
+                    onlyHotspots -> "Open hotspots nearby"
+                    sorted.isNotEmpty() -> "Worth a look"
                     wifi.scannedTs > 0 -> "Wi-Fi clean"
                     else -> "Checking"
                 },
                 body = when {
                     high > 0 -> "Networks below look built to catch your traffic. Don't join them."
-                    sorted.isNotEmpty() -> "${plural(sorted.size, "network")} nearby look off. Nothing you're joined to is flagged."
                     conn != null && !conn.security.secure -> "You're on an unencrypted network. Anyone nearby can read what isn't end-to-end encrypted."
+                    onlyHotspots -> "${plural(sorted.size, "open carrier hotspot")} nearby. Not bait: captive portals that leave traffic unencrypted, so use a VPN if you join one."
+                    sorted.isNotEmpty() -> "${plural(sorted.size, "network")} nearby look off. Nothing you're joined to is flagged."
                     wifi.scannedTs > 0 -> "${plural(wifi.nearby.size, "network")} in range, none flagged. Checked ${fmtAgo(now, wifi.scannedTs)}."
                     else -> "Reading what's in range. Results fill in within a few seconds."
                 },
@@ -3547,12 +4128,25 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         if (sorted.isNotEmpty()) {
             item(key = "§anomaly-head") {
                 SectionHeader(
-                    "Suspicious networks",
+                    if (onlyHotspots) "Open carrier hotspots" else "Suspicious networks",
                     supporting = "${sorted.size}" + if (high > 0) " · $high high" else "",
                     tone = if (high > 0) Tone.Danger else Tone.Caution
                 )
             }
             itemsIndexed(sorted, key = { i, a -> "anomaly|${a.bssid}|${a.reason}|$i" }) { _, a -> WifiRow(a) }
+        }
+
+        // ── The Karma trap: armed only once Android may use the suggestion ───
+        item(key = "§trap") {
+            Notice(
+                tone = when (trap.state) {
+                    KarmaTrap.State.ARMED -> Tone.Safe
+                    KarmaTrap.State.OFF -> Tone.Neutral
+                    else -> Tone.Caution
+                },
+                text = trap.detail(),
+                title = trap.headline(if (trap.since > 0L) trapSinceFmt.format(Date(trap.since)) else "")
+            )
         }
 
         // ── Connected network ─────────────────────────────────────────────────
@@ -3601,7 +4195,14 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
                     KeyValueRow("Gateway", conn.gateway ?: "Unknown")
                     KeyValueRow("DNS", if (conn.dnsServers.isEmpty()) "None" else conn.dnsServers.joinToString("\n"))
                     KeyValueRow("Private DNS", conn.privateDns ?: "Off", valueColor = if (conn.privateDns != null) c.safe else null)
-                    KeyValueRow("VPN", if (conn.vpnActive) "Active" else "None", valueColor = if (conn.vpnActive) c.safe else null)
+                    // Whether Clairix's own traffic goes through a VPN: a VPN set to carry
+                    // only some apps is not protection for the rest, and is not shown as such.
+                    when (conn.vpn) {
+                        VpnCoverage.COVERS_APP -> KeyValueRow("VPN", "Active for Clairix", valueColor = c.safe)
+                        VpnCoverage.EXCLUDES_APP -> KeyValueRow("VPN", "Active, not covering Clairix", valueColor = c.caution)
+                        VpnCoverage.APP_OFFLINE -> KeyValueRow("VPN", "Active, Clairix offline")
+                        VpnCoverage.NONE -> KeyValueRow("VPN", "None")
+                    }
                     if (conn.metered) KeyValueRow("Metered", "Yes")
                     conn.flags.forEach { flag ->
                         WarningLine(flag, if (conn.security.secure) Tone.Caution else Tone.Danger, Modifier.padding(top = 4.dp))
@@ -3625,7 +4226,11 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
             if (wifi.nearby.isEmpty()) {
                 item(key = "§none-nearby") {
                     Text(
-                        "No scan results yet. Android hands out cached results first; a fresh scan has been asked for and the list fills in within a few seconds.",
+                        if (status.scanning) {
+                            "Nothing in range when the scanner last looked, ${fmtAgo(now, wifi.scannedTs)}. It looks again every two minutes while the screen is on."
+                        } else {
+                            "No scan results yet. Android hands out cached results first; a fresh scan has been asked for and the list fills in within a few seconds."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
@@ -3762,20 +4367,59 @@ private data class ExplainerContent(
 private fun bleExplainerContent(d: Detection): ExplainerContent {
     val tone = if (d.threat.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
     return when {
-        d.following -> ExplainerContent(
+        d.resolved -> ExplainerContent(
+            headline = "Marked found: ${d.name}",
+            whatIsThis = "You marked this device found at ${fmtClock(d.resolvedAt)}. " +
+                (if (d.following) "Before that it was confirmed moving with you, heard at places ${d.displacementM.roundToInt()} metres apart."
+                else "Before that it kept showing up near you.") +
+                (d.tracker?.let { " It identifies itself as ${it.label} (${it.brand})." } ?: ""),
+            whatToDo = "Keep what you found as evidence: photograph it where it was, and do not throw it away. The " +
+                "timeline and the evidence report keep the record. If it is heard again after an hour away, Clairix " +
+                "watches it afresh and tells you if it follows you again. If you marked it by mistake, tap Not found after all.",
+            howCertain = "The record is what was confirmed before you marked it: ${d.sightings} sightings, threat score ${d.score}/100.",
+            tone = Tone.Caution
+        )
+        d.following && d.threat == Threat.CRITICAL -> ExplainerContent(
             headline = "Tracker on you: ${d.name}",
             whatIsThis = "A Bluetooth tracker has been verified as following your movements. " +
-                "It appeared at multiple locations ${d.displacementM.roundToInt()} metres apart while you were " +
-                "moving, which cannot be explained by proximity alone. ${d.tracker?.let { "This matches a known ${it.brand} ${it.label}." } ?: "No commercial tracker signature matched, but the movement pattern is conclusive."}",
+                "It was heard at places ${d.displacementM.roundToInt()} metres apart while your own position " +
+                "showed you travelling between them, which cannot be explained by proximity alone." +
+                (d.tracker?.let { " It identifies itself as ${it.label} (${it.brand}), away from its owner." } ?: ""),
             whatToDo = "Stop and search the vehicle or your belongings now. Check: wheel wells, bumper covers and cavities, " +
                 "OBD-II diagnostic port (under dashboard), under seats and floor mats, inside bag linings and seams. " +
                 "If found, do not discard it on the roadside — it is evidence. Photograph it in place before removing it. " +
                 "Consider filing a police report and contacting legal counsel.",
-            howCertain = "High confidence. Confirmation requires the device to appear at locations " +
-                "${d.displacementM.roundToInt()} m apart during your movement. " +
+            howCertain = "High confidence. Confirmation requires the device to be heard, more than once, at places " +
+                "${d.displacementM.roundToInt()} m apart, with your own travelled distance accounting for the separation. " +
                 "Threat score: ${d.score}/100 across ${d.sightings} sightings.",
             tone = tone
         )
+        d.following -> {
+            // Moved with you, but not a recognised tracker away from its owner: either
+            // nothing identifies it, or it is a tag with its owner's phone in range.
+            val known = d.tracker
+            ExplainerContent(
+                headline = "Travelling with you: ${d.name}",
+                whatIsThis = "This device was heard at places ${d.displacementM.roundToInt()} metres apart while you travelled, " +
+                    "so it moved with you. " +
+                    (if (known != null) {
+                        "It identifies itself as ${known.label}, which Clairix does not count as a tracker away from its owner. ${known.notes}"
+                    } else {
+                        "Nothing identifies it as a tracker: the phone, earbuds or watch of someone travelling with you " +
+                            "look exactly like this, and so do a vehicle's own electronics. A hardwired GPS tracker looks " +
+                            "the same, which is why it is shown."
+                    }),
+                whatToDo = "If you were alone, check the vehicle: the OBD-II port under the dashboard, under the dash and seats, " +
+                    "wheel wells and bumpers. If you recognise the device, mark it as yours below and it will not be raised again. " +
+                    "If it keeps turning up on journeys you make alone, treat it as a tracker: photograph anything you find " +
+                    "in place, keep it as evidence, and consider contacting the police.",
+                howCertain = "That it moved with you is confirmed over ${d.sightings} sightings. " +
+                    (if (known != null) "It is not a tracker away from its owner, so Clairix does not say it is following you. "
+                    else "What it is remains unknown, so Clairix does not call it a tracker. ") +
+                    "Threat score: ${d.score}/100.",
+                tone = Tone.Caution
+            )
+        }
         d.persistent && d.identified -> ExplainerContent(
             headline = "Known tracker nearby: ${d.name}",
             whatIsThis = "A ${d.tracker?.brand ?: "commercial"} ${d.tracker?.label ?: "tracker"} has been " +
@@ -3809,11 +4453,22 @@ private fun bleExplainerContent(d: Detection): ExplainerContent {
             whatToDo = "Continue monitoring. The scan needs more time and movement to determine whether " +
                 "this device is following you. Keep the scan running as you travel.",
             howCertain = "Building confidence. Score ${d.score}/100 · ${d.sightings} sightings. " +
-                "GPS confirmation of following requires approximately 300 m of shared movement.",
+                "GPS confirmation of following requires approximately ${AppSettings.followThresholdM.roundToInt()} m of shared movement.",
             tone = tone
         )
     }
 }
+
+/**
+ * What the phone itself can do against a fake tower, for the findings that point at
+ * a forced drop to an older network: refuse 2G, and let Android warn about networks
+ * that turn encryption off. Neither can be read or set by an app.
+ */
+private const val CELL_PLATFORM_DEFENCE =
+    "For the next time: if your phone has the \"Allow 2G\" switch, turn it off (Phone check → Health shows it), " +
+        "and on Android 14 and later turn on Android's own cell network protections, on phones whose modem " +
+        "supports them, so the phone refuses or warns about a network that turns encryption off (Settings, " +
+        "search for \"network security\")."
 
 private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     val tone = f.severity.tone()
@@ -3821,24 +4476,28 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     // explainer keys off the heuristic name in front of it.
     val (what, todo, certain) = when (f.id.substringBefore(':')) {
         "rat_downgrade" -> Triple(
-            "Your device has been forced from a newer radio technology (4G/5G) down to an older one (2G/3G). " +
-            "IMSI catchers do this deliberately because older protocols have weaker encryption and are easier " +
-            "to intercept. Legitimate networks only downgrade in areas with no newer coverage.",
+            "Your device has dropped from a newer radio technology (4G/5G) to an older one (2G/3G) while " +
+            "standing still, with no voice call in progress. IMSI catchers force this because the older " +
+            "protocols have weaker encryption and are easier to intercept. Legitimate networks only downgrade " +
+            "where there is no newer coverage, and a phone without VoLTE drops to 3G or 2G for every call; " +
+            "Clairix does not count a reading taken during a call or within five minutes of one.",
             "Avoid making voice calls or sending SMS until you leave the area. Use end-to-end encrypted " +
             "messaging apps over WiFi or data. Do not transmit sensitive information. Move away from the " +
-            "area and observe whether the technology level returns to normal.",
+            "area and observe whether the technology level returns to normal. $CELL_PLATFORM_DEFENCE",
             "High confidence indicator. A drop to 2G/3G within half an hour of 4G/5G serving you at the " +
-            "same spot, without you having moved, is a primary IMSI catcher signature. Moving resets " +
-            "the comparison, so a drive into a basement car park does not count."
+            "same spot, without you having moved and without a call, is a primary IMSI catcher signature. " +
+            "Moving resets the comparison, so a drive into a basement car park does not count, and neither " +
+            "does a call falling back to the older network."
         )
         "cellid_tac_mismatch" -> Triple(
-            "A cell tower ID that you have seen before is now claiming to be in a different area (tracking " +
-            "area code). Real base stations have fixed, permanent area assignments. A portable IMSI catcher " +
-            "moving through the area will produce inconsistent area codes.",
+            "A cell tower ID that you have seen before, on the same radio technology, is now claiming to be " +
+            "in a different area (tracking area code). Real base stations have fixed area assignments. A " +
+            "portable IMSI catcher borrowing a real cell's number produces inconsistent area codes.",
             "Monitor for additional indicators. A single mismatch could be a network reconfiguration, but " +
             "combined with other findings it is significant. Avoid sensitive calls in this area.",
-            "High confidence indicator when combined with other findings. Alone it may reflect legitimate " +
-            "network changes, but it warrants heightened caution."
+            "High confidence indicator when combined with other findings. Alone it may reflect a carrier " +
+            "re-plan: if this cell keeps reporting the new area consistently for forty readings over an " +
+            "hour or more, Clairix accepts the new area as its baseline and this finding clears."
         )
         "tac_change_stationary" -> Triple(
             "Your device registered a different tracking area while you were not moving. " +
@@ -3847,7 +4506,8 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "Note your exact location and time. A stationary area change combined with other indicators " +
             "is a strong surveillance signal. Consider moving away from the area.",
             "Medium confidence. Stationary area changes can occur due to legitimate network maintenance, " +
-            "but are uncommon and warrant attention alongside other findings."
+            "but are uncommon and warrant attention alongside other findings. A change during a voice call, " +
+            "or within five minutes of one, is not counted: a call can move the phone to another network layer."
         )
         "signal_outlier" -> Triple(
             "The cell signal is significantly stronger than the historical maximum for this area. " +
@@ -3875,8 +4535,10 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "A portable surveillance device driven into and away from an area looks exactly like this.",
             "Note the time and location. An ephemeral cell that appeared and disappeared suggests a " +
             "mobile surveillance asset that has moved on. Review your surroundings at the time of detection.",
-            "Medium-to-high confidence. Ephemeral cells have few legitimate explanations. " +
-            "A duration under 90 seconds is the strictest threshold."
+            "Medium-to-high confidence. Ephemeral cells have few legitimate explanations once the two " +
+            "common ones are ruled out: a cell that served while you were moving, and a 3G or 2G cell " +
+            "that carried a voice call on a phone without VoLTE, are never counted. A duration under " +
+            "90 seconds is the strictest threshold."
         )
         "cell_flapping" -> Triple(
             "Your device has switched between multiple different cell towers rapidly while you were " +
@@ -3898,14 +4560,16 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "Low confidence as a standalone indicator. Meaningful when combined with other findings."
         )
         "timing_advance_zero" -> Triple(
-            "LTE timing advance of zero means the transmitter is within approximately 78 metres of " +
-            "your device. Macro cell towers are never this close to you. A portable IMSI catcher in " +
-            "a parked vehicle or nearby building would produce exactly this reading.",
-            "A transmitter within 78 metres is immediately actionable. Scan your visual surroundings " +
-            "for parked vehicles with rooftop antennas or unusual equipment. Do not make sensitive " +
-            "calls. Move away and observe whether the indicator follows you.",
-            "High confidence. LTE timing advance is a precise physical measurement — zero means very " +
-            "close proximity to the transmitter."
+            "LTE timing advance of zero means the transmitter serving you is within about 78 metres. " +
+            "A rooftop site, an in-building antenna or a small cell is this close legitimately, and so " +
+            "is a portable IMSI catcher in a parked vehicle or a nearby building. On its own the reading " +
+            "does not say which.",
+            "Nothing on its own. If it appears together with other indicators, note the time and place, " +
+            "look for a vehicle or equipment that was not there before, avoid sensitive calls and see " +
+            "whether the indicator follows you when you move.",
+            "Low confidence alone. The distance is a precise physical measurement; what is at that " +
+            "distance is not. Clairix remembers each cell: once one has read timing advance zero on " +
+            "twenty readings spread over a day, it treats that as normal there and stops listing it."
         )
         "signal_spike" -> Triple(
             "The signal strength on your current cell tower jumped suddenly between two consecutive " +
@@ -3918,14 +4582,16 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
             "or other environmental factors, but are notable when combined with other findings."
         )
         "rat_oscillation" -> Triple(
-            "Your device has switched between multiple radio technologies (2G, 3G, 4G) rapidly in " +
-            "a short window. IMSI catchers force devices through technology cycles to capture separate " +
-            "authentication events on each technology, revealing the device's IMSI.",
+            "Your device has switched between three or more radio technologies (2G, 3G, 4G, 5G) in " +
+            "a short window while standing still and not on a call. IMSI catchers force devices through " +
+            "technology cycles to capture separate authentication events on each technology, revealing " +
+            "the device's IMSI. A voice call on a phone without VoLTE walks 5G to 3G and back on its " +
+            "own, so readings taken in a call, or within five minutes of one, are not counted.",
             "Multiple technology switches in a short window strongly indicate active interference. " +
             "Avoid all calls and data use. Use WiFi with a VPN for any communications. " +
-            "Move out of the area and observe whether the switching stops.",
-            "High confidence. Rapid multi-technology oscillation is a strong signature of active " +
-            "IMSI capture operations."
+            "Move out of the area and observe whether the switching stops. $CELL_PLATFORM_DEFENCE",
+            "High confidence. Rapid multi-technology oscillation outside a call is a strong signature " +
+            "of active IMSI capture operations."
         )
         else -> Triple(
             "An anomaly was detected in your cellular environment that deviates from your established " +
@@ -3944,11 +4610,25 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     )
 }
 
+/**
+ * The co-traveller explanation of a trip-memory finding with no sign the journeys were
+ * in the owner's car: probably the bus, the train or a fellow commuter, and what to do
+ * if they were in her car after all.
+ */
+private fun journeysExplainerContent(e: TimelineEvent): ExplainerContent = ExplainerContent(
+    headline = e.title,
+    whatIsThis = VehicleTrips.CO_TRAVELLER_WHAT_IS_THIS,
+    whatToDo = VehicleTrips.CO_TRAVELLER_WHAT_TO_DO,
+    howCertain = VehicleTrips.CO_TRAVELLER_HOW_CERTAIN,
+    tone = Tone.Caution
+)
+
 @Composable
 private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit) {
     val content = when (target) {
         is ExplainerTarget.BleDevice -> bleExplainerContent(target.detection)
         is ExplainerTarget.CellIndicator -> cellExplainerContent(target.finding)
+        is ExplainerTarget.Journeys -> journeysExplainerContent(target.event)
     }
     val c = ClairixTheme.colors
 
@@ -3982,6 +4662,10 @@ private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit)
 
         // Most useful first: what to do, then what it is, then how sure.
         ExplainerSection("What to do", content.whatToDo, Tone.Accent)
+        // A tracker on you, a device travelling with you or a known tracker that
+        // stays: removing it can tell whoever placed it, so that is said next.
+        val detection = (target as? ExplainerTarget.BleDevice)?.detection
+        if (detection != null && SafetyFirst.forDetection(detection)) SafetyFirstCard()
         ExplainerSection("What this is", content.whatIsThis, Tone.Neutral)
         ExplainerSection("How sure we are", content.howCertain, Tone.Neutral)
 

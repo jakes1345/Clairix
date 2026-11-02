@@ -1,12 +1,24 @@
+import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.Properties
+import java.util.TreeMap
+import java.util.TreeSet
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     // JVM screenshot tests of the Compose screens (no device): layoutlib renders
-    // them; recordPaparazziFullSuiteDebug writes the PNGs to src/test/snapshots.
+    // them; recordPaparazziFullSuiteDebug writes the PNGs to src/test/snapshots
+    // and verifyPaparazziFullSuiteDebug compares against them (android.yml).
     id("app.cash.paparazzi")
+    // Kotlin static analysis; see the detekt block below.
+    id("io.gitlab.arturbosch.detekt")
+    // The bill of materials attached to each release; see cyclonedxDirectBom below.
+    id("org.cyclonedx.bom")
+    // The licences the app's Android libraries publish, for the third-party
+    // notices the app shows (thirdPartyNotices, below).
+    id("com.mikepenz.aboutlibraries.plugin")
 }
 
 // ── COMMS end-to-end encryption: the Rust crate in ../comms-crypto ─────────
@@ -131,12 +143,210 @@ tasks.named("preBuild") { dependsOn(uniffiBindgen) }
 // The relay list the app starts with: relays/relays.json at the repository's
 // root, the same file the Relay list workflow signs and publishes. Newer
 // copies come signed from the `relays` release (comms/RelayDirectory.kt).
+// So does the asset key list, relays/keys.json (nav/AssetKeys.kt): the copy
+// built in is the oldest list the app will take, whatever it is handed later.
 val relayListAssets = layout.buildDirectory.dir("generated/relayList")
 val copyRelayList by tasks.registering(Copy::class) {
-    from(rootProject.file("../relays/relays.json"))
+    from(rootProject.file("../relays/relays.json"), rootProject.file("../relays/keys.json"))
     into(relayListAssets)
 }
 tasks.named("preBuild") { dependsOn(copyRelayList) }
+
+// ── Third-party notices ────────────────────────────────────────────────────
+//
+// Settings > About > Third-party licences shows assets/third_party_licences.json,
+// which thirdPartyNotices<Variant> writes for each build from:
+//   - the variant's Android libraries and the licences their POMs declare, as
+//     the AboutLibraries plugin lists them (prepareLibraryDefinitions<Variant>);
+//   - notices/rust-crates.json: cargo-about's list of the crates compiled into
+//     libclairix_comms_crypto.so, with each crate's own licence file
+//     (comms-crypto/about.toml; .github/workflows/android.yml regenerates it
+//     and fails when it differs from what is committed);
+//   - notices/notices.json and notices/licences/: the licence texts the POMs
+//     only name, and the native code inside two libraries that no POM lists.
+// The build fails when a library has no licence or a licence has no text to
+// ship. Nothing in the output depends on the time or the machine, and every
+// list is in a fixed order, so two builds of one commit write the same bytes:
+// the reproducible-build comparison in android.yml covers the asset with the
+// rest of the APK.
+
+aboutLibraries {
+    // Licence data from the POMs only: nothing fetched over the network while
+    // building, which could differ from one build to the next.
+    offlineMode.set(true)
+    collect {
+        fetchRemoteLicense.set(false)
+        fetchRemoteFunding.set(false)
+    }
+    export {
+        // No generation date in the output.
+        includeMetaData.set(false)
+    }
+}
+
+abstract class ThirdPartyNoticesTask : DefaultTask() {
+
+    /** The AboutLibraries list of this variant's Android libraries. */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val androidLibraries: RegularFileProperty
+
+    /** app/notices: notices.json, licences/ and rust-crates.json. */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val noticesDir: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun write() {
+        val dir = noticesDir.get().asFile
+        @Suppress("UNCHECKED_CAST")
+        fun obj(v: Any?): Map<String, Any?> = (v as? Map<String, Any?>) ?: emptyMap()
+        fun list(v: Any?): List<Any?> = (v as? List<Any?>) ?: emptyList()
+        fun str(v: Any?): String? = (v as? String)?.takeIf { it.isNotBlank() }
+        fun sha(s: String): String = MessageDigest.getInstance("SHA-256")
+            .digest(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }.take(12)
+
+        val slurper = groovy.json.JsonSlurper()
+        val config = obj(slurper.parse(dir.resolve("notices.json")))
+        val texts = obj(config["licenceTexts"])
+        val byUrl = obj(config["licenceUrls"])
+        val linked = obj(config["linkedOnly"])
+        val overrides = obj(config["libraryLicences"])
+        // Licences whose text carries the project's own copyright line (BSD,
+        // MIT) are matched per library: a generic text would drop that line.
+        val perLibrary = obj(config["libraryTexts"])
+        val problems = mutableListOf<String>()
+
+        // Licences shown once each: keyed by id and a hash of the text, so the
+        // same text from several libraries or crates appears once.
+        val licences = TreeMap<String, Map<String, Any?>>()
+        fun withText(id: String, name: String, url: String?, text: String): String {
+            val key = "$id-${sha(text)}"
+            licences.getOrPut(key) { linkedMapOf("id" to id, "name" to name, "url" to url, "text" to text) }
+            return key
+        }
+        // A licence notices.json knows by id, with its text, or by name and link
+        // alone (terms that are not an open-source licence); null when it knows none.
+        fun known(id: String): String? {
+            val t = obj(texts[id])
+            if (t.isNotEmpty()) {
+                val body = str(t["text"]) ?: list(t["files"]).joinToString("\n\n") {
+                    dir.resolve("licences/$it").readText(Charsets.UTF_8).trimEnd()
+                }
+                return withText(id, str(t["name"]) ?: id, str(t["url"]), body)
+            }
+            val l = obj(linked[id])
+            if (l.isNotEmpty()) {
+                licences.getOrPut(id) { linkedMapOf("id" to id, "name" to (str(l["name"]) ?: id), "url" to str(l["url"])) }
+                return id
+            }
+            return null
+        }
+
+        val components = mutableListOf<Map<String, Any?>>()
+
+        // Android libraries, with the licences their POMs declare.
+        val about = obj(slurper.parse(androidLibraries.get().asFile))
+        val aboutLicences = obj(about["licenses"])
+        for (lib in list(about["libraries"]).map { obj(it) }) {
+            val id = str(lib["uniqueId"]) ?: continue
+            val declared = list(lib["licenses"]).mapNotNull { str(it) }
+            val resolved = if (declared.isEmpty()) {
+                val chosen = list(overrides[id]).mapNotNull { str(it) }
+                if (chosen.isEmpty()) problems += "$id declares no licence: add it under libraryLicences in app/notices/notices.json"
+                chosen.mapNotNull { lid -> known(lid) ?: run { problems += "$id: licence $lid is not in app/notices/notices.json"; null } }
+            } else {
+                declared.mapNotNull { key ->
+                    val lic = obj(aboutLicences[key])
+                    val spdx = str(lic["spdxId"])
+                    val url = str(lic["url"])
+                    val own = str(obj(perLibrary[id])[spdx ?: key])
+                    own?.let { known(it) } ?: spdx?.let { known(it) } ?: url?.let { u -> str(byUrl[u])?.let { known(it) } } ?: run {
+                        problems += "$id: licence \"${str(lic["name"]) ?: "?"}\" (${spdx ?: url ?: key}) has no text to ship: add it to app/notices/notices.json"
+                        null
+                    }
+                }
+            }
+            val organisation = str(obj(lib["organization"])["name"])
+            val developers = list(lib["developers"]).mapNotNull { str(obj(it)["name"]) }.distinct().joinToString(", ")
+            components += linkedMapOf(
+                "origin" to "android", "name" to (str(lib["name"]) ?: id), "id" to id, "version" to str(lib["artifactVersion"]),
+                "by" to (organisation ?: developers.ifEmpty { null }), "website" to str(lib["website"]), "licences" to resolved.distinct(),
+            )
+        }
+
+        // Native code compiled into two of those libraries, which no POM lists.
+        for (n in list(config["native"]).map { obj(it) }) {
+            val name = str(n["name"]) ?: continue
+            val resolved = list(n["licences"]).mapNotNull { str(it) }.mapNotNull { lid ->
+                known(lid) ?: run { problems += "native $name: licence $lid is not in app/notices/notices.json"; null }
+            }
+            if (resolved.isEmpty()) problems += "native $name has no licence"
+            components += linkedMapOf(
+                "origin" to "native", "name" to name, "id" to name, "in" to str(n["in"]),
+                "website" to str(n["website"]), "note" to str(n["note"]), "licences" to resolved,
+            )
+        }
+
+        // The Rust crates in libclairix_comms_crypto.so, each with its own licence file.
+        val rust = obj(slurper.parse(dir.resolve("rust-crates.json")))
+        val crates = TreeMap<String, Pair<Map<String, Any?>, TreeSet<String>>>()
+        for (l in list(rust["licences"]).map { obj(it) }) {
+            val lid = str(l["id"]) ?: continue
+            val text = (l["text"] as? String)?.trimEnd()
+            if (text.isNullOrBlank()) { problems += "rust-crates.json: a $lid entry has no text"; continue }
+            val key = withText(lid, str(l["name"]) ?: lid, null, text)
+            for (c in list(l["crates"]).map { obj(it) }) {
+                val name = str(c["name"]) ?: continue
+                val version = str(c["version"])
+                crates.getOrPut("$name $version") {
+                    linkedMapOf<String, Any?>("origin" to "rust", "name" to name, "id" to name, "version" to version) to TreeSet()
+                }.second += key
+            }
+        }
+        for ((entry, keys) in crates.values) components += entry + ("licences" to keys.toList())
+
+        if (problems.isNotEmpty()) {
+            throw GradleException("The third-party notices are incomplete:\n  " + problems.distinct().joinToString("\n  "))
+        }
+
+        val origins = listOf("android", "native", "rust")
+        val sorted = components.sortedWith(
+            compareBy<Map<String, Any?>>(
+                { origins.indexOf(it["origin"] as String) },
+                { (it["name"] as String).lowercase() },
+                { it["id"] as String },
+                { (it["version"] as? String).orEmpty() },
+            )
+        )
+        val out = linkedMapOf(
+            "format" to "clairix-third-party-licences",
+            "version" to 1,
+            "components" to sorted.map { c -> c.filterValues { it != null } },
+            "licences" to licences.mapValues { (_, l) -> l.filterValues { it != null } },
+        )
+        val file = outputDirectory.get().asFile.resolve("third_party_licences.json")
+        file.parentFile.mkdirs()
+        file.writeText(groovy.json.JsonOutput.toJson(out), Charsets.UTF_8)
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val suffix = variant.name.replaceFirstChar { it.uppercase() }
+        val notices = tasks.register<ThirdPartyNoticesTask>("thirdPartyNotices$suffix") {
+            description = "Writes the third-party licences the app shows for the ${variant.name} build"
+            dependsOn("prepareLibraryDefinitions$suffix")
+            androidLibraries.set(layout.buildDirectory.file("generated/aboutLibraries/${variant.name}/res/raw/aboutlibraries.json"))
+            noticesDir.set(layout.projectDirectory.dir("notices"))
+        }
+        // AGP sets the output directory and packs what is written there as assets.
+        variant.sources.assets?.addGeneratedSourceDirectory(notices, ThirdPartyNoticesTask::outputDirectory)
+    }
+}
 
 // The JVM unit tests load the same crate built for this machine, so the relay
 // round-trip tests exercise the real Olm and sealing code rather than a stand-in.
@@ -219,7 +429,8 @@ android {
     //
     // tier — how much of the app a build carries:
     //   suite  the whole app: scanner, map, cell/NFC/Wi-Fi/device tabs, tools, COMMS
-    //   comms  COMMS only: encrypted messages, calls, groups and SOS, nothing else
+    //   comms  COMMS only: encrypted messages, calls, groups and SOS, with the safety
+    //          pages (duress phrase, fake call, Wipe Clairix); no scanner or tools
     //
     // Variants built: playSuite (the Play upload), fullSuite and fullComms. The
     // comms-only build is handed out directly, never through Play, so playComms
@@ -231,19 +442,24 @@ android {
     // needs; the scanner's permissions and components are added by
     // src/suite/AndroidManifest.xml, and the card-emulation service only by
     // src/fullSuite/AndroidManifest.xml. The code reads FULL_ACCESS to decide
-    // which screens exist, CARD_VAULT for the vault and card emulation, and
-    // CLAIRIX_COIN for the coin balance, payments and their relay requests.
+    // which screens exist, CARD_VAULT for the vault and card emulation,
+    // CLAIRIX_COIN for the coin balance, payments and their relay requests, and
+    // LAUNCHER_DISGUISE for discreet mode's neutral launcher entries ("Compass",
+    // "Notes"), which Google Play's policy does not allow: the Play edition keeps
+    // the Clairix entry and src/play/AndroidManifest.xml removes the other two.
     flavorDimensions += listOf("edition", "tier")
     productFlavors {
         create("play") {
             dimension = "edition"
             buildConfigField("boolean", "CARD_VAULT", "false")
             buildConfigField("boolean", "CLAIRIX_COIN", "false")
+            buildConfigField("boolean", "LAUNCHER_DISGUISE", "false")
         }
         create("full") {
             dimension = "edition"
             buildConfigField("boolean", "CARD_VAULT", "true")
             buildConfigField("boolean", "CLAIRIX_COIN", "true")
+            buildConfigField("boolean", "LAUNCHER_DISGUISE", "true")
         }
         create("suite") {
             dimension = "tier"
@@ -310,6 +526,24 @@ android {
     testOptions {
         // android.util.Log and friends return defaults on the JVM instead of throwing.
         unitTests.isReturnDefaultValues = true
+    }
+
+    // Android Lint, run by .github/workflows/android.yml (lintFullSuiteDebug):
+    // every warning is an error and stops the build. What lint found when this
+    // was switched on is listed in lint-baseline.xml and tolerated until it is
+    // fixed; anything new fails. updateLintBaselineFullSuiteDebug rewrites the
+    // list: run it to drop what was fixed, not to hide something new.
+    lint {
+        warningsAsErrors = true
+        abortOnError = true
+        checkDependencies = true
+        baseline = file("lint-baseline.xml")
+        // CI's SDK knows API 36, so "targetSdk = 35" reads as out of date there
+        // (not on an SDK without 36). Moving to 36 is its own change: compileSdk,
+        // AGP and an API 36 emulator together, with the behaviour changes tested.
+        // Until it lands, the reminder stays in every report without failing it;
+        // take this line out with that change.
+        informational += "OldTargetApi"
     }
 
     sourceSets {
@@ -397,6 +631,92 @@ dependencies {
     testImplementation("org.json:json:20240303")
     // The desktop JNA jar carries the native dispatch library for the build machine.
     testImplementation("net.java.dev.jna:jna:5.19.1")
+    // A real Context, SharedPreferences and SQLite for the few JVM tests that need the
+    // framework (marked @RunWith(RobolectricTestRunner::class)); every other test keeps
+    // the stubbed android.jar above. 4.14 is the first release that knows compileSdk 35;
+    // its tests run against SDK 34 (src/test/resources/robolectric.properties), because
+    // Robolectric's SDK 35 needs Java 21 and this build runs on 17.
+    testImplementation("org.robolectric:robolectric:4.14.1")
+}
+
+// Robolectric's Android runtime, resolved by Gradle like any other dependency (and
+// cached with it) instead of downloaded by Robolectric itself while the tests run,
+// which made every run depend on Maven Central answering at that moment (it
+// rate-limits). The tests then run Robolectric offline against this copy. The
+// versions are the ones robolectric 4.14.1 pairs with SDK 34, which the tests
+// run on (src/test/resources/robolectric.properties), and SDK 35, the target.
+// Two configurations: one module in two versions in one configuration resolves to
+// the newer alone.
+val robolectricRuntime: Configuration by configurations.creating
+val robolectricTarget: Configuration by configurations.creating
+dependencies {
+    robolectricRuntime("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
+    // The SDK the app targets: Robolectric reads the app's resources against it,
+    // whichever SDK the tests run on.
+    robolectricTarget("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7")
+}
+val robolectricJars = layout.buildDirectory.dir("robolectric-jars")
+// Links into Gradle's cache, not copies: the two jars are about 300 MB.
+val copyRobolectricRuntime by tasks.registering {
+    inputs.files(robolectricRuntime, robolectricTarget)
+    outputs.dir(robolectricJars)
+    doLast {
+        val dir = robolectricJars.get().asFile
+        dir.deleteRecursively()
+        dir.mkdirs()
+        (robolectricRuntime.files + robolectricTarget.files).forEach { jar ->
+            Files.createSymbolicLink(dir.toPath().resolve(jar.name), jar.toPath())
+        }
+    }
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(copyRobolectricRuntime)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricJars.get().asFile.absolutePath)
+}
+
+// detekt, run by .github/workflows/android.yml with its default rules and
+// android/config/detekt.yml over every source set (main, the flavours, the JVM
+// and device tests). What it found when
+// it was switched on is listed in detekt-baseline.xml (written by detektBaseline)
+// and tolerated until it is fixed; anything new fails.
+detekt {
+    buildUponDefaultConfig = true
+    // What differs from detekt's defaults, and why: Compose functions, layout
+    // numbers and line length are house style, not defects.
+    config.setFrom(rootProject.file("config/detekt.yml"))
+    parallel = true
+    source.setFrom("src")
+    baseline = file("detekt-baseline.xml")
+}
+
+// detekt 1.23 is built with Kotlin 2.0 and refuses to run with another Kotlin
+// compiler, which the Kotlin plugin here would hand it. Its own classpath alone
+// gets the version it was built with (detekt's documented remedy); the app is
+// compiled with the Kotlin plugin's version as before.
+configurations.matching { it.name == "detekt" }.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.kotlin") {
+            useVersion(io.gitlab.arturbosch.detekt.getSupportedKotlinVersion())
+        }
+    }
+}
+
+// A CycloneDX bill of materials of the libraries in the release builds, which
+// .github/workflows/release.yml attaches to every release: each library in the
+// runtime classpath, with its version. The three release variants have the
+// same dependencies, so the full edition's classpath stands for all of them.
+// The Rust crates inside the crypto library get a bill of their own from
+// cargo-cyclonedx in the same workflow.
+tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
+    includeConfigs.set(listOf("fullSuiteReleaseRuntimeClasspath"))
+    projectType.set(org.cyclonedx.model.Component.Type.APPLICATION)
+    componentGroup.set("app.clairix")
+    componentName.set("clairix")
+    componentVersion.set(android.defaultConfig.versionName)
+    includeBomSerialNumber.set(false)
+    jsonOutput.set(layout.buildDirectory.file("reports/cyclonedx/clairix-android.cdx.json"))
+    xmlOutput.set(layout.buildDirectory.file("reports/cyclonedx/clairix-android.cdx.xml"))
 }
 
 // The comms-only build is never published on Google Play, so the Play edition

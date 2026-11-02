@@ -112,6 +112,22 @@ class CameraFeed(context: Context, val slug: String) {
             return out.distinctBy { it.id }
         }
 
+        /**
+         * What [loadCached] would read, as the name, size and modification time of each
+         * region's list and signature record. It changes whenever a list is downloaded,
+         * replaced or deleted and not otherwise, so the scanner gunzips and parses the
+         * lists only then instead of every half hour. A directory listing; no file is
+         * opened. File I/O; call off the main thread.
+         */
+        fun cacheStamp(context: Context): String = cacheStamp(File(context.applicationContext.filesDir, "nav"))
+
+        internal fun cacheStamp(dir: File): String {
+            val files = dir.listFiles { f ->
+                f.isFile && f.name.startsWith("cameras-") && (f.name.endsWith(".json.gz") || f.name.endsWith(".meta.json"))
+            } ?: return ""
+            return files.sortedBy { it.name }.joinToString(";") { "${it.name}:${it.length()}:${it.lastModified()}" }
+        }
+
         /** Parses an extractor file; throws [JSONException] when it is not one, or is for another region. */
         fun parse(text: String, expectSlug: String? = null): List<KnownCamera> {
             val root = JSONObject(text)

@@ -148,13 +148,13 @@ class RelayClient(
     /** The keys a relay issues blind tokens under in [epoch], kind (wire name) to base64url. */
     data class TokenKeys(val epoch: Long, val keys: Map<String, String>)
 
-    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null)
+    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null, val coin: Boolean = false)
 
     /**
      * The relay's description of itself: its API version, the other addresses it
-     * answers at, its onion address if it has one, and its blind-token keys
-     * (null from a relay before Beta 6). Unauthenticated, on a connection
-     * nothing else uses.
+     * answers at, its onion address if it has one, its blind-token keys (null
+     * from a relay before Beta 6) and whether its operator turned ClairixCoin on
+     * ([CoinRules.offered]). Unauthenticated, on a connection nothing else uses.
      */
     fun info(): Info {
         val relay = base() ?: throw RelayException("Not registered with a relay")
@@ -177,7 +177,7 @@ class RelayClient(
                 val nextEpoch = next?.optLong("epoch", -1L) ?: -1L
                 if (nextKeys != null && nextEpoch == tokens.epoch + 1 && tokenKeys.get(origin, nextEpoch) == null) tokenKeys.put(origin, nextEpoch, nextKeys)
             }
-            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }))
+            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }), CoinRules.offered(json))
         }
     }
 
@@ -231,20 +231,34 @@ class RelayClient(
      * Through Tor a connection waits for a circuit before its first byte, and
      * to an onion address for a rendezvous as well; Tor gives up on its own
      * within a minute. Connecting and reading get that long while Tor is on.
+     * Each request also counts as using Tor, as it starts and as it ends, so
+     * Tor does not go to sleep under one riding a connection already open
+     * (see [TorTransport.noteUse]).
      */
     private val torTimeouts = Interceptor { chain ->
         if (!TorTransport.enabled) return@Interceptor chain.proceed(chain.request())
-        chain.withConnectTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .withReadTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
-            .proceed(chain.request())
+        TorTransport.noteUse()
+        try {
+            chain.withConnectTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+                .withReadTimeout(TOR_STEP_TIMEOUT_SEC, TimeUnit.SECONDS)
+                .proceed(chain.request())
+        } finally {
+            TorTransport.noteUse()
+        }
     }
 
-    /** The live socket's client: no overall call timeout, which would cut the socket itself. */
+    /**
+     * The live socket's client: no overall call timeout, which would cut the
+     * socket itself, and no ping on a timer. The relay's heartbeat carries the
+     * socket's liveness, and LiveLink pings only when that is overdue (see
+     * [LinkTiming]); a ping every 45 seconds brought the radio up on top of
+     * the heartbeat whenever the phone was awake.
+     */
     val http: OkHttpClient = RelayTls.pinned(OkHttpClient.Builder(), pin)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
-        .pingInterval(45, TimeUnit.SECONDS)
+        .pingInterval(0, TimeUnit.SECONDS)
         // Signed requests carry identity headers and the registration body carries
         // the enrollment secret; neither may be re-sent to wherever a redirect points.
         .followRedirects(false)
@@ -375,12 +389,17 @@ class RelayClient(
     /**
      * Uploads one-time keys and the fallback key, and the current sealing
      * prekey, which the relay takes only when it is newer than the one it holds.
+     * With [replace], the one-time keys given become the relay's whole pool
+     * for this number (a phone restored from a recovery file: the keys the
+     * relay held were the old phone's, and their secrets went with it); a
+     * relay from before recovery files ignores it and adds them.
      */
-    fun putKeys(bundle: PublicBundle): Int {
+    fun putKeys(bundle: PublicBundle, replace: Boolean = false): Int {
         val body = JSONObject()
             .put("oneTimeKeys", JSONArray(bundle.oneTimeKeys.map { signedKeyJson(it) }))
             .put("fallback", bundle.fallback?.let { signedKeyJson(it) } ?: JSONObject.NULL)
             .apply { bundle.sealingPrekey?.let { put("sealingPrekey", prekeyJson(it)) } }
+            .apply { if (replace) put("replace", true) }
         return signed("PUT", "/v1/keys", body).optInt("oneTimeKeys", 0)
     }
 
@@ -428,22 +447,34 @@ class RelayClient(
 
     fun wipe() { signed("DELETE", "/v1/me") }
 
-    /**
-     * The account deletion, signed now, to be sent with [sendPrepared] after the
-     * keys that sign it are gone: a wipe destroys them first and asks the relay
-     * last, so the network never holds up what is erased on the phone. The
-     * relay accepts it for its five-minute window.
-     */
-    fun preparedWipe(): Request? = runCatching {
-        val builder = signedRequest("DELETE", "/v1/me", null)
-        val signing = builder.build().tag(Signing::class.java) ?: return@runCatching null
-        sign(builder, signing).tag(Signing::class.java, null).build()
-    }.getOrNull()
+    /** A request signed ahead of time for the relay-clock moment [ts]: the headers that carry it. */
+    class Presigned(val ts: Long, val headers: List<Pair<String, String>>)
 
-    /** Sends a request [preparedWipe] made, on a connection of its own, waiting at most [timeoutSec]. */
-    fun sendPrepared(request: Request, timeoutSec: Long) {
-        runCatching { anonymousClient(timeoutSec).newCall(request).execute().close() }
-    }
+    /** The account deletion, signed for a run of moments: where it goes, the pin it is checked against, and the copies. */
+    class PreparedWipe(val url: String, val pin: String?, val offsetMs: Long, val copies: List<Presigned>)
+
+    /**
+     * The account deletion, signed now for [count] moments [stepMs] apart from
+     * the relay's present time, to be sent after the keys that sign it are gone:
+     * a wipe destroys them first and asks the relay last, so the network never
+     * holds up what is erased on the phone. The relay takes each copy within five
+     * minutes of its moment, so steps under ten minutes leave no gap, and the
+     * phone sends whichever is current when it can reach the relay
+     * (security/RelayFarewell.kt). Null without an account or an identity.
+     */
+    fun preparedWipes(count: Int, stepMs: Long): PreparedWipe? = runCatching {
+        val start = relayNow()
+        var url: String? = null
+        val copies = (0 until count).map { k ->
+            val builder = signedRequest("DELETE", "/v1/me", null, allowTransport = false)
+            val signing = builder.build().tag(Signing::class.java) ?: return@runCatching null
+            val ts = start + k * stepMs
+            val request = sign(builder, signing, ts).tag(Signing::class.java, null).build()
+            url = request.url.toString()
+            Presigned(ts, request.headers.toList())
+        }
+        PreparedWipe(url ?: return@runCatching null, pin(), clockOffsetMs, copies)
+    }.getOrNull()
 
     // ── Contacts and envelopes ────────────────────────────────────────────
 
@@ -514,6 +545,10 @@ class RelayClient(
      * relay pair the two. With the pool empty this throws a [RelayException]
      * with [NO_TOKENS]; the caller keeps the envelope queued and calls
      * [topUpTokens] before trying again.
+     *
+     * Below the oldest safe version ([AppUpdate]) nothing but an SOS, and
+     * what it needs to reach a member ([forSos], see [carriesSos]), is sent:
+     * this throws [UNSAFE_VERSION], with the reason, before anything leaves.
      */
     fun send(
         to: String,
@@ -523,7 +558,9 @@ class RelayClient(
         urgent: Boolean = false,
         alert: String? = null,
         passKey: ByteArray? = null,
+        forSos: Boolean = false,
     ): String {
+        AppUpdate.sendRefusal(alert, forSos)?.let { throw RelayException(it, UNSAFE_VERSION) }
         val data = Base64.getEncoder().encodeToString(envelope)
         val body = JSONObject().put("to", to).put("envelope", data)
         if (claim != null) body.put("claim", claim)
@@ -543,6 +580,16 @@ class RelayClient(
         if (alert != null) body.put("alert", alert)
         val json = anonymous(TokenKind.DELIVERY, "POST", "/v1/send", body)
         return parsed { json.getString("id") }
+    }
+
+    /**
+     * Reports someone abusing this relay to its operator ([ContactGate.reportBody]):
+     * the number, its relay, an envelope's fingerprint and a reason. Like a send it
+     * spends a token, a report one, and names nobody, so the operator learns
+     * who was reported, never who reported them.
+     */
+    fun report(body: JSONObject) {
+        anonymous(TokenKind.REPORT, "POST", "/v1/report", body)
     }
 
     /**
@@ -593,6 +640,22 @@ class RelayClient(
      * apart from the sends that spend them.
      */
     fun topUpTokens(low: Int = TOKENS_LOW, batch: Int = TOKENS_BATCH): Int = topUpTokens(TokenKind.DELIVERY, low, batch)
+
+    /**
+     * Whether a blind-token fetch now could be checked against keys this
+     * phone holds: it has seen the relay's keys for the current epoch, or it
+     * never saw any (a relay before Beta 6, or no fetch yet; [fetchTokens]
+     * then reads them itself). False after a fortnight or more away, when the
+     * epoch has moved on: a fetch would end in [KEYS_PENDING], and an
+     * ordinary top-up reads the keys at a random moment later. An SOS reads
+     * them at once instead, with [info], before the fetch.
+     */
+    fun tokenKeysCurrent(): Boolean {
+        val relay = base() ?: return true
+        val origin = pinOrigin(relay)
+        if (!tokenKeys.any(origin)) return true
+        return tokenKeys.get(origin, relayNow() / TOKEN_EPOCH_MS) != null
+    }
 
     /** Fetches a batch of [kind] tokens when fewer than [low] are left; returns how many the pool then holds. */
     fun topUpTokens(kind: TokenKind, low: Int = kind.low, batch: Int = kind.batch): Int {
@@ -753,11 +816,19 @@ class RelayClient(
     /** This identity's coins on this relay. Every relay is its own coin community. */
     data class CoinBalance(val balance: Long, val symbol: String)
 
-    /** A payment the relay took: its id, and what is left afterwards. */
-    data class PayResult(val txid: String, val balance: Long)
+    /**
+     * A payment the relay took: its id in this account's record ([txid]), the id the
+     * payee's record keeps it under ([credit], which only the payment notice tells the
+     * payee), and what is left afterwards.
+     */
+    data class PayResult(val txid: String, val credit: String, val balance: Long)
 
-    /** One transfer as the relay recorded it; [direction] is "in" or "out" from this identity's side. */
-    data class CoinTx(val id: String, val from: String, val to: String, val amount: Long, val ts: Long, val direction: String, val note: String)
+    /**
+     * One transfer as the relay recorded it: its id, the amount, the hour it was
+     * made ([ts], the hour's first millisecond) and [direction], "in" or "out"
+     * from this identity's side. The relay keeps no record of who paid whom.
+     */
+    data class CoinTx(val id: String, val amount: Long, val ts: Long, val direction: String)
 
     /** Refuses before anything is sent when the edition is built without ClairixCoin (the Play edition). */
     private fun requireCoin() {
@@ -771,14 +842,24 @@ class RelayClient(
     }
 
     /**
-     * Pays [amount] coins to [to]. Only the amount reaches the relay; the note
-     * the payer wrote travels to the recipient inside an encrypted envelope
-     * (see CommsWire.payment), never here.
+     * Pays [amount] coins to [to], whose identity key has the fingerprint [pin]
+     * (the contact's pinned key, as a lookup of an unlisted number takes): the
+     * relay pays only the account that holds that key, and answers a number
+     * that does not exist exactly as one whose key is another. Only the amount
+     * reaches the relay; the note the payer wrote travels to the recipient
+     * inside an encrypted envelope (see CommsWire.payment), never here. The
+     * payee's record keeps the payment under [credit], not [txid], so the two
+     * records share no id ([CoinRules.payRequest]).
      */
-    fun pay(to: String, amount: Long, note: String?, txid: String = UUID.randomUUID().toString()): PayResult {
+    fun pay(
+        to: String,
+        pin: String,
+        amount: Long,
+        txid: String = UUID.randomUUID().toString(),
+        credit: String = UUID.randomUUID().toString()
+    ): PayResult {
         requireCoin()
-        val body = JSONObject().put("to", to).put("amount", amount).put("txid", txid)
-        if (!note.isNullOrBlank()) body.put("note", note)
+        val body = CoinRules.payRequest(to, pin, amount, txid, credit)
         // The payment is named here, and the relay makes it once per name: a
         // request whose answer was lost on the network is repeated under the
         // same name, and cannot move the coins twice. An answer the relay gave
@@ -789,7 +870,10 @@ class RelayClient(
             if (e.code != 0) throw e
             signed("POST", "/v1/coin/pay", body)
         }
-        return parsed { PayResult(json.getString("txid"), json.getLong("balance")) }
+        return parsed {
+            val taken = json.getString("txid")
+            PayResult(taken, CoinRules.creditId(json, taken), json.getLong("balance"))
+        }
     }
 
     fun coinHistory(): List<CoinTx> {
@@ -799,10 +883,7 @@ class RelayClient(
             val arr = json.getJSONArray("txs")
             (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
-                CoinTx(
-                    o.getString("id"), o.getString("from"), o.getString("to"), o.getLong("amount"), o.getLong("ts"),
-                    o.optString("direction", "out"), o.optString("note", "")
-                )
+                CoinTx(o.getString("id"), o.getLong("amount"), o.getLong("ts"), o.optString("direction", "out"))
             }
         }
     }
@@ -879,8 +960,11 @@ class RelayClient(
     /** Opens the live-delivery socket. The caller owns the returned socket. */
     fun openSocket(listener: WebSocketListener): WebSocket {
         // OkHttp runs no network interceptors for a WebSocket upgrade, so it is
-        // signed here, once; a refused upgrade is retried by the caller.
+        // signed here, once; a refused upgrade is retried by the caller. The
+        // header tells the relay how long a quiet socket may go without a
+        // heartbeat; a relay from before it sends one every two minutes anyway.
         val builder = signedRequest("GET", "/v1/ws", null)
+            .header(LinkTiming.HEARTBEAT_HEADER, LinkTiming.HEARTBEAT_MS.toString())
         val signing = builder.build().tag(Signing::class.java) ?: throw RelayException("Not registered with a relay")
         if (signing.transport == null) return http.newWebSocket(sign(builder, signing).build(), listener)
         // A refused upgrade signed with the transport key means the relay does not
@@ -956,14 +1040,16 @@ class RelayClient(
         return builder
     }
 
-    /** Adds the signature headers for one attempt: a fresh nonce and the relay's current time. */
-    private fun sign(builder: Request.Builder, s: Signing): Request.Builder {
+    /**
+     * Adds the signature headers for one attempt: a fresh nonce and the relay's
+     * current time, or the moment [ts] a copy is signed ahead for ([preparedWipes]).
+     */
+    private fun sign(builder: Request.Builder, s: Signing, ts: Long = relayNow()): Request.Builder {
         val number = number() ?: throw RelayException("Not registered with a relay")
         val signer: (ByteArray) -> String = s.transport?.let { t -> { bytes: ByteArray -> t.sign(bytes) } }
             ?: (identity() ?: throw RelayException("No identity on this device")).let { id -> { bytes: ByteArray -> id.sign(bytes) } }
         // The relay rejects a timestamp more than five minutes from its own clock,
         // so a phone whose clock is off signs with the relay's time once it knows it.
-        val ts = relayNow()
         val nonce = ByteArray(18).also { SecureRandom().nextBytes(it) }
             .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
         val payload = "$number\n$ts\n$nonce\n${s.method}\n${s.pathAndQuery}\n${sha256Hex(s.bodyText)}"
@@ -1101,6 +1187,8 @@ class RelayClient(
         const val TOKEN_KEY_MISMATCH = -5
         /** Tokens were issued for an epoch whose keys this phone has not pinned yet: look them up later, anonymously, and retry. */
         const val KEYS_PENDING = -6
+        /** This version is below the oldest safe one ([AppUpdate]): nothing but an SOS is sent until it is updated. */
+        const val UNSAFE_VERSION = -7
         /** A token epoch: 14 days, as the relay's (comms-worker/src/tokens.ts TOKEN_EPOCH_MS). */
         const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */

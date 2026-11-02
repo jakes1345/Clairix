@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.media.AudioManager
 import android.os.Build
+import android.os.SystemClock
 import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoGsm
@@ -44,6 +46,13 @@ class CellMonitor(private val context: Context) {
 
     private val tm: TelephonyManager? =
         context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+
+    /** Read for the audio mode only: whether a call is up. Needs no permission. */
+    private val audio: AudioManager? = context.getSystemService(AudioManager::class.java)
+
+    init {
+        CallModeWatch.ensure(context)
+    }
 
     /** The serving cell together with the neighbours heard at the same time. */
     data class Snapshot(val cell: ServingCell, val neighbors: List<NeighborCell>)
@@ -113,21 +122,59 @@ class CellMonitor(private val context: Context) {
             ?: return null
         if (all.isEmpty()) return null
 
-        val registered = all.firstOrNull { it.isRegistered } ?: return null
+        // requestCellInfoUpdate answers for the one subscription; the getAllCellInfo
+        // fallback is documented to return the cells of every radio, so on a dual-SIM
+        // phone it can hold two registered cells. Take the one on the data SIM's
+        // network rather than whichever the platform listed first, which alternated
+        // between SIMs from poll to poll and read as rapid cell switching.
+        val registeredAll = all.filter { it.isRegistered }
+        if (registeredAll.isEmpty()) return null
+        val dataPlmn = runCatching { manager.networkOperator }.getOrNull()
+        val registered = registeredAll[pickForPlmn(registeredAll.map { plmnOf(it) }, dataPlmn)]
         val others = all.filter { !it.isRegistered }
-        val cell = build(registered, others.size) ?: return null
+        val cell = build(registered, others.size)?.copy(inCall = inCall()) ?: return null
         val neighbors = others.mapNotNull { neighbor(it) }
             .sortedByDescending { it.signalDbm ?: Int.MIN_VALUE }
         return Snapshot(cell, neighbors)
     }
 
     /**
+     * Whether a voice call is up or ringing now, or was within the last minute, from
+     * the audio mode, which any app may read. A phone without VoLTE is parked on 3G or
+     * 2G for the length of a call (circuit-switched fallback), and the catcher
+     * heuristics must not read that as a forced downgrade. The minute covers a call
+     * that started and ended between two readings, which the mode read at the reading
+     * alone would miss; [CallModeWatch] saw it.
+     */
+    private fun inCall(): Boolean {
+        val mode = runCatching { audio?.mode }.getOrNull()
+        return callContext(mode, CallModeWatch.active, CallModeWatch.lastCallAt, SystemClock.elapsedRealtime())
+    }
+
+    /** MCC+MNC of the network a cell belongs to, as [TelephonyManager.getNetworkOperator] spells it. */
+    private fun plmnOf(info: CellInfo): String? {
+        val (mcc, mnc) = when (info) {
+            is CellInfoLte -> info.cellIdentity.mccString to info.cellIdentity.mncString
+            is CellInfoWcdma -> info.cellIdentity.mccString to info.cellIdentity.mncString
+            is CellInfoTdscdma -> info.cellIdentity.mccString to info.cellIdentity.mncString
+            is CellInfoGsm -> info.cellIdentity.mccString to info.cellIdentity.mncString
+            is CellInfoNr -> (info.cellIdentity as? CellIdentityNr)?.let { it.mccString to it.mncString } ?: return null
+            else -> return null
+        }
+        if (mcc == null || mnc == null) return null
+        return mcc + mnc
+    }
+
+    /**
      * What the radio reports about the registration as a whole. None of it needs a
      * dangerous permission except the data network type, which is read when the
-     * platform allows it and left null otherwise.
+     * platform allows it and left null otherwise. Read from the data subscription's
+     * manager, like the cells: on a dual-SIM phone the default manager describes
+     * whichever subscription the platform treats as default for voice, which can be
+     * the other SIM.
      */
     fun radioInfo(): RadioInfo {
-        val manager = tm ?: return RadioInfo()
+        val manager = dataManager(tm ?: return RadioInfo())
         val networkOperator = manager.networkOperator?.takeIf { it.length >= 5 }
         val simOperator = manager.simOperator?.takeIf { it.length >= 5 }
         val dataType = try {
@@ -325,6 +372,40 @@ class CellMonitor(private val context: Context) {
         private const val REQUEST_TIMEOUT_MS = 5_000L
 
         /**
+         * Which of several registered cells to read, by the network each belongs to:
+         * the one on the data subscription's registered network ([dataPlmn], MCC+MNC
+         * as [TelephonyManager.getNetworkOperator] spells it), else the first. With one
+         * registered cell there is nothing to choose.
+         */
+        internal fun pickForPlmn(plmns: List<String?>, dataPlmn: String?): Int {
+            if (plmns.size <= 1) return 0
+            val wanted = dataPlmn?.takeIf { it.length >= 5 } ?: return 0
+            val i = plmns.indexOfFirst { it == wanted }
+            return if (i >= 0) i else 0
+        }
+
+        /** How long after a call a reading still counts as taken in one; longer than the slowest poll. */
+        internal const val RECENT_CALL_MS = 60_000L
+
+        /** An audio mode that means a call is up or ringing, cellular or VoIP. */
+        internal fun isCallMode(mode: Int): Boolean = when (mode) {
+            AudioManager.MODE_IN_CALL, AudioManager.MODE_IN_COMMUNICATION,
+            AudioManager.MODE_RINGTONE, AudioManager.MODE_CALL_SCREENING -> true
+            else -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                (mode == AudioManager.MODE_CALL_REDIRECT || mode == AudioManager.MODE_COMMUNICATION_REDIRECT)
+        }
+
+        /**
+         * A reading is taken in a call when the audio mode says so now ([modeNow], null
+         * when unreadable), when the mode watcher has a call [active], or when the last
+         * call ended less than [RECENT_CALL_MS] before [now] (both on the elapsed-time
+         * clock).
+         */
+        internal fun callContext(modeNow: Int?, active: Boolean, lastCallAt: Long, now: Long): Boolean =
+            (modeNow != null && isCallMode(modeNow)) || active ||
+                (lastCallAt != 0L && now - lastCallAt in 0..RECENT_CALL_MS)
+
+        /**
          * The platform delivers cell info on this executor. One shared single thread
          * is enough for a poll every fifteen seconds and keeps the callback off the
          * service's main thread.
@@ -368,6 +449,44 @@ class CellMonitor(private val context: Context) {
             TelephonyManager.SIM_STATE_CARD_RESTRICTED -> "Card restricted"
             else -> "Unknown"
         }
+    }
+}
+
+/**
+ * When a call was last up or ringing, as Android's audio mode reports it. Reading the
+ * mode at each cell poll misses a call that starts and ends between two polls (15 to
+ * 30 s apart) while the phone is still on 3G at the next one; a listener on the mode
+ * sees every call. Needs no permission. Registered once per process on the
+ * application context, which lives as long as the process, so it leaks nothing and
+ * needs no stopping; it costs nothing until the mode changes. Times are on the
+ * elapsed-time clock.
+ */
+private object CallModeWatch {
+    @Volatile var active = false
+        private set
+    @Volatile var lastCallAt = 0L
+        private set
+    @Volatile private var registered = false
+
+    fun ensure(context: Context) {
+        if (registered) return
+        synchronized(this) {
+            if (registered) return
+            val app = context.applicationContext ?: return
+            val am = app.getSystemService(AudioManager::class.java) ?: return
+            val added = runCatching { am.addOnModeChangedListener(app.mainExecutor) { mode -> onMode(mode) } }.isSuccess
+            if (!added) return
+            registered = true
+            // A call already up when the scanner starts has no change to report.
+            runCatching { am.mode }.getOrNull()?.let { onMode(it) }
+        }
+    }
+
+    private fun onMode(mode: Int) {
+        val inCall = CellMonitor.isCallMode(mode)
+        // Entering a call and leaving one are both moments a call was up.
+        if (inCall || active) lastCallAt = SystemClock.elapsedRealtime()
+        active = inCall
     }
 }
 

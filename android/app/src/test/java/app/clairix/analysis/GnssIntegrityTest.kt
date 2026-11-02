@@ -1,6 +1,8 @@
 package app.clairix.analysis
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,10 +87,13 @@ class GnssIntegrityTest {
     }
 
     @Test
-    fun aPositionFarFromWifiAndCellTwiceRunningIsSpoofed() {
+    fun aPositionFarFromWifiAndCellTwiceRunningIsUnusualNotSpoofed() {
         val g = GnssIntegrity()
         feed(g, 6, ::realSky)
-        // Satellites say 20 km north; Wi-Fi and cell say home.
+        // Satellites say 20 km north; Wi-Fi and cell say home. On a sky that passes every
+        // other check that is as likely a mis-mapped access point as a spoofer (it used
+        // to read as spoofed, with "trust the Wi-Fi/cell position"), so it is unusual and
+        // neither position is vouched for.
         g.onGnssFix(fix(now, lat = home.first + 0.18))
         g.onNetworkFix(NetworkFix(now, home.first, home.second, 30f))
         assertEquals(CheckState.WARN, state(g.assess(now), "network"))
@@ -97,8 +102,137 @@ class GnssIntegrityTest {
         g.onNetworkFix(NetworkFix(now, home.first, home.second, 30f))
         val a = g.assess(now)
         assertEquals(CheckState.FAIL, state(a, "network"))
-        assertEquals(GnssVerdict.SPOOFED, a.verdict)
+        assertEquals(GnssVerdict.SUSPECT, a.verdict)
         assertEquals(home.first, a.networkLat!!, 1e-9)
+        assertTrue(a.networkDisputed)
+        assertNull(a.vouchedNetwork)
+        assertFalse(a.advice(), a.advice().contains("better guide"))
+    }
+
+    @Test
+    fun aDisagreementBackedByASecondFailingCheckIsSpoofedButVouchesForNeither() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        // Twenty km from the Wi-Fi/cell position twice, and the satellites' clock three
+        // hours out: two independent checks agree. Which position is right is still not
+        // known, so the advice points at neither.
+        val off = 3 * 3_600_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.18, satTime = now - off))
+        g.onNetworkFix(NetworkFix(now, home.first, home.second, 30f))
+        now += 30_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.18, satTime = now - off))
+        g.onNetworkFix(NetworkFix(now, home.first, home.second, 30f))
+        val a = g.assess(now)
+        assertEquals(CheckState.FAIL, state(a, "time"))
+        assertEquals(CheckState.FAIL, state(a, "network"))
+        assertEquals(GnssVerdict.SPOOFED, a.verdict)
+        assertNull(a.vouchedNetwork)
+        assertTrue(a.advice(), a.advice().contains("do not navigate by either"))
+    }
+
+    @Test
+    fun aSpoofWithTheNetworkInAgreementVouchesForTheNetworkPosition() {
+        val g = GnssIntegrity()
+        feed(g, 30, ::realSky)
+        feed(g, 6) { fakeSky(it) }
+        g.onGnssFix(fix(now))
+        g.onNetworkFix(NetworkFix(now, home.first + 0.001, home.second, 40f))
+        val a = g.assess(now)
+        assertEquals(GnssVerdict.SPOOFED, a.verdict)
+        assertEquals(home.first + 0.001, a.vouchedNetwork!!.first, 1e-9)
+        assertTrue(a.advice(), a.advice().contains("better guide"))
+    }
+
+    /** Indoors by a window: every satellite arrives by one reflection and, for a moment, all alike. */
+    private fun flatSky(t: Long) = SkyEpoch(t, listOf(
+        GnssSat(Gnss.GPS, 3, 33.4f, true), GnssSat(Gnss.GPS, 7, 32.9f, true), GnssSat(Gnss.GPS, 12, 33.8f, true),
+        GnssSat(Gnss.GALILEO, 4, 33.1f, true), GnssSat(Gnss.GALILEO, 11, 32.6f, true), GnssSat(Gnss.BEIDOU, 21, 33.5f, true)
+    ))
+
+    @Test
+    fun aMomentOfEvenSignalsIndoorsIsUnusualAndOnlyAPersistentOneIsSpoofed() {
+        val g = GnssIntegrity()
+        feed(g, 30, ::realSky)
+        feed(g, 6, ::flatSky)
+        val brief = g.assess(now)
+        assertEquals(CheckState.FAIL, state(brief, "spread"))
+        assertEquals(CheckState.PASS, state(brief, "constellations"))
+        assertEquals(GnssVerdict.SUSPECT, brief.verdict)
+        // The same flat spread epoch after epoch for half a minute is a transmitter.
+        feed(g, 24, ::flatSky)
+        assertEquals(GnssVerdict.SPOOFED, g.assess(now).verdict)
+    }
+
+    /** A GPS repeater indoors: the rooftop antenna's sky, amplified, with its spread intact. */
+    private fun repeaterSky(t: Long) = SkyEpoch(t, listOf(
+        GnssSat(Gnss.GPS, 3, 58f, true), GnssSat(Gnss.GPS, 7, 49f, true), GnssSat(Gnss.GPS, 12, 56f, true),
+        GnssSat(Gnss.GPS, 19, 45f, true), GnssSat(Gnss.GALILEO, 4, 57f, true), GnssSat(Gnss.GALILEO, 11, 47f, true),
+        GnssSat(Gnss.BEIDOU, 21, 55f, true)
+    ))
+
+    @Test
+    fun aRepeaterIndoorsIsLoudButNotSpoofed() {
+        val g = GnssIntegrity()
+        feed(g, 10, ::repeaterSky)
+        g.onGnssFix(fix(now))
+        g.onNetworkFix(NetworkFix(now, home.first + 0.001, home.second, 40f))
+        val a = g.assess(now)
+        assertEquals(CheckState.WARN, state(a, "strength"))
+        assertEquals(CheckState.PASS, state(a, "spread"))
+        assertEquals(GnssVerdict.GENUINE, a.verdict)
+    }
+
+    @Test
+    fun oneImpossibleJumpIsUnusualAndASecondIsSpoofed() {
+        // A cold start or a multipath fix can put one position kilometres out; a spoofer
+        // dragging the position does it again.
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(fix(now)); now += 2_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.02)) // 2.2 km in 2 s
+        val once = g.assess(now)
+        assertEquals(CheckState.FAIL, state(once, "jumps"))
+        assertEquals(GnssVerdict.SUSPECT, once.verdict)
+        now += 60_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.02)); now += 2_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.05)) // 3.3 km in 2 s
+        assertEquals(GnssVerdict.SPOOFED, g.assess(now).verdict)
+    }
+
+    @Test
+    fun aMockLocationAppGetsItsOwnAdvice() {
+        val g = GnssIntegrity()
+        g.onGnssFix(fix(now, mock = true))
+        val a = g.assess(now)
+        assertTrue(a.mockDetected)
+        assertTrue(a.advice(), a.advice().contains("Select mock location app"))
+    }
+
+    @Test
+    fun aBadFirstGainSampleDoesNotPoisonTheRun() {
+        // The receiver's first gain reading, taken while it settles, is 12 dB off the
+        // level it then holds. It used to become the baseline every later reading
+        // "deviated" from, so Band energy warned for the rest of the run.
+        val g = GnssIntegrity()
+        g.onClock(GnssClockSample(now, 1, 100.0, 30.0)); g.onSky(realSky(now)); now += 1_000L
+        repeat(10) { g.onClock(GnssClockSample(now, 1, 100.0, 42.0)); g.onSky(realSky(now)); now += 1_000L }
+        // Still learning: not judged, however far off the first sample was.
+        assertEquals(CheckState.NO_DATA, state(g.assess(now), "agc"))
+        repeat(60) { g.onClock(GnssClockSample(now, 1, 100.0, 42.0)); g.onSky(realSky(now)); now += 1_000L }
+        val a = g.assess(now)
+        assertEquals(CheckState.PASS, state(a, "agc"))
+        assertEquals(GnssVerdict.GENUINE, a.verdict)
+        // Real energy on the band after the warm-up still shows.
+        repeat(6) { g.onClock(GnssClockSample(now, 1, 100.0, 30.0)); g.onSky(realSky(now)); now += 1_000L }
+        assertEquals(CheckState.WARN, state(g.assess(now), "agc"))
+    }
+
+    @Test
+    fun aLastingChangeInGainLevelBecomesTheNewNormal() {
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 42.0)); now += 1_000L }
+        repeat(GnssIntegrity.AGC_RESEED_SAMPLES) { g.onClock(GnssClockSample(now, 1, 100.0, 31.0)); now += 1_000L }
+        assertEquals(CheckState.PASS, state(g.assess(now), "agc"))
     }
 
     @Test
@@ -161,9 +295,125 @@ class GnssIntegrityTest {
     }
 
     @Test
+    fun aGainAlarmDoesNotOutliveTheMeasurements() {
+        // Passive in the background, raw measurements stop whenever no other app asks
+        // for them. A gain alarm left standing from the last of them used to go on
+        // corroborating any other failing check: one wrong satellite time read as spoofing.
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 40.0)); g.onSky(realSky(now)); now += 1_000L }
+        repeat(6) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); g.onSky(realSky(now)); now += 1_000L }
+        assertEquals(CheckState.WARN, state(g.assess(now), "agc"))
+        // While the alarm is live it corroborates a failing check.
+        g.onGnssFix(fix(now, satTime = now + 2 * 3_600_000L))
+        assertEquals(GnssVerdict.SPOOFED, g.assess(now).verdict)
+        // The measurements stop; the sky goes on.
+        feed(g, 40, ::realSky)
+        g.onGnssFix(fix(now, satTime = now + 2 * 3_600_000L))
+        val a = g.assess(now)
+        assertEquals(CheckState.NO_DATA, state(a, "agc"))
+        assertEquals(CheckState.NO_DATA, state(a, "clock"))
+        assertEquals(GnssVerdict.SUSPECT, a.verdict)
+    }
+
+    @Test
+    fun aTunnelAfterTheMeasurementsStoppedIsOnlyLost() {
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 40.0)); g.onSky(realSky(now)); now += 1_000L }
+        repeat(6) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); g.onSky(realSky(now)); now += 1_000L }
+        // The measurements stop with the alarm standing; the fix carries on, then drops at a tunnel.
+        feed(g, 40, ::realSky)
+        feed(g, 10) { t -> SkyEpoch(t, listOf(GnssSat(Gnss.GPS, 3, 11f, false))) }
+        val a = g.assess(now)
+        assertEquals(CheckState.WARN, state(a, "jamming"))
+        assertEquals(GnssVerdict.NO_FIX, a.verdict)
+    }
+
+    @Test
+    fun aRunOfLoudGainReadingsStartsAgainAfterAGap() {
+        val g = GnssIntegrity()
+        repeat(40) { g.onClock(GnssClockSample(now, 1, 100.0, 40.0)); now += 1_000L }
+        repeat(4) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); now += 1_000L }
+        now += 60_000L
+        g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); now += 1_000L
+        // Five loud readings, but not five in a row: no alarm yet.
+        assertEquals(CheckState.PASS, state(g.assess(now), "agc"))
+        repeat(4) { g.onClock(GnssClockSample(now, 1, 100.0, 22.0)); now += 1_000L }
+        assertEquals(CheckState.WARN, state(g.assess(now), "agc"))
+    }
+
+    @Test
     fun noDataSaysSoInsteadOfClaimingClean() {
         val a = GnssIntegrity().assess(now)
         assertEquals(GnssVerdict.NO_DATA, a.verdict)
         assertTrue(a.checks.all { it.state == CheckState.NO_DATA })
+    }
+
+    // ── Benign failures: what an ordinary bad day looks like ────────────────
+
+    @Test
+    fun aCellOnlyPositionKilometresOutWithinItsOwnAccuracyAgrees() {
+        val g = GnssIntegrity()
+        feed(g, 10, ::realSky)
+        g.onGnssFix(fix(now))
+        // No Wi-Fi around: the network position is one cell tower's, 2 km out and saying it is good to 1.5 km.
+        g.onNetworkFix(NetworkFix(now, home.first + 0.02, home.second, 1_500f))
+        val a = g.assess(now)
+        assertEquals(CheckState.PASS, state(a, "network"))
+        assertEquals(GnssVerdict.GENUINE, a.verdict)
+    }
+
+    @Test
+    fun aMisMappedAccessPointOnceThenRightIsAMomentsWarningNotAVerdict() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(fix(now))
+        // A router that moved house: the Wi-Fi position is 20 km away, once.
+        g.onNetworkFix(NetworkFix(now, home.first + 0.18, home.second, 30f))
+        val first = g.assess(now)
+        assertEquals(CheckState.WARN, state(first, "network"))
+        assertEquals(GnssVerdict.GENUINE, first.verdict)
+        // The next Wi-Fi position, from the neighbours' routers, agrees.
+        now += 15_000L
+        g.onSky(realSky(now))
+        g.onGnssFix(fix(now))
+        g.onNetworkFix(NetworkFix(now, home.first + 0.001, home.second, 30f))
+        val next = g.assess(now)
+        assertEquals(CheckState.PASS, state(next, "network"))
+        assertEquals(GnssVerdict.GENUINE, next.verdict)
+        assertTrue(next.networkAgrees)
+    }
+
+    @Test
+    fun aWrongNetworkClockAloneIsUnusualNotSpoofed() {
+        val g = GnssIntegrity()
+        feed(g, 10, ::realSky)
+        // The carrier's network time is two hours out; the satellites, rightly, disagree with it.
+        g.onGnssFix(fix(now, satTime = now + 2 * 3_600_000L))
+        g.onNetworkFix(NetworkFix(now, home.first + 0.001, home.second, 40f))
+        val a = g.assess(now)
+        assertEquals(CheckState.FAIL, state(a, "time"))
+        assertEquals(CheckState.PASS, state(a, "network"))
+        assertEquals(GnssVerdict.SUSPECT, a.verdict)
+    }
+
+    @Test
+    fun aMultipathHopInAStreetOfTallBuildingsIsNotAJump() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(fix(now)); now += 1_000L
+        g.onGnssFix(fix(now, lat = home.first + 0.0012)); now += 1_000L // 133 m in a second, off a glass wall
+        g.onGnssFix(fix(now))                                           // and back
+        val a = g.assess(now)
+        assertEquals(CheckState.PASS, state(a, "jumps"))
+        assertEquals(GnssVerdict.GENUINE, a.verdict)
+    }
+
+    @Test
+    fun aColdStartsFirstFixFarOutWithItsOwnPoorAccuracyIsNotAJump() {
+        val g = GnssIntegrity()
+        feed(g, 6, ::realSky)
+        g.onGnssFix(GnssFix(now, home.first + 0.05, home.second, 900f, now, false)); now += 2_000L
+        g.onGnssFix(fix(now))
+        assertEquals(CheckState.PASS, state(g.assess(now), "jumps"))
     }
 }

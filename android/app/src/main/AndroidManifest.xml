@@ -20,10 +20,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- COMMS: the camera scans a contact's pairing QR code; the relay connection
-         runs in a foreground service of the remote-messaging type while the
-         owner keeps comms online. -->
+         runs in a foreground service of the special-use type while the owner
+         keeps comms online (its reason is given on CommsService below). -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- COMMS calls: the microphone for the call itself, audio routing for
@@ -34,15 +34,20 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
-    <!-- COMMS: lets the owner exempt Clairix from battery optimisation, which on
-         many phones (Samsung especially) otherwise cuts the background relay
-         connection so incoming calls never ring. Asked for from COMMS settings. -->
+    <!-- Lets the owner exempt Clairix from battery optimisation, which on many
+         phones (Samsung especially) otherwise cuts the background relay connection
+         so incoming calls never ring, and stops the scanner while the phone sleeps.
+         Asked for from COMMS settings, and on the Scan hub while the scanner is on. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- COMMS calls: the proximity sensor switches the screen off at the ear. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Bring the relay connection back after a reboot or an update. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Fake incoming call (Comms menu, both editions): rings at the exact moment
+         the owner picked, even in Doze. A special access the owner grants. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <!-- The relay (and, in the full app, map tile downloads from OpenStreetMap). -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -60,9 +65,14 @@
         android:theme="@style/Theme.Clairix">
 
         <!--
-            Portrait only: the whole UI is laid out for it, and a rotation would
-            recreate the Activity in the middle of a BiometricPrompt and drop the
-            result the vault is waiting for.
+            Portrait only, because every screen is laid out and tested for it alone.
+            The vault no longer needs it: BiometricPrompt's result goes through
+            Registry.vaultAuth, and whichever MainActivity instance is on screen
+            when it lands carries the operation out. The lock (here, on the two
+            call screens, the wipe relaunch and the QR scanner) comes off once the
+            layouts, and a vault unlock rotated mid-prompt, have been run on a
+            tablet and an unfolded foldable; from targetSdk 36 Android ignores it
+            on screens 600 dp wide and up anyway.
         -->
         <activity
             android:name=".MainActivity"
@@ -71,10 +81,10 @@
             android:launchMode="singleTop"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Clairix">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            <!--
+                The launcher entry is not here but on the aliases below, so discreet
+                mode can show a neutral one instead (security/DiscreetMode.kt).
+            -->
             <!--
                 COMMS invites: https://clairix.app/i#<invite>. The domain names this
                 app and its signing key (/.well-known/assetlinks.json), so Android
@@ -98,6 +108,52 @@
                 <data android:scheme="clairix" android:host="invite" />
             </intent-filter>
         </activity>
+
+        <!--
+            Launcher entries for MainActivity, exactly one enabled at a time
+            (security/DiscreetMode.kt). LauncherClairix is the app as it is. The
+            other two are discreet mode's neutral entries, off until the owner
+            picks one in Settings; Google Play's policy does not allow disguising
+            the launcher icon, so the Play edition's manifest removes them
+            (src/play/AndroidManifest.xml). Declared after MainActivity, as an
+            alias must be. Android's own lists (Settings, Apps) still show the
+            package's label, Clairix.
+        -->
+        <activity-alias
+            android:name=".LauncherClairix"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherCompass"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_compass"
+            android:label="@string/launcher_compass">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherNotes"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_notes"
+            android:label="@string/launcher_notes">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!--
             The call screen incoming-call and ongoing-call notifications open. It
@@ -143,13 +199,20 @@
             COMMS relay connection. Holds the WebSocket to the owner's relay while
             comms are online, so encrypted envelopes arrive the moment they are
             queued. When it is not running, a UnifiedPush wake-up (below) or opening
-            the app fetches the inbox instead.
+            the app fetches the inbox instead. None of Android's named service types
+            fits a relay socket (remoteMessaging is for moving messages between a
+            person's own devices), so it is a special-use service, and the property
+            states why for Google Play's review (docs/play/foreground-services.md).
         -->
         <service
             android:name=".comms.CommsService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="remoteMessaging" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the end-to-end-encrypted relay connection open so incoming calls and messages arrive without a Google push service" />
+        </service>
 
         <!--
             UnifiedPush receiver: a distributor app the owner installs (ntfy, for
@@ -179,9 +242,78 @@
             android:name=".comms.LinkWatchdog"
             android:exported="false" />
 
+        <!-- The TLS canary's four-hourly check: an alarm the system keeps, so it runs
+             whether or not the process that armed it is still alive. -->
+        <receiver
+            android:name=".analysis.TlsCanaryAlarm"
+            android:exported="false" />
+
         <!-- Decline / hang-up buttons on call notifications. -->
         <receiver
             android:name=".comms.CallActionReceiver"
+            android:exported="false" />
+
+        <!--
+            Fake incoming call: a pretend ring the owner schedules as a reason to
+            leave, in the Comms menu of both editions. Its screen shows over the
+            lock screen like a real call and is kept out of recents; only Clairix's
+            own alarm and notification can open it.
+        -->
+        <activity
+            android:name=".security.FakeCallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity="app.clairix.fakecall"
+            android:excludeFromRecents="true"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.Clairix" />
+
+        <!-- The fake call's alarm and its Decline button. -->
+        <receiver
+            android:name=".security.FakeCallReceiver"
+            android:exported="false" />
+
+        <!--
+            The fake call's ring: a short foreground service (no type permission and
+            no prerequisites; the ring lasts 45 s) that plays the phone's ringtone
+            and vibrates from the background, under a wake lock, so the call rings
+            whether or not any screen opens. Its notification is the incoming-call
+            card. Started by the alarm; ends with the ring (answer, decline, Cancel
+            or the ring's own timer). On Android 12 and 13, which have no such type,
+            it runs as an untyped foreground service.
+        -->
+        <service
+            android:name=".security.FakeCallRingService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+
+        <!--
+            After the duress passcode's wipe: ends the process that showed the old
+            data and opens the lock screen afresh in a new one. Runs for a moment in
+            a process of its own, since a process cannot reliably restart itself.
+            Not exported: only the wipe starts it.
+        -->
+        <activity
+            android:name=".security.WipeRelaunchActivity"
+            android:exported="false"
+            android:process=":relaunch"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Clairix" />
+
+        <!-- A wipe's request to the relay to delete the account, tried again until
+             the relay takes it or it expires (a day), whether or not Clairix runs. -->
+        <receiver
+            android:name=".security.RelayFarewellAlarm"
+            android:exported="false" />
+
+        <!-- History older than the owner's retention, deleted once a day even when
+             neither the scanner nor the app is open. -->
+        <receiver
+            android:name=".security.HistoryRetentionAlarm"
             android:exported="false" />
 
         <!-- Portrait QR scanner for pairing; the library's default is landscape. -->

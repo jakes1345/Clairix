@@ -15,7 +15,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 FIX = HERE / "fixtures"
 REGIONS = HERE.parent / "graph-builder" / "us-regions.txt"
 BBOXES = HERE / "state_bboxes.json"
-NOW = agg.parse_time("2026-10-18T03:00:00Z")
+FIXED_NOW = "2026-10-18T03:00:00Z"
+NOW = agg.parse_time(FIXED_NOW)
 
 
 @pytest.fixture(autouse=True)
@@ -555,7 +556,7 @@ def test_main_fails_when_no_feed_works(tmp_path, monkeypatch, www):
                                 "url": {"url": www.url("/nope.json")}}]))
     monkeypatch.delenv("WZDX_KEYS", raising=False)
     monkeypatch.setattr(agg, "RETRIES", 0)
-    rc = agg.main(["--registry", str(reg), "--out", str(tmp_path / "dist"), "--previous", ""])
+    rc = agg.main(["--registry", str(reg), "--out", str(tmp_path / "dist"), "--previous", "", "--now", FIXED_NOW])
     assert rc == 1
 
 
@@ -681,8 +682,10 @@ def test_previous_feeds_unavailable_does_not_fail_the_run(tmp_path, monkeypatch,
     if prev_content is not None:
         prev.write_bytes(prev_content)
     out = tmp_path / "dist"
+    # main() runs as of the clock unless told otherwise; the fixtures' zones end in 2026, so the
+    # time is fixed here as everywhere else in this file.
     rc = agg.main(["--registry", str(_carry_registry(tmp_path, www)), "--out", str(out),
-                   "--previous", str(prev)])
+                   "--previous", str(prev), "--now", FIXED_NOW])
     assert rc == 0
     assert _state(out, "north-america-us-north-carolina")["items"] == []
     assert len(_state(out, "north-america-us-minnesota")["items"]) == 2
@@ -693,3 +696,77 @@ def test_previous_feeds_download_failure_is_tolerated(monkeypatch):
         raise agg.urllib.error.URLError(OSError("unreachable"))
     monkeypatch.setattr(agg, "fetch_bytes", boom)
     assert agg.load_previous_feeds(agg.PREVIOUS_FEEDS_URL) == {}
+    assert agg.load_previous(agg.PREVIOUS_FEEDS_URL) == ({}, {})
+
+
+# --- fixed clock and stable state files --------------------------------------------------------
+
+
+def test_now_option_fixes_the_clock(tmp_path, monkeypatch, www):
+    monkeypatch.setattr(agg, "RETRIES", 0)
+    monkeypatch.delenv("WZDX_KEYS", raising=False)
+    reg = _carry_registry(tmp_path, www)
+    for spec in (FIXED_NOW, str(NOW)):
+        out = tmp_path / f"dist-{len(spec)}"
+        assert agg.main(["--registry", str(reg), "--out", str(out), "--previous", "", "--now", spec]) == 0
+        assert json.loads((out / "workzones-index.json").read_text())["generated"] == NOW
+        assert _state(out, "north-america-us-minnesota")["generated"] == NOW
+    for bad in ("yesterday", "-5", "0"):
+        with pytest.raises(SystemExit):
+            agg.main(["--registry", str(reg), "--out", str(tmp_path / "x"), "--previous", "", "--now", bad])
+
+
+def test_unchanged_state_keeps_its_generated_and_its_bytes(tmp_path, monkeypatch, www):
+    """A state whose items did not change is written byte for byte as before, with the earlier
+    run's "generated", so publish.py leaves its release asset alone. The index and the feeds file
+    carry the new run's time, and a state whose items changed is stamped with it."""
+    monkeypatch.setattr(agg, "RETRIES", 0)
+    reg = _carry_registry(tmp_path, www)
+    first = tmp_path / "first"
+    agg.run(str(reg), str(first), str(REGIONS), str(BBOXES), {}, now=NOW)
+    later = NOW + 900
+    second = tmp_path / "second"
+    agg.run(str(reg), str(second), str(REGIONS), str(BBOXES), {}, now=later,
+            previous_src=str(first / "workzones-feeds.json.gz"))
+    for slug in agg.region_slugs(str(REGIONS)):
+        assert (first / f"workzones-{slug}.json.gz").read_bytes() == (second / f"workzones-{slug}.json.gz").read_bytes(), slug
+    assert _state(second, "north-america-us-minnesota")["generated"] == NOW
+    assert json.loads((second / "workzones-index.json").read_text())["generated"] == later
+    with gzip.open(second / "workzones-feeds.json.gz", "rt", encoding="utf-8") as f:
+        feeds = json.load(f)
+    assert feeds["generated"] == later
+    assert feeds["states"]["north-america-us-minnesota"]["generated"] == NOW
+    assert len(feeds["states"]) == 52 and all(len(s["digest"]) == 64 for s in feeds["states"].values())
+
+    # A new zone appears in the Minnesota feed: that state's file and "generated" change, no other's.
+    doc = load("wzdx_v3_1.geojson")
+    extra = json.loads(json.dumps(doc["features"][0]))
+    extra["id"] = "v3-new"
+    doc["features"].append(extra)
+    www.put("/v3.geojson", json.dumps(doc).encode("utf-8"))
+    third = tmp_path / "third"
+    agg.run(str(reg), str(third), str(REGIONS), str(BBOXES), {}, now=later + 900,
+            previous_src=str(second / "workzones-feeds.json.gz"))
+    mn = _state(third, "north-america-us-minnesota")
+    assert mn["generated"] == later + 900 and len(mn["items"]) == 3
+    assert (third / "workzones-north-america-us-wyoming.json.gz").read_bytes() == \
+        (first / "workzones-north-america-us-wyoming.json.gz").read_bytes()
+
+
+def test_previous_state_memory_is_optional_and_validated(tmp_path):
+    d = "d" * 64
+    assert agg.state_generated(None, d, NOW) == NOW
+    assert agg.state_generated({"generated": NOW - 5, "digest": d}, d, NOW) == NOW - 5
+    assert agg.state_generated({"generated": NOW - 5, "digest": "other"}, d, NOW) == NOW
+    assert agg.state_generated({"generated": NOW + 5, "digest": d}, d, NOW) == NOW  # a clock that ran ahead
+    assert agg.state_generated({"generated": True, "digest": d}, d, NOW) == NOW
+    assert agg.items_digest([]) == agg.items_digest([]) and agg.items_digest([{"id": "a"}]) != agg.items_digest([])
+
+    # An older feeds file without "states", or with junk in it, means a fresh stamp for every state.
+    prev = tmp_path / "prev.json.gz"
+    agg.write_gz_json(str(prev), {"version": 1, "generated": NOW, "feeds": {}, "states": {
+        "a": {"generated": 5, "digest": "x"}, "b": {"generated": "5", "digest": "x"},
+        "c": {"generated": 5}, "d": "junk"}})
+    assert agg.load_previous(str(prev)) == ({}, {"a": {"generated": 5, "digest": "x"}})
+    agg.write_gz_json(str(prev), {"version": 1, "generated": NOW, "feeds": {}})
+    assert agg.load_previous(str(prev)) == ({}, {})

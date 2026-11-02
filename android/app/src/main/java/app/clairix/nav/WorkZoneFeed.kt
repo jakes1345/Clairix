@@ -11,6 +11,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -105,20 +106,30 @@ data class WorkZone(
 }
 
 /**
- * Downloads the work zones for one map region from the workzones release (rebuilt every 15
- * minutes by GitHub Actions), with conditional requests so an unchanged file costs one round
- * trip. The last good file is kept in filesDir/nav/ so zones are known offline.
+ * Downloads the work zones for one map region from the workzones release, with conditional
+ * requests so an unchanged file costs one round trip, and the release's signed index for the
+ * time of the aggregator's last run. GitHub Actions runs that workflow on a best-effort
+ * schedule, in practice several times a day rather than the quarter-hour its cron asks for, so
+ * [status] carries how old the zones are, for the UI to show beside the routes that use them.
+ * The last good files are kept in filesDir/nav/ so zones are known offline.
  */
 class WorkZoneFeed(context: Context, val slug: String) {
 
     companion object {
         private const val TAG = "WorkZoneFeed"
         private const val RELEASE_BASE = "https://github.com/jakes1345/Clairix/releases/download/workzones"
+        /** How often to ask the release again; most answers are 304, and the age shown does not depend on it. */
         const val REFRESH_INTERVAL_MS = 15 * 60_000L
         const val MAX_BYTES = 10L * 1024 * 1024
+        /** The index lists every feed's status: a few kilobytes. */
+        const val INDEX_MAX_BYTES = 1024L * 1024
         /** A signature file is one line. */
         const val SIGNATURE_MAX_BYTES = 1024L
         private const val FORMAT_VERSION = 1
+        /** Rewritten by every run of the aggregator, whether or not any region's file changed. */
+        const val INDEX_URL = "$RELEASE_BASE/workzones-index.json"
+        /** The cached index is shared by every region's feed: one reader or writer at a time. */
+        private val indexLock = Mutex()
 
         fun url(slug: String): String = "$RELEASE_BASE/workzones-$slug.json.gz"
 
@@ -150,7 +161,11 @@ class WorkZoneFeed(context: Context, val slug: String) {
          * Parses an aggregator file and keeps the zones that have not ended by [nowSec]. Throws
          * [JSONException] when the file is not one; a file for another region is rejected too.
          */
-        fun parse(text: String, nowSec: Long, expectSlug: String? = null): List<WorkZone> {
+        fun parse(text: String, nowSec: Long, expectSlug: String? = null): List<WorkZone> =
+            parseFile(text, nowSec, expectSlug).zones
+
+        /** [parse], with the file's own date: the aggregator run that last changed this region's zones. */
+        fun parseFile(text: String, nowSec: Long, expectSlug: String? = null): ParsedFile {
             val root = JSONObject(text)
             val version = root.optInt("version", -1)
             if (version != FORMAT_VERSION) throw JSONException("Unsupported work zone file version $version")
@@ -167,13 +182,78 @@ class WorkZoneFeed(context: Context, val slug: String) {
                 if (z.end != null && z.end <= nowSec) continue
                 if (seen.add(z.id)) out.add(z)
             }
-            return out
+            return ParsedFile(out, epochOrNull(root, "generated"))
         }
+
+        /**
+         * The time of the aggregator's last run, from workzones-index.json; null when the index
+         * carries none. Throws [JSONException] when the text is not a JSON object.
+         */
+        fun parseIndexGenerated(text: String): Long? = epochOrNull(JSONObject(text), "generated")
+
+        private fun epochOrNull(o: JSONObject, key: String): Long? {
+            if (o.isNull(key)) return null
+            val v = o.optDouble(key, Double.NaN)
+            return if (v.isNaN() || v <= 0) null else v.toLong()
+        }
+
+        /**
+         * How current a region's zones are once a refresh has confirmed its file: the newer of the
+         * file's own date (the run that last changed its zones) and the run time the index gave
+         * ([indexGenerated], fetched before the file, so never newer than the file is). An
+         * unchanged file also keeps the date it was confirmed to before; a changed one starts
+         * again from its own date.
+         */
+        fun confirmedAsOf(fileChanged: Boolean, fileGenerated: Long?, previousAsOf: Long?, indexGenerated: Long?): Long? =
+            listOfNotNull(fileGenerated, indexGenerated, if (fileChanged) null else previousAsOf).maxOrNull()
+
+        /** "just now", "12 min ago", "3 h ago", "2 d ago": how old the work-zone data is. */
+        fun asOfText(nowSec: Long, asOfSec: Long): String {
+            val s = (nowSec - asOfSec).coerceAtLeast(0L)
+            return when {
+                s < 60 -> "just now"
+                s < 3600 -> "${s / 60} min ago"
+                s < 86_400 -> "${s / 3600} h ago"
+                else -> "${s / 86_400} d ago"
+            }
+        }
+
+        /** The line under route options that says how many work zones the routes know of, and how old that list is. */
+        fun statusText(status: Status, nowSec: Long): String = when (status) {
+            is Status.Loaded -> {
+                val listed = if (status.count == 0) "none listed for this map" else "${status.count} listed for this map"
+                val asOf = status.asOfEpochSec
+                if (asOf != null) "Work zones as of ${asOfText(nowSec, asOf)}: $listed, from the state DOT feeds."
+                else "Work zones: $listed, from the state DOT feeds; the list carries no date."
+            }
+            Status.NotPublished -> "No work-zone list has been published for this map yet."
+            Status.Unknown -> "The work-zone list for this map has not been fetched yet."
+        }
+    }
+
+    /** A parsed region file: the zones not yet ended, and the aggregator run that produced this set of zones. */
+    data class ParsedFile(val zones: List<WorkZone>, val generatedEpochSec: Long?)
+
+    /** What the UI can say about the feed: nothing yet, the list with its age, or none published for this region. */
+    sealed interface Status {
+        data object Unknown : Status
+        /** [count] zones not yet ended; [asOfEpochSec] the aggregator run they are known current at, null when nothing says. */
+        data class Loaded(val count: Int, val asOfEpochSec: Long?) : Status
+        /** No work-zone file has been published for this region (yet). */
+        data object NotPublished : Status
     }
 
     private val dir = File(context.applicationContext.filesDir, "nav")
     private val cacheFile = File(dir, "workzones-$slug.json.gz")
+    /** The region file's validators, the mark that its signature was checked, and "asOf", the run it was last confirmed current at. */
     private val metaFile = File(dir, "workzones-$slug.meta.json")
+    /**
+     * The release's index, the same for every region: one copy and one set of validators. Its run
+     * time dates a region only in the refresh that confirmed that region's file; what each region
+     * was confirmed to is kept in that region's own meta file.
+     */
+    private val indexFile = File(dir, "workzones-index.json")
+    private val indexMetaFile = File(dir, "workzones-index.meta.json")
 
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -186,10 +266,20 @@ class WorkZoneFeed(context: Context, val slug: String) {
     private val lock = Mutex()
     @Volatile private var loaded = false
     @Volatile private var lastAttemptMs = 0L
+    /** A signed region file has been parsed, from the cache or the release, and its zones are in [zones]. */
+    @Volatile private var haveFile = false
+    /** The region file's "generated": the aggregator run that last changed its zones. */
+    @Volatile private var fileGenerated: Long? = null
+    /** The aggregator run this region's file was last confirmed current at. */
+    @Volatile private var asOf: Long? = null
 
     private val _zones = MutableStateFlow<List<WorkZone>>(emptyList())
     /** Work zones not yet ended, from the newest file this phone has. */
     val zones: StateFlow<List<WorkZone>> = _zones.asStateFlow()
+
+    private val _status = MutableStateFlow<Status>(Status.Unknown)
+    /** Whether a list exists for this region and how old it is, for the route options sheet. */
+    val status: StateFlow<Status> = _status.asStateFlow()
 
     /** Refreshes when the last attempt was more than [maxAgeMs] ago. */
     suspend fun refreshIfStale(maxAgeMs: Long = REFRESH_INTERVAL_MS): Boolean {
@@ -198,8 +288,9 @@ class WorkZoneFeed(context: Context, val slug: String) {
     }
 
     /**
-     * Loads the cached file on first use, then asks the release for a newer one. Returns false
-     * when the download failed; the cached zones stay in place then.
+     * Loads the cached file on first use, then asks the release for its index and for a newer
+     * region file. Returns false when the region download failed; the cached zones and their
+     * date stay in place then.
      */
     suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
         lock.withLock {
@@ -208,18 +299,29 @@ class WorkZoneFeed(context: Context, val slug: String) {
                 loaded = true
             }
             lastAttemptMs = System.currentTimeMillis()
-            try {
+            // The index before the region file: tools/workzones/publish.py uploads it after every
+            // region file of a run, so a region file fetched after it is at least as new as the
+            // run it names, and the age shown can be too old but never too new.
+            val runAt = fetchRunTime()
+            val changed = try {
                 download()
-                true
             } catch (e: IOException) {
                 Log.i(TAG, "Work zones for $slug unavailable: ${e.message}")
                 pruneEnded()
-                false
+                null
             } catch (e: JSONException) {
                 Log.w(TAG, "Malformed work zone file for $slug: ${e.message}")
                 pruneEnded()
-                false
+                null
             }
+            if (changed != null) {
+                val confirmed = confirmedAsOf(changed, fileGenerated, asOf, runAt)
+                // A new file was stored with fresh validators and no date; an unchanged one only when its date moves.
+                if (changed || confirmed != asOf) saveAsOf(confirmed)
+                asOf = confirmed
+            }
+            publishStatus()
+            changed != null
         }
     }
 
@@ -232,19 +334,32 @@ class WorkZoneFeed(context: Context, val slug: String) {
         if (kept.size != cur.size) _zones.value = kept
     }
 
-    private fun download() {
-        val meta = readMeta()
+    /** Loaded once a signed file has been read, dated by the newer of its own date and the run it was confirmed at. */
+    private fun publishStatus() {
+        if (!haveFile) return
+        _status.value = Status.Loaded(_zones.value.size, listOfNotNull(fileGenerated, asOf).maxOrNull())
+    }
+
+    /** Asks the release for a newer region file: true when one was stored, false when the one held is current (304). */
+    private fun download(): Boolean {
+        val meta = readMeta(metaFile)
         val builder = Request.Builder().url(url(slug)).get()
-        // Validators only make sense while the file they describe is still on
-        // disk, and only for a copy whose signature was checked when it was stored.
-        if (cacheFile.isFile && meta?.optBoolean("signed") == true) {
-            meta?.optString("etag")?.takeIf { it.isNotEmpty() }?.let { builder.header("If-None-Match", it) }
-            meta?.optString("lastModified")?.takeIf { it.isNotEmpty() }?.let { builder.header("If-Modified-Since", it) }
+        // Validators only make sense while the zones they describe are loaded from a file still on
+        // disk, and only for a copy whose signature was checked when it was stored: a 304 must
+        // mean the zones in hand are the current ones.
+        if (haveFile && cacheFile.isFile && meta != null && meta.optBoolean("signed")) {
+            meta.optString("etag").takeIf { it.isNotEmpty() }?.let { builder.header("If-None-Match", it) }
+            meta.optString("lastModified").takeIf { it.isNotEmpty() }?.let { builder.header("If-Modified-Since", it) }
         }
         http.newCall(builder.build()).execute().use { resp ->
             if (resp.code == 304) {
                 pruneEnded()
-                return
+                return false
+            }
+            if (resp.code == 404) {
+                // A region the release has no file for; with zones in hand, a moment between a replace's delete and upload.
+                if (!haveFile) _status.value = Status.NotPublished
+                throw IOException("No work zone file is published for this region")
             }
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             val body = resp.body ?: throw IOException("Empty response")
@@ -257,13 +372,56 @@ class WorkZoneFeed(context: Context, val slug: String) {
                 throw IOException("The work zone file is not signed by the Clairix release key")
             }
             val text = String(gunzipCapped(raw), Charsets.UTF_8)
-            val zones = parse(text, nowSec(), slug)
+            val parsed = parseFile(text, nowSec(), slug)
             writeAtomically(cacheFile, raw)
-            val m = JSONObject().put("signed", true)
-            resp.header("ETag")?.let { m.put("etag", it) }
-            resp.header("Last-Modified")?.let { m.put("lastModified", it) }
-            writeAtomically(metaFile, m.toString().toByteArray(Charsets.UTF_8))
-            _zones.value = zones
+            writeAtomically(metaFile, validators(resp))
+            fileGenerated = parsed.generatedEpochSec
+            haveFile = true
+            _zones.value = parsed.zones
+            return true
+        }
+    }
+
+    /** The time of the aggregator's last run, from the release's signed index; null when it cannot be had. */
+    private suspend fun fetchRunTime(): Long? = indexLock.withLock {
+        try {
+            downloadIndex()
+        } catch (e: IOException) {
+            Log.i(TAG, "Work zone index unavailable: ${e.message}")
+            null
+        } catch (e: JSONException) {
+            Log.w(TAG, "Malformed work zone index, discarding the cached copy: ${e.message}")
+            indexFile.delete()
+            indexMetaFile.delete()
+            null
+        }
+    }
+
+    private fun downloadIndex(): Long? {
+        val meta = readMeta(indexMetaFile)
+        val builder = Request.Builder().url(INDEX_URL).get()
+        if (indexFile.isFile && meta != null && meta.optBoolean("signed")) {
+            meta.optString("etag").takeIf { it.isNotEmpty() }?.let { builder.header("If-None-Match", it) }
+            meta.optString("lastModified").takeIf { it.isNotEmpty() }?.let { builder.header("If-Modified-Since", it) }
+        }
+        http.newCall(builder.build()).execute().use { resp ->
+            if (resp.code == 304) {
+                // Unchanged: the copy on disk, checked when it was stored, is the current index.
+                val cached = indexFile.inputStream().use { readCapped(it, INDEX_MAX_BYTES) }
+                return parseIndexGenerated(String(cached, Charsets.UTF_8))
+            }
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+            val body = resp.body ?: throw IOException("Empty response")
+            if (body.contentLength() > INDEX_MAX_BYTES) throw IOException("Work zone index is larger than ${INDEX_MAX_BYTES / 1024} KiB")
+            val raw = body.byteStream().use { readCapped(it, INDEX_MAX_BYTES) }
+            // Signed by the same key as the region files, and checked the same way before it is read.
+            if (!AssetSignature.verify(raw, fetchSignature("$INDEX_URL.sig"))) {
+                throw IOException("The work zone index is not signed by the Clairix release key")
+            }
+            val generated = parseIndexGenerated(String(raw, Charsets.UTF_8))
+            writeAtomically(indexFile, raw)
+            writeAtomically(indexMetaFile, validators(resp))
+            return generated
         }
     }
 
@@ -277,26 +435,48 @@ class WorkZoneFeed(context: Context, val slug: String) {
         }
     }
 
-    private fun readMeta(): JSONObject? = try {
-        if (metaFile.isFile) JSONObject(metaFile.readText()) else null
+    /** The validators to send next time, and the mark that this copy's signature was checked. */
+    private fun validators(resp: Response): ByteArray {
+        val m = JSONObject().put("signed", true)
+        resp.header("ETag")?.let { m.put("etag", it) }
+        resp.header("Last-Modified")?.let { m.put("lastModified", it) }
+        return m.toString().toByteArray(Charsets.UTF_8)
+    }
+
+    private fun readMeta(file: File): JSONObject? = try {
+        if (file.isFile) JSONObject(file.readText()) else null
     } catch (e: IOException) {
         null
     } catch (e: JSONException) {
-        metaFile.delete()
+        file.delete()
         null
+    }
+
+    /** Keeps the run this region's file was confirmed current at beside its validators, so a restart offline still knows it. */
+    private fun saveAsOf(value: Long?) {
+        val m = readMeta(metaFile) ?: return
+        if (value == null) m.remove("asOf") else m.put("asOf", value)
+        writeAtomically(metaFile, m.toString().toByteArray(Charsets.UTF_8))
     }
 
     private fun loadCache() {
         if (!cacheFile.isFile) return
+        val meta = readMeta(metaFile)
         // A copy kept by a version that did not check signatures is not trusted now.
-        if (readMeta()?.optBoolean("signed") != true) {
+        if (meta == null || !meta.optBoolean("signed")) {
             cacheFile.delete()
             metaFile.delete()
             return
         }
         try {
             val raw = cacheFile.inputStream().use { readCapped(it, MAX_BYTES) }
-            _zones.value = parse(String(gunzipCapped(raw), Charsets.UTF_8), nowSec(), slug)
+            val parsed = parseFile(String(gunzipCapped(raw), Charsets.UTF_8), nowSec(), slug)
+            fileGenerated = parsed.generatedEpochSec
+            // Recorded by an earlier refresh; a copy stored before that was recorded has only its own date.
+            asOf = meta.optLong("asOf", 0L).takeIf { it > 0 }
+            haveFile = true
+            _zones.value = parsed.zones
+            publishStatus()
         } catch (e: IOException) {
             Log.w(TAG, "Work zone cache unreadable: ${e.message}")
         } catch (e: JSONException) {

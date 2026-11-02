@@ -5,12 +5,18 @@ import android.util.Base64
 import app.clairix.Registry
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.VaultBox
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.security.MessageDigest
 
 /**
  * A duress phrase: an ordinary-looking sentence the owner can type into any
  * conversation. The message goes out as written, so anyone watching the screen
- * sees a normal chat; underneath, the SOS fires with the last known position.
+ * sees a normal chat; underneath, the SOS fires with the last known position,
+ * or a fresh one when the phone can read one within a few seconds.
  *
  * The phrase is kept encrypted under the comms vault key ([VaultBox]) and
  * compared in memory only. Neither it nor the SOS it raises is written to a
@@ -22,6 +28,8 @@ object DuressPhrase {
     private const val PREFS = "duress"
     private const val KEY_PHRASE = "phrase_enc"
 
+    /** Where the position is read and the SOS raised, off the send path, so the cover message goes out at its usual speed. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** The decrypted, normalised phrase, held after the first check so the Keystore is not hit per message. */
     @Volatile
@@ -114,7 +122,8 @@ object DuressPhrase {
 
     /**
      * Checks [body] and, on a match, raises a covert SOS ([Registry.setPanicActive]):
-     * sent with the last known location, recorded nowhere. Returns whether it fired.
+     * sent with the last known position, or a freshly read one, recorded nowhere.
+     * Returns whether it fired.
      */
     fun checkAndTrigger(body: String, context: Context): Boolean {
         if (!check(body, context)) return false
@@ -137,9 +146,19 @@ object DuressPhrase {
 
     private fun trigger(app: Context) {
         // Sent to every group like the SOS button's, and recorded nowhere on this
-        // phone: no timeline entry, no line in the comms log. Whoever makes the
-        // owner unlock the phone afterwards must not find that help was called.
-        Registry.setPanicActive(true, covert = true)
+        // phone: no timeline entry, no line in the comms log, no toast. Whoever
+        // makes the owner unlock the phone afterwards must not find that help was
+        // called. The position is read first (the platform's last known one,
+        // else a fresh fix with a few seconds' budget), off the send path so
+        // the cover message is not held up; with the scanner off the status
+        // would otherwise hold no position at all.
+        scope.launch {
+            runCatching { SosLocation.find(app) }
+            // A broadcast still running lowers the flag when it is done; a raise
+            // before that would be lost.
+            Registry.panicActive.first { !it }
+            Registry.setPanicActive(true, covert = true)
+        }
     }
 
     private fun load(context: Context): String? {

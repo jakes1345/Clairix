@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.provider.Settings
 import app.clairix.HealthFact
 import app.clairix.Severity
+import app.clairix.VpnCoverage
 import java.net.Inet4Address
 import java.net.Inet6Address
 
@@ -95,6 +96,21 @@ object NetworkLeaks {
             )
         }
         return out
+    }
+
+    /**
+     * What the Wi-Fi tab's VPN row can honestly say. [vpnOnDevice]: any network on the
+     * phone is a VPN. [appHasNetwork]: Android gives this app a default network at all
+     * (none while it is blocked or offline). [appOnVpn]: that default network is a VPN,
+     * which is the only reading that says where Clairix's own traffic goes; Android
+     * picks the default network per app, so a VPN that leaves this app out does not
+     * show up as its default.
+     */
+    fun coverage(vpnOnDevice: Boolean, appHasNetwork: Boolean, appOnVpn: Boolean): VpnCoverage = when {
+        appOnVpn -> VpnCoverage.COVERS_APP
+        !vpnOnDevice -> VpnCoverage.NONE
+        !appHasNetwork -> VpnCoverage.APP_OFFLINE
+        else -> VpnCoverage.EXCLUDES_APP
     }
 
     /** The picture from the platform. Needs ACCESS_NETWORK_STATE only. */

@@ -1,5 +1,7 @@
 package app.clairix
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
@@ -41,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,12 +53,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.CameraFinding
 import app.clairix.analysis.HiddenCameraScanner
+import app.clairix.analysis.ScannerHealth
+import app.clairix.security.QuickExit
+import app.clairix.ui.BatteryExemptionCard
 import app.clairix.ui.components.BottomBarItem
 import app.clairix.ui.components.ClairixBottomBar
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.ClairixTopBar
 import app.clairix.ui.components.IconWell
 import app.clairix.ui.components.LogoMark
+import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.components.ScreenList
 import app.clairix.ui.components.SecondaryButton
 import app.clairix.ui.components.SectionHeader
@@ -62,6 +70,7 @@ import app.clairix.ui.components.SegmentedTabs
 import app.clairix.ui.components.StatusHero
 import app.clairix.ui.components.Tone
 import app.clairix.ui.components.color
+import app.clairix.ui.rememberBatteryUnrestricted
 import app.clairix.ui.theme.ClairixTheme
 
 /*
@@ -110,7 +119,7 @@ internal enum class ScanCategory(val title: String, val description: String, val
     ULTRASOUND("Ultrasound", "Inaudible beacons that link your devices", emptyList()),
     WIFI("Wi-Fi", "Rogue hotspots and unsafe networks", emptyList()),
     NFC("NFC", "Tags, cards and skimmers", emptyList()),
-    PHONE("Phone check", "Spyware, risky settings and certificates", listOf("Health", "Stalkerware", "Certificates"));
+    PHONE("Phone check", "Spyware, risky settings and certificates", listOf("Health", "Stalkerware", "Certificates", "Accounts"));
 
     val icon: ImageVector
         get() = when (this) {
@@ -141,6 +150,7 @@ internal enum class TrackerAction(val title: String) {
 
 /** The safety pages reached from the Comms menu, each opened as its own screen. */
 internal enum class CommsAction(val title: String) {
+    GET_HELP("Get help"),
     FAKE_CALL("Fake call"),
     DURESS("Duress phrase"),
     MESH("Offline mesh"),
@@ -148,12 +158,22 @@ internal enum class CommsAction(val title: String) {
 
     val icon: ImageVector
         get() = when (this) {
+            GET_HELP -> Icons.Filled.Call
             FAKE_CALL -> ClairixIcons.PhoneInTalk
             DURESS -> ClairixIcons.Shield
             MESH -> ClairixIcons.Bluetooth
             WIPE -> ClairixIcons.Remove
         }
 }
+
+/**
+ * The Comms menu of an edition. Get help, Fake call, Duress phrase and Wipe
+ * Clairix are in both: the comms-only build is the one a helper hands a
+ * survivor. The offline mesh is the full app's alone: its Bluetooth service and
+ * permissions are declared only in src/suite.
+ */
+internal fun commsActionsFor(fullAccess: Boolean): List<CommsAction> =
+    if (fullAccess) CommsAction.entries else CommsAction.entries.filter { it != CommsAction.MESH }
 
 /** The Activity tab's sub-tabs, in order. */
 internal val ACTIVITY_SUB_TABS = listOf("Timeline", "Patterns", "Unlocks")
@@ -179,23 +199,47 @@ private fun count(n: Int, noun: String): String = if (n == 1) "1 $noun" else "$n
 /** A finding at or above this confidence counts as strong on its own, as the sweep screen counts it. */
 private const val STRONG_CAMERA_CONFIDENCE = 0.7f
 
-internal fun trackerStatus(status: ScanStatus, detections: List<Detection>, trusted: Set<String>): CategoryStatus {
-    val following = detections.count { it.following && it.address !in trusted && it.threat == Threat.CRITICAL }
-    val travelling = detections.count { it.following && it.address !in trusted && it.threat != Threat.CRITICAL }
+internal fun trackerStatus(
+    status: ScanStatus,
+    detections: List<Detection>,
+    trusted: Set<String>,
+    /** An app is supplying the phone's positions ([app.clairix.analysis.PositionState.faking]). */
+    faking: Boolean = false
+): CategoryStatus {
+    // Marked as the owner's, or found and dealt with: neither is following anyone.
+    val following = detections.count { FollowerStatus.withYou(it) && it.address !in trusted && it.threat == Threat.CRITICAL }
+    val travelling = detections.count { FollowerStatus.withYou(it) && it.address !in trusted && it.threat != Threat.CRITICAL }
     return when {
         following > 0 -> CategoryStatus("${count(following, "tracker")} following you", StatusTone.ALERT)
         travelling > 0 -> CategoryStatus("${count(travelling, "device")} travelling with you", StatusTone.CAUTION)
+        // Wanted on and not hearing, which is not a quiet all-clear. Bluetooth off is
+        // named (the service sets an error with it); for anything else (Location off,
+        // silence, a refused start) the hub's hero spells out the error.
+        !status.bluetoothOn && (status.scanning || status.error != null) -> CategoryStatus("Bluetooth is off", StatusTone.CAUTION)
+        status.error != null -> CategoryStatus("Scanner cannot hear", StatusTone.CAUTION)
+        // Ended by an update, a kill or a battery manager, not by the owner.
+        status.stoppedBySystem && !status.scanning ->
+            CategoryStatus("Stopped by the system at ${ScannerHealth.clock(status.stoppedAt)}", StatusTone.CAUTION)
         !status.scanning -> CategoryStatus("Scanner off", StatusTone.NEUTRAL)
-        !status.bluetoothOn -> CategoryStatus("Bluetooth is off", StatusTone.CAUTION)
+        // Faked positions confirm nothing and rule nothing out: not an all-clear.
+        faking -> CategoryStatus("Position faked, following unproven", StatusTone.CAUTION)
         else -> CategoryStatus("${count(status.nearbyCount, "device")} nearby, none following", StatusTone.CLEAR)
     }
 }
 
-internal fun cameraStatus(findings: List<CameraFinding>): CategoryStatus {
+/**
+ * The camera sweep's hub line. [lastRunTs] is when any sweep method last ran (0 =
+ * never): before then there is nothing to report either way. [networkInconclusive]
+ * is true when the last Wi-Fi sweep could not look (client isolation, a network
+ * wider than it checked, no IPv4 address), so "nothing found" is not said plainly.
+ */
+internal fun cameraStatus(findings: List<CameraFinding>, lastRunTs: Long, networkInconclusive: Boolean = false): CategoryStatus {
     val strong = findings.count { it.confidence >= STRONG_CAMERA_CONFIDENCE }
     return when {
         strong > 0 -> CategoryStatus(count(strong, "strong finding"), StatusTone.ALERT)
         findings.isNotEmpty() -> CategoryStatus("${count(findings.size, "possible finding")} to check", StatusTone.CAUTION)
+        lastRunTs == 0L -> CategoryStatus("Not swept yet", StatusTone.NEUTRAL)
+        networkInconclusive -> CategoryStatus("Nothing found, Wi-Fi sweep inconclusive", StatusTone.NEUTRAL)
         else -> CategoryStatus("No findings", StatusTone.NEUTRAL)
     }
 }
@@ -249,6 +293,8 @@ internal fun phoneStatus(health: PhoneHealth): CategoryStatus {
             CategoryStatus("Camera or microphone in use", StatusTone.ALERT)
         health.level.ordinal >= Threat.HIGH.ordinal -> CategoryStatus("${count(issues, "issue")} to fix", StatusTone.ALERT)
         issues > 0 -> CategoryStatus("${count(issues, "item")} to review", StatusTone.CAUTION)
+        // Nothing found, but the installed apps have not been checked for spyware yet.
+        health.spywareScannedTs == 0L -> CategoryStatus("Checking installed apps", StatusTone.NEUTRAL)
         else -> CategoryStatus("No issues found", StatusTone.CLEAR)
     }
 }
@@ -265,10 +311,16 @@ internal fun rememberCategoryStatuses(): Map<ScanCategory, CategoryStatus> {
     val nfc by Registry.nfc.collectAsStateWithLifecycle()
     val health by Registry.phoneHealth.collectAsStateWithLifecycle()
     val cameras by HiddenCameraScanner.findings.collectAsStateWithLifecycle()
+    val camerasRun by HiddenCameraScanner.lastRunTs.collectAsStateWithLifecycle()
+    val cameraNetwork by HiddenCameraScanner.network.collectAsStateWithLifecycle()
     val gnss by Registry.gnss.collectAsStateWithLifecycle()
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
+    // The sweep's findings and when it last ran are kept on disk; put them back for the hub.
+    val ctx = LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) { HiddenCameraScanner.restore(ctx) }
     return mapOf(
-        ScanCategory.TRACKERS to trackerStatus(status, detections, trusted),
-        ScanCategory.CAMERAS to cameraStatus(cameras),
+        ScanCategory.TRACKERS to trackerStatus(status, detections, trusted, faking = positioning.faking(System.currentTimeMillis())),
+        ScanCategory.CAMERAS to cameraStatus(cameras, camerasRun, cameraNetwork.inconclusiveReason != null),
         ScanCategory.CELL to cellStatus(cell),
         ScanCategory.GPS to gnssStatus(gnss, status.scanning),
         ScanCategory.ULTRASOUND to CategoryStatus("Listen on demand", StatusTone.NEUTRAL),
@@ -305,7 +357,9 @@ internal fun ShellTopBar(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val c = ClairixTheme.colors
-    ClairixTopBar(title = title, onBack = onBack) {
+    val context = LocalContext.current
+    // Quick exit: a long press on the mark leaves Clairix and, with a passcode set, locks it.
+    ClairixTopBar(title = title, onBack = onBack, onMarkLongClick = { QuickExit.leave(context) }) {
         if (menu.isNotEmpty()) {
             Box {
                 IconButton(onClick = { menuOpen = true }) {
@@ -405,16 +459,39 @@ internal fun ShellSubTabs(labels: List<String>, selected: Int, onSelect: (Int) -
 /** What the hub's hero says, from every category's status. */
 internal data class HubVerdict(val headline: String, val body: String, val tone: Tone)
 
-internal fun hubVerdict(scanning: Boolean, statuses: Collection<CategoryStatus>): HubVerdict {
+/**
+ * [error] is the scanner's status error: set, the scanner is wanted on and not
+ * hearing, which makes every quiet tile unproven, so it leads unless something
+ * is already confirmed. [stoppedBySystemAt] is when a scanner the owner left on
+ * was ended by something else; the hero then says so instead of "Standing by".
+ */
+internal fun hubVerdict(
+    scanning: Boolean,
+    statuses: Collection<CategoryStatus>,
+    error: String? = null,
+    stoppedBySystemAt: Long? = null
+): HubVerdict {
     val alerts = statuses.count { it.tone == StatusTone.ALERT }
     val cautions = statuses.count { it.tone == StatusTone.CAUTION }
     val toCheck = alerts + cautions
     return when {
+        alerts > 0 -> HubVerdict(
+            headline = if (toCheck == 1) "1 thing needs a look" else "$toCheck things need a look",
+            body = "Open the flagged checks below. Each one says what was found and what to do next." +
+                // What was found stands; what the scanner would find now, it cannot.
+                (error?.let { " The scanner cannot hear right now: $it" } ?: ""),
+            tone = Tone.Danger
+        )
+        error != null -> HubVerdict(headline = "Scanner cannot hear", body = error, tone = Tone.Caution)
+        !scanning && stoppedBySystemAt != null -> HubVerdict(
+            headline = "Scanner stopped",
+            body = ScannerHealth.stoppedBySystemLine(stoppedBySystemAt),
+            tone = Tone.Caution
+        )
         toCheck > 0 -> HubVerdict(
             headline = if (toCheck == 1) "1 thing needs a look" else "$toCheck things need a look",
-            body = if (alerts > 0) "Open the flagged checks below. Each one says what was found and what to do next."
-            else "Nothing urgent. Have a look at the checks marked below when you have a minute.",
-            tone = if (alerts > 0) Tone.Danger else Tone.Caution
+            body = "Nothing urgent. Have a look at the checks marked below when you have a minute.",
+            tone = Tone.Caution
         )
         scanning -> HubVerdict(
             headline = "All clear",
@@ -431,15 +508,28 @@ internal fun hubVerdict(scanning: Boolean, statuses: Collection<CategoryStatus>)
 
 /**
  * The Scan tab's landing screen: the status hero, then a tile per category with
- * its live status line.
+ * its live status line. [error] and [stoppedBySystemAt] are the scanner's; see
+ * [hubVerdict]. [scanEnabled] is whether the owner last left the scanner on: only
+ * then is the battery exemption asked for, and only then can "tap to resume"
+ * ([onResumeScan]) mean anything.
  */
 @Composable
 internal fun ScanHub(
     scanning: Boolean,
     statuses: Map<ScanCategory, CategoryStatus>,
-    onOpen: (ScanCategory) -> Unit
+    onOpen: (ScanCategory) -> Unit,
+    error: String? = null,
+    stoppedBySystemAt: Long? = null,
+    scanEnabled: Boolean = false,
+    onResumeScan: () -> Unit = {}
 ) {
-    val verdict = hubVerdict(scanning, statuses.values)
+    val verdict = hubVerdict(scanning, statuses.values, error, stoppedBySystemAt)
+    val context = LocalContext.current
+    // Asked only while the scanner is meant to run: a phone that never scans has
+    // nothing for the battery manager to stop.
+    val batteryFree by if (scanEnabled) rememberBatteryUnrestricted() else remember { mutableStateOf(true) }
+    // Below the oldest safe version (the signed note read once a day), said here until it is updated.
+    val update by app.clairix.comms.AppUpdate.notice.collectAsStateWithLifecycle()
     ScreenList {
         item(key = "§hero") {
             StatusHero(
@@ -449,18 +539,53 @@ internal fun ScanHub(
                 tone = verdict.tone,
                 modifier = Modifier.padding(top = 8.dp),
                 trailing = { LogoMark(size = 48.dp, contentDescription = null) },
-                footer = if (!scanning) {
-                    {
-                        SecondaryButton(
-                            "Open the scanner",
-                            onClick = { onOpen(ScanCategory.TRACKERS) },
-                            tone = Tone.Accent,
-                            icon = ClairixIcons.TrackChanges,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                footer = when {
+                    !scanning && stoppedBySystemAt != null -> {
+                        {
+                            PrimaryButton(
+                                "Resume scanning",
+                                onClick = onResumeScan,
+                                icon = ClairixIcons.TrackChanges,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
-                } else null
+                    !scanning -> {
+                        {
+                            SecondaryButton(
+                                "Open the scanner",
+                                onClick = { onOpen(ScanCategory.TRACKERS) },
+                                tone = Tone.Accent,
+                                icon = ClairixIcons.TrackChanges,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    error == ScannerHealth.LOCATION_OFF -> {
+                        {
+                            SecondaryButton(
+                                "Open Location settings",
+                                onClick = { openExternal(context, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
+                                tone = Tone.Accent,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    else -> null
+                }
             )
+        }
+        if (update.unsafe) {
+            item(key = "§update") { app.clairix.ui.UnsafeVersionBanner(update, Modifier.padding(top = 8.dp)) }
+        }
+        if (scanEnabled && !batteryFree) {
+            item(key = "§battery") {
+                BatteryExemptionCard(
+                    reason = "Battery saving can stop the scanner while the phone sleeps, and then nothing is watched. " +
+                        "Let Clairix run unrestricted.",
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
         item(key = "§checks") { SectionHeader("Checks", supporting = "${ScanCategory.entries.size} areas") }
         ScanCategory.entries.chunked(2).forEach { pair ->

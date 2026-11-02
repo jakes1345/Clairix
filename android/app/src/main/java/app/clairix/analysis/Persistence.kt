@@ -7,6 +7,7 @@ import app.clairix.Threat
 import app.clairix.TrackerType
 import app.clairix.detect.BleNames
 import app.clairix.detect.DultResult
+import app.clairix.detect.Signatures
 import kotlin.math.max
 import kotlin.math.min
 
@@ -33,13 +34,49 @@ const val FOLLOWING_RETENTION_MS = 7 * 24 * 3600_000L
 private const val MAX_SERVICES = 8
 
 /**
+ * A device the owner marked found that then goes unheard for longer than this, and
+ * is heard again, is watched afresh — see [Tracker.observe].
+ */
+const val REARM_AFTER_MS = 60 * 60_000L
+
+/**
+ * Whether this reading is of a tracker still within range of its owner's phone, or
+ * not yet known to have left it: the Find My "owner nearby" readings and Find Hub's
+ * ordinary frame ([Signatures.withOwner]).
+ */
+private val TrackerType.nearOwner: Boolean get() = Signatures.withOwner(this)
+
+/**
+ * The classification an entry should hold given what it held and what a packet
+ * says. A device becomes identifiable once it advertises something we match, and a
+ * higher-severity reading replaces a lower one: a Find My tag heard "owner nearby"
+ * that then advertises as separated is a tracker away from its owner under the same
+ * address, and the first reading must not hide the second. Nothing is ever
+ * downgraded, so a later near-owner frame does not undo a separation.
+ */
+private fun classify(held: TrackerType?, seen: TrackerType?): TrackerType? = when {
+    seen == null -> held
+    held == null -> seen
+    seen.threat.ordinal > held.threat.ordinal -> seen
+    else -> held
+}
+
+/** The earlier of two timestamps, where 0 means none. */
+private fun earliest(a: Long, b: Long): Long = when {
+    a == 0L -> b
+    b == 0L -> a
+    else -> min(a, b)
+}
+
+/**
  * Tracks how long a device stays with you and — where there is a position fix —
  * whether it actually travelled with you.
  *
  * The distinction is the whole point of this app. "Seen five times over ten
  * minutes" describes a tracker in your bumper and it equally describes a
  * neighbour's Tile through a wall. Only displacement separates them, so with no
- * position source the stronger claim is simply never made.
+ * position source the stronger claim is simply never made. Nor is it made on
+ * displacement the phone did not itself travel: see [ObservationArea].
  */
 class Tracker(
     /**
@@ -64,6 +101,12 @@ class Tracker(
         var addressKind: String? = null
         var rssi = 0
         var tracker: TrackerType? = null
+        /**
+         * When a near-owner reading of this device gave way to a separated one, or 0.
+         * The moment its owner's phone dropped out of range — which, for a tag that was
+         * riding along, is the moment it stopped being somebody's keys.
+         */
+        var separatedAt = 0L
         var approxMetres: Double? = null
         var firstSeen = 0L
         var lastSeen = 0L
@@ -77,10 +120,19 @@ class Tracker(
          * clock, and without this latch a confirmed tracker would drop back to
          * nothing for a full threshold after every rotation — and be pruned on the
          * short cutoff meanwhile. It only ever carries a verdict this entry already
-         * earned, so nothing new can reach "following" through it.
+         * earned, so nothing new can reach "following" through it; and it does not
+         * carry across a stitch that could as well have swapped in another unit of
+         * the same product (see [absorb]).
          */
         var confirmedAt = 0L
         var persistent = false
+        /**
+         * Whether an observation has reported this device as a recognised tracker
+         * following you. A merge can lift a follower to CRITICAL between two
+         * observations, when a separated reading arrives under a new address, and the
+         * next observation must still report that rise, once.
+         */
+        var criticalReported = false
         var score = 0
         var confidence = FollowConfidence.NONE
         val area = ObservationArea()
@@ -88,6 +140,12 @@ class Tracker(
         var lastHeardAt: LatLon? = null
         /** The tracker's own account of itself over DULT, once it has been asked. */
         var dult: DultResult? = null
+        /**
+         * When the owner marked this device found ([resolve]), or 0. A found device
+         * raises nothing while it is resolved; heard again after [REARM_AFTER_MS] of
+         * silence it starts over ([observe]).
+         */
+        var resolvedAt = 0L
 
         /**
          * Folds [other] into this entry when two keys turn out to be one device. The
@@ -95,6 +153,10 @@ class Tracker(
          * time the new address has a few sightings under a key of its own.
          *
          * [certain] is the fingerprinter's own confidence in the stitch.
+         * [indistinguishable] says the two addresses belong to one tracker family and
+         * share every confirming feature, so that only their cadence and the timing of
+         * the hand-over say they are one device — which two units of one product also
+         * manage.
          *
          * A certain merge joins the two histories: the earliest firstSeen, every
          * sighting and every place. An uncertain one may be two different devices,
@@ -105,15 +167,35 @@ class Tracker(
          * address; keeping this entry's early firstSeen, as the first version of
          * this did, still handed the new address the old one's ten minutes. The
          * identity bookkeeping (rotations, addresses, names, DULT) is kept either way.
+         *
+         * A confirmation already earned survives a merge, certain or not, with one
+         * exception: when the stitch is uncertain and indistinguishable, the address
+         * now on the row is not necessarily the device that earned it, and carrying
+         * the verdict over would send the locator after the wrong physical tracker.
+         * The row then keeps only what the newer address earned for itself. The
+         * owner's "I found it" ([resolvedAt]) follows the same rule: a found tag's
+         * next address is still the found tag, another unit of its product is not.
          */
-        fun absorb(other: Entry, certain: Boolean) {
+        fun absorb(other: Entry, certain: Boolean, indistinguishable: Boolean) {
             if (address.isEmpty()) address = other.address
             if (advertisedName == null) advertisedName = other.advertisedName
             if (manufacturer == null) manufacturer = other.manufacturer
             if (services.size < MAX_SERVICES) services.addAll(other.services)
             if (radio == "BLE" && other.radio != "BLE") radio = other.radio
             if (addressKind == null) addressKind = other.addressKind
-            if (tracker == null) tracker = other.tracker
+            // The higher-severity classification wins (see [classify]); a near-owner
+            // reading giving way to a separated one is the separation itself, dated
+            // to when the separated address was first heard unless either side knows better.
+            val held = tracker
+            val kept = classify(held, other.tracker)
+            if (kept !== held) {
+                if (held != null && held.nearOwner && kept != null && !kept.nearOwner &&
+                    separatedAt == 0L && other.separatedAt == 0L
+                ) separatedAt = other.firstSeen
+                tracker = kept
+            }
+            separatedAt = earliest(separatedAt, other.separatedAt)
+            criticalReported = criticalReported || other.criticalReported
             if (dult == null || (other.dult?.answered == true && dult?.answered != true)) dult = other.dult
             if (other.lastSeen >= lastSeen) {
                 rssi = other.rssi
@@ -123,39 +205,53 @@ class Tracker(
             // The merge itself is one more address the device has used.
             rotations = rotations + other.rotations + 1
             addresses = addresses + other.addresses
+            var inherited = earliest(confirmedAt, other.confirmedAt)
+            var found = max(resolvedAt, other.resolvedAt)
             if (certain) {
                 firstSeen = if (firstSeen == 0L) other.firstSeen else min(firstSeen, other.firstSeen)
                 sightings += other.sightings
                 following = following || other.following
                 persistent = persistent || other.persistent
                 score = max(score, other.score)
-                other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+                area.merge(other.area)
             } else {
                 // Restart the presence clock at the later of the two starts.
                 val newer = if (other.firstSeen != 0L && (firstSeen == 0L || other.firstSeen >= firstSeen)) other else this
+                // Read before the newer side's figures are copied over this entry's.
+                val newerConfirmed = newer.confirmedAt
+                val newerFound = newer.resolvedAt
                 if (newer === other) {
                     firstSeen = other.firstSeen
                     sightings = other.sightings
                     following = other.following
                     persistent = other.persistent
                     score = other.score
-                    area.clear()
-                    other.area.points().forEach { area.add(Fix(it.lat, it.lon, null, 0)) }
+                    area.replaceWith(other.area)
+                }
+                if (indistinguishable) {
+                    inherited = newerConfirmed
+                    found = newerFound
                 }
             }
-            // A confirmation already earned survives any merge, certain or not.
-            confirmedAt = when {
-                confirmedAt == 0L -> other.confirmedAt
-                other.confirmedAt == 0L -> confirmedAt
-                else -> min(confirmedAt, other.confirmedAt)
-            }
+            confirmedAt = inherited
+            resolvedAt = found
             if (confirmedAt != 0L) following = true
             lastSeen = max(lastSeen, other.lastSeen)
             name = BleNames.displayName(advertisedName, tracker, manufacturer, address)
         }
     }
 
-    data class Observation(val detection: Detection, val becameFollowing: Boolean)
+    data class Observation(
+        val detection: Detection,
+        /** This packet confirmed the device as following. */
+        val becameFollowing: Boolean,
+        /**
+         * Already following, and now a recognised tracker away from its owner for the
+         * first time, so the verdict rose to CRITICAL: a tag that rode along as "owner
+         * nearby" has separated, under its own address or a new one.
+         */
+        val escalated: Boolean = false
+    )
 
     private val entries = LinkedHashMap<String, Entry>()
 
@@ -175,10 +271,28 @@ class Tracker(
         manufacturer: String? = null,
         services: List<String> = emptyList(),
         radio: String = "BLE",
-        addressKind: String? = null
+        addressKind: String? = null,
+        /** The phone's own odometer ([LocationTrack.travelledM]) at this sighting. */
+        travelledM: Double = 0.0
     ): Observation {
         val entry = entries.getOrPut(key) {
             Entry(key).apply { firstSeen = now }
+        }
+
+        // Marked found, unheard for over an hour, and now heard again: it is back on
+        // you, or it is somewhere new, and either way it starts over. Its presence
+        // clock, its places and its verdict restart, so it is raised again only if it
+        // travels with you again, while a found tag kept within earshot (heard all
+        // along) stays found.
+        if (entry.resolvedAt != 0L && entry.lastSeen != 0L && now - entry.lastSeen > REARM_AFTER_MS) {
+            entry.resolvedAt = 0L
+            entry.firstSeen = now
+            entry.sightings = 0
+            entry.area.clear()
+            entry.confirmedAt = 0L
+            entry.following = false
+            entry.persistent = false
+            entry.criticalReported = false
         }
 
         val wasFollowing = entry.following
@@ -192,8 +306,14 @@ class Tracker(
         entry.addresses = max(entry.addresses, addresses)
         entry.lastSeen = now
         entry.sightings++
-        // A device only becomes identifiable once it advertises something we match.
-        if (entry.tracker == null && tracker != null) entry.tracker = tracker
+        val held = entry.tracker
+        val kept = classify(held, tracker)
+        if (kept !== held) {
+            if (held != null && held.nearOwner && kept != null && !kept.nearOwner && entry.separatedAt == 0L) {
+                entry.separatedAt = now
+            }
+            entry.tracker = kept
+        }
 
         advertisedName?.let { entry.advertisedName = it }
         manufacturer?.let { entry.manufacturer = it }
@@ -203,7 +323,7 @@ class Tracker(
         entry.name = BleNames.displayName(entry.advertisedName, entry.tracker, entry.manufacturer, address)
 
         fix?.let {
-            entry.area.add(it)
+            entry.area.add(it, now, travelledM)
             entry.lastHeardAt = LatLon(it.lat, it.lon)
         }
 
@@ -243,130 +363,141 @@ class Tracker(
         entry.score = score
         entry.confidence = confidence
 
-        // Moving with you is CRITICAL for a recognised tracker. For a device nothing
-        // identifies it is HIGH: that is how a hardwired GPS box looks, and also how a
-        // companion's phone, a passenger's earbuds or the bus's own electronics look,
-        // and the alert says so rather than declaring every one of them a tracker.
-        val threat = when {
-            entry.following -> if (isRecognisedTracker(entry.tracker)) Threat.CRITICAL else Threat.HIGH
-            entry.tracker != null -> entry.tracker!!.threat
+        val threat = threatOf(entry)
+        val criticalFollower = entry.following && threat == Threat.CRITICAL
+        // A device the owner has found raises nothing until it starts over (above).
+        val resolved = entry.resolvedAt != 0L
+        val escalated = wasFollowing && criticalFollower && !entry.criticalReported && !resolved
+        if (criticalFollower && !resolved) entry.criticalReported = true
+        return Observation(
+            detection = detectionOf(entry, threat),
+            becameFollowing = entry.following && !wasFollowing && !resolved,
+            escalated = escalated
+        )
+    }
+
+    /**
+     * How worrying an entry is, for the live observation and the list alike: one
+     * mapping, so the pill, the hero, the report and the alert cannot disagree.
+     *
+     * Moving with you is CRITICAL for a recognised tracker away from its owner. For a
+     * device nothing identifies, or one still within range of its owner, it is HIGH:
+     * that is how a hardwired GPS box looks, and also how a companion's phone, a
+     * passenger's earbuds or the bus's own electronics look, and the alert says so
+     * rather than declaring every one of them a tracker.
+     */
+    private fun threatOf(entry: Entry): Threat {
+        val type = entry.tracker
+        return when {
+            entry.following -> if (isRecognisedTracker(type)) Threat.CRITICAL else Threat.HIGH
+            type != null -> type.threat
             entry.persistent -> Threat.MEDIUM
             else -> Threat.LOW
         }
-
-        val detection = Detection(
-            key = entry.key,
-            address = entry.address,
-            name = entry.name,
-            rssi = entry.rssi,
-            tracker = entry.tracker,
-            threat = threat,
-            score = score,
-            firstSeen = entry.firstSeen,
-            lastSeen = entry.lastSeen,
-            sightings = entry.sightings,
-            persistent = entry.persistent,
-            following = entry.following,
-            confidence = confidence,
-            displacementM = entry.area.span(),
-            places = entry.area.size,
-            rotations = entry.rotations,
-            addresses = entry.addresses,
-            approxMetres = entry.approxMetres,
-            points = entry.area.points(),
-            lastHeardAt = entry.lastHeardAt,
-            advertisedName = entry.advertisedName,
-            manufacturer = entry.manufacturer,
-            services = entry.services.toList(),
-            radio = entry.radio,
-            addressKind = entry.addressKind,
-            dult = entry.dult
-        )
-
-        return Observation(detection, entry.following && !wasFollowing)
     }
 
-    /** A tag made for finding things (AirTag, Tile, SmartTag…), not a beacon or a device we only half recognise. */
+    /**
+     * A tag made for finding things (AirTag, Tile, SmartTag…) away from its owner —
+     * not a beacon, not a reading with the owner's phone in range, not a device we
+     * only half recognise.
+     */
     private fun isRecognisedTracker(type: TrackerType?): Boolean =
-        type != null && (type.threat == Threat.CRITICAL || type.threat == Threat.HIGH)
+        type != null && !type.nearOwner && (type.threat == Threat.CRITICAL || type.threat == Threat.HIGH)
+
+    private fun detectionOf(entry: Entry, threat: Threat) = Detection(
+        key = entry.key,
+        address = entry.address,
+        name = entry.name,
+        rssi = entry.rssi,
+        tracker = entry.tracker,
+        threat = threat,
+        score = entry.score,
+        firstSeen = entry.firstSeen,
+        lastSeen = entry.lastSeen,
+        sightings = entry.sightings,
+        persistent = entry.persistent,
+        following = entry.following,
+        confidence = entry.confidence,
+        displacementM = entry.area.span(),
+        places = entry.area.size,
+        rotations = entry.rotations,
+        addresses = entry.addresses,
+        approxMetres = entry.approxMetres,
+        points = entry.area.points(),
+        lastHeardAt = entry.lastHeardAt,
+        advertisedName = entry.advertisedName,
+        manufacturer = entry.manufacturer,
+        services = entry.services.toList(),
+        radio = entry.radio,
+        addressKind = entry.addressKind,
+        dult = entry.dult,
+        separatedAt = entry.separatedAt,
+        resolvedAt = entry.resolvedAt
+    )
 
     /**
      * Attaches what a tracker said over DULT to its row. Partial results arrive as
      * the exchange proceeds; a later one always replaces an earlier one, except that
-     * a final "refused" must not erase answers already received.
+     * a later exchange that is refused must not erase answers already received: the
+     * row keeps what the tracker said and takes the new exchange's outcome and times.
      */
     @Synchronized
     fun attachDult(key: String, result: DultResult) {
         val entry = entries[key] ?: return
         val current = entry.dult
         if (current != null && current.answered && !result.answered) {
-            entry.dult = current.copy(complete = result.complete, error = result.error)
+            entry.dult = current.copy(
+                complete = result.complete, error = result.error, refused = result.refused,
+                askedAt = result.askedAt, attempt = result.attempt, retryAt = result.retryAt
+            )
             return
         }
         entry.dult = result
     }
 
     /**
-     * Moves everything recorded under [fromKey] into [intoKey], creating the target
-     * when it does not exist yet. Returns false when there was nothing to move.
-     * [certain] says whether the two keys are proven to be one device; see
-     * [Entry.absorb] for what an uncertain merge holds back.
+     * The owner found [key] and dealt with it ([found]), or takes that back. A found
+     * device stays on the list, the timeline and the report, marked found, but no
+     * longer counts as on you and raises nothing; heard again after [REARM_AFTER_MS]
+     * of silence it is watched afresh. Returns the device as it now stands, or null
+     * when nothing is recorded under [key].
      */
     @Synchronized
-    fun merge(fromKey: String, intoKey: String, certain: Boolean): Boolean {
+    fun resolve(key: String, found: Boolean, now: Long): Detection? {
+        val entry = entries[key] ?: return null
+        entry.resolvedAt = if (found) now else 0L
+        return detectionOf(entry, threatOf(entry))
+    }
+
+    /**
+     * Moves everything recorded under [fromKey] into [intoKey], creating the target
+     * when it does not exist yet. Returns false when there was nothing to move.
+     * [certain] says whether the two keys are proven to be one device and
+     * [indistinguishable] whether only their cadence told them apart; see
+     * [Entry.absorb] for what each holds back.
+     */
+    @Synchronized
+    fun merge(fromKey: String, intoKey: String, certain: Boolean, indistinguishable: Boolean = false): Boolean {
         if (fromKey == intoKey) return false
         val from = entries.remove(fromKey) ?: return false
         val into = entries.getOrPut(intoKey) { Entry(intoKey) }
-        into.absorb(from, certain)
+        into.absorb(from, certain, indistinguishable)
         return true
     }
 
     @Synchronized
-    fun snapshot(now: Long): List<Detection> = entries.values
-        .map { entry ->
-            Detection(
-                key = entry.key,
-                address = entry.address,
-                name = entry.name,
-                rssi = entry.rssi,
-                tracker = entry.tracker,
-                threat = when {
-                    entry.following -> Threat.CRITICAL
-                    entry.tracker != null -> entry.tracker!!.threat
-                    entry.persistent -> Threat.MEDIUM
-                    else -> Threat.LOW
-                },
-                score = entry.score,
-                firstSeen = entry.firstSeen,
-                lastSeen = entry.lastSeen,
-                sightings = entry.sightings,
-                persistent = entry.persistent,
-                following = entry.following,
-                confidence = entry.confidence,
-                displacementM = entry.area.span(),
-                places = entry.area.size,
-                rotations = entry.rotations,
-                addresses = entry.addresses,
-                approxMetres = entry.approxMetres,
-                points = entry.area.points(),
-                lastHeardAt = entry.lastHeardAt,
-                advertisedName = entry.advertisedName,
-                manufacturer = entry.manufacturer,
-                services = entry.services.toList(),
-                radio = entry.radio,
-                addressKind = entry.addressKind,
-                dult = entry.dult
-            )
-        }
+    fun snapshot(now: Long): List<Detection> = entries.values.map { detectionOf(it, threatOf(it)) }
 
     /**
      * Drops devices that have gone quiet. Anything that proved it travels with you is
      * kept far longer — trackers sleep between reports and forgetting one would throw
      * away the only evidence that matters — but not forever: a follower silent for a
      * week is gone, and keeping its row would only leave a permanent CRITICAL ghost.
+     * Returns how many devices were dropped, so the scanner knows when its list changed.
      */
     @Synchronized
-    fun prune(now: Long, maxAgeMs: Long = 30 * 60 * 1000L) {
+    fun prune(now: Long, maxAgeMs: Long = 30 * 60 * 1000L): Int {
+        val before = entries.size
         val cutoff = now - maxAgeMs
         val followingCutoff = now - FOLLOWING_RETENTION_MS
         entries.entries.removeAll { (_, entry) ->
@@ -385,6 +516,7 @@ class Tracker(
                 .take(entries.size - MAX_ENTRIES)
                 .forEach { entries.remove(it.key) }
         }
+        return before - entries.size
     }
 
     /**

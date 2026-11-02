@@ -211,6 +211,11 @@ export function minuteFloor(nowMs: number): number {
   return Math.floor(nowMs / MINUTE_MS) * MINUTE_MS;
 }
 
+/** [nowMs] rounded down to the start of its hour. */
+export function hourFloor(nowMs: number): number {
+  return Math.floor(nowMs / HOUR_MS) * HOUR_MS;
+}
+
 /** Splits claims into those still waiting and those whose window has passed. */
 export function expireClaims(claims: OtkClaim[], now: number, windowMs = OTK_CLAIM_WINDOW_MS): { kept: OtkClaim[]; expired: OtkClaim[] } {
   const kept: OtkClaim[] = [];
@@ -323,7 +328,14 @@ export function tokenBatchExpiry(now: number, random: () => number = Math.random
 
 // ── Push endpoints ──────────────────────────────────────────────────────────
 
-/** Push hosts trusted without a check: ntfy's public server and Conversations' push service. */
+/**
+ * Push hosts trusted without a check unless the operator says otherwise:
+ * ntfy's public server and Conversations' push service. Either learns when a
+ * wake is sent for a phone, which is when something arrived for it while its
+ * live connection was down. PUSH_HOSTS adds to them; with PUSH_HOSTS_ONLY on,
+ * PUSH_HOSTS replaces them, so a relay whose operator runs its own ntfy can
+ * trust that one alone and check every other host first.
+ */
 export const DEFAULT_PUSH_HOSTS: readonly string[] = ["ntfy.sh", "up.conversations.im"];
 export const PUSH_ENDPOINT_MAX = 2048;
 /** How long the code sent through an unknown push host can be echoed back. */
@@ -342,9 +354,19 @@ function isIpLiteral(host: string): boolean {
   return /^[0-9.]+$/.test(host) || /^0x[0-9a-f]+$/i.test(host);
 }
 
-/** The trusted push hosts: the defaults plus the operator's PUSH_HOSTS. */
-export function trustedPushHosts(extra: string | undefined): Set<string> {
-  const hosts = new Set(DEFAULT_PUSH_HOSTS);
+/** Whether PUSH_HOSTS_ONLY asks for PUSH_HOSTS to replace the built-in hosts: "on" or "true". */
+export function pushHostsOnly(raw: string | undefined): boolean {
+  const mode = (raw ?? "").trim().toLowerCase();
+  return mode === "on" || mode === "true";
+}
+
+/**
+ * The trusted push hosts: the defaults plus the operator's PUSH_HOSTS, or
+ * PUSH_HOSTS alone when [only] (PUSH_HOSTS_ONLY), which may leave none: then
+ * every endpoint is checked first.
+ */
+export function trustedPushHosts(extra: string | undefined, only = false): Set<string> {
+  const hosts = new Set<string>(only ? [] : DEFAULT_PUSH_HOSTS);
   for (const raw of (extra ?? "").split(",")) {
     const h = raw.trim().toLowerCase().replace(/\.$/, "");
     if (/^[a-z0-9.-]+\.[a-z0-9-]+$/.test(h)) hosts.add(h);
@@ -356,8 +378,9 @@ export function trustedPushHosts(extra: string | undefined): Set<string> {
  * Whether [raw] may be used as a push endpoint. It must be an https URL to a
  * public DNS name, without credentials. On a trusted host it is used at once;
  * anywhere else ([trusted] false) only after the phone echoes a code sent to it.
+ * [onlyExtra] is PUSH_HOSTS_ONLY: the operator's hosts are the only trusted ones.
  */
-export function checkPushEndpoint(raw: unknown, extraHosts: string | undefined): PushCheck {
+export function checkPushEndpoint(raw: unknown, extraHosts: string | undefined, onlyExtra = false): PushCheck {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > PUSH_ENDPOINT_MAX || /\s/.test(raw)) {
     return { ok: false, reason: "endpoint must be an https URL" };
   }
@@ -374,7 +397,7 @@ export function checkPushEndpoint(raw: unknown, extraHosts: string | undefined):
   if (!host.includes(".") || host === "localhost" || PRIVATE_SUFFIXES.some((s) => host.endsWith(s))) {
     return { ok: false, reason: "endpoint must be on a public host" };
   }
-  const trusted = trustedPushHosts(extraHosts).has(host) && (url.port === "" || url.port === "443");
+  const trusted = trustedPushHosts(extraHosts, onlyExtra).has(host) && (url.port === "" || url.port === "443");
   return { ok: true, url: url.toString(), trusted };
 }
 
@@ -413,4 +436,157 @@ export function parseIceServers(body: unknown): IceServer[] {
     servers.push(entry);
   }
   return servers;
+}
+
+// ── Abuse reports ───────────────────────────────────────────────────────────
+//
+// A phone reports someone who abuses this relay (POST /v1/report): the number
+// and the relay it is on, the hash of an envelope it sent, and a reason. The
+// request spends a "report" token and names nobody, so the operator learns
+// who was reported and why, never who reported it, and never what was said:
+// the relay could not read that if it were sent, and it is not.
+
+/** Why a number is reported; the app offers exactly these (ContactGate.ReportReason). */
+export const REPORT_REASONS = ["harassment", "threats", "spam", "impersonation", "other"] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+
+/** An envelope's hash as phones keep it: SHA-256 of its bytes, in lowercase hex. */
+export const ENVELOPE_HASH_RE = /^[0-9a-f]{64}$/;
+
+/** How long a report is kept for the operator, unless they close it sooner. */
+export const REPORT_TTL_MS = 90 * DAY_MS;
+/** Reports kept about one number, and in all: past either, new ones are refused, never old ones dropped. */
+export const REPORTS_PER_TARGET_MAX = 500;
+export const REPORTS_MAX = 50_000;
+
+export function isReportReason(raw: unknown): raw is ReportReason {
+  return typeof raw === "string" && (REPORT_REASONS as readonly string[]).includes(raw);
+}
+
+/** One report as the relay keeps it: the day it came, never the moment. */
+export interface AbuseReport {
+  number: string;
+  /** The relay the number is on, when it is not this one. */
+  relay: string | null;
+  envelope: string | null;
+  reason: ReportReason;
+  day: number;
+}
+
+/** What the operator reads: every report about one number, together. */
+export interface ReportedNumber {
+  number: string;
+  relay: string | null;
+  reports: number;
+  reasons: Partial<Record<ReportReason, number>>;
+  envelopes: string[];
+  firstDay: number;
+  lastDay: number;
+}
+
+/** Groups [reports] by the number (and relay) they name, the most reported first. */
+export function summariseReports(reports: AbuseReport[]): ReportedNumber[] {
+  const byTarget = new Map<string, ReportedNumber>();
+  for (const r of reports) {
+    const key = `${r.relay ?? ""} ${r.number}`;
+    let entry = byTarget.get(key);
+    if (!entry) {
+      entry = { number: r.number, relay: r.relay, reports: 0, reasons: {}, envelopes: [], firstDay: r.day, lastDay: r.day };
+      byTarget.set(key, entry);
+    }
+    entry.reports += 1;
+    entry.reasons[r.reason] = (entry.reasons[r.reason] ?? 0) + 1;
+    if (r.envelope !== null && !entry.envelopes.includes(r.envelope)) entry.envelopes.push(r.envelope);
+    entry.firstDay = Math.min(entry.firstDay, r.day);
+    entry.lastDay = Math.max(entry.lastDay, r.day);
+  }
+  return [...byTarget.values()].sort((a, b) => b.reports - a.reports || b.lastDay - a.lastDay || a.number.localeCompare(b.number));
+}
+
+// ── Open registration ───────────────────────────────────────────────────────
+//
+// Off unless the operator turns it on. A relay run for people who have nobody
+// to invite them can let a phone register with neither an invite nor the
+// enrollment secret, up to a number of new accounts a day for the whole relay,
+// on top of the per-address limit every registration attempt already meets.
+
+/** Open registrations a day when the operator turns them on without saying how many. */
+export const OPEN_REGISTRATION_DEFAULT_PER_DAY = 50;
+
+/**
+ * How many accounts may register openly in a UTC day, or null when open
+ * registration is off: OPEN_REGISTRATION must be "on" (or "true"), and
+ * OPEN_REGISTRATION_PER_DAY, when set, a whole number from 1 to 100000;
+ * anything else there keeps the default.
+ */
+export function openRegistrationCap(env: { OPEN_REGISTRATION?: string; OPEN_REGISTRATION_PER_DAY?: string }): number | null {
+  const mode = (env.OPEN_REGISTRATION ?? "").trim().toLowerCase();
+  if (mode !== "on" && mode !== "true") return null;
+  const raw = (env.OPEN_REGISTRATION_PER_DAY ?? "").trim();
+  if (!/^[0-9]{1,6}$/.test(raw)) return OPEN_REGISTRATION_DEFAULT_PER_DAY;
+  const n = Number(raw);
+  return n >= 1 && n <= 100_000 ? n : OPEN_REGISTRATION_DEFAULT_PER_DAY;
+}
+
+// ── ClairixCoin ─────────────────────────────────────────────────────────────
+//
+// Each relay is its own coin community: a balance lives in its owner's
+// mailbox, and so does the owner's record of the transfers they made and
+// received. That record names nobody. Who paid whom travels between the two
+// phones inside an end-to-end encrypted payment notice, and the payee's phone
+// checks the notice against its own record by id and amount.
+
+/** The most transfers a mailbox keeps, newest first. */
+export const COIN_TX_MAX = 100;
+/** How long a mailbox keeps a transfer. */
+export const COIN_TX_TTL_MS = 30 * DAY_MS;
+/** What the record of a mint says, the same for every mint: never who minted it. */
+export const COIN_MINT_NOTE = "Minted by the relay";
+
+/**
+ * One transfer as the mailbox that made or received it keeps it: the id the
+ * payer's phone chose (a refund is the payment's id with ":refund"), the
+ * amount, the hour it was made (the hour's first millisecond) and which way it
+ * went. A mint carries COIN_MINT_NOTE; nothing else carries a note.
+ */
+export interface CoinTx {
+  id: string;
+  amount: number;
+  ts: number;
+  direction: "in" | "out";
+  note?: typeof COIN_MINT_NOTE;
+}
+
+/** The record of a transfer of [amount] under [id] made at [now], dated to the hour. */
+export function coinTx(id: string, amount: number, direction: "in" | "out", now: number, minted = false): CoinTx {
+  const tx: CoinTx = { id, amount, ts: hourFloor(now), direction };
+  if (minted) tx.note = COIN_MINT_NOTE;
+  return tx;
+}
+
+/**
+ * What a mailbox may keep of [stored] at [now]: each entry cut down to a
+ * CoinTx, newest first, none older than COIN_TX_TTL_MS and at most
+ * COIN_TX_MAX. Entries written before the record was cut down also named the
+ * payer and the payee, kept the payer's note, the millisecond and, for a mint,
+ * the number of whoever minted it; all of that goes, and so does anything that
+ * is not a transfer at all.
+ */
+export function coinLedger(stored: unknown, now: number): CoinTx[] {
+  if (!Array.isArray(stored)) return [];
+  const kept: CoinTx[] = [];
+  for (const raw of stored) {
+    if (kept.length === COIN_TX_MAX) break;
+    if (typeof raw !== "object" || raw === null) continue;
+    const t = raw as { id?: unknown; amount?: unknown; ts?: unknown; direction?: unknown; from?: unknown; note?: unknown };
+    if (typeof t.id !== "string" || typeof t.amount !== "number" || !Number.isInteger(t.amount)) continue;
+    if (typeof t.ts !== "number" || !Number.isFinite(t.ts)) continue;
+    if (t.direction !== "in" && t.direction !== "out") continue;
+    const ts = hourFloor(t.ts);
+    if (now - ts >= COIN_TX_TTL_MS) continue;
+    // A mint was once recorded as a payment from "mint", with the operator's number in its note.
+    const minted = t.direction === "in" && (t.from === "mint" || t.note === COIN_MINT_NOTE);
+    kept.push(coinTx(t.id, t.amount, t.direction, ts, minted));
+  }
+  return kept;
 }

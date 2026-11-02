@@ -1,9 +1,13 @@
 package app.clairix.detect
 
+import android.bluetooth.BluetoothClass
 import app.clairix.Severity
 import app.clairix.Store
 import app.clairix.TestStoreCipher
+import app.clairix.TrackerType
+import app.clairix.security.BluetoothExposure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -26,15 +30,23 @@ class VehicleTripsTest {
         return VehicleTrips(Store(File(dir, "vehicle_trips.json"), cipher = TestStoreCipher))
     }
 
+    /** The car's own hands-free unit. */
+    private val carKit = "00:1A:2B:3C:4D:5E"
+
     /**
-     * One drive from [from], with [devices] each heard four times over three minutes.
-     * Returns every finding raised, mid-trip and at the end.
+     * One drive from [from], with [devices] each heard four times over three minutes;
+     * with [ownCar], the car's hands-free connects as it sets off. Returns every
+     * finding raised, mid-trip and at the end.
      */
-    private fun drive(vt: VehicleTrips, from: Pair<Double, Double>, devices: List<String>): List<VehicleTrips.Finding> {
+    private fun drive(
+        vt: VehicleTrips, from: Pair<Double, Double>, devices: List<String>,
+        ownCar: Boolean = false, tracker: TrackerType? = null, fingerprint: String? = null
+    ): List<VehicleTrips.Finding> {
         val out = ArrayList<VehicleTrips.Finding>()
         vt.beginTrip(now, from.first, from.second)
+        if (ownCar) vt.noteAccessory(carKit, "Civic", car = true)
         repeat(4) {
-            for (d in devices) vt.sight(d, d, "Tag $d", tracker = null, fingerprint = null, now = now)?.let(out::add)
+            for (d in devices) vt.sight(d, d, "Tag $d", tracker = tracker, fingerprint = fingerprint, now = now)?.let(out::add)
             now += 60_000L
         }
         now += 20 * 60_000L
@@ -46,12 +58,100 @@ class VehicleTripsTest {
     @Test
     fun aCommutersTrackerIsReportedOnTheThirdTrip() {
         val vt = trips()
-        assertTrue(drive(vt, home, listOf(tracker)).isEmpty())
-        assertTrue(drive(vt, work, listOf(tracker)).isEmpty())
-        val third = drive(vt, home, listOf(tracker))
+        assertTrue(drive(vt, home, listOf(tracker), ownCar = true).isEmpty())
+        assertTrue(drive(vt, work, listOf(tracker), ownCar = true).isEmpty())
+        val third = drive(vt, home, listOf(tracker), ownCar = true)
         assertEquals(third.toString(), 1, third.size)
-        assertEquals(Severity.CRITICAL, third.single().severity)
-        assertEquals("vehicle@$tracker", third.single().dedupeKey)
+        val finding = third.single()
+        assertEquals(Severity.CRITICAL, finding.severity)
+        assertEquals("vehicle@$tracker", finding.dedupeKey)
+        assertTrue(finding.title, finding.title.contains("in your vehicle on 3 trips"))
+        assertTrue(finding.detail.contains("OBD-II"))
+        assertFalse(finding.coTraveller)
+    }
+
+    @Test
+    fun withNothingTyingTheJourneysToACarItIsReportedAsJourneysNotTheVehicle() {
+        // A bus commuter: no car kit, no Drive mode. The bus's own unit is on every ride.
+        val vt = trips()
+        drive(vt, home, listOf(tracker))
+        drive(vt, work, listOf(tracker))
+        val finding = drive(vt, home, listOf(tracker)).single()
+        assertEquals(Severity.HIGH, finding.severity)
+        assertEquals("${VehicleTrips.JOURNEYS_PREFIX}$tracker", finding.dedupeKey)
+        assertTrue(finding.id.startsWith(VehicleTrips.JOURNEYS_PREFIX))
+        assertTrue(VehicleTrips.coTravellerEvent("${finding.dedupeKey}@$now"))
+        assertTrue(finding.coTraveller)
+        assertTrue(finding.title, finding.title.contains("has been on 3 of your journeys"))
+        assertFalse(finding.title.contains("vehicle"))
+        assertTrue(finding.detail, finding.detail.contains("bus or train"))
+    }
+
+    @Test
+    fun driveModeIsAnOwnCarSignal() {
+        val vt = trips()
+        drive(vt, home, listOf(tracker))
+        drive(vt, work, listOf(tracker))
+        vt.beginTrip(now, home.first, home.second)
+        var finding: VehicleTrips.Finding? = null
+        repeat(4) {
+            finding = finding ?: vt.sight(tracker, tracker, "Tag", null, null, now, driveMode = true)
+            now += 60_000L
+        }
+        assertEquals(Severity.CRITICAL, finding!!.severity)
+        assertEquals("vehicle@$tracker", finding!!.dedupeKey)
+    }
+
+    @Test
+    fun aConnectedAccessoryThatIsNotACarKitIsNoOwnCarSignal() {
+        val vt = trips()
+        drive(vt, home, listOf(tracker))
+        drive(vt, work, listOf(tracker))
+        vt.beginTrip(now, home.first, home.second)
+        vt.noteAccessory("F0:E1:D2:C3:B4:A5", "Pixel Buds")
+        var finding: VehicleTrips.Finding? = null
+        repeat(4) {
+            finding = finding ?: vt.sight(tracker, tracker, "Tag", null, null, now)
+            now += 60_000L
+        }
+        assertTrue(finding!!.coTraveller)
+    }
+
+    @Test
+    fun aSharedSignatureIsReportedAtMostDailyAndANotchLowerWithoutACar() {
+        // A separated AirTag rotates, so each trip hears a different address with the
+        // same type and advertisement shape — every AirTag's.
+        val vt = trips()
+        val airTag = Signatures.AIRTAG
+        drive(vt, home, listOf("AA:00:00:00:00:01"), tracker = airTag, fingerprint = "fp")
+        drive(vt, work, listOf("AA:00:00:00:00:02"), tracker = airTag, fingerprint = "fp")
+        val onBus = drive(vt, home, listOf("AA:00:00:00:00:03"), tracker = airTag, fingerprint = "fp").single()
+        assertEquals("An Apple AirTag has been on 3 of your journeys", onBus.title)
+        assertEquals(Severity.MEDIUM, onBus.severity)
+        assertEquals(VehicleTrips.SIGNATURE_DEDUPE_MS, onBus.dedupeWindowMs)
+        assertTrue(onBus.coTraveller)
+        val inCar = drive(vt, work, listOf("AA:00:00:00:00:04"), ownCar = true, tracker = airTag, fingerprint = "fp").single()
+        assertEquals(Severity.HIGH, inCar.severity)
+        assertEquals(VehicleTrips.SIGNATURE_DEDUPE_MS, inCar.dedupeWindowMs)
+        assertEquals("vehicle@airtag|fp", inCar.dedupeKey)
+        assertFalse(inCar.coTraveller)
+    }
+
+    @Test
+    fun aCarKitIsKnownByItsBluetoothClass() {
+        assertTrue(BluetoothExposure.isCarKit(BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO))
+        assertTrue(BluetoothExposure.isCarKit(BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE))
+        assertFalse(BluetoothExposure.isCarKit(BluetoothClass.Device.AUDIO_VIDEO_WEARABLE_HEADSET))
+        assertFalse(BluetoothExposure.isCarKit(BluetoothClass.Device.WEARABLE_WRIST_WATCH))
+        assertFalse(BluetoothExposure.isCarKit(null))
+    }
+
+    @Test
+    fun anAddressFindingKeepsTheShortDedupeWindow() {
+        val vt = trips()
+        drive(vt, home, listOf(tracker), ownCar = true)
+        drive(vt, work, listOf(tracker), ownCar = true)
+        assertEquals(VehicleTrips.ADDRESS_DEDUPE_MS, drive(vt, home, listOf(tracker), ownCar = true).single().dedupeWindowMs)
     }
 
     @Test

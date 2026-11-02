@@ -2,6 +2,7 @@ package app.clairix.security
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
@@ -50,7 +51,12 @@ object BluetoothExposure {
         val addressKind: String?,
         /** True when the address it is heard on never changes; false when it rotates; null when unknown. */
         val fixedAddress: Boolean?,
-        val connected: Boolean
+        val connected: Boolean,
+        /**
+         * A car's own unit by its Bluetooth class (car audio or a hands-free kit), so
+         * one connected during a journey shows the journey is in the owner's car.
+         */
+        val car: Boolean = false
     ) {
         /** What a sensor gets from it, in a few words. */
         val exposure: String get() = when (fixedAddress) {
@@ -108,11 +114,17 @@ object BluetoothExposure {
             ?: "Device [${BleNames.macSuffix(address)}]"
         val type = runCatching { device.type }.getOrDefault(BluetoothDevice.DEVICE_TYPE_UNKNOWN)
         val kind = BleNames.addressKind(device, address)
+        val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
         return Accessory(
             address = address, name = name, radio = BleNames.radio(context, device),
-            addressKind = kind, fixedAddress = fixedAddress(type, kind), connected = address in connected
+            addressKind = kind, fixedAddress = fixedAddress(type, kind), connected = address in connected,
+            car = isCarKit(deviceClass)
         )
     }
+
+    /** Whether a Bluetooth device class is a car's own unit: car audio or a hands-free kit. */
+    fun isCarKit(deviceClass: Int?): Boolean =
+        deviceClass == BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO || deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE
 
     /**
      * Whether a device is heard on one address for life. Classic Bluetooth has no

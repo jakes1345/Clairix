@@ -2,6 +2,7 @@ package app.clairix
 
 import android.content.Context
 import app.clairix.analysis.EventLog
+import app.clairix.analysis.SweepPhotos
 
 /**
  * The one timeline for the whole process.
@@ -18,12 +19,19 @@ object TimelineLog {
     @Volatile
     private var log: EventLog? = null
 
-    /** The shared log, loading it from disk on first use. Does file I/O on first call. */
+    /**
+     * The shared log, loading it from disk on first use. Does file I/O on first call.
+     * A photo kept with an event ([TimelineEvent.attachment]) is deleted when the
+     * event leaves the log: "Clear all data", the retention, or the cap.
+     */
     fun get(context: Context): EventLog {
         log?.let { return it }
         synchronized(this) {
             log?.let { return it }
-            val l = EventLog(Store(context.applicationContext, "timeline.json"))
+            val app = context.applicationContext
+            val l = EventLog(Store(app, "timeline.json")) { dropped ->
+                SweepPhotos.delete(app.filesDir, dropped.mapNotNull { it.attachment })
+            }
             log = l
             return l
         }

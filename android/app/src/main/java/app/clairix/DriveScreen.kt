@@ -1,5 +1,9 @@
 package app.clairix
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -30,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,11 +44,18 @@ import app.clairix.ui.components.Tone
 import app.clairix.ui.components.ButtonKind
 import app.clairix.ui.components.ClairixButton
 import app.clairix.ui.components.ClairixCard
+import app.clairix.ui.components.ClairixDialog
 import app.clairix.ui.components.ClairixShapes
+import app.clairix.ui.components.Notice
+import app.clairix.ui.components.ToggleRow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.clairix.nav.DrivePower
 import app.clairix.nav.NavScreen
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.roundToInt
@@ -113,10 +125,23 @@ private fun DriveSensors(viewModel: DriveViewModel, showRadio: Boolean, showVehi
     val activeChannel by viewModel.activeChannel.collectAsStateWithLifecycle()
     val squelchOpen by viewModel.squelchOpen.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
-    val lastRecordingPath by viewModel.lastRecordingPath.collectAsStateWithLifecycle()
     val aircraft by viewModel.aircraft.collectAsStateWithLifecycle()
     val driveModeActive by viewModel.driveModeActive.collectAsStateWithLifecycle()
     val squelchLevel by viewModel.squelchLevel.collectAsStateWithLifecycle()
+    val radio by viewModel.radio.collectAsStateWithLifecycle()
+    val lowBattery by viewModel.lowBattery.collectAsStateWithLifecycle()
+    val recordingEnabled by viewModel.recordingEnabled.collectAsStateWithLifecycle()
+    val recordings by viewModel.recordings.collectAsStateWithLifecycle()
+    val legacy by viewModel.legacyRecordings.collectAsStateWithLifecycle()
+    val playing by viewModel.playing.collectAsStateWithLifecycle()
+    val radioNoticeAcked by viewModel.radioNoticeAcked.collectAsStateWithLifecycle()
+
+    // The gauges are read faster while they are on screen; see DriveViewModel.setScreenVisible.
+    LifecycleResumeEffect(viewModel, showRadio) {
+        viewModel.setScreenVisible(true)
+        if (showRadio) viewModel.refreshRecordings()
+        onPauseOrDispose { viewModel.setScreenVisible(false) }
+    }
 
     DriveContent(
         showRadio = showRadio,
@@ -127,7 +152,6 @@ private fun DriveSensors(viewModel: DriveViewModel, showRadio: Boolean, showVehi
         activeChannel = activeChannel,
         squelchOpen = squelchOpen,
         isRecording = isRecording,
-        lastRecordingPath = lastRecordingPath,
         aircraft = aircraft,
         driveModeActive = driveModeActive,
         squelchLevel = squelchLevel,
@@ -140,7 +164,24 @@ private fun DriveSensors(viewModel: DriveViewModel, showRadio: Boolean, showVehi
         onToggleDriveMode = {
             if (driveModeActive) viewModel.deactivateDriveMode() else viewModel.activateDriveMode()
         },
-        onOpenRecording = viewModel::openRecording
+        radio = radio,
+        lowBattery = lowBattery,
+        onReconnect = viewModel::reconnectSdr,
+        recordingEnabled = recordingEnabled,
+        onSetRecording = viewModel::setRecording,
+        recordings = recordings,
+        legacyRecordings = legacy,
+        playing = playing,
+        onPlay = viewModel::playRecording,
+        onPlayLegacy = viewModel::playLegacyRecording,
+        onStopPlayback = viewModel::stopPlayback,
+        onDeleteRecording = viewModel::deleteRecording,
+        onDeleteAllRecordings = viewModel::deleteAllRecordings,
+        onImportLegacy = viewModel::importLegacyRecordings,
+        onDeleteLegacy = viewModel::deleteLegacyRecording,
+        onDeleteAllLegacy = viewModel::deleteLegacyRecordings,
+        radioNoticeAcked = radioNoticeAcked,
+        onAckRadioNotice = viewModel::ackRadioNotice
     )
 }
 
@@ -155,7 +196,6 @@ internal fun DriveContent(
     activeChannel: ScannerChannel?,
     squelchOpen: Boolean,
     isRecording: Boolean,
-    lastRecordingPath: String?,
     aircraft: Map<String, Aircraft>,
     driveModeActive: Boolean,
     squelchLevel: Float,
@@ -166,16 +206,38 @@ internal fun DriveContent(
     onConnectObd: () -> Unit,
     onDisconnectObd: () -> Unit,
     onToggleDriveMode: () -> Unit,
-    onOpenRecording: (String) -> Unit
+    radio: DriveLink.Radio = DriveLink.Radio.OFF,
+    lowBattery: Boolean = false,
+    onReconnect: () -> Unit = {},
+    recordingEnabled: Boolean = false,
+    onSetRecording: (Boolean) -> Unit = {},
+    recordings: List<ScannerRecordings.Info> = emptyList(),
+    legacyRecordings: List<ScannerRecordings.LegacyRecording> = emptyList(),
+    playing: String? = null,
+    onPlay: (String) -> Unit = {},
+    onPlayLegacy: (String) -> Unit = {},
+    onStopPlayback: () -> Unit = {},
+    onDeleteRecording: (String) -> Unit = {},
+    onDeleteAllRecordings: () -> Unit = {},
+    onImportLegacy: () -> Unit = {},
+    onDeleteLegacy: (String) -> Unit = {},
+    onDeleteAllLegacy: () -> Unit = {},
+    radioNoticeAcked: Boolean = true,
+    onAckRadioNotice: () -> Unit = {}
 ) {
     var scannerExpanded by remember { mutableStateOf(true) }
     var adsbExpanded by remember { mutableStateOf(true) }
     var obdExpanded by remember { mutableStateOf(true) }
     var showAddDialog by remember { mutableStateOf(false) }
+    // The first drive mode, or the first channel, waits for the radio notice to be read.
+    var pendingRadioAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun afterRadioNotice(action: () -> Unit) {
+        if (radioNoticeAcked) action() else pendingRadioAction = action
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(modifier = Modifier.fillMaxSize()) {
-            StatusBarRow(obd = obd, sdrState = sdrState)
+            StatusBarRow(obd = obd, sdrState = sdrState, radio = radio)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             Column(
@@ -186,6 +248,13 @@ internal fun DriveContent(
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (lowBattery) Notice(
+                    Tone.Caution,
+                    "The battery is below ${DrivePower.CUTOFF_PCT} % and not charging, so the radio stick and the " +
+                        "OBD-II adapter are off. They start again once the phone charges. Navigation keeps going.",
+                    title = "Battery low"
+                )
+                if (showRadio && driveModeActive) RadioStickNotice(radio = radio, sdrState = sdrState, onReconnect = onReconnect)
                 if (showRadio) ScannerCard(
                     expanded = scannerExpanded,
                     onToggle = { scannerExpanded = !scannerExpanded },
@@ -194,12 +263,23 @@ internal fun DriveContent(
                     squelchOpen = squelchOpen,
                     isRecording = isRecording,
                     squelchLevel = squelchLevel,
-                    lastRecordingPath = lastRecordingPath,
                     onSquelchChange = onSetSquelch,
-                    onAddClick = { showAddDialog = true },
+                    onAddClick = { afterRadioNotice { showAddDialog = true } },
                     onRemoveChannel = onRemoveChannel,
                     onSetChannelActive = onSetChannelActive,
-                    onOpenRecording = onOpenRecording
+                    recordingEnabled = recordingEnabled,
+                    onSetRecording = onSetRecording,
+                    recordings = recordings,
+                    legacyRecordings = legacyRecordings,
+                    playing = playing,
+                    onPlay = onPlay,
+                    onPlayLegacy = onPlayLegacy,
+                    onStopPlayback = onStopPlayback,
+                    onDeleteRecording = onDeleteRecording,
+                    onDeleteAllRecordings = onDeleteAllRecordings,
+                    onImportLegacy = onImportLegacy,
+                    onDeleteLegacy = onDeleteLegacy,
+                    onDeleteAllLegacy = onDeleteAllLegacy
                 )
                 if (showRadio) AdsbCard(
                     expanded = adsbExpanded,
@@ -210,20 +290,30 @@ internal fun DriveContent(
                     expanded = obdExpanded,
                     onToggle = { obdExpanded = !obdExpanded },
                     obd = obd,
+                    paused = lowBattery,
                     onConnect = onConnectObd,
                     onDisconnect = onDisconnectObd
                 )
             }
 
+            // What drive mode costs, said where it is switched on.
+            Text(
+                style = MaterialTheme.typography.bodySmall,
+                text = "Drive mode keeps the radio stick streaming and the OBD-II adapter polled, screen off or not. " +
+                    "The stick runs on the phone's battery through the USB port, so plug the phone in for long drives. " +
+                    "Below ${DrivePower.CUTOFF_PCT} % with no charger, both stop until it charges.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 12.dp, end = 88.dp, top = 8.dp)
+            )
             // Clear of the SOS button in the bottom end corner.
             ClairixButton(
                 if (driveModeActive) "Turn off drive mode" else "Turn on drive mode",
-                onClick = onToggleDriveMode,
+                onClick = { if (driveModeActive) onToggleDriveMode() else afterRadioNotice(onToggleDriveMode) },
                 kind = if (driveModeActive) ButtonKind.Secondary else ButtonKind.Primary,
                 tone = if (driveModeActive) Tone.Danger else Tone.Accent,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 12.dp, end = 88.dp, top = 12.dp, bottom = 12.dp)
+                    .padding(start = 12.dp, end = 88.dp, top = 8.dp, bottom = 12.dp)
                     .heightIn(min = 56.dp)
             )
         }
@@ -238,10 +328,71 @@ internal fun DriveContent(
             }
         )
     }
+
+    pendingRadioAction?.let { action ->
+        RadioNoticeDialog(
+            onAccept = {
+                pendingRadioAction = null
+                onAckRadioNotice()
+                action()
+            },
+            onDismiss = { pendingRadioAction = null }
+        )
+    }
+}
+
+/**
+ * Shown once, before the first drive mode or the first channel: receiving, and above all
+ * recording, other people's radio traffic is restricted in some places, and only the
+ * owner can know where they are.
+ */
+@Composable
+private fun RadioNoticeDialog(onAccept: () -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    ClairixDialog(
+        title = "Before you listen",
+        onDismiss = onDismiss,
+        confirmLabel = "I understand",
+        onConfirm = onAccept,
+        text = "Receiving and recording radio traffic is restricted in some places and in some vehicles. " +
+            "Clairix cannot tell what is lawful where you are. Recording is off unless you turn it on."
+    ) {
+        GhostButton(
+            "Read the terms",
+            onClick = { openLink(context, Intent(Intent.ACTION_VIEW, Uri.parse(TERMS_URL)), "No app on this phone can open $TERMS_URL") }
+        )
+    }
+}
+
+/** What happened to the stick while drive mode is on, and the way back. */
+@Composable
+private fun RadioStickNotice(radio: DriveLink.Radio, sdrState: SdrState, onReconnect: () -> Unit) {
+    val reconnect: @Composable () -> Unit = { SecondaryButton("Reconnect", onClick = onReconnect, tone = Tone.Accent) }
+    when {
+        radio == DriveLink.Radio.UNPLUGGED -> Notice(
+            Tone.Caution,
+            "The radio stick was unplugged, so the radio stopped and its aircraft were cleared. Plug it back in and " +
+                "it starts again on its own.",
+            title = "Radio stick unplugged"
+        )
+        radio == DriveLink.Radio.NEEDS_PERMISSION -> Notice(
+            Tone.Caution,
+            "The radio stick is plugged in, but Android has not yet allowed Clairix to use it. Reconnect asks for that.",
+            title = "Radio stick plugged in",
+            action = reconnect
+        )
+        radio == DriveLink.Radio.ON && sdrState is SdrState.Error -> Notice(
+            Tone.Caution,
+            "The radio stopped: ${sdrState.msg}. Check the stick and its cable, then reconnect.",
+            title = "Radio stopped",
+            action = reconnect
+        )
+        else -> Unit
+    }
 }
 
 @Composable
-private fun StatusBarRow(obd: ObdData, sdrState: SdrState) {
+private fun StatusBarRow(obd: ObdData, sdrState: SdrState, radio: DriveLink.Radio) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -273,7 +424,7 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState) {
         }
 
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            SdrIndicator(sdrState)
+            SdrIndicator(sdrState, radio)
         }
 
         Row(
@@ -297,7 +448,7 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState) {
 }
 
 @Composable
-private fun SdrIndicator(state: SdrState) {
+private fun SdrIndicator(state: SdrState, radio: DriveLink.Radio) {
     val ok = ClairixTheme.colors.safe
     val caution = ClairixTheme.colors.caution
     val bad = ClairixTheme.colors.danger
@@ -310,18 +461,33 @@ private fun SdrIndicator(state: SdrState) {
     val dotColor: Color
     val dotAlpha: Float
     val label: String
-    when (state) {
-        is SdrState.Ready -> {
+    when {
+        radio == DriveLink.Radio.LOW_BATTERY -> {
+            dotColor = caution
+            dotAlpha = 1f
+            label = "Paused: battery low"
+        }
+        radio == DriveLink.Radio.UNPLUGGED -> {
+            dotColor = bad
+            dotAlpha = 1f
+            label = "Stick unplugged"
+        }
+        radio == DriveLink.Radio.NEEDS_PERMISSION -> {
+            dotColor = caution
+            dotAlpha = 1f
+            label = "Stick needs permission"
+        }
+        state is SdrState.Ready -> {
             dotColor = ok
             dotAlpha = 1f
             label = "SDR Ready"
         }
-        is SdrState.Opening -> {
+        state is SdrState.Opening -> {
             dotColor = caution
             dotAlpha = pulse.value
             label = "Opening…"
         }
-        is SdrState.Error -> {
+        state is SdrState.Error -> {
             dotColor = bad
             dotAlpha = 1f
             label = state.msg
@@ -395,12 +561,23 @@ private fun ScannerCard(
     squelchOpen: Boolean,
     isRecording: Boolean,
     squelchLevel: Float,
-    lastRecordingPath: String?,
     onSquelchChange: (Float) -> Unit,
     onAddClick: () -> Unit,
     onRemoveChannel: (Long) -> Unit,
     onSetChannelActive: (Long, Boolean) -> Unit,
-    onOpenRecording: (String) -> Unit
+    recordingEnabled: Boolean,
+    onSetRecording: (Boolean) -> Unit,
+    recordings: List<ScannerRecordings.Info>,
+    legacyRecordings: List<ScannerRecordings.LegacyRecording>,
+    playing: String?,
+    onPlay: (String) -> Unit,
+    onPlayLegacy: (String) -> Unit,
+    onStopPlayback: () -> Unit,
+    onDeleteRecording: (String) -> Unit,
+    onDeleteAllRecordings: () -> Unit,
+    onImportLegacy: () -> Unit,
+    onDeleteLegacy: (String) -> Unit,
+    onDeleteAllLegacy: () -> Unit
 ) {
     ClairixCard(contentPadding = PaddingValues(0.dp), spacing = 0.dp) {
         CardHeader(title = "Scanner", expanded = expanded, onToggle = onToggle) {
@@ -472,18 +649,179 @@ private fun ScannerCard(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
-                if (lastRecordingPath != null) {
-                    Text(
-                        style = MaterialTheme.typography.monoSmall,
-                        text = lastRecordingPath,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { onOpenRecording(lastRecordingPath) }
-                    )
-                }
+                ToggleRow(
+                    title = "Record transmissions",
+                    checked = recordingEnabled,
+                    onCheckedChange = onSetRecording,
+                    subtitle = "Turns itself off when drive mode ends. Each transmission that opens the squelch is " +
+                        "saved encrypted on this phone: at most 10 minutes each and 256 MB in all, the oldest deleted " +
+                        "first, and deleted with your history (Settings, Keep history for)."
+                )
+                RecordingList(
+                    recordings = recordings,
+                    playing = playing,
+                    onPlay = onPlay,
+                    onStop = onStopPlayback,
+                    onDelete = onDeleteRecording,
+                    onDeleteAll = onDeleteAllRecordings
+                )
+                if (legacyRecordings.isNotEmpty()) LegacyRecordings(
+                    legacy = legacyRecordings,
+                    playing = playing,
+                    onPlay = onPlayLegacy,
+                    onStop = onStopPlayback,
+                    onImport = onImportLegacy,
+                    onDelete = onDeleteLegacy,
+                    onDeleteAll = onDeleteAllLegacy
+                )
             }
         }
+    }
+}
+
+/** The recordings on this phone, newest first, each with play and delete. */
+@Composable
+private fun RecordingList(
+    recordings: List<ScannerRecordings.Info>,
+    playing: String?,
+    onPlay: (String) -> Unit,
+    onStop: () -> Unit,
+    onDelete: (String) -> Unit,
+    onDeleteAll: () -> Unit
+) {
+    if (recordings.isEmpty()) return
+    var confirmAll by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                style = MaterialTheme.typography.titleSmall,
+                text = "Recordings (${recordings.size}, ${formatMegabytes(recordings.sumOf { it.bytes })})",
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            GhostButton("Delete all", onClick = { confirmAll = true }, tone = Tone.Danger)
+        }
+        recordings.forEach { r ->
+            RecordingRow(
+                title = if (r.readable) "${formatWhen(r.startedAt)} · ${formatMhz(r.freqHz)}" else "A recording that will not open",
+                detail = when {
+                    !r.readable -> "Damaged; it can only be deleted"
+                    else -> listOfNotNull(
+                        r.channel.takeIf { it.isNotBlank() },
+                        formatDuration(r.durationMs),
+                        if (r.complete) null else "cut short"
+                    ).joinToString(" · ")
+                },
+                playing = playing == r.id,
+                canPlay = r.readable,
+                onPlay = { onPlay(r.id) },
+                onStop = onStop,
+                onDelete = { onDelete(r.id) }
+            )
+        }
+    }
+    if (confirmAll) {
+        ClairixDialog(
+            title = "Delete every recording?",
+            onDismiss = { confirmAll = false },
+            confirmLabel = "Delete all",
+            confirmTone = Tone.Danger,
+            onConfirm = {
+                confirmAll = false
+                onDeleteAll()
+            },
+            text = "${recordings.size} recordings are deleted from this phone. There is no undo."
+        )
+    }
+}
+
+/**
+ * Recordings from before they were sealed: still plain audio in the app's external storage.
+ * They are offered, never moved or deleted unasked.
+ */
+@Composable
+private fun LegacyRecordings(
+    legacy: List<ScannerRecordings.LegacyRecording>,
+    playing: String?,
+    onPlay: (String) -> Unit,
+    onStop: () -> Unit,
+    onImport: () -> Unit,
+    onDelete: (String) -> Unit,
+    onDeleteAll: () -> Unit
+) {
+    var confirmAll by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Notice(
+            Tone.Caution,
+            "${legacy.size} recordings from an earlier version (${formatMegabytes(legacy.sumOf { it.bytes })}) are " +
+                "stored unencrypted in the app's storage, where anyone with a copy of the phone's files can play them. " +
+                "Encrypt moves them into the list above, as many as fit in the 256 MB kept for recordings, and from " +
+                "then on they are kept like new ones. Nothing happens to them until you choose.",
+            title = "Unencrypted recordings",
+            action = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SecondaryButton("Encrypt", onClick = onImport, tone = Tone.Accent)
+                    GhostButton("Delete them", onClick = { confirmAll = true }, tone = Tone.Danger)
+                }
+            }
+        )
+        legacy.forEach { r ->
+            val key = r.file.absolutePath
+            RecordingRow(
+                title = "${formatWhen(r.startedAt)} · ${formatMhz(r.freqHz)}",
+                detail = "${formatDuration(r.bytes * 1000 / (ScannerRecordings.LEGACY_SAMPLE_RATE * 2L))} · unencrypted",
+                playing = playing == key,
+                canPlay = true,
+                onPlay = { onPlay(key) },
+                onStop = onStop,
+                onDelete = { onDelete(key) }
+            )
+        }
+    }
+    if (confirmAll) {
+        ClairixDialog(
+            title = "Delete the unencrypted recordings?",
+            onDismiss = { confirmAll = false },
+            confirmLabel = "Delete them",
+            confirmTone = Tone.Danger,
+            onConfirm = {
+                confirmAll = false
+                onDeleteAll()
+            },
+            text = "${legacy.size} recordings from an earlier version are deleted from this phone. There is no undo."
+        )
+    }
+}
+
+@Composable
+private fun RecordingRow(
+    title: String,
+    detail: String,
+    playing: Boolean,
+    canPlay: Boolean,
+    onPlay: () -> Unit,
+    onStop: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                style = MaterialTheme.typography.bodyMedium,
+                text = title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                style = MaterialTheme.typography.bodySmall,
+                text = detail,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (canPlay) GhostButton(if (playing) "Stop" else "Play", onClick = if (playing) onStop else onPlay)
+        GhostButton("Delete", onClick = onDelete, tone = Tone.Danger)
     }
 }
 
@@ -788,6 +1126,7 @@ private fun ObdCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     obd: ObdData,
+    paused: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit
 ) {
@@ -795,7 +1134,11 @@ private fun ObdCard(
         CardHeader(title = "OBD-II", expanded = expanded, onToggle = onToggle) {
             Text(
                 style = MaterialTheme.typography.bodyMedium,
-                text = if (obd.connected) obd.deviceName ?: "Connected" else "Not connected",
+                text = when {
+                    obd.connected -> obd.deviceName ?: "Connected"
+                    paused -> "Paused: battery low"
+                    else -> "Not connected"
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -971,6 +1314,25 @@ private fun AddChannelDialog(
 private fun formatMhz(freqHz: Long): String =
     String.format(Locale.US, "%.3f MHz", freqHz / 1_000_000.0)
 
+/** When a recording was made: the date and time in the phone's own format. */
+private fun formatWhen(epochMs: Long): String =
+    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault()).format(Date(epochMs))
+
+private fun formatDuration(ms: Long): String {
+    val s = (ms + 500) / 1000
+    return String.format(Locale.US, "%d:%02d", s / 60, s % 60)
+}
+
+private fun formatMegabytes(bytes: Long): String =
+    String.format(Locale.US, "%.1f MB", bytes / 1_048_576.0)
+
+private const val TERMS_URL = "https://clairix.app/terms"
+
+private fun openLink(context: Context, intent: Intent, otherwise: String) {
+    val started = runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+    if (!started) Toast.makeText(context, otherwise, Toast.LENGTH_LONG).show()
+}
+
 @Preview(showBackground = true)
 @Composable
 fun DriveScreenPreview() {
@@ -984,7 +1346,6 @@ fun DriveScreenPreview() {
             activeChannel = null,
             squelchOpen = false,
             isRecording = false,
-            lastRecordingPath = null,
             aircraft = emptyMap(),
             driveModeActive = false,
             squelchLevel = 0.3f,
@@ -994,8 +1355,7 @@ fun DriveScreenPreview() {
             onSetChannelActive = { _, _ -> },
             onConnectObd = {},
             onDisconnectObd = {},
-            onToggleDriveMode = {},
-            onOpenRecording = {}
+            onToggleDriveMode = {}
         )
     }
 }

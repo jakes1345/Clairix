@@ -5,12 +5,19 @@ Reads the USDOT WZDx feed registry, fetches every active feed (key-gated feeds o
 is configured in WZDX_KEYS), normalizes the features and writes
 
     <out>/workzones-<slug>.json.gz   for every region slug in tools/graph-builder/us-regions.txt
-    <out>/workzones-index.json       per-feed status
+    <out>/workzones-index.json       per-feed status and the time of this run ("generated")
     <out>/workzones-feeds.json.gz    each feed's items, so the next run can carry a feed that
-                                     fails then forward instead of publishing its states empty
+                                     fails then forward instead of publishing its states empty,
+                                     and each state's item digest, so a state whose items did
+                                     not change keeps its "generated" time and its exact bytes
+
+A state file is byte-identical to the previous run's when its items are unchanged (its
+"generated" is the run that last changed them; the index's "generated" is always this run), so
+publish.py uploads only the files that differ. --now fixes the clock, for tests and for
+reproducing a run.
 
 usage: aggregate.py [--registry URL|PATH] [--out DIR] [--regions FILE] [--bboxes FILE]
-                    [--previous URL|PATH]
+                    [--previous URL|PATH] [--now ISO-8601|EPOCH-SECONDS]
 """
 from __future__ import annotations
 
@@ -659,15 +666,36 @@ def write_gz_json(path: str, obj) -> None:
     os.replace(tmp, path)
 
 
+def items_digest(items: list[dict]) -> str:
+    """SHA-256 over a state's items in canonical JSON: the same items give the same digest."""
+    canon = json.dumps(items, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def state_generated(prev: dict | None, digest: str, now: int) -> int:
+    """The "generated" time for a state file: the previous run's when the items are the same
+    (so the file's bytes, and the release asset, stay the same), else this run's."""
+    if isinstance(prev, dict) and prev.get("digest") == digest:
+        generated = prev.get("generated")
+        if isinstance(generated, int) and not isinstance(generated, bool) and 0 < generated <= now:
+            return generated
+    return now
+
+
 def write_outputs(out_dir: str, slugs: list[str], by_state: dict[str, list[dict]],
-                  feeds: list[dict], now: int, feed_items: dict[str, dict] | None = None) -> None:
+                  feeds: list[dict], now: int, feed_items: dict[str, dict] | None = None,
+                  prev_states: dict[str, dict] | None = None) -> None:
     os.makedirs(out_dir, exist_ok=True)
+    states: dict[str, dict] = {}
     for slug in slugs:
         items = sorted(by_state.get(slug, []), key=lambda i: i["id"])
+        digest = items_digest(items)
+        generated = state_generated((prev_states or {}).get(slug), digest, now)
+        states[slug] = {"generated": generated, "digest": digest}
         write_gz_json(os.path.join(out_dir, f"workzones-{slug}.json.gz"),
-                      {"version": 1, "generated": now, "slug": slug, "items": items})
+                      {"version": 1, "generated": generated, "slug": slug, "items": items})
     write_gz_json(os.path.join(out_dir, "workzones-feeds.json.gz"),
-                  {"version": 1, "generated": now, "feeds": feed_items or {}})
+                  {"version": 1, "generated": now, "feeds": feed_items or {}, "states": states})
     index = {"generated": now, "feeds": feeds}
     tmp = os.path.join(out_dir, "workzones-index.json.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -755,13 +783,15 @@ def _valid_item(it) -> bool:
                and num(p[1]) is not None for p in geom)
 
 
-def load_previous_feeds(src: str | None) -> dict[str, dict]:
-    """feedname -> {"generated", "items"} from a previous run's workzones-feeds.json.gz.
+def load_previous(src: str | None) -> tuple[dict[str, dict], dict[str, dict]]:
+    """(feedname -> {"generated", "items"}, slug -> {"generated", "digest"}) from a previous
+    run's workzones-feeds.json.gz.
 
-    Any failure (first run, network, corrupt file) means no carry-forward, never a failed run.
+    Any failure (first run, network, corrupt file) means no carry-forward and a fresh
+    "generated" on every state file, never a failed run.
     """
     if not src:
-        return {}
+        return {}, {}
     try:
         if is_http_url(src):
             raw = fetch_bytes(src, retries=1)  # gunzips by magic bytes, both steps size-capped
@@ -776,7 +806,7 @@ def load_previous_feeds(src: str | None) -> dict[str, dict]:
             raise ValueError("not a version 1 feeds file")
     except Exception as e:  # noqa: BLE001
         log.warning("previous feeds unavailable (%s); nothing carried forward", describe_error(e))
-        return {}
+        return {}, {}
     out = {}
     for name, entry in feeds.items():
         if not isinstance(entry, dict) or not isinstance(entry.get("items"), list):
@@ -785,7 +815,22 @@ def load_previous_feeds(src: str | None) -> dict[str, dict]:
         if not isinstance(generated, int) or isinstance(generated, bool):
             continue
         out[name] = {"generated": generated, "items": [i for i in entry["items"] if _valid_item(i)]}
-    return out
+    states = {}
+    raw_states = doc.get("states")
+    if isinstance(raw_states, dict):
+        for slug, entry in raw_states.items():
+            if not isinstance(entry, dict) or not isinstance(entry.get("digest"), str):
+                continue
+            generated = entry.get("generated")
+            if not isinstance(generated, int) or isinstance(generated, bool):
+                continue
+            states[str(slug)] = {"generated": generated, "digest": entry["digest"]}
+    return out, states
+
+
+def load_previous_feeds(src: str | None) -> dict[str, dict]:
+    """feedname -> {"generated", "items"} from a previous run's workzones-feeds.json.gz."""
+    return load_previous(src)[0]
 
 
 def carry_forward(prev: dict | None, now: int) -> list[dict] | None:
@@ -808,7 +853,7 @@ def run(registry_src: str, out_dir: str, regions_path: str, bboxes_path: str,
 
     registry = load_json_source(registry_src)
     to_fetch, statuses = plan_feeds(registry, keys)
-    previous = load_previous_feeds(previous_src)
+    previous, prev_states = load_previous(previous_src)
     all_items: list[dict] = []
     feed_items: dict[str, dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -832,7 +877,7 @@ def run(registry_src: str, out_dir: str, regions_path: str, bboxes_path: str,
     statuses.sort(key=lambda s: s["name"])
 
     by_state = split_by_state(all_items, bboxes)
-    write_outputs(out_dir, slugs, by_state, statuses, now, feed_items)
+    write_outputs(out_dir, slugs, by_state, statuses, now, feed_items, prev_states)
     ok = sum(1 for s in statuses if s["ok"])
     log.info("%d/%d feeds ok, %d items, wrote %d state files to %s",
              ok, len(statuses), len(all_items), len(slugs), out_dir)
@@ -848,11 +893,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bboxes", default=DEFAULT_BBOXES)
     ap.add_argument("--previous", default=PREVIOUS_FEEDS_URL,
                     help="previous run's workzones-feeds.json.gz to carry failed feeds from ('' = none)")
+    ap.add_argument("--now", default=None,
+                    help="the time to run as, ISO-8601 or epoch seconds (default: the clock); "
+                         "expiry, the 24 h look-ahead and every 'generated' stamp follow it")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+    now = None
+    if args.now is not None:
+        spec = args.now.strip()
+        now = parse_time(int(spec) if spec.isdigit() else spec)
+        if now is None or now <= 0:
+            ap.error(f"--now {args.now!r} is not an ISO-8601 time or epoch seconds")
 
     result = run(args.registry, args.out, args.regions, args.bboxes,
-                 parse_keys(os.environ.get("WZDX_KEYS")), previous_src=args.previous)
+                 parse_keys(os.environ.get("WZDX_KEYS")), now=now, previous_src=args.previous)
     if not any(s["ok"] for s in result["feeds"]):
         # Publishing now would replace every state's last good file with an empty one.
         log.error("no feed could be fetched; not publishing")

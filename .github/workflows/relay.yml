@@ -35,7 +35,7 @@ jobs:
           node-version: '22.22.0'
 
       - name: Install
-        run: npm ci --no-audit --no-fund
+        run: npm ci --no-fund
 
       # src/voprf.wasm (the relay's half of the blind send tokens) is committed
       # so the Worker deploys without Rust. Its own tests run here, and it is

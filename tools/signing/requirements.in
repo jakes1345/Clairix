@@ -1,0 +1,10 @@
+# What tools/signing needs: cryptography for Ed25519 (sign.py, keygen.py).
+#
+# requirements.txt is generated from this file, with a hash for every file of
+# every package it resolves to, under Python 3.11, which most signing jobs use
+# (it resolves to the same packages under 3.12, which Maps uses):
+#   cd tools/signing && pip-compile --generate-hashes --no-emit-index-url --strip-extras --output-file=requirements.txt requirements.in
+# Every workflow installs it with
+#   python -m pip install --require-hashes -r tools/signing/requirements.txt
+# so pip refuses any file whose hash is not listed, whatever PyPI serves.
+cryptography==50.0.2

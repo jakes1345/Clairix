@@ -3,12 +3,14 @@ package app.clairix
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.graphics.Point
 import android.net.Uri
 import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
@@ -76,8 +78,10 @@ class SmokeTest {
         // Android asking whether Clairix may suggest Wi-Fi networks (the Karma trap's
         // decoy network, added when scanning starts). Answer it as an owner would and
         // carry on; the screenshot shows it was there.
-        ui.find(By.res("com.android.permissioncontroller:id/permission_allow_foreground_only_button"))?.click()
-        ui.find(By.res("com.android.permissioncontroller:id/permission_allow_button"))?.click()
+        for (controller in PERMISSION_CONTROLLERS) {
+            ui.find(By.res("$controller:id/permission_allow_foreground_only_button"))?.click()
+            ui.find(By.res("$controller:id/permission_allow_button"))?.click()
+        }
         val current = device.currentPackageName
         if (current != pkg && current in SYSTEM_PROMPTS) {
             shot("system-prompt-$step")
@@ -96,7 +100,9 @@ class SmokeTest {
          * System apps that show a dialog over Clairix on its behalf. Android 12
          * shows the Wi-Fi suggestion prompt from the framework itself ("android").
          */
-        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "com.android.permissioncontroller", "android")
+        /** The permission dialog's app: AOSP's, or Google's on images with Google APIs (Android 35's). */
+        val PERMISSION_CONTROLLERS = listOf("com.android.permissioncontroller", "com.google.android.permissioncontroller")
+        val SYSTEM_PROMPTS = setOf("com.google.android.wifi.dialog", "com.android.wifi.dialog", "android") + PERMISSION_CONTROLLERS
         val ALLOW: java.util.regex.Pattern = java.util.regex.Pattern.compile("(?i)^(allow|yes|ok|while using the app|only this time)$")
     }
 
@@ -133,19 +139,49 @@ class SmokeTest {
 
     /**
      * Scrolls the main list until [t] is on screen, then taps it. Settings is a
-     * long list (its About section, with "Take the tour", is near the bottom),
-     * so this goes up to 30 swipes.
+     * long list (its About section, with "Take the tour", is near the bottom).
+     * A quick swipe flings, and a fling carried the About card past between two
+     * looks once Settings grew (run 41267307169); a drag judged the end of the
+     * list from one unchanged look and stopped halfway (run 41269300153). So it
+     * scrolls the list node itself a third at a time, down to the end (two looks
+     * with nothing new), then back up, and drags without a fling only where no
+     * node reports itself scrollable.
      */
     private fun tapScrolling(t: String) {
-        repeat(30) {
-            ui.find(By.text(t))?.let {
-                try { it.click(); alive(t); return } catch (_: StaleObjectException) { device.waitForIdle(1_000) }
-            }
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
-            device.waitForIdle(1_000)
+        fun tapIfShown(): Boolean {
+            val found = ui.find(By.text(t)) ?: return false
+            return try { found.click(); alive(t); true } catch (_: StaleObjectException) { device.waitForIdle(1_000); false }
         }
+        val x = device.displayWidth / 2
+        val upper = device.displayHeight / 3
+        val lower = device.displayHeight * 2 / 3
+        for (direction in listOf(Direction.DOWN, Direction.UP)) {
+            var still = 0
+            for (swipe in 0 until 80) {
+                if (tapIfShown()) return
+                val before = onScreen()
+                // UiAutomator's own scroll on the list itself, which says when the end is
+                // reached; the slow drag (no fling) only where no node reports itself scrollable.
+                val list = runCatching { ui.find(By.scrollable(true)) }.getOrNull()
+                val moved = list?.let { runCatching { it.scroll(direction, 0.3f) }.getOrNull() }
+                if (moved == null) {
+                    val (from, to) = if (direction == Direction.DOWN) lower to upper else upper to lower
+                    device.swipe(arrayOf(Point(x, from), Point(x, to), Point(x, to)), 40)
+                }
+                device.waitForIdle(1_000)
+                // Two looks in a row with nothing new is the end of the list; one can be a
+                // frame that had not redrawn yet.
+                if (onScreen() == before) { if (++still >= 2) break } else still = 0
+            }
+        }
+        if (tapIfShown()) return
         shot("MISSING-$t"); fail("Could not find \"$t\" by scrolling")
     }
+
+    /** What Clairix's screen says now, to tell when a swipe has stopped moving the list. */
+    private fun onScreen(): List<String> = runCatching {
+        ui.findAll(By.pkg(pkg).text(java.util.regex.Pattern.compile(".+"))).mapNotNull { runCatching { it.text }.getOrNull() }
+    }.getOrDefault(emptyList())
 
     private fun back(step: String) { device.pressBack(); alive("back from $step") }
 
@@ -163,14 +199,23 @@ class SmokeTest {
         fail("Clairix did not leave \"$step\" within ${BACK_PATIENCE_MS / 1000} s of Back")
     }
 
-    /** Scrolls the main list until [selector] is on screen; null if 30 swipes do not bring it. */
+    /**
+     * Scrolls the main list until [selector] is on screen: down first, then back up,
+     * since what is wanted can lie above where the list stands (a page that grew
+     * while it was scrolled); null if neither way brings it within 30 swipes.
+     */
     private fun scrollTo(selector: BySelector): UiObject2? {
-        repeat(30) {
-            ui.find(selector)?.let { return it }
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
-            device.waitForIdle(1_000)
+        val x = device.displayWidth / 2
+        val low = device.displayHeight * 3 / 4
+        val high = device.displayHeight / 3
+        for ((fromY, toY) in listOf(low to high, high to low)) {
+            repeat(30) {
+                ui.find(selector)?.let { return it }
+                device.swipe(x, fromY, x, toY, 20)
+                device.waitForIdle(1_000)
+            }
         }
-        return null
+        return ui.find(selector)
     }
 
     /**
@@ -196,8 +241,9 @@ class SmokeTest {
         if (scrollTo(registerButton().enabled(true)) == null) { shot("MISSING-register-enabled"); fail("Register stayed off after the owner confirmed") }
         tapScrolling("Use a relay URL and secret instead")
         // Back to the ordinary setup, wherever the list is scrolled to: the
-        // secret field is there, and nothing of the invite is.
-        if (scrollTo(By.text("Enrollment secret")) == null || ui.has(By.text("Join with an invite"))) {
+        // secret field is there, and nothing of the invite is. The field's label
+        // goes on to say the secret is needed only if the relay asks for one.
+        if (scrollTo(By.textStartsWith("Enrollment secret")) == null || ui.has(By.text("Join with an invite"))) {
             shot("MISSING-invite-cleared"); fail("The invite was not cleared")
         }
     }
@@ -265,7 +311,7 @@ class SmokeTest {
             if (tab == "Comms") {
                 // Several rounds: going in and back out of these pages has failed
                 // now and then, and one round seldom shows it.
-                for (round in 1..5) for (page in listOf("Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
+                for (round in 1..5) for (page in listOf("Get help", "Fake call", "Duress phrase", "Offline mesh", "Wipe Clairix")) {
                     val more = ui.waitFor(By.desc("More options"), 5_000) ?: run { shot("MISSING-menu"); fail("No Comms menu"); return }
                     more.click(); alive("comms menu")
                     tap(page, "comms $page"); device.waitForIdle(2_000)

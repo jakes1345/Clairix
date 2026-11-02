@@ -1,0 +1,44 @@
+{
+  "licenceTexts": {
+    "Apache-2.0": { "name": "Apache License 2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0", "files": ["Apache-2.0.txt"] },
+    "LGPL-2.1-or-later": { "name": "GNU Lesser General Public License v2.1 or later", "url": "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html", "files": ["LGPL-2.1-or-later.txt"] },
+    "SQLCipher": { "name": "SQLCipher Community Edition License (BSD-style)", "url": "https://www.zetetic.net/sqlcipher/license/", "files": ["SQLCipher.txt"] },
+    "libyuv": { "name": "libyuv licence (BSD-3-Clause)", "url": "https://chromium.googlesource.com/libyuv/libyuv/+/refs/heads/main/LICENSE", "files": ["libyuv.txt"] },
+    "WebRTC": { "name": "WebRTC licence (BSD-3-Clause) and patent grant", "url": "https://webrtc.googlesource.com/src/+/refs/heads/main/LICENSE", "files": ["WebRTC.txt", "WebRTC-PATENTS.txt"] },
+    "libsrtp": { "name": "libsrtp licence (BSD-3-Clause)", "url": "https://chromium.googlesource.com/chromium/deps/libsrtp/+/refs/heads/main/LICENSE", "files": ["libsrtp.txt"] },
+    "libvpx": { "name": "libvpx licence (BSD-3-Clause) and patent grant", "url": "https://chromium.googlesource.com/webm/libvpx/+/refs/heads/main/LICENSE", "files": ["libvpx.txt", "libvpx-PATENTS.txt"] },
+    "libaom": { "name": "libaom licence (BSD-2-Clause) and AOMedia patent licence", "url": "https://aomedia.googlesource.com/aom/+/refs/heads/main/LICENSE", "files": ["libaom.txt", "libaom-PATENTS.txt"] },
+    "dav1d": { "name": "dav1d licence (BSD-2-Clause)", "url": "https://code.videolan.org/videolan/dav1d/-/blob/master/COPYING", "files": ["dav1d.txt"] },
+    "protobuf": { "name": "Protocol Buffers licence (BSD-3-Clause)", "url": "https://github.com/protocolbuffers/protobuf/blob/main/LICENSE", "files": ["protobuf.txt"] },
+    "opus": { "name": "Opus licence (BSD-3-Clause)", "url": "https://opus-codec.org/license/", "files": ["opus.txt"] },
+    "public-domain": { "name": "Public domain", "text": "The authors have dedicated this code to the public domain. It carries no licence conditions." }
+  },
+  "licenceUrls": {
+    "https://www.zetetic.net/sqlcipher/license/": "SQLCipher",
+    "https://chromium.googlesource.com/libyuv/libyuv/+/refs/heads/main/README.chromium": "libyuv"
+  },
+  "libraryLicences": {},
+  "libraryTexts": {
+    "com.google.protobuf:protobuf-java": { "BSD-3-Clause": "protobuf" }
+  },
+  "linkedOnly": {
+    "ASDKL": { "name": "Android Software Development Kit License", "url": "https://developer.android.com/studio/terms.html" },
+    "BoringSSL": { "name": "BoringSSL licence", "url": "https://boringssl.googlesource.com/boringssl/+/refs/heads/main/LICENSE" },
+    "libevent": { "name": "libevent licence (BSD-3-Clause)", "url": "https://github.com/libevent/libevent/blob/master/LICENSE" }
+  },
+  "native": [
+    { "name": "WebRTC", "in": "io.getstream:stream-webrtc-android", "website": "https://webrtc.org", "licences": ["WebRTC"] },
+    { "name": "Abseil", "in": "io.getstream:stream-webrtc-android", "website": "https://abseil.io", "licences": ["Apache-2.0"] },
+    { "name": "BoringSSL", "in": "io.getstream:stream-webrtc-android", "website": "https://boringssl.googlesource.com/boringssl", "licences": ["BoringSSL"], "note": "Which version of its licence applies depends on the BoringSSL Stream's build took; the text is at the link, not yet in this list." },
+    { "name": "dav1d", "in": "io.getstream:stream-webrtc-android", "website": "https://code.videolan.org/videolan/dav1d", "licences": ["dav1d"] },
+    { "name": "libaom", "in": "io.getstream:stream-webrtc-android", "website": "https://aomedia.googlesource.com/aom", "licences": ["libaom"] },
+    { "name": "libevent", "in": "io.getstream:stream-webrtc-android", "website": "https://libevent.org", "licences": ["libevent"], "note": "The text is at the link, not yet in this list." },
+    { "name": "libsrtp", "in": "io.getstream:stream-webrtc-android", "website": "https://github.com/cisco/libsrtp", "licences": ["libsrtp"] },
+    { "name": "libvpx", "in": "io.getstream:stream-webrtc-android", "website": "https://www.webmproject.org", "licences": ["libvpx"] },
+    { "name": "libyuv", "in": "io.getstream:stream-webrtc-android", "website": "https://chromium.googlesource.com/libyuv/libyuv", "licences": ["libyuv"] },
+    { "name": "Opus", "in": "io.getstream:stream-webrtc-android", "website": "https://opus-codec.org", "licences": ["opus"] },
+    { "name": "Protocol Buffers", "in": "io.getstream:stream-webrtc-android", "website": "https://protobuf.dev", "licences": ["protobuf"] },
+    { "name": "LibTomCrypt", "in": "net.zetetic:sqlcipher-android", "website": "https://www.libtom.net", "licences": ["public-domain"] },
+    { "name": "SQLite", "in": "net.zetetic:sqlcipher-android", "website": "https://www.sqlite.org", "licences": ["public-domain"] }
+  ]
+}

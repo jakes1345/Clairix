@@ -1,0 +1,12 @@
+# What the road-graph and plate-reader builders need (build_graph.py,
+# extract_cameras.py). numpy 2.5 ships wheels for Python 3.12 and newer only,
+# which is why the Maps workflow runs 3.12.
+#
+# requirements.txt is generated from this file, with a hash for every file of
+# every package it resolves to, under Python 3.12:
+#   cd tools/graph-builder && pip-compile --generate-hashes --no-emit-index-url --strip-extras --output-file=requirements.txt requirements.in
+# The Maps workflow installs it with
+#   python -m pip install --require-hashes -r tools/graph-builder/requirements.txt
+# so pip refuses any file whose hash is not listed, whatever PyPI serves.
+osmium==4.3.2
+numpy==2.5.4

@@ -15,6 +15,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import app.clairix.ClairixIcons
 import androidx.compose.material3.Text
@@ -24,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -55,11 +59,16 @@ fun LockScreen() {
     var code        by remember { mutableStateOf("") }
     var checking    by remember { mutableStateOf(false) }
     var shake       by remember { mutableStateOf(false) }
-    var errorText   by remember { mutableStateOf("") }
+    // Back from the duress wipe in a fresh process (AppLock.takeWipeNotice): this
+    // screen carries on from the last one, with its words and without a prompt.
+    val afterWipe = remember { AppLock.takeWipeNotice() }
+    var errorText   by remember { mutableStateOf(if (afterWipe) "Wrong passcode" else "") }
     var lockoutMs   by remember { mutableLongStateOf(0L) }
     var countdown   by remember { mutableLongStateOf(0L) }
     val maxLen = AppLock.MAX_LENGTH
     val biometricEnabled by AppLock.biometricEnabled.collectAsStateWithLifecycle()
+    // Read from disk by MainActivity before this screen is first drawn (DiscreetMode.reconcile).
+    val discreet = DiscreetMode.state.collectAsStateWithLifecycle().value.on
 
     // Countdown ticker for the lockout display, on the same monotonic clock as the lock itself.
     LaunchedEffect(lockoutMs) {
@@ -87,9 +96,10 @@ fun LockScreen() {
         }
     }
 
-    // Auto-show the biometric prompt when the lock screen first appears.
+    // Auto-show the biometric prompt when the lock screen first appears (not on
+    // the duress wipe's return: the screen before it had it dismissed).
     LaunchedEffect(biometricEnabled) {
-        if (biometricEnabled && activity != null) promptBiometric()
+        if (biometricEnabled && activity != null && !afterWipe) promptBiometric()
     }
 
     // Auto-submit once the code reaches the set length, OR on an explicit
@@ -162,33 +172,51 @@ fun LockScreen() {
     val showLockout = countdown > 0L
     val active = !checking && countdown == 0L
 
-    Box(
+    // Scrolls when it does not fit (a 640 dp phone, large text), so the Unlock
+    // button that every code shorter than 12 digits needs can always be reached;
+    // at least the window's height, so where it fits it sits centred as before.
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(c.base)
             .windowInsetsPadding(WindowInsets.systemBars),
         contentAlignment = Alignment.Center
     ) {
+        val windowHeight = maxHeight
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = windowHeight)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
         ) {
             // ── The mark and what this screen is ───────────────────────────
+            // In discreet mode only the keypad and a plain prompt: no logo, no LOCKED.
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                LogoMark(size = 56.dp)
-                StencilText(
-                    "LOCKED",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = c.text,
-                    ground = c.base,
-                    modifier = Modifier.semantics { heading(); contentDescription = "Clairix is locked" }
-                )
-                Text(
-                    "Enter your passcode to continue",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = c.textSubtle
-                )
+                if (DiscreetText.lockShowsBrand(discreet)) {
+                    LogoMark(size = 56.dp)
+                    StencilText(
+                        "LOCKED",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = c.text,
+                        ground = c.base,
+                        modifier = Modifier.semantics { heading(); contentDescription = DiscreetText.lockHeading(discreet) }
+                    )
+                    Text(
+                        DiscreetText.lockPrompt(discreet),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c.textSubtle
+                    )
+                } else {
+                    Text(
+                        DiscreetText.lockPrompt(discreet),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = c.text,
+                        modifier = Modifier.semantics { heading(); contentDescription = DiscreetText.lockHeading(discreet) }
+                    )
+                }
             }
 
             // ── Entered digits ───────────────────────────────────────────────
@@ -223,7 +251,8 @@ fun LockScreen() {
                 else -> errorText
             }
             val msgAlpha by animateFloatAsState(if (msg.isNotEmpty()) 1f else 0f, label = "message")
-            Box(Modifier.height(20.dp).alpha(msgAlpha), contentAlignment = Alignment.Center) {
+            // At least one line high, and taller when large text needs it, so the message is never cut.
+            Box(Modifier.heightIn(min = 20.dp).alpha(msgAlpha), contentAlignment = Alignment.Center) {
                 Text(msg, style = MaterialTheme.typography.bodyMedium, color = c.danger, textAlign = TextAlign.Center)
             }
 
@@ -233,24 +262,26 @@ fun LockScreen() {
                 listOf('4', '5', '6'),
                 listOf('7', '8', '9'),
             )
+            // Smaller keys on a short window, so the whole screen fits without scrolling where it can.
+            val keySize = lockKeySize(windowHeight)
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 for (row in rows) {
                     Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         for (d in row) {
-                            NumKey(label = d.toString(), active = active) { tap(d) }
+                            NumKey(label = d.toString(), size = keySize, active = active) { tap(d) }
                         }
                     }
                 }
                 // Bottom row: biometrics (when on) · 0 · backspace
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    Box(Modifier.size(KEY_SIZE))
-                    NumKey(label = "0", active = active) { tap('0') }
-                    NumKey(label = KEY_BACKSPACE, active = active && code.isNotEmpty(), accent = false) { backspace() }
+                    Box(Modifier.size(keySize))
+                    NumKey(label = "0", size = keySize, active = active) { tap('0') }
+                    NumKey(label = KEY_BACKSPACE, size = keySize, active = active && code.isNotEmpty(), accent = false) { backspace() }
                 }
             }
 
             // ── Submit (for codes shorter than MAX_LENGTH), or biometrics ──
-            Box(Modifier.height(48.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
                 if (code.length in AppLock.MIN_LENGTH until maxLen) {
                     PrimaryButton("Unlock", onClick = { submit() }, enabled = active)
                 } else if (biometricEnabled && activity != null && code.isEmpty()) {
@@ -298,14 +329,28 @@ private const val KEY_BACKSPACE = "backspace"
 
 private val KEY_SIZE = 72.dp
 
+/** The smallest key: Android's minimum touch target. */
+private val KEY_SIZE_MIN = 48.dp
+
+/** Everything on the lock screen but the four rows of keys, at default text size: padding, mark, dots, message, gaps, button. */
+private val LOCK_CHROME = 380.dp
+
+/**
+ * The keypad's key size for a window [maxHeight] tall: 72 dp where there is
+ * room, smaller on a short window, and never below a 48 dp touch target. With
+ * the smallest keys the whole screen fits from 572 dp; a 640 dp phone (about
+ * 568 dp between its bars) scrolls by a few dp, as larger text does.
+ */
+internal fun lockKeySize(maxHeight: Dp): Dp = ((maxHeight - LOCK_CHROME) / 4).coerceIn(KEY_SIZE_MIN, KEY_SIZE)
+
 /** A keypad key: an octagon, the mark's own shape, with the digit in the display face. */
 @Composable
-private fun NumKey(label: String, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
+private fun NumKey(label: String, size: Dp, active: Boolean, accent: Boolean = true, onClick: () -> Unit) {
     val c = ClairixTheme.colors
     val color = if (active) (if (accent) c.text else c.textMuted) else c.textSubtle
     Box(
         Modifier
-            .size(KEY_SIZE)
+            .size(size)
             .clip(ClairixShapes.Octagon)
             .background(if (active) c.surface else c.base)
             .border(1.dp, if (active) c.border else c.surface, ClairixShapes.Octagon)

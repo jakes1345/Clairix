@@ -29,8 +29,12 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -39,12 +43,15 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.clairix.security.AppLock
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.GhostButton
 import app.clairix.ui.components.Hairline
 import app.clairix.ui.components.IconWell
 import app.clairix.ui.components.ListGroup
 import app.clairix.ui.components.LogoMark
+import app.clairix.ui.components.Notice
 import app.clairix.ui.components.PrimaryButton
 import app.clairix.ui.components.Tone
 import app.clairix.ui.components.StencilText
@@ -54,10 +61,13 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 private const val ONBOARDING_PREFS = "prefs"
-private const val ONBOARDING_DONE_KEY = "onboarding_done"
-// The full app walks through the scanner; the comms-only build has three pages
-// about encrypted messaging and ends on Get started instead of Start scanning.
-private val TOTAL_PAGES = if (BuildConfig.FULL_ACCESS) 4 else 3
+/** Also written by a duress wipe's decoy (security/Wiper.kt), which has done its first run. */
+internal const val ONBOARDING_DONE_KEY = "onboarding_done"
+private const val LOCK_OFFERED_KEY = "onboarding_lock_offered"
+// The full app walks through the scanner; the comms-only build has pages about
+// encrypted messaging and ends on Get started instead of Start scanning. Both
+// ask, on the page before the last, whether anyone else uses this phone.
+private val TOTAL_PAGES = if (BuildConfig.FULL_ACCESS) 5 else 4
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -69,14 +79,27 @@ fun markOnboardingDone(context: Context) =
     context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)
         .edit().putBoolean(ONBOARDING_DONE_KEY, true).apply()
 
+/**
+ * Whether onboarding showed the page that offers a passcode. Skip passes it by;
+ * the tour's Settings stop follows up either way while no passcode is set.
+ */
+fun isLockOffered(context: Context): Boolean =
+    context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(LOCK_OFFERED_KEY, false)
+
+fun markLockOffered(context: Context) =
+    context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)
+        .edit().putBoolean(LOCK_OFFERED_KEY, true).apply()
+
 // ── OnboardingScreen ───────────────────────────────────────────────────────────
 
 /**
- * First run: a few pages on what Clairix does and what it needs, then the start
- * button, and beside it "Not now" for someone who wants to look around first:
- * that finishes without asking for a permission or starting the scanner, which
- * is then started from Scan → Trackers whenever they choose. The pages scroll
- * on their own if a small phone or large text does not fit them; the page bars
+ * First run: a few pages on what Clairix does and what it needs, a page that
+ * offers a passcode for anyone who shares the phone, then the start button,
+ * and beside it "Not now" for someone who wants to look around first: that
+ * finishes without asking for a permission or starting the scanner, which is
+ * then started from Scan → Trackers whenever they choose. The pages scroll on
+ * their own if a small phone or large text does not fit them; the page bars
  * and the buttons stay pinned at the bottom.
  */
 @Composable
@@ -86,6 +109,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
     val scope = rememberCoroutineScope()
     val c = ClairixTheme.colors
     val last = pagerState.currentPage == TOTAL_PAGES - 1
+    val nextPage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } }
 
     fun finish(scan: Boolean = true) {
         markOnboardingDone(context)
@@ -141,13 +165,24 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                             Triple(ClairixIcons.Wifi, "Wi-Fi and NFC", "Flags bait hotspots that copy real networks, and NFC tags hidden where they shouldn't be.")
                         )
                     )
+                    3 -> LockOfferPage(
+                        lead = "If someone else can pick up this phone, give Clairix a passcode of its own. Without " +
+                            "one, anyone who opens Clairix can read everything in it: the timeline, your usual places " +
+                            "and times, when the phone was unlocked, and your messages.",
+                        note = "A passcode keeps what is in Clairix to you. It does not hide the app: Clairix appears " +
+                            "by name in the app list and shows a notification while it scans, and while Comms stays online.",
+                        onNotNow = nextPage
+                    )
                     else -> ReadyPage(
+                        comms = "Messaging, calls, SOS and the duress phrase need a Clairix number: an invite from " +
+                            "someone already on Clairix, or a relay you run. Everything else here works without one.",
                         title = "Ready when you are",
                         lead = "Start scanning now and keep the app running while you move, or look around first " +
                             "and start it later from Scan → Trackers.",
                         note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together. " +
                             "Android may ask whether Clairix can suggest Wi-Fi networks: that is the Wi-Fi trap, a made-up " +
-                            "network name only interception kit answers to. Nothing ever joins it. The tour explains it."
+                            "network name only interception kit answers to. It is added with auto-join off and a password " +
+                            "nobody knows, so the phone does not join what answers. The tour explains it."
                     )
                 }
             } else {
@@ -167,8 +202,15 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                             Triple(Icons.Filled.Notifications, "Notifications", "So a new message shows and a call rings while the app is closed."),
                             Triple(Icons.Filled.Call, "Microphone", "For calls. Asked once you have a number, so the first call isn't also the first question."),
                             Triple(ClairixIcons.Videocam, "Camera", "To scan a contact's pairing code. Nothing is recorded."),
-                            Triple(Icons.Filled.LocationOn, "Location", "Attached to an SOS so your group knows where you are. Read only when you press SOS.")
+                            Triple(Icons.Filled.LocationOn, "Location", "Attached to an SOS so your group knows where you are. Read only for an SOS: the button, or the duress phrase.")
                         )
+                    )
+                    2 -> LockOfferPage(
+                        lead = "If someone else can pick up this phone, give Clairix a passcode of its own. Without " +
+                            "one, anyone who opens Clairix can read your messages and see who you talk to.",
+                        note = "A passcode keeps what is in Clairix to you. It does not hide the app: Clairix appears " +
+                            "by name in the app list and shows a notification while Comms stays online.",
+                        onNotNow = nextPage
                     )
                     else -> ReadyPage(
                         title = "You need an invite",
@@ -205,7 +247,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
             } else {
                 PrimaryButton(
                     "Next",
-                    onClick = { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } },
+                    onClick = nextPage,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -322,8 +364,58 @@ private fun ListPage(eyebrow: String, title: String, lead: String, items: List<T
     }
 }
 
+/**
+ * "Does anyone else use this phone?" A passcode offered before the first
+ * session instead of waiting in Settings to be found, set up right here, with
+ * what it does not do said plainly. Showing the page is recorded, so the tour
+ * can follow up while no passcode is set.
+ */
 @Composable
-private fun ReadyPage(title: String, lead: String, note: String) {
+private fun LockOfferPage(lead: String, note: String, onNotNow: () -> Unit) {
+    val context = LocalContext.current
+    val c = ClairixTheme.colors
+    val enabled by AppLock.enabled.collectAsStateWithLifecycle()
+    // The setup stays up after the save until the wipe-limit question that follows it is answered.
+    var setting by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { markLockOffered(context) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Spacer(Modifier.height(16.dp))
+        PageTitle("Before you start", "Does anyone else use this phone?")
+        Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
+        Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
+        when {
+            setting -> PasscodeSetupPanel(
+                context,
+                isChanging = false,
+                onDone = { setting = false },
+                onCancel = { setting = false }
+            )
+            enabled -> Notice(
+                Tone.Safe,
+                "Clairix asks for it whenever the screen has been off, or after 30 seconds away. Settings → " +
+                    "App passcode changes that, and adds biometrics or a duress passcode.",
+                title = "Passcode set"
+            )
+            else -> {
+                PrimaryButton(
+                    "Set a passcode for Clairix",
+                    onClick = { setting = true },
+                    icon = Icons.Filled.Lock,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                GhostButton("Not now", onClick = onNotNow, tone = Tone.Neutral, modifier = Modifier.fillMaxWidth())
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** The last page. [comms], when given, says what Comms needs before it can be used. */
+@Composable
+private fun ReadyPage(title: String, lead: String, note: String, comms: String? = null) {
     val c = ClairixTheme.colors
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
@@ -344,6 +436,7 @@ private fun ReadyPage(title: String, lead: String, note: String) {
         PageTitle("Last step", title)
         Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
         Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
+        if (comms != null) Text(comms, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
         Spacer(Modifier.height(8.dp))
     }
 }

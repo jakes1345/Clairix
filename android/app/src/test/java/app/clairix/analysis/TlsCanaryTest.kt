@@ -164,6 +164,36 @@ class TlsCanaryTest {
         assertEquals(200, TlsCanary.readConnectStatus(quick, deadlineAt = 30_000L, now = { clock }))
     }
 
+    // ── The schedule start() carries out ─────────────────────────────────
+
+    private val now = 1_700_000_000_000L
+    private val fourHours = 4 * 3600_000L
+
+    @Test
+    fun aCanaryThatNeverRanRunsAtOnceAndIsArmedFourHoursOut() {
+        val p = TlsCanary.plan(lastRunAt = 0L, now = now)
+        assertTrue(p.runNow)
+        assertEquals(now + fourHours, p.nextAt)
+    }
+
+    @Test
+    fun aRecentRunIsNotRepeatedAndTheAlarmKeepsItsCadence() {
+        val last = now - 3600_000L
+        val p = TlsCanary.plan(lastRunAt = last, now = now)
+        assertFalse(p.runNow)
+        assertEquals(last + fourHours, p.nextAt)
+    }
+
+    @Test
+    fun anOverdueRunAndAClockSetBackBothRunNow() {
+        assertTrue(TlsCanary.plan(lastRunAt = now - fourHours, now = now).runNow)
+        assertTrue(TlsCanary.plan(lastRunAt = now - 5 * 3600_000L, now = now).runNow)
+        // The last run is in the future: the clock went back, and waiting for it is not an option.
+        val back = TlsCanary.plan(lastRunAt = now + 60_000L, now = now)
+        assertTrue(back.runNow)
+        assertEquals(now + fourHours, back.nextAt)
+    }
+
     @Test
     fun theGlobalProxySettingIsParsed() {
         val p = TlsCanary.parseGlobalProxy(" 10.0.0.2:8888 ")!!

@@ -21,14 +21,23 @@ import androidx.test.uiautomator.UiObject2
  * failed or stalled on exactly that, with the app idle and its window
  * already redrawn. The app's own nodes are recomputed whenever they are
  * asked for; only the cache was stale. Every lookup here clears it first
- * (UiAutomation.clearCache, Android 14 on). Before 14 there is no public way
- * to, and the emulator workflow enables NoopAccessibilityService instead, so
- * Compose sends its events and the cache stays current.
+ * (UiAutomation.clearCache, Android 14 on). Before 14 it is cleared by
+ * setting the connection's own service info back on it: UiAutomation.setServiceInfo
+ * clears AccessibilityInteractionClient's cache first. The emulator workflow
+ * also enables NoopAccessibilityService, but that was not enough: on Android 12
+ * and 13 the denied-permissions walk read a hub list that had scrolled as
+ * still at the top (every node it fetched afterwards failed to refresh), so
+ * "Ultrasound" and "NFC" were never found.
  */
 internal class FreshUi(private val instrumentation: Instrumentation, val device: UiDevice) {
 
     fun clear() {
-        if (Build.VERSION.SDK_INT >= 34) instrumentation.uiAutomation.clearCache()
+        val automation = instrumentation.uiAutomation
+        if (Build.VERSION.SDK_INT >= 34) {
+            automation.clearCache()
+        } else {
+            automation.serviceInfo?.let { automation.serviceInfo = it }
+        }
     }
 
     fun find(selector: BySelector): UiObject2? { clear(); return device.findObject(selector) }

@@ -45,6 +45,22 @@ cd android
 
 The build compiles `comms-crypto` for every Android ABI through cargo-ndk.
 
+```sh
+./gradlew testFullSuiteDebugUnitTest --tests 'app.clairix.screenshots.*' verifyPaparazziFullSuiteDebug
+./gradlew lintFullSuiteDebug detekt                   # every warning an error, past the baselines
+```
+
+A plain test run draws the screenshot tests' screens and compares nothing;
+`verifyPaparazziFullSuiteDebug` compares them with the PNGs in
+`app/src/test/snapshots/images/` and leaves any difference in
+`app/build/paparazzi/failures/`. `recordPaparazziFullSuiteDebug` writes new
+PNGs; CI records them on its own runner when the Android APK workflow is run
+by hand with "record_screenshots", since rendering depends on the JDK and its
+fonts. Lint and detekt fail on anything not in `app/lint-baseline.xml` and
+`app/detekt-baseline.xml` (`updateLintBaselineFullSuiteDebug`,
+`detektBaseline`). The same steps run in `.github/workflows/android.yml`
+([`../PROCESS.md`](../PROCESS.md)).
+
 - **Editions:** `fullSuite` (everything), `fullComms` (messaging only) and
   `playSuite` (the Play Store edition).
 - **Variants:** see [`../../android/README.md`](../../android/README.md).
@@ -109,6 +125,16 @@ adb shell am instrument -w -r -e class app.clairix.comms.EndToEndTest \
 | `TorDeviceTest` (4, `-e tor true`) | Requests leave through Tor; a listed relay answers through Tor; a relay is reached at its onion address; nothing goes out directly when Tor is down |
 | `VaultLockScreenTest` (2, `-e lockScreen true`) | The vault across a lock screen being set and removed |
 | `VaultDeviceTest`, `CommsStoreUpgradeTest`, `DisappearingMessagesTest` | The vault keys, database upgrades and timer deletion on a device |
+| `CardVaultLockTest` (`-e lockScreen true`) | A synthetic ISO-DEP card saved through the card vault under a set lock screen, and the armed card disarming when the app locks |
+
+## Hardware: SDR, scanner, ADS-B, OBD
+
+The Drive tab's radio and vehicle features need a USB SDR dongle and a Bluetooth
+OBD-II adapter, which the emulator cannot attach. Only their offline decode logic
+is covered by unit tests (`AdsbDecoderTest`, `FmDemodulatorTest`, `ObdParserTest`,
+`UsbDeviceFilterTest`); no run against real hardware is recorded in this
+repository. See [HARDWARE-RUNS.md](HARDWARE-RUNS.md) for exactly what is and is
+not validated, and the device run to add.
 
 ## Checking a release against the source
 

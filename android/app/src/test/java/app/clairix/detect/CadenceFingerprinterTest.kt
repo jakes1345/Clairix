@@ -69,8 +69,10 @@ class CadenceFingerprinterTest {
         val match = answers.firstOrNull { it != null }
         assertNotNull(answers.toString(), match)
         assertEquals("tag-one", match!!.logicalId)
-        // Nothing but cadence separates two AirTags, so this is never "certain".
+        // Nothing but cadence separates two AirTags, so this is never "certain", and the
+        // caller is told so: a verdict must not ride across such a stitch.
         assertFalse(match.certain)
+        assertTrue(match.indistinguishable)
     }
 
     @Test
@@ -106,6 +108,45 @@ class CadenceFingerprinterTest {
         assertNotNull(answers.toString(), match)
         assertEquals("gadget", match!!.logicalId)
         assertTrue(match.certain)
+        assertFalse(match.indistinguishable)
+    }
+
+    @Test
+    fun theFamilyTableUsesTheSameIdentifiersAsTheSignatures() {
+        val fp = CadenceFingerprinter()
+        fun heard(address: String, company: Int? = null, payload: ByteArray? = null, services: Set<Int> = emptySet()) {
+            fp.stitch(
+                CadenceFingerprinter.Packet(
+                    address = address, timestampNanos = t0 * 1_000_000L, nowMs = t0, rssi = -60,
+                    primaryPhy = 1, advertisingSid = 0xFF, hasRecord = true, txPower = null,
+                    company = company, mfrPayload = payload, services = services, payloadLength = 20
+                )
+            )
+        }
+        heard("01:00:00:00:00:01", company = 0x004C, payload = airTagPayload)
+        heard("01:00:00:00:00:02", services = setOf(0xFEED))
+        heard("01:00:00:00:00:03", services = setOf(0xFD84))
+        heard("01:00:00:00:00:04", company = 0x0075, payload = byteArrayOf(0x42, 0x09))
+        heard("01:00:00:00:00:05", services = setOf(0xFE33))
+        heard("01:00:00:00:00:06", services = setOf(0xFE65))
+        // Bose's UUID, and one that belongs to no tracker maker.
+        heard("01:00:00:00:00:07", services = setOf(0xFEBE))
+        heard("01:00:00:00:00:08", services = setOf(0xFE2B))
+        assertEquals("Apple AirTag", fp.familyLabel("01:00:00:00:00:01"))
+        assertEquals("Tile", fp.familyLabel("01:00:00:00:00:02"))
+        assertEquals("Tile", fp.familyLabel("01:00:00:00:00:03"))
+        assertEquals("Samsung SmartTag", fp.familyLabel("01:00:00:00:00:04"))
+        assertEquals("Chipolo", fp.familyLabel("01:00:00:00:00:05"))
+        assertEquals("Chipolo", fp.familyLabel("01:00:00:00:00:06"))
+        assertNull(fp.familyLabel("01:00:00:00:00:07"))
+        assertNull(fp.familyLabel("01:00:00:00:00:08"))
+        // And every service-keyed family is the tracker the signatures name for those UUIDs.
+        for (family in CadenceFingerprinter.FAMILIES.filter { it.serviceShorts.isNotEmpty() }) {
+            for (short in family.serviceShorts) {
+                val type = Signatures.match(Advert(shorts = setOf(short)))
+                assertEquals("${family.id} 0x%04X".format(short), family.id, type?.id)
+            }
+        }
     }
 
     private companion object {

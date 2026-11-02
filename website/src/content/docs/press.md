@@ -12,7 +12,7 @@ Clairix is a personal security app for Android built for everyday situations: a 
 
 Clairix is a personal security app for Android that puts counter-surveillance tools in the hands of people who have never needed them before: someone checking a holiday rental for a hidden camera, someone who suspects a tracker was slipped into their bag, someone whose former partner had access to their phone.
 
-The hidden-camera sweep uses the phone's torch and camera to find the one thing a lens cannot hide, its reflection, and the front camera to spot the infrared lights night-vision cameras use. It then checks the venue's Wi-Fi for devices that stream video, listens for cameras still in setup mode, and offers a magnetic gauge for finding hidden mounts. A guided ten-step checklist ties it together.
+The hidden-camera sweep uses the phone's torch and camera to find the one thing a lens cannot hide, its reflection, and the front camera to spot the infrared lights night-vision cameras use. It then checks the venue's Wi-Fi for devices that stream video, listens for cameras still in setup mode, and offers a magnetic gauge for finding hidden mounts. A guided eleven-step checklist ties it together.
 
 Tracker detection recognises AirTags, Tile, Samsung SmartTag, Chipolo and other Bluetooth trackers, follows them through their address rotations, and raises an alert only when the same device has been heard with the user across real distance over real time. A locator, a trip memory for cars and the industry-standard tracker identification protocol help the user find and name the device.
 
@@ -29,7 +29,7 @@ Clairix is free to use and requires Android 12 or newer.
 | **Name** | Clairix |
 | **Website** | https://clairix.app |
 | **Platform** | Android 12 and newer |
-| **Distribution** | Google Play (package `app.clairix`); Clairix Full edition as a direct APK download from clairix.app |
+| **Distribution** | Direct APK from clairix.app and GitHub Releases (public beta), package `app.clairix`; a Google Play edition is in preparation |
 | **Current version** | 3.0.0 Beta 8 |
 | **Price** | Free. Every feature. |
 | **Developer** | Clairix, an independent project |
@@ -38,10 +38,11 @@ Clairix is free to use and requires Android 12 or newer.
 
 ### What it detects
 
-- **Hidden cameras:** lens glint (torch and rear camera), infrared illuminators (front camera, dark room), cameras streaming on the local Wi-Fi (RTSP, ONVIF, mDNS), cameras in setup mode (Wi-Fi hotspots and Bluetooth beacons), magnetic mounts (magnetometer). Guided ten-step room sweep.
-- **Bluetooth trackers:** AirTag and Find My accessories, Tile, Samsung SmartTag (all generations), Chipolo, Pebblebee, Google Find Hub tags, any tracker announcing itself under the DULT unwanted-tracking standard, Orbit, Nut, Invoxia, Eddystone beacons, and generic Bluetooth modules used in hardwired GPS trackers. Following confirmed by displacement over time (default about 10 minutes and 300 metres). Address-rotation tracking by payload fingerprint and radio cadence. Compass locator with distance estimate. DULT identification and sound. Vehicle trip memory. Self-test. Pattern-of-life report.
-- **Spyware and phone integrity:** score-based stalkerware scan (sideload, hidden icon, keyboard, accessibility, notification listener, VPN, device admin, hidden background service); user-installed certificate audit; TLS interception canary; unlock ledger with "used while you slept"; biometric enrolment tripwire; screen-recording alert (Android 15+); microphone and camera use; wireless microphone attachment; root, bootloader, verified boot, SELinux, debugging and patch-age checks.
-- **Networks and towers:** Karma-style rogue access point canary (zero false positives by construction); open carrier-named and evil-twin networks; known interception tool names; cell-tower baseline with scored indicators (technology downgrade, wrong-area cell, area change while stationary, signal outlier, unknown cell at a familiar place, ephemeral cell, rapid switching, no neighbours, near-zero timing advance).
+- **Hidden cameras:** lens glint (torch and rear camera), infrared illuminators (front camera, dark room), cameras streaming on the local Wi-Fi (RTSP, ONVIF, mDNS), cameras in setup mode (Wi-Fi hotspots and Bluetooth beacons), magnetic mounts (magnetometer). Guided eleven-step room sweep.
+- **Bluetooth trackers:** AirTag and Find My accessories, Tile, Samsung SmartTag (all generations), Chipolo, Pebblebee, Google Find Hub tags, any tracker announcing itself under the DULT unwanted-tracking standard, Orbit, Nut, Invoxia, Eddystone beacons, iBeacon-format tags, and generic Bluetooth modules used in hardwired GPS trackers. Following confirmed by displacement over time (default about 10 minutes and 300 metres). Address-rotation tracking by payload fingerprint and radio cadence. Compass locator with distance estimate. DULT identification and sound. Vehicle trip memory. Self-test. Pattern-of-life report.
+- **Spyware and phone integrity:** score-based stalkerware scan (sideload, hidden icon, keyboard, accessibility, notification listener, VPN, device admin, hidden background service), run at boot, after updates, daily while in use or scanning, and after installs while the scanner runs; every app that is not part of the phone's own system matched against the Echap stalkerware indicators by package name and signing certificate; device-owner and profile-owner check; user-installed certificate audit; TLS interception canary; unlock ledger with "used while you slept"; biometric enrolment tripwire; screen-recording alert (Android 15+); microphone and camera use; wireless microphone attachment; root, bootloader, verified boot, SELinux, debugging and patch-age checks.
+
+- **Networks and towers:** Karma-style rogue access point canary (a made-up network name, replaced every six hours and withdrawn when scanning stops, that only an answer-everything box responds to); evil-twin networks and the default names of Wi-Fi interception kit; open carrier hotspots noted as captive portals rather than flagged; cell-tower baseline with scored indicators (technology downgrade and rapid switching outside voice calls, wrong-area cell with carrier re-plans relearned, area change while stationary, signal outlier, unknown cell at a familiar place, ephemeral cell, no neighbours, zero timing advance with per-cell memory).
 
 ### Private communication
 
@@ -56,13 +57,14 @@ Clairix is free to use and requires Android 12 or newer.
 
 ### Emergency tools
 
-SOS to groups with end-to-end encrypted location; duress phrase; scheduled fake call; app lock with hardware-backed verifier, wipe-on-failure and duress passcode; panic wipe.
+SOS to groups with end-to-end encrypted location; duress phrase; scheduled fake call; app lock with hardware-backed verifier, wipe-on-failure and a duress passcode that wipes and leaves an empty decoy behind the lock screen; Wipe Clairix, in the Comms menu and in Settings. All of them in both Clairix Full and Clairix Comms.
 
 ### Privacy
 
 - No ads, analytics SDK, advertising SDK or crash reporter.
 - Scan results, timeline, location history, app list and unlock ledger stay on the device. Android backup disabled.
-- Relay holds only the Clairix number, public keys, queued envelopes (30 days), push endpoint and unused invites (7 days).
+- Relay holds the Clairix number, public keys, queued envelopes (30 days), push endpoint, pass key, hashes of single-use tokens and unused invites (7 days). Full table at https://clairix.app/security#relay.
+- Clairix Full, on a relay that offers ClairixCoin: the balance, and for each transfer made or received the amount and the hour, the 100 most recent and none older than 30 days, deleted with the account. Never who paid whom.
 - Full list of network destinations published at https://clairix.app/security.
 
 ### Technology

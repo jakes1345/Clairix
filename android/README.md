@@ -1,9 +1,11 @@
 # Clairix — Android
 
-A real BLE tracker detector, not a port. The Node tool in this repo is a
-terminal application and does not run on Android, so this is a native Kotlin
-app that reuses the parts that actually matter: the tracker signature database,
-the MAC-rotation fingerprinting, and the geo-correlation rule.
+A real BLE tracker detector, written for Android in Kotlin. The tracker
+signatures are in `detect/Signatures.kt`; a device that changes its Bluetooth
+address is followed across the change by its advertisement content
+(`analysis/Identity.kt`) and by the rhythm of its radio
+(`detect/CadenceFingerprinter.kt`); and the rule below is in `analysis/Geo.kt`
+and `analysis/Persistence.kt`.
 
 ## The rule that makes it worth installing
 
@@ -24,8 +26,8 @@ dimensions (`edition` first, then `tier`, so a variant reads `<edition><Tier>`):
 | Variant | Edition | What it is | Where it goes |
 |---|---|---|---|
 | `fullSuite` | Full | The whole app, including the Card Vault with NFC card emulation and ClairixCoin | `clairix-<tag>.apk` on GitHub Releases and clairix.app |
-| `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS only | `clairix-comms-<tag>.apk` on GitHub Releases |
-| `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, uploaded to Google Play |
+| `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS, with the duress phrase, fake call and Wipe Clairix; no scanner | `clairix-comms-<tag>.apk` on GitHub Releases |
+| `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, for the Play Console (the listing is not public yet) |
 
 There is no `playComms`: the comms-only build is never published on Play.
 
@@ -40,7 +42,9 @@ How the Play edition leaves those features out:
 - **Card Vault and ClairixCoin.** `BuildConfig.CARD_VAULT` and
   `BuildConfig.CLAIRIX_COIN` are `false` in the Play edition. The NFC tab shows
   no vault, save or emulate controls; COMMS shows no balance and no Pay button;
-  and the relay's `/v1/coin/*` endpoints are never called.
+  and the relay's `/v1/coin/*` endpoints are never called. In the Full edition
+  the balance and the Pay button appear unless the relay's `GET /` says
+  `"coin": false` (its operator set `COIN=off`) or a coin request answers 404.
 
 Everything else (scanner, tools, map, navigation, COMMS) is identical.
 
@@ -81,18 +85,25 @@ gradle test                         # unit tests for every variant
 - **Comms → "Hide names and previews in notifications"**, on by default once a
   passcode is set.
 - **Comms → "Relay-only calls"**: audio only through the relay's TURN server,
-  so no contact learns this phone's address from a call. Off by default.
+  so no contact learns this phone's address from a call. On by default
+  whenever the relay offers a TURN server; a choice made in Comms settings
+  is kept.
 - **Comms → "Cover traffic"**: sealed envelopes nobody reads, to random
   contacts at random intervals, so real messages are not the only traffic.
   Off by default.
 - **Settings → App lock → wipe after N wrong passcodes** (1, 3, 5, 10 or never)
-  and the duress passcode.
-- **Comms menu → Wipe Clairix** wipes on demand; `security/Wiper.kt` lists
-  what it takes with it, in order.
+  and the duress passcode, whose wipe leaves an empty decoy behind the lock
+  screen that the duress passcode then opens.
+- **Comms menu → Wipe Clairix**, or **Settings → Wipe and delete → Wipe
+  Clairix**, wipes on demand, in both editions; `security/Wiper.kt` lists what
+  it takes with it, in order, and `security/RelayFarewell.kt` how the relay is
+  told when it cannot be reached at once.
 - **Settings → "Keep history for"**: 7, 30 or 90 days, or forever (30 by
-  default). The location log, the timeline, vehicle trips and the unlock
-  ledger older than that are deleted every quarter hour while scanning and
-  at each start (`security/HistoryRetention.kt`).
+  default). The location log, the timeline, vehicle trips, the unlock ledger
+  and the map's tile and traffic caches older than that are deleted at each
+  start, every hour while scanning and once a day otherwise; the
+  cell-tower baseline keeps which towers and areas are usual and the last day
+  each was seen, the exact time for two days (`security/HistoryRetention.kt`).
 
 ## Reproducing a build
 
@@ -102,9 +113,9 @@ edition twice, on two machines, and fails unless the two builds agree
 (`reproducible-build` and `compare-builds` in
 `.github/workflows/android.yml`): the debug APK entry for entry, since each
 machine signs it with a debug key it makes for itself, and the release APK,
-built unsigned, byte for byte. A release build refuses to run until
-`asset-signing.pub` is committed, so until then the debug build alone is
-compared. What makes the builds agree:
+built unsigned, byte for byte. (A release build refuses to run without
+`asset-signing.pub`; that file has been committed since 0ff171b5, see
+`docs/KEYS.md`, so both are compared.) What makes the builds agree:
 
 - The Rust compiler, `1.97.0`, named in `comms-crypto/rust-toolchain.toml`
   and in both workflows; bump both together. The absolute paths of the
@@ -134,9 +145,10 @@ files and the signing block and changes nothing else.
 
 The NDK (`27.2.12479018`) and `cargo-ndk` (`4.1.2`) are pinned from 3.0.0
 Beta 6; the build checks both. Releases up to Beta 5 used the runner's latest
-NDK, so a rebuild of one may differ in the native library. No published
-release has yet been rebuilt and matched; until one has, the check is a
-check, not a promise.
+NDK, so a rebuild of one may differ in the native library. 3.0.0 Beta 7 is
+the first published release rebuilt from its tag and matched, and
+`.github/workflows/verify-release.yml` now rebuilds and compares every release
+as it is published (`tools/reproducible/README.md`).
 
 ## Release signing
 
@@ -150,8 +162,10 @@ and come out unsigned otherwise:
 | `ANDROID_KEY_ALIAS` | The key's alias in the keystore |
 | `ANDROID_KEY_PASSWORD` | The key's password (defaults to the keystore password) |
 
-The release workflow reads them from these **repository secrets**
-(Settings → Secrets and variables → Actions):
+The release workflow's `release` job reads them from these secrets of the
+**`release` environment** (Settings → Environments → release), which only that
+job can read, and only from main, a `release/v*` branch or a `v*` tag
+([`docs/PROCESS.md`](../docs/PROCESS.md), Signing keys):
 
 | Secret | What to put in it |
 |---|---|
@@ -163,12 +177,21 @@ The release workflow reads them from these **repository secrets**
 Keep the keystore and its passwords out of the repository, and keep a backup
 somewhere safe: a phone only accepts an update signed with the same key as the
 installed app, so losing it means every user has to uninstall and reinstall.
-The same key signs the Play bundle, which makes it the Play upload key.
+The same key signs the Play bundle, so it is the key Play checks each upload
+against (the upload key). That does not make it the key Play signs the APKs it
+delivers with (the app-signing key): Play App Signing fixes that key once, at
+the first upload, and unless the release key is enrolled there (step 5a under
+"Cutting a release"), Google generates its own, and Play installs and these
+APKs can never install over each other.
 
-Without `ANDROID_KEYSTORE_BASE64` the workflow still runs, but signs with a
-throwaway key it makes on the spot. It says so in a warning and in the release
-notes: those APKs will not install over an earlier release, and the bundle must
-not be uploaded to Play.
+Without `ANDROID_KEYSTORE_BASE64` the workflow stops before it builds: a
+release signed with any other key cannot be installed over an earlier one, and
+a lost or mis-rotated secret must not publish one that looks tampered. To try
+the build itself anyway, start the workflow by hand with `allow_throwaway_key`:
+it signs with a throwaway key it makes on the spot, keeps the files as a
+workflow artifact (`throwaway-signed-<tag>`, for seven days) and publishes no
+GitHub release. Those APKs will not install over an earlier release, and the
+bundle must not be uploaded to Play.
 
 To build signed release files locally:
 
@@ -184,30 +207,112 @@ gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 
 ## Cutting a release
 
-Before the first release, make the asset signing key (`tools/signing/README.md`):
-`python3 tools/signing/keygen.py` writes `android/asset-signing.pub` and
-`android/asset-signing.pem` (commit both) and prints the secret for the
-`ASSET_SIGNING_KEY` repository secret. The maps, work zones and the release
-checksums are signed with it, and the app refuses downloads it cannot verify;
-a release build fails without the public key file.
+The asset signing key exists: its public half is committed as
+`android/asset-signing.pub` and `android/asset-signing.pem`, its secret half is
+the `ASSET_SIGNING_KEY` secret, and `docs/KEYS.md` records it. The jobs that
+sign name the `release` and `assets` environments, and `docs/PROCESS.md` says
+how to move the secret into them. The maps, the work zones, the relay and
+stalkerware lists and the release checksums are signed with it, and the app
+refuses downloads it cannot verify; a release build fails without the public
+key file. Replacing it takes `tools/signing/keygen.py --force` and a new app
+release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 
 1. Set `versionName` and raise `versionCode` in `app/build.gradle.kts`
    (3.0.0-beta.1 is versionCode 21). The workflow refuses a tag that does not
-   match `versionName`.
+   match `versionName`. In the same commit, change the supported version in
+   `SECURITY.md` ("currently 3.0.0 Beta 9" for `3.0.0-beta.9`) and bring
+   `docs/OPEN-ISSUES.md` up to date.
 2. Commit, then start `.github/workflows/release.yml` in one of three ways:
    push a tag `v3.0.0-beta.1`; push a branch `release/v3.0.0-beta.1` (the tag is
    created at its head); or Actions → Release → Run workflow with the tag.
-3. The workflow tests the crypto crate, builds and signs `fullSuite` and
-   `fullComms` APKs and the `playSuite` bundle, checks the Play manifest has no
-   card emulation, and publishes a GitHub Release with the three files,
-   `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed by the
-   asset signing key). A tag ending in `-alpha.N`, `-beta.N` or `-rc.N` is
-   marked as a pre-release. A run started by hand must start from `main`, a
-   `release/v*` branch or a `v*` tag.
+3. The workflow first runs the Android APK workflow on the commit (unit tests,
+   screenshots, lint, detekt, the build on two machines), requires an
+   Emulator smoke test run that passed on the same tree (it waits for one
+   still going, and fails if there is none: start one by hand on the same ref
+   and re-run), and makes CycloneDX bills of materials of the app's libraries
+   and the crypto crate. Then it tests the crypto crate, builds and signs
+   `fullSuite` and `fullComms` APKs and the `playSuite` bundle, checks the Play
+   manifest has no card emulation, checks that every 64-bit native library in
+   them is built for 16 KB pages (`tools/android/check-16k-alignment.sh`: each
+   LOAD segment 0x4000-aligned, `zipalign -c -P 16 -v 4` on the APKs), and
+   publishes a GitHub Release with the three files, the two bills of
+   materials, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed
+   by the asset signing key). A tag
+   ending in `-alpha.N`, `-beta.N` or `-rc.N` is marked as a pre-release. A run
+   started by hand must start from `main`, a `release/v*` branch or a `v*` tag.
+   A failed run, or a rebuild-and-compare check that does not match, opens an
+   issue titled "Release workflow failing" (or adds the run to the open one).
 4. Check the certificate digest the "Collect and verify artifacts" step prints:
    it must be the same as the previous release's, or phones will refuse the update.
+   The "Check the bundle and the APKs share one signing certificate" step
+   (`tools/android/check-bundle-signer.sh`) fails the release if the Play
+   bundle is signed by any other certificate than the APKs, and prints the
+   digest as `Release certificate SHA-256: …`; it is the `apksigner` digest in
+   `docs/KEYS.md`.
 5. Upload `clairix-play-<tag>.aab` in the Play Console (a beta goes to a testing
-   track first).
+   track first). The declarations Play reviews are prepared in
+   [docs/play/](../docs/play/README.md); before sending a release for review:
+   - Permissions declaration for `QUERY_ALL_PACKAGES`: paste the core-use text
+     from `docs/play/query-all-packages.md`.
+   - Location permissions for `ACCESS_BACKGROUND_LOCATION`: the feature
+     statement from `docs/play/background-location.md`, and the video recorded
+     from its script (unlisted YouTube link).
+   - Foreground service permissions: one entry and one video per type
+     (`specialUse`, `microphone`, `location`, `connectedDevice`) from
+     `docs/play/foreground-services.md`.
+   - Full-screen intent: the calling use case from
+     `docs/play/full-screen-intent.md`.
+   - Data safety: the answers in `docs/play/data-safety.md`, after its
+     "Mismatches" list is empty or each item has a recorded reason.
+   - Store listing: a privacy policy URL of https://clairix.app/privacy; the
+     content rating questionnaire answered for an app for adults (Terms,
+     section 2: 18 or older); target audience 18 and over.
+   - Re-read each file against the manifests of the build being uploaded: a
+     permission or service type added since the last review needs its own entry.
+   - The first time only, before any of this, step 5a.
+
+   5a. **The first Play upload: enrol the release key as the app-signing key.**
+   Play App Signing is mandatory for bundles, and the app-signing key is chosen
+   once, when the first bundle is uploaded; it cannot be changed to the release
+   key afterwards. In the Play Console, under the app's signing setup, choose
+   "Use an existing key" and the option to export and upload a key from a Java
+   keystore. The console offers Google's `pepk` tool and an encryption public
+   key; on a trusted machine holding the release keystore, run
+
+   ```bash
+   java -jar pepk.jar --keystore=release.keystore --alias="$ANDROID_KEY_ALIAS" \
+     --output=clairix-app-signing-key.zip --include-cert --rsa-aes-encryption \
+     --encryption-key-path=encryption_public_key.pem
+   ```
+
+   and upload the zip it writes (it holds the key encrypted to Google; delete
+   it afterwards). Do not register a separate upload key: the release workflow
+   signs the bundle with the release key, and the step in point 4 checks that.
+   Then upload the first bundle.
+
+   **Verify it before the listing goes live.** On the Play Console's app
+   signing page, the app-signing certificate's SHA-256 must equal the one in
+   `docs/KEYS.md` and in `website/public/.well-known/assetlinks.json`. Then
+   install the app from the internal testing track on a phone and check the
+   APK Play delivered:
+
+   ```bash
+   adb shell pm path app.clairix          # package:/data/app/…/base.apk
+   adb pull /data/app/…/base.apk play-base.apk
+   apksigner verify --print-certs play-base.apk | grep 'SHA-256 digest'
+   ```
+
+   The digest must equal the `Release certificate SHA-256` the release
+   workflow printed for that tag. When it does, record the check (date, tag,
+   digest) under "The APK signing certificate" in `docs/KEYS.md` and set
+   `PLAY_SAME_SIGNING_KEY = true` in `website/src/config/site.ts`: only then
+   does the download page say that one edition installs over the other. If it
+   does not (Google generated the key), the editions cannot replace each other
+   without uninstalling, which deletes the Comms identity: leave
+   `PLAY_SAME_SIGNING_KEY` false (the download page then says so), add the
+   app-signing certificate's SHA-256 to `assetlinks.json` before the listing
+   goes live (or `https://clairix.app/i` links stop opening in Play installs),
+   and record both digests in `docs/KEYS.md`.
 
 ## Permissions, and why each one is needed
 
@@ -215,13 +320,24 @@ a release build fails without the public key file.
 |---|---|
 | Nearby devices (`BLUETOOTH_SCAN`) | The scan itself |
 | Precise location | Android requires it for BLE scanning and for reading your own modem's serving cell (the IMSI-catcher checks), and this app genuinely uses the fix — it is what proves a device travelled with you |
-| Notifications | The one alert that matters, when something crosses into confirmed-following |
+| Notifications | The one alert that matters, when something crosses into confirmed-following; and the fake call's incoming-call card, which opens its screen over the lock screen |
 | Foreground service | Scanning has to continue while the screen is off, or it never accumulates enough evidence |
-| Wi-Fi state | Reads the system's existing scan results; the app never triggers a Wi-Fi scan of its own |
+| Wi-Fi state | Reads the networks in range for the Wi-Fi checks, and asks Android for a fresh Wi-Fi scan: while the scanner runs, every two minutes with the screen on or the phone moving and every ten minutes once it has settled with the screen off; with the scanner off, once a minute from the Wi-Fi tab while it is open (with the scanner on, the tab shows the scanner's results and asks for none); and once each time you tap "Scan for setup hotspots" under Hidden cameras. Android caps how often an app may ask and hands out its last results otherwise |
 | NFC | The passive HF tag sweep on the NFC tab |
-| Background location | Optional, requested only from Settings → "Resume scanning after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning simply waits until you open the app |
+| Background location | Optional, requested only from Settings → "Resume after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning simply waits until you open the app |
+| Nearby devices (`BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE`) | Connecting to an OBD-II adapter, asking a tracker for its identifier and naming paired accessories; advertising only for the detector self-test and the offline mesh while it is on |
+| Camera | The hidden-camera sweep and scanning a contact's pairing code. No frame is saved unless the owner keeps a photo of a finding |
+| Microphone | Used during a call you place or answer, while you hold the record button for a voice note, and while the Ultrasound tool is open, when it listens for 17.5-21.5 kHz beacons. Only spectrum numbers are kept; no audio is stored or sent |
+| Installed apps (`QUERY_ALL_PACKAGES`) | The stalkerware check matches every installed app against its signed list, on the phone; Android 11+ hides most apps without it |
+| Usage access (`PACKAGE_USAGE_STATS`, special access) | Fills the unlock ledger in from before its device admin was enabled, and shows the spyware check which apps ran in the background without ever being opened |
+| Device admin | The unlock ledger's lock-screen successes and failures, and "Schedule and lock" on the fake call page; nothing else |
+| Basic phone state (`READ_BASIC_PHONE_STATE`) | The data network type for the Cell tab; granted at install on Android 13+ |
+| Exact alarms | The fake call rings at the minute the owner picked, even in Doze |
+| Screen-recording detection, Advanced Protection status | Granted at install: whether Clairix's own screen is being recorded (Android 15+), and whether Advanced Protection is on (Android 16+) |
 
-Declining notifications costs you the alert, not the detector — scanning still runs.
+Declining notifications costs you the alert and the fake call (its page says so, and
+schedules nothing until notifications and full-screen calls are allowed), not the
+detector — scanning still runs.
 
 Detection data stays on the phone, sealed on disk under a key in the phone's
 secure hardware. The app's network connections are: the Clairix relay (Comms,
@@ -240,9 +356,12 @@ exists for, which is the unbranded box wired into a wheel well.
 
 So it runs both. Screen on, the scan is unfiltered and anything advertising at all
 can be discovered, including hardware with no known signature. Screen off, it falls
-back to filters covering the known tracker manufacturers and service UUIDs, which is
-what keeps it running at all. A device first seen while the screen was on stays
-tracked either way.
+back to filters covering the known tracker manufacturers, Find My and iBeacon frames
+and service UUIDs, which is what keeps it running at all, plus an address filter for
+each device already under watch that those would miss (up to sixteen: confirmed
+following, keeping a persistence pattern, or a GPS module recognised by its name),
+re-registered at most once a minute as that set changes. A device under watch keeps
+a filter of its own with the screen off for as long as it keeps its address.
 
 The practical consequence: leave the screen on for a minute or two when you first
 start a sweep, so unknown hardware gets a chance to be discovered.
@@ -250,15 +369,21 @@ start a sweep, so unknown hardware gets a chance to be discovered.
 ## What it detects
 
 AirTag, Apple Find My items, Tile, Samsung SmartTag and SmartTag2, Chipolo,
-Pebblebee, Orbit/KeySmart, Nut, Eddystone beacons, and standalone GPS trackers
-that advertise a Bluetooth configuration interface.
+Pebblebee, Google Find Hub tags, trackers announcing themselves under DULT,
+Orbit/KeySmart, Nut, Invoxia, Eddystone beacons, tags in Apple's iBeacon format,
+and standalone GPS trackers that advertise a Bluetooth configuration interface.
 
-AirPods, iBeacons, Apple Handoff and Microsoft devices are filtered out, because
-otherwise every coffee shop sets off an alert.
+AirPods, Apple Handoff and Microsoft devices are filtered out, because otherwise
+every coffee shop sets off an alert. iBeacons are not: a shop's beacon stays on its
+wall and the follow check leaves it alone, while an anti-lost tag in the same format
+never changes its address and is exactly what the follow check catches.
 
 ## What it cannot detect
 
 - A tracker with no Bluetooth radio — a hardwired GPS/LTE box only transmits on
-  cellular uplink. Finding those needs an SDR; see the Node tool in this repo.
+  cellular uplink, and Clairix does not listen for that. Drive mode's SDR
+  support (an RTL-SDR dongle on USB, `SdrUsbDriver.kt`) decodes aircraft
+  transponders (`AdsbDecoder.kt`) and plays the voice channels you set; it does
+  not look for a modem's uplink. A physical search is the way to find one.
 - Anything currently asleep. Physical search still finds things RF never will.
 - Carrier-side location. Nothing near you transmits, so there is nothing to hear.

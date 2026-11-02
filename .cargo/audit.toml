@@ -1,0 +1,35 @@
+# cargo audit's settings for the Supply chain workflow (.github/workflows/supply-chain.yml),
+# which runs it from the repository root over comms-crypto/Cargo.lock and
+# comms-worker/voprf/Cargo.lock. docs/PROCESS.md says when an advisory may be listed here:
+# only one that has no fixed version this tree can take, with the reason it does not apply
+# and when to look again. Remove an entry as soon as the fix can be taken.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071, rsa 0.9.10 (comms-crypto): the Marvin attack, key recovery by
+    # timing the private-key operations (decryption and signing). No fixed version exists.
+    # rsa is in the tree only through Arti (tor-llcrypto, tor-key-forge,
+    # ssh-key-fork-arti), which uses it to check signatures made with Tor's legacy RSA
+    # identity keys on public directory documents and certificates: public-key operations
+    # only. Clairix runs Arti as a client (arti-client with onion-service-client, no
+    # onion service and no relay), so it never makes or holds an RSA private key and the
+    # attack has nothing to time. Look again when rsa publishes a fixed version, or if
+    # Clairix ever hosts an onion service or runs a relay.
+    "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2026-0387, crypto-bigint 0.5.5 (both lockfiles): arithmetic meant to be
+    # constant-time that a compiler may turn into secret-dependent branches. Fixed in
+    # 0.7.6, which needs elliptic-curve 0.14; elliptic-curve 0.13 requires crypto-bigint
+    # 0.5, and voprf, whose only stable release (0.5.0) is on elliptic-curve 0.13, keeps it
+    # in both trees. No secret reaches it. The blind send tokens use the Ristretto255 suite
+    # (voprf's ristretto255-ciphersuite feature, in the app and in the relay's module), whose
+    # scalar and point arithmetic is curve25519-dalek's; voprf uses elliptic-curve there
+    # only for hash-to-curve's message expansion, which is hashing, and for the trait that
+    # names the suite (its generic NIST-curve group is never instantiated). The relay's
+    # module builds no other curve. In the app, the NIST curves come only with
+    # ssh-key-fork-arti's OpenSSH key formats, which Arti's key store can read; Tor has no
+    # ECDSA keys, so Clairix never makes or uses one. Look again when voprf releases a
+    # stable version on elliptic-curve 0.14 (then update both trees and remove this), or
+    # if Clairix ever uses a NIST-curve suite or an ECDSA key.
+    "RUSTSEC-2026-0387",
+]

@@ -21,7 +21,7 @@ import javax.crypto.SecretKey
 
 /** What [BiometricTripwire.check] found. */
 sealed interface BiometricTripwireResult {
-    /** The enrolment-bound key is intact: no biometric has been added or removed since it was armed. */
+    /** The enrolment-bound key is intact: no biometric has been added, nor every one removed, since it was armed. */
     data object OK : BiometricTripwireResult
     /** The key was invalidated: the enrolled biometrics changed. [ts] is when this was noticed. */
     data class TRIGGERED(val ts: Long) : BiometricTripwireResult
@@ -41,8 +41,8 @@ sealed interface BiometricTripwireResult {
  * Android offers no broadcast for a new enrolment, but it does offer a key that
  * dies on one: an AES key made with
  * [KeyGenParameterSpec.Builder.setInvalidatedByBiometricEnrollment] is
- * permanently invalidated by the Keystore the moment the set of enrolled
- * biometrics changes. Clairix arms one such key on first run and, on every launch,
+ * permanently invalidated by the Keystore the moment a new biometric is
+ * enrolled, or every one is removed; removing one of several leaves it valid. Clairix arms one such key on first run and, on every launch,
  * asks the Keystore to start a cipher with it. The key is never used for
  * anything; a [KeyPermanentlyInvalidatedException] from that one call is the
  * whole signal. The key is then re-armed against the new enrolment set, so the

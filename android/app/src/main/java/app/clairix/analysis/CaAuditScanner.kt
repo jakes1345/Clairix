@@ -1,14 +1,12 @@
 package app.clairix.analysis
 
 import android.content.Context
-import app.clairix.PhoneHealthFinding
+import android.provider.Settings
+import app.clairix.HealthFact
 import app.clairix.Severity
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import javax.security.auth.x500.X500Principal
@@ -37,20 +35,67 @@ data class SuspiciousCa(
 }
 
 /**
+ * One trust-store audit: the roots worth a look ([roots]) and which of the two sources could be
+ * read. [userStoreRead] is the one that matters most: the AndroidCAStore is the only place a root
+ * installed by hand shows up (this app's network security config trusts system roots only, so the
+ * default trust manager never lists one), and an audit that could not read it knows nothing about
+ * them, which is not the same as "none". [error] says why a source could not be read, in a few
+ * words, for the page; null when both were. [unreadableUser] counts certificates under a "user:"
+ * alias that would not open: installed by hand, though nothing more can be said of them.
+ */
+data class CaAudit(
+    val roots: List<SuspiciousCa>,
+    val userStoreRead: Boolean,
+    val trustManagerRead: Boolean,
+    val error: String? = null,
+    val unreadableUser: Int = 0
+) {
+    /** Both sources were read. */
+    val complete: Boolean get() = userStoreRead && trustManagerRead
+}
+
+/** What the Certificates page shows for an audit; see [CaAuditScanner.page]. */
+sealed interface CaPage {
+    /** The audit is still running. */
+    data object Reading : CaPage
+
+    /** Both sources were read and nothing needs a look: the only state that may say the store is clean. */
+    data object Clean : CaPage
+
+    /**
+     * [roots] to list. When a source could not be read, [failure] ("Could not read the trust store
+     * (…)") and [failureDetail] go above them in caution; [unreadableUser] certificates installed by
+     * hand would not open.
+     */
+    data class Findings(
+        val roots: List<SuspiciousCa>,
+        val failure: String? = null,
+        val failureDetail: String? = null,
+        val unreadableUser: Int = 0
+    ) : CaPage
+}
+
+/**
  * Audits the trust store: which root certificates this phone will accept a TLS
  * server certificate from.
  *
- * Two sources are read. The platform's default X.509 trust manager hands over
- * every accepted issuer at once (system plus user roots). The AndroidCAStore
- * keystore lists the same certificates by alias, and its aliases say where
- * each one came from: "system:<hash>" or "user:<hash>". A root under a "user:"
- * alias was installed through Settings → Security → Install a certificate,
- * which is exactly what a stalker with the PIN or an MDM would do to read the
- * phone's HTTPS traffic through a proxy.
+ * Two sources are read. The AndroidCAStore keystore lists the phone's roots by
+ * alias, and its aliases say where each one came from: "system:<hash>" or
+ * "user:<hash>". A root under a "user:" alias was installed through Settings →
+ * Security → Install a certificate, which is exactly what a stalker with the PIN
+ * or an MDM would do to read the phone's HTTPS traffic through a proxy. It is
+ * the only source that can show one: the default X.509 trust manager, the
+ * second source, answers with this app's network security config, which trusts
+ * the system's roots and no others. What that trust manager accepts is the
+ * operative list of system roots; one it accepts that the keystore does not list
+ * as a system root came from somewhere else.
  *
  * Anything not under a user alias is compared against the AOSP bundle below.
  * The bundle changes a little with every Android release, so a system root not
  * in the list is reported as MEDIUM, worth a look, not an alarm.
+ *
+ * Either read can fail. The audit says which did ([CaAudit]), so a failure is
+ * shown as one and never as a clean store.
  */
 object CaAuditScanner {
 
@@ -158,75 +203,195 @@ object CaAuditScanner {
 
     private val hex = "0123456789ABCDEF".toCharArray()
 
-    /**
-     * The audit. Reads the keystore and parses every root; a few milliseconds
-     * on a modern phone but file I/O, so call it off the main thread.
-     */
-    fun scan(context: Context): List<SuspiciousCa> {
-        val out = LinkedHashMap<String, SuspiciousCa>()
+    /** Where a root installed by hand is listed, and taken out. */
+    private const val USER_CREDENTIALS = "Settings → Security → Encryption & credentials → User credentials"
 
-        // Source 1: the AndroidCAStore, which tells user roots from system roots.
-        val userFingerprints = HashSet<String>()
-        val systemFingerprints = HashSet<String>()
-        runCatching {
-            val ks = KeyStore.getInstance("AndroidCAStore").also { it.load(null, null) }
-            val aliases = ks.aliases()
-            while (aliases.hasMoreElements()) {
-                val alias = aliases.nextElement()
-                val cert = runCatching { ks.getCertificate(alias) as? X509Certificate }.getOrNull() ?: continue
-                val fp = fingerprint(cert)
-                when {
-                    alias.startsWith("user:") -> {
-                        userFingerprints += fp
-                        out[fp] = describe(
-                            cert, fp, Severity.HIGH, "user",
-                            "Installed by hand on this phone. A user-added root lets whoever added it decrypt " +
-                                "HTTPS traffic of browsers and apps that trust user CAs, by routing the phone through a proxy. " +
-                                "Remove it under Settings → Security → Encryption & credentials → User credentials unless you put it there yourself."
-                        )
-                    }
-                    alias.startsWith("system:") -> systemFingerprints += fp
-                }
+    private const val USER_REASON =
+        "Installed by hand on this phone. A user-added root lets whoever added it decrypt " +
+            "HTTPS traffic of browsers and apps that trust user CAs, by routing the phone through a proxy. " +
+            "Remove it under $USER_CREDENTIALS unless you put it there yourself."
+    private const val SYSTEM_REASON =
+        "A root in the system store that is not part of the standard Android bundle. Carrier and " +
+            "manufacturer images sometimes add roots; a modified system image can too. Confirm it is expected."
+    private const val UNKNOWN_REASON =
+        "Trusted by this phone but not listed in the system or user store. Only a modified trust " +
+            "manager or OS component can do that; treat the phone's TLS as compromised until explained."
+
+    /** One certificate as the audit needs it, apart from the X.509 object, so [audit] runs without one. */
+    internal data class Root(
+        val fingerprint: String,
+        val subjectDn: String,
+        val issuerDn: String,
+        val validFrom: Long,
+        val validTo: Long
+    )
+
+    /**
+     * What the AndroidCAStore listed: the roots under "user:" aliases, the fingerprints of those
+     * under "system:" ones, and how many "user:" aliases would not open.
+     */
+    internal data class StoreListing(val user: List<Root>, val system: Set<String>, val unreadableUser: Int = 0)
+
+    /**
+     * The audit. Reads the keystore and the trust manager and parses every root; a few
+     * milliseconds on a modern phone but file I/O, so call it off the main thread. Never throws:
+     * a source that cannot be read is said to be unread in the result.
+     */
+    fun scan(context: Context): CaAudit = runCatching {
+        audit(runCatching { readStore() }, runCatching { readAccepted() })
+    }.getOrElse { CaAudit(emptyList(), userStoreRead = false, trustManagerRead = false, error = "the audit: ${reason(it)}") }
+
+    /** Source 1: the AndroidCAStore, which tells roots installed by hand from system roots. */
+    private fun readStore(): StoreListing {
+        val ks = KeyStore.getInstance("AndroidCAStore").also { it.load(null, null) }
+        val user = ArrayList<Root>()
+        val system = HashSet<String>()
+        var unreadable = 0
+        val aliases = ks.aliases()
+        while (aliases.hasMoreElements()) {
+            val alias = aliases.nextElement()
+            val root = runCatching { (ks.getCertificate(alias) as? X509Certificate)?.let(::root) }.getOrNull()
+            when {
+                alias.startsWith("user:") -> if (root == null) unreadable++ else user += root
+                alias.startsWith("system:") -> root?.let { system += it.fingerprint }
             }
         }
-
-        // Source 2: what the default trust manager actually accepts. This is the
-        // operative list; a root here that the keystore did not label is treated as
-        // system-added by the OS image (or injected some other way).
-        val accepted: Array<X509Certificate> = runCatching {
-            val tmf = TrustManagerFactory.getInstance("X509").apply { init(null as KeyStore?) }
-            tmf.trustManagers.filterIsInstance<X509TrustManager>().flatMap { it.acceptedIssuers.toList() }.toTypedArray()
-        }.getOrDefault(emptyArray())
-
-        for (cert in accepted) {
-            val fp = fingerprint(cert)
-            if (fp in out) continue
-            if (fp in userFingerprints) continue
-            val subject = cert.subjectX500Principal.getName(X500Principal.RFC2253)
-            if (isKnownSystemRoot(subject)) continue
-            val source = if (fp in systemFingerprints) "system" else "unknown"
-            out[fp] = describe(
-                cert, fp, if (source == "system") Severity.MEDIUM else Severity.HIGH, source,
-                if (source == "system")
-                    "A root in the system store that is not part of the standard Android bundle. Carrier and " +
-                        "manufacturer images sometimes add roots; a modified system image can too. Confirm it is expected."
-                else
-                    "Trusted by this phone but not listed in the system or user store. Only a modified trust " +
-                        "manager or OS component can do that; treat the phone's TLS as compromised until explained."
-            )
-        }
-
-        return out.values.sortedWith(compareByDescending<SuspiciousCa> { it.severity.ordinal }.thenBy { it.subjectCn })
+        return StoreListing(user, system, unreadable)
     }
 
-    /** The audit's findings in the Device tab's own type, one row per root. */
-    fun scanAsFindings(context: Context): List<PhoneHealthFinding> = scan(context).map { ca ->
-        PhoneHealthFinding(
-            id = "ca_${ca.fingerprint.take(23)}",
-            severity = ca.severity,
-            category = "Trust store",
-            title = (if (ca.source == "user") "User-installed CA: " else "Unlisted root CA: ") + ca.subjectCn,
-            detail = ca.reason + " Issuer: ${cn(ca.issuerDn) ?: ca.issuerDn}. Valid ${date(ca.validFrom)} – ${date(ca.validTo)}. SHA-256 ${ca.fingerprint}."
+    /** Source 2: what the default trust manager accepts, under this app's network security config. */
+    private fun readAccepted(): List<Root> {
+        val tmf = TrustManagerFactory.getInstance("X509").apply { init(null as KeyStore?) }
+        return tmf.trustManagers.filterIsInstance<X509TrustManager>().flatMap { it.acceptedIssuers.toList() }
+            .mapNotNull { runCatching { root(it) }.getOrNull() }
+    }
+
+    /**
+     * The audit from what the two sources gave. A source that failed, or that listed nothing at
+     * all (a working phone always has its system roots, in both), counts as unread, and the
+     * result says why. With the store unread, a root the trust manager accepts is taken as a
+     * system root, which is all the trust manager takes: nothing can show it came from outside
+     * the store, and a read that failed is no reason to call one "trusted from outside".
+     */
+    internal fun audit(store: Result<StoreListing>, accepted: Result<List<Root>>): CaAudit {
+        val listing = store.getOrNull()?.takeIf { it.user.isNotEmpty() || it.system.isNotEmpty() || it.unreadableUser > 0 }
+        val storeError = store.exceptionOrNull()?.let { "the phone's certificate store: ${reason(it)}" }
+            ?: if (listing == null) "the phone's certificate store listed nothing" else null
+        val roots = accepted.getOrNull()?.takeIf { it.isNotEmpty() }
+        val acceptedError = accepted.exceptionOrNull()?.let { "the roots this phone accepts: ${reason(it)}" }
+            ?: if (roots == null) "the phone listed no roots it accepts" else null
+
+        val out = LinkedHashMap<String, SuspiciousCa>()
+        listing?.user?.forEach { out[it.fingerprint] = describe(it, Severity.HIGH, "user", USER_REASON) }
+        for (r in roots.orEmpty()) {
+            if (r.fingerprint in out) continue
+            if (isKnownSystemRoot(r.subjectDn)) continue
+            val system = listing == null || r.fingerprint in listing.system
+            out[r.fingerprint] = if (system) describe(r, Severity.MEDIUM, "system", SYSTEM_REASON)
+            else describe(r, Severity.HIGH, "unknown", UNKNOWN_REASON)
+        }
+        return CaAudit(
+            roots = out.values.sortedWith(compareByDescending<SuspiciousCa> { it.severity.ordinal }.thenBy { it.subjectCn }),
+            userStoreRead = listing != null,
+            trustManagerRead = roots != null,
+            error = listOfNotNull(storeError, acceptedError).joinToString("; ").ifEmpty { null },
+            unreadableUser = listing?.unreadableUser ?: 0
+        )
+    }
+
+    /** An exception in a few words: its class, and its message when it has a short one. */
+    private fun reason(e: Throwable): String =
+        e.javaClass.simpleName + (e.message?.trim()?.takeIf { it.isNotEmpty() }?.let { ": " + it.take(80) } ?: "")
+
+    /**
+     * What the Certificates page shows for [audit] (null while it runs). The clean card only when
+     * both sources were read and nothing turned up; a source that could not be read is said so in
+     * caution, above whatever the other source found, never as a clean store.
+     */
+    fun page(audit: CaAudit?): CaPage {
+        if (audit == null) return CaPage.Reading
+        if (audit.complete && audit.roots.isEmpty() && audit.unreadableUser == 0) return CaPage.Clean
+        if (audit.complete) return CaPage.Findings(audit.roots, unreadableUser = audit.unreadableUser)
+        val detail = if (!audit.userStoreRead) {
+            "Android did not hand over the certificates installed on this phone, and a certificate installed by hand " +
+                "shows up nowhere else, so this page cannot say there is none. Look yourself: $USER_CREDENTIALS lists " +
+                "every certificate someone installed."
+        } else {
+            "The roots this phone accepts could not be read, so a system root that is not in the standard bundle, or " +
+                "one trusted from outside both stores, would not show here. The certificates installed by hand were read" +
+                (if (audit.roots.none { it.source == "user" } && audit.unreadableUser == 0) ": there are none." else ", and are listed below.")
+        }
+        return CaPage.Findings(
+            roots = audit.roots,
+            failure = "Could not read the trust store (${audit.error ?: "no reason given"})",
+            failureDetail = detail,
+            unreadableUser = audit.unreadableUser
+        )
+    }
+
+    /**
+     * Phone check's certificates row, from [scan]'s result: the roots someone installed by hand,
+     * and any trusted from outside both stores, are HIGH, since either lets whoever holds the key
+     * read the phone's encrypted traffic. A system root missing from the stock bundle stays on the
+     * Certificates page only: the bundle list here is representative, not complete, and a maker's
+     * or carrier's own root is common. A store that could not be read is not "none added by hand":
+     * the row says it could not be read, at MEDIUM, and where to look instead.
+     */
+    fun fact(audit: CaAudit): HealthFact {
+        val user = audit.roots.filter { it.source == "user" }
+        val unknown = audit.roots.filter { it.source == "unknown" }
+        val byHand = user.size + audit.unreadableUser
+        val acceptedNote = if (audit.trustManagerRead) "" else
+            "The roots this phone accepts could not be read (${audit.error ?: "no reason given"}), so one trusted from " +
+                "outside both stores would not show here."
+        if (byHand == 0 && unknown.isEmpty()) {
+            if (!audit.userStoreRead) return HealthFact(
+                "user_ca", "Network", "Installed certificates", "Could not read the trust store", Severity.MEDIUM,
+                "Android did not hand over the certificates installed on this phone (${audit.error ?: "no reason given"}), " +
+                    "and a certificate installed by hand shows up nowhere else, so this does not mean there is none. Look " +
+                    "yourself: anything under $USER_CREDENTIALS was installed by hand.",
+                fixAction = Settings.ACTION_SECURITY_SETTINGS
+            )
+            return HealthFact(
+                "user_ca", "Network", "Installed certificates", "None added by hand",
+                detail = acceptedNote.ifEmpty { null }
+            )
+        }
+        val value = listOfNotNull(
+            byHand.takeIf { it > 0 }?.let { "$it added by hand" },
+            unknown.size.takeIf { it > 0 }?.let { "$it from outside the stores" }
+        ).joinToString(", ")
+        val listed = user + unknown
+        val detail = buildString {
+            if (listed.isNotEmpty()) {
+                val names = listed.take(3).joinToString(", ") { it.subjectCn } + if (listed.size > 3) ", …" else ""
+                append("Trusted roots: $names. ")
+            }
+            if (audit.unreadableUser > 0) {
+                append(
+                    "${audit.unreadableUser} installed by hand ${if (audit.unreadableUser == 1) "is" else "are"} on the phone " +
+                        "but would not open, so nothing more can be said of ${if (audit.unreadableUser == 1) "it" else "them"}. "
+                )
+            }
+            if (byHand > 0) {
+                append(
+                    "A root installed by hand lets whoever holds its key read this phone's encrypted traffic through a proxy, " +
+                        "which is how someone who has had the phone and its PIN, or a management profile, reads it. Unless you " +
+                        "installed it yourself, remove it under $USER_CREDENTIALS. "
+                )
+            }
+            if (unknown.isNotEmpty()) {
+                append(
+                    "A root trusted from outside both the system and the user store takes a modified trust manager or OS " +
+                        "component; treat the phone's encrypted connections as readable until that is explained. "
+                )
+            }
+            if (acceptedNote.isNotEmpty()) append(acceptedNote).append(' ')
+            append("Phone check → Certificates shows each one.")
+        }
+        return HealthFact(
+            "user_ca", "Network", "Installed certificates", value, Severity.HIGH, detail,
+            fixAction = Settings.ACTION_SECURITY_SETTINGS
         )
     }
 
@@ -238,12 +403,20 @@ object CaAuditScanner {
         return KNOWN_SYSTEM_ORGS.any { org.contains(it, ignoreCase = true) }
     }
 
-    private fun describe(cert: X509Certificate, fp: String, severity: Severity, source: String, reason: String) = SuspiciousCa(
-        issuerDn = cert.issuerX500Principal.getName(X500Principal.RFC2253),
+    private fun root(cert: X509Certificate) = Root(
+        fingerprint = fingerprint(cert),
         subjectDn = cert.subjectX500Principal.getName(X500Principal.RFC2253),
-        fingerprint = fp,
+        issuerDn = cert.issuerX500Principal.getName(X500Principal.RFC2253),
         validFrom = cert.notBefore.time,
-        validTo = cert.notAfter.time,
+        validTo = cert.notAfter.time
+    )
+
+    private fun describe(r: Root, severity: Severity, source: String, reason: String) = SuspiciousCa(
+        issuerDn = r.issuerDn,
+        subjectDn = r.subjectDn,
+        fingerprint = r.fingerprint,
+        validFrom = r.validFrom,
+        validTo = r.validTo,
         severity = severity,
         source = source,
         reason = reason
@@ -287,6 +460,4 @@ object CaAuditScanner {
         return raw.substring(prefix.length).trim().removeSurrounding("\"").replace("\\,", ",").replace("\\+", "+")
             .takeIf { it.isNotEmpty() }
     }
-
-    private fun date(ts: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(ts))
 }

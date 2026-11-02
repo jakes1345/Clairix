@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Monochrome layer of the "Notes" launcher entry for themed icons (Android
+    13+): the page of ic_launcher_notes_fg in solid white with the binding line
+    and the ruled lines cut out; the launcher reads only the alpha and tints it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M38,30h32a4,4 0,0 1,4 4v40a4,4 0,0 1,-4 4h-32a4,4 0,0 1,-4 -4v-40a4,4 0,0 1,4 -4zM34,38h40v2h-40zM40,45h28v3h-28zM40,53h28v3h-28zM40,61h28v3h-28zM40,69h18v3h-18z" />
+
+</vector>

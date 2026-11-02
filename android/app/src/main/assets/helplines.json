@@ -1,0 +1,424 @@
+{
+  "version": 1,
+  "about": "The Get help page's helplines, keyed by ISO 3166 country code. Every number, text number and link was checked against the page in its source on the date in verified; an entry without both is not shown. The list is not exhaustive. Re-check each entry against its source before changing its verified date.",
+  "directory": {
+    "label": "Find A Helpline",
+    "url": "https://findahelpline.com/",
+    "note": "A free directory of helplines in many more countries, run by ThroughLine. Pick your country, then the abuse and domestic violence topic.",
+    "source": "https://findahelpline.com/",
+    "verified": "2026-11-01"
+  },
+  "countries": {
+    "US": {
+      "name": "United States",
+      "emergency": {
+        "number": "911",
+        "source": "https://www.usa.gov/report-crime",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "National Domestic Violence Hotline",
+          "phone": "1-800-799-7233",
+          "hours": "Free, confidential, 24 hours",
+          "text": { "label": "Text START to 88788", "to": "88788", "body": "START" },
+          "chat": [
+            { "label": "Chat at thehotline.org", "url": "https://www.thehotline.org/" }
+          ],
+          "source": "https://www.thehotline.org/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "GB": {
+      "name": "United Kingdom",
+      "emergency": {
+        "number": "999",
+        "note": "If you cannot speak on a 999 call from a mobile, press 55 to be put through to the police.",
+        "source": "https://www.gov.uk/guidance/domestic-abuse-how-to-get-help",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "National Domestic Abuse Helpline (Refuge)",
+          "area": "England",
+          "phone": "0808 2000 247",
+          "hours": "Free, 24 hours",
+          "note": "Run for women. For men, the Men's Advice Line below.",
+          "chat": [
+            {
+              "label": "Live chat at nationaldahelpline.org.uk",
+              "url": "https://www.nationaldahelpline.org.uk/chat-to-us-online/",
+              "hours": "Monday to Friday 10am to 10pm, weekends 10am to 6pm"
+            }
+          ],
+          "source": "https://www.nationaldahelpline.org.uk/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Scotland's Domestic Abuse and Forced Marriage Helpline",
+          "area": "Scotland",
+          "phone": "0800 027 1234",
+          "hours": "24 hours",
+          "text": { "label": "Text or WhatsApp 07401 288595", "to": "07401288595" },
+          "chat": [
+            { "label": "Web chat at sdafmh.org.uk", "url": "https://sdafmh.org.uk/contact-us/", "hours": "24 hours" }
+          ],
+          "source": "https://sdafmh.org.uk/contact-us/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Live Fear Free",
+          "area": "Wales",
+          "phone": "0808 80 10 800",
+          "hours": "Free, 24 hours",
+          "note": "Calls in Welsh are welcome.",
+          "text": { "label": "Text 07860 077333", "to": "07860077333", "hours": "24 hours" },
+          "chat": [
+            { "label": "Live chat at gov.wales/live-fear-free", "url": "https://www.gov.wales/live-fear-free", "hours": "24 hours" }
+          ],
+          "source": "https://www.gov.wales/live-fear-free/contact-live-fear-free",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Domestic and Sexual Abuse Helpline",
+          "area": "Northern Ireland",
+          "phone": "0808 802 1414",
+          "hours": "Free, 24 hours, for anyone 18 or over",
+          "chat": [
+            { "label": "Live chat at dsahelpline.org", "url": "https://www.dsahelpline.org/", "hours": "24 hours" }
+          ],
+          "source": "https://www.dsahelpline.org/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Men's Advice Line",
+          "area": "For men",
+          "phone": "0808 801 0327",
+          "hours": "Freephone, Monday to Friday 10am to 5pm",
+          "note": "For men experiencing domestic abuse, including trans and non-binary people, and for the people supporting them.",
+          "chat": [
+            { "label": "Webchat at mensadviceline.org.uk", "url": "https://mensadviceline.org.uk/", "hours": "Monday to Friday 9am to 10am" }
+          ],
+          "source": "https://mensadviceline.org.uk/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "IE": {
+      "name": "Ireland",
+      "emergency": {
+        "number": "999",
+        "note": "112 works too.",
+        "source": "https://www.womensaid.ie/are-you-in-immediate-danger/",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Women's Aid National Freephone Helpline",
+          "area": "For women",
+          "phone": "1800 341 900",
+          "hours": "Free, 24 hours",
+          "chat": [
+            { "label": "Instant message at womensaid.ie", "url": "https://www.womensaid.ie/", "hours": "Mornings and evenings, 7 days a week" }
+          ],
+          "source": "https://www.womensaid.ie/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Men's Aid National Confidential Helpline",
+          "area": "For men",
+          "phone": "01 554 3811",
+          "hours": "Monday to Friday 9am to 5pm",
+          "note": "For men experiencing domestic violence and coercive control, and their families.",
+          "source": "https://www.mensaid.ie/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "AU": {
+      "name": "Australia",
+      "emergency": {
+        "number": "000",
+        "source": "https://www.1800respect.org.au/",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "1800RESPECT",
+          "phone": "1800 737 732",
+          "hours": "Free, confidential, 24 hours",
+          "text": { "label": "Text 0458 737 732", "to": "0458737732", "hours": "24 hours" },
+          "chat": [
+            { "label": "Chat or video call at 1800respect.org.au", "url": "https://www.1800respect.org.au/", "hours": "24 hours" }
+          ],
+          "source": "https://www.1800respect.org.au/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "NZ": {
+      "name": "New Zealand",
+      "emergency": {
+        "number": "111",
+        "source": "https://womensrefuge.org.nz/",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Are You OK family violence helpline",
+          "phone": "0800 456 450",
+          "hours": "Free, 24 hours",
+          "chat": [
+            { "label": "Web chat at areyouok.org.nz", "url": "https://areyouok.org.nz/", "hours": "24 hours" }
+          ],
+          "source": "https://areyouok.org.nz/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "Women's Refuge Crisisline",
+          "area": "For women",
+          "phone": "0800 733 843",
+          "hours": "Free, 24 hours",
+          "note": "Also written 0800 REFUGE.",
+          "source": "https://womensrefuge.org.nz/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "CA": {
+      "name": "Canada",
+      "emergency": {
+        "number": "911",
+        "source": "https://www.ontario.ca/page/get-help-if-you-are-experiencing-violence",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Assaulted Women's Helpline",
+          "area": "Ontario only",
+          "phone": "1-866-863-0511",
+          "hours": "Free, 24 hours",
+          "note": "Run for women.",
+          "also": [
+            { "label": "TTY", "phone": "1-866-863-7868" },
+            { "label": "#SAFE on a Bell, Rogers, Fido or Telus mobile", "phone": "#7233" }
+          ],
+          "source": "https://www.awhl.org/",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "SOS violence conjugale",
+          "area": "Quebec only",
+          "phone": "1-800-363-9010",
+          "hours": "Free, anonymous, 24 hours, in French and English",
+          "text": { "label": "Text 1-438-601-1211", "to": "14386011211" },
+          "chat": [
+            { "label": "Chat at sosviolenceconjugale.ca", "url": "https://sosviolenceconjugale.ca/en" }
+          ],
+          "source": "https://sosviolenceconjugale.ca/en",
+          "verified": "2026-11-01"
+        },
+        {
+          "name": "VictimLinkBC",
+          "area": "British Columbia and Yukon only",
+          "phone": "1-800-563-0808",
+          "hours": "Free, confidential, 24 hours, in up to 150 languages",
+          "text": { "label": "Text 1-800-563-0808", "to": "18005630808", "hours": "24 hours" },
+          "source": "https://www2.gov.bc.ca/gov/content/justice/criminal-justice/victims-of-crime/victimlinkbc",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "DE": {
+      "name": "Germany",
+      "emergency": {
+        "number": "110",
+        "source": "https://www.polizei-beratung.de/infos-fuer-betroffene/haeusliche-gewalt/",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Hilfetelefon Gewalt gegen Frauen",
+          "area": "For women",
+          "phone": "116 016",
+          "hours": "Free, 24 hours, in 18 languages besides German",
+          "chat": [
+            { "label": "Chat or email at hilfetelefon.de", "url": "https://onlineberatung.hilfetelefon.de" }
+          ],
+          "source": "https://www.hilfetelefon.de/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "CZ": {
+      "name": "Czechia",
+      "emergency": {
+        "number": "112",
+        "source": "https://digital-strategy.ec.europa.eu/en/policies/112",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Linka 116 016 (ROSA)",
+          "phone": "116 016",
+          "hours": "Free, around the clock",
+          "note": "For women experiencing domestic violence. ROSA announces any closures of the line on its website.",
+          "source": "https://www.rosacentrum.cz/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "FI": {
+      "name": "Finland",
+      "emergency": {
+        "number": "112",
+        "source": "https://digital-strategy.ec.europa.eu/en/policies/112",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Nollalinja",
+          "phone": "116 016",
+          "hours": "Free, 24 hours, in Finnish, Swedish and English",
+          "note": "The call does not show on the phone bill.",
+          "also": [
+            { "label": "Nollalinja's former number, which still reaches it", "phone": "080 005 005" }
+          ],
+          "chat": [
+            { "label": "Chat at nollalinja.fi", "url": "https://www.nollalinja.fi/en/", "hours": "Monday to Wednesday 9:00 to 15:00, Thursday and Friday 14:00 to 20:00" }
+          ],
+          "source": "https://www.nollalinja.fi/en/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "SE": {
+      "name": "Sweden",
+      "emergency": {
+        "number": "112",
+        "source": "https://digital-strategy.ec.europa.eu/en/policies/112",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Kvinnofridslinjen",
+          "phone": "116 016",
+          "hours": "Free, 24 hours",
+          "note": "For women who have been threatened, subjected to violence or sexually assaulted, and for family and friends. The call does not show on the phone bill.",
+          "chat": [
+            { "label": "Chat at kvinnofridslinjen.se", "url": "https://kvinnofridslinjen.se/en/about-us/contact/" }
+          ],
+          "source": "https://kvinnofridslinjen.se/en/about-us/contact/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "FR": {
+      "name": "France",
+      "emergency": {
+        "number": "17",
+        "note": "112 works too. If you cannot speak, text 114: free, 24 hours, for emergencies only.",
+        "text": { "label": "Text 114", "to": "114" },
+        "source": "https://www.service-public.gouv.fr/particuliers/vosdroits/F12544",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "3919 Violences Femmes Info",
+          "area": "For women",
+          "phone": "3919",
+          "hours": "Free, anonymous, 24 hours",
+          "note": "Not an emergency line.",
+          "source": "https://www.service-public.gouv.fr/particuliers/vosdroits/F12544",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "ES": {
+      "name": "Spain",
+      "emergency": {
+        "number": "112",
+        "source": "https://www.lamoncloa.gob.es/serviciosdeprensa/notasprensa/igualdad/Paginas/2026/telefono-016-que-es.aspx",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "016",
+          "phone": "016",
+          "hours": "Free, 24 hours",
+          "note": "It does not appear on the phone bill, but it stays in the phone's call log.",
+          "chat": [
+            { "label": "WhatsApp 600 000 016", "url": "https://wa.me/34600000016" },
+            { "label": "Chat at violenciagenero.igualdad.gob.es", "url": "https://violenciagenero.igualdad.gob.es/", "hours": "24 hours" }
+          ],
+          "source": "https://www.lamoncloa.gob.es/serviciosdeprensa/notasprensa/igualdad/Paginas/2026/telefono-016-que-es.aspx",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "IT": {
+      "name": "Italy",
+      "emergency": {
+        "number": "112",
+        "source": "https://digital-strategy.ec.europa.eu/en/policies/112",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "1522",
+          "phone": "1522",
+          "hours": "Free, from mobiles too, 24 hours",
+          "note": "A public service of the Italian government's Department for Equal Opportunities.",
+          "chat": [
+            { "label": "Chat at 1522.eu", "url": "https://www.1522.eu/" }
+          ],
+          "source": "https://www.1522.eu/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "AT": {
+      "name": "Austria",
+      "emergency": {
+        "number": "133",
+        "note": "Police. 112 works too.",
+        "source": "https://www.frauenhelpline.at/",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Frauenhelpline gegen Gewalt",
+          "area": "For women",
+          "phone": "0800 222 555",
+          "hours": "Free, anonymous, 24 hours",
+          "chat": [
+            { "label": "HelpChat at haltdergewalt.at", "url": "https://www.haltdergewalt.at/", "hours": "Monday to Friday 18:00 to 20:00" }
+          ],
+          "source": "https://www.frauenhelpline.at/",
+          "verified": "2026-11-01"
+        }
+      ]
+    },
+    "NL": {
+      "name": "Netherlands",
+      "emergency": {
+        "number": "112",
+        "source": "https://veiligthuis.nl/",
+        "verified": "2026-11-01"
+      },
+      "lines": [
+        {
+          "name": "Veilig Thuis",
+          "phone": "0800 2000",
+          "hours": "Free, anonymous, 24 hours",
+          "chat": [
+            { "label": "Chat at veiligthuis.nl", "url": "https://veiligthuis.nl/" }
+          ],
+          "source": "https://veiligthuis.nl/",
+          "verified": "2026-11-01"
+        }
+      ]
+    }
+  }
+}

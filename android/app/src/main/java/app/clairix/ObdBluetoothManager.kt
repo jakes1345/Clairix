@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
+import app.clairix.nav.DrivePower
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,13 @@ class ObdBluetoothManager(private val context: Context) {
 
     private val _data = MutableStateFlow(ObdData())
     val data: StateFlow<ObdData> = _data.asStateFlow()
+
+    /**
+     * The pause between rounds of readings: [DrivePower.obdPollMs], twice a second while
+     * the gauges are on screen and once a second otherwise. It used to be 150 ms, six
+     * rounds of five requests a second over Bluetooth for a needle nobody needs that fast.
+     */
+    @Volatile var pollIntervalMs: Long = DrivePower.obdPollMs(onScreen = false)
 
     private var scope = newScope()
     private var pollJob: Job? = null
@@ -151,7 +159,7 @@ class ObdBluetoothManager(private val context: Context) {
                     connected = true
                 )
             }
-            delay(POLL_INTERVAL_MS)
+            delay(pollIntervalMs)
         }
     }
 
@@ -365,7 +373,6 @@ class ObdBluetoothManager(private val context: Context) {
         const val RESET_SETTLE_MS = 500L
         const val SEARCH_TIMEOUT_MS = 6_000L
         const val DTC_TIMEOUT_MS = 3_000L
-        const val POLL_INTERVAL_MS = 150L
         const val READ_POLL_MS = 10L
         const val RECONNECT_DELAY_MS = 3_000L
         const val MAX_RECONNECT_ATTEMPTS = 5

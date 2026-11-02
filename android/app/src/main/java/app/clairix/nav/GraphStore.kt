@@ -15,7 +15,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.File
+import java.io.FilterInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.security.MessageDigest
@@ -48,15 +50,17 @@ sealed interface GraphDownload {
 
 /**
  * Road graphs on disk at filesDir/nav/<slug>.agr, downloaded from the maps release the
- * GitHub workflow publishes (spec section 6). A download is only installed once it opens
- * as a valid graph, and it replaces any older copy in one rename.
+ * GitHub workflow publishes (spec section 6). A download is unpacked as it arrives, is
+ * installed only once its compressed bytes match the signed checksum and it opens as a
+ * valid graph, and replaces any older copy in one rename. What a published map weighs
+ * and when it was built can be read beforehand without downloading it ([published]).
  */
 class GraphStore(context: Context) {
 
     companion object {
         private const val RELEASE_BASE = "https://github.com/jakes1345/Clairix/releases/download"
         private const val HEADER_BYTES = 128
-        private const val GRAPH_VERSION = 2
+        internal const val GRAPH_VERSION = 2
         private val SHA256_RE = Regex("^[0-9a-fA-F]{64}$")
         private const val PROGRESS_STEP_BYTES = 256 * 1024L
         /** RoadGraph maps the whole file into one buffer, so nothing larger can ever open. */
@@ -114,6 +118,29 @@ class GraphStore(context: Context) {
 
     fun isInstalled(slug: String): Boolean = SLUG_RE.matches(slug) && fileFor(slug).isFile
 
+    /** Where the signed checksum of the download an installed graph came from is kept. */
+    private fun checksumFile(slug: String): File = File(dir, "$slug.agr.sha256")
+
+    /**
+     * The signed SHA-256 of the download [slug]'s installed graph came from, recorded at
+     * install; null for a graph installed before this was recorded, or none at all.
+     */
+    fun recordedChecksum(slug: String): String? {
+        if (!SLUG_RE.matches(slug) || !fileFor(slug).isFile) return null
+        return runCatching { checksumFile(slug).readText(Charsets.US_ASCII).trim() }.getOrNull()?.takeIf { SHA256_RE.matches(it) }
+    }
+
+    /**
+     * The checksum published for [slug]'s map today, once its signature by the Clairix asset
+     * signing key has checked: about a hundred bytes and a signature, the cheapest way to
+     * learn whether the map on GitHub is still the one on the phone. Throws when it cannot be
+     * read or does not verify.
+     */
+    suspend fun publishedChecksum(slug: String): String = withContext(Dispatchers.IO) {
+        require(SLUG_RE.matches(slug)) { "Not a map region: $slug" }
+        fetchChecksum(downloadUrl(slug) + ".sha256")
+    }
+
     /** Opens an installed region's graph. */
     fun open(slug: String): RoadGraph = RoadGraph.open(fileFor(slug))
 
@@ -147,6 +174,7 @@ class GraphStore(context: Context) {
         if (!SLUG_RE.matches(slug)) return false
         File(dir, "$slug.agr.gz.part").delete()
         File(dir, "$slug.agr.tmp").delete()
+        checksumFile(slug).delete()
         val f = fileFor(slug)
         return !f.exists() || f.delete()
     }
@@ -160,18 +188,17 @@ class GraphStore(context: Context) {
     suspend fun download(slug: String): Result<File> = withContext(Dispatchers.IO) {
         if (!SLUG_RE.matches(slug)) return@withContext Result.failure(IllegalArgumentException("Not a map region: $slug"))
         dir.mkdirs()
-        val part = File(dir, "$slug.agr.gz.part")
+        // Where downloads went before they were unpacked as they arrived.
+        File(dir, "$slug.agr.gz.part").delete()
         val tmp = File(dir, "$slug.agr.tmp")
         val target = fileFor(slug)
         try {
             _progress.value = GraphDownload.Downloading(slug, 0, null)
             val expected = fetchChecksum(downloadUrl(slug) + ".sha256")
-            val actual = fetch(downloadUrl(slug), part, slug)
+            val actual = fetchUnpacked(downloadUrl(slug), tmp, slug)
             if (!actual.equals(expected, ignoreCase = true)) throw IOException("The map download failed its checksum")
             currentCoroutineContext().ensureActive()
             _progress.value = GraphDownload.Installing(slug)
-            gunzip(part, tmp)
-            part.delete()
             val graph = try {
                 RoadGraph.open(tmp)
             } catch (e: Exception) {
@@ -181,21 +208,61 @@ class GraphStore(context: Context) {
                 throw IOException("The downloaded map is for ${graph.region}, not $slug")
             }
             Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            // What the weekly check compares the published checksum with. A graph whose record
+            // could not be written is still installed; the check then compares build dates.
+            runCatching { checksumFile(slug).writeText(expected.lowercase(), Charsets.US_ASCII) }
             _progress.value = GraphDownload.Done(slug)
             Result.success(target)
         } catch (e: kotlinx.coroutines.CancellationException) {
-            part.delete(); tmp.delete()
+            tmp.delete()
             _progress.value = GraphDownload.Idle
             throw e
         } catch (e: Exception) {
-            part.delete(); tmp.delete()
+            tmp.delete()
             _progress.value = GraphDownload.Failed(slug, e.message ?: e.javaClass.simpleName)
             Result.failure(e)
         }
     }
 
-    private suspend fun execute(url: String): Response {
-        val call = http.newCall(Request.Builder().url(url).header("Accept", "application/octet-stream").build())
+    /**
+     * What [slug]'s published map weighs and when it was built, from two small reads of the
+     * file: its first [MapDownloads.HEAD_PROBE_BYTES], which unpack to the graph's header and
+     * whose response gives the whole file's size, and its last four bytes, the gzip trailer's
+     * unpacked size. Throws when the map cannot be reached, or the server will not serve part
+     * of a file (rather than download all of it to find out).
+     */
+    suspend fun published(slug: String): PublishedGraph = withContext(Dispatchers.IO) {
+        require(SLUG_RE.matches(slug)) { "Not a map region: $slug" }
+        val url = downloadUrl(slug)
+        val (head, total) = fetchRange(url, 0, MapDownloads.HEAD_PROBE_BYTES - 1L)
+        val built = MapDownloads.gunzipHead(head, HEADER_BYTES)?.let { MapDownloads.builtAt(it, slug) }
+        val unpacked = if (total < 4) null else runCatching { fetchRange(url, total - 4, total - 1).first }
+            .getOrNull()
+            ?.let { MapDownloads.gzipSize(it) }
+            ?.takeIf { it in HEADER_BYTES..MAX_GRAPH_BYTES }
+        PublishedGraph(slug, total, unpacked, built)
+    }
+
+    /** Bytes [from]..[to] of [url], and the whole file's size. */
+    private suspend fun fetchRange(url: String, from: Long, to: Long): Pair<ByteArray, Long> {
+        execute(url, range = "bytes=$from-$to").use { res ->
+            if (res.code == 404) throw IOException("No map has been published for this region yet")
+            // 200 would be the whole map: refused here, and the response closed unread.
+            if (res.code != 206) throw IOException("The map's size could not be read: HTTP ${res.code}")
+            val total = MapDownloads.totalFromContentRange(res.header("Content-Range"))
+                ?: throw IOException("The map's size could not be read")
+            val body = res.body ?: throw IOException("The map's size could not be read")
+            val want = to - from + 1
+            val source = body.source()
+            source.request(want)
+            return source.buffer.readByteArray(minOf(want, source.buffer.size)) to total
+        }
+    }
+
+    private suspend fun execute(url: String, range: String? = null): Response {
+        val request = Request.Builder().url(url).header("Accept", "application/octet-stream")
+        if (range != null) request.header("Range", range)
+        val call = http.newCall(request.build())
         return suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
@@ -236,8 +303,13 @@ class GraphStore(context: Context) {
         }
     }
 
-    /** Streams [url] into [out] and returns the SHA-256 of the bytes written, in hex. */
-    private suspend fun fetch(url: String, out: File, slug: String): String {
+    /**
+     * Streams [url] through a gunzip into [out] and returns the SHA-256 of the compressed
+     * bytes as they arrived, in hex. Unpacking on the way in means the phone never holds the
+     * download and the unpacked graph side by side; nothing is installed until that hash
+     * matches the signed checksum.
+     */
+    private suspend fun fetchUnpacked(url: String, out: File, slug: String): String {
         val sha = MessageDigest.getInstance("SHA-256")
         execute(url).use { res ->
             if (res.code == 404) throw IOException("No map has been published for $slug yet")
@@ -246,48 +318,73 @@ class GraphStore(context: Context) {
             val total = body.contentLength().takeIf { it > 0 }
             if (total != null && total > MAX_GRAPH_BYTES) throw IOException("The map download is too large")
             val ctx = currentCoroutineContext()
-            body.byteStream().use { input ->
+            val received = HashingCounter(body.byteStream(), sha)
+            GZIPInputStream(received, 64 * 1024).use { input ->
                 out.outputStream().buffered().use { output ->
                     val buf = ByteArray(64 * 1024)
-                    var done = 0L
+                    var unpacked = 0L
                     var reported = 0L
                     while (true) {
                         ctx.ensureActive()
                         val n = input.read(buf)
                         if (n < 0) break
+                        unpacked += n
+                        // Bounds what a corrupt or hostile archive can write to disk.
+                        if (unpacked > MAX_GRAPH_BYTES) throw IOException("The downloaded map is too large to open")
+                        if (received.count > MAX_GRAPH_BYTES) throw IOException("The map download is too large")
                         output.write(buf, 0, n)
-                        sha.update(buf, 0, n)
-                        done += n
-                        if (done > MAX_GRAPH_BYTES) throw IOException("The map download is too large")
-                        if (done - reported >= PROGRESS_STEP_BYTES) {
-                            reported = done
-                            _progress.value = GraphDownload.Downloading(slug, done, total)
+                        if (received.count - reported >= PROGRESS_STEP_BYTES) {
+                            reported = received.count
+                            _progress.value = GraphDownload.Downloading(slug, received.count, total)
                         }
                     }
-                    if (total != null && done != total) throw IOException("Map download was cut short")
-                    _progress.value = GraphDownload.Downloading(slug, done, total)
+                    // Anything after the gzip data still counts toward the checksum.
+                    while (received.read(buf) >= 0) {
+                        ctx.ensureActive()
+                        if (received.count > MAX_GRAPH_BYTES) throw IOException("The map download is too large")
+                    }
                 }
             }
+            if (total != null && received.count != total) throw IOException("Map download was cut short")
+            _progress.value = GraphDownload.Downloading(slug, received.count, total)
         }
         return sha.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private suspend fun gunzip(src: File, dst: File) {
-        val ctx = currentCoroutineContext()
-        GZIPInputStream(src.inputStream().buffered(), 64 * 1024).use { input ->
-            dst.outputStream().buffered().use { output ->
-                val buf = ByteArray(64 * 1024)
-                var done = 0L
-                while (true) {
-                    ctx.ensureActive()
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    done += n
-                    // Bounds what a corrupt or hostile archive can write to disk.
-                    if (done > MAX_GRAPH_BYTES) throw IOException("The downloaded map is too large to open")
-                    output.write(buf, 0, n)
-                }
+    /** Hashes and counts every byte read through it, skipped ones included. */
+    private class HashingCounter(input: InputStream, private val digest: MessageDigest) : FilterInputStream(input) {
+        var count = 0L
+            private set
+
+        override fun read(): Int {
+            val b = super.read()
+            if (b >= 0) {
+                digest.update(b.toByte())
+                count++
             }
+            return b
         }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            val n = super.read(b, off, len)
+            if (n > 0) {
+                digest.update(b, off, n)
+                count += n
+            }
+            return n
+        }
+
+        override fun skip(n: Long): Long {
+            val buf = ByteArray(minOf(n, 8192L).toInt().coerceAtLeast(1))
+            var left = n
+            while (left > 0) {
+                val r = read(buf, 0, minOf(left, buf.size.toLong()).toInt())
+                if (r < 0) break
+                left -= r
+            }
+            return n - left
+        }
+
+        override fun markSupported(): Boolean = false
     }
 }

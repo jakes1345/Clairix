@@ -4,12 +4,18 @@ import {
   dayFloor,
   DELIVERY_TOKEN_BATCH_MAX,
   DELIVERY_TOKEN_RE,
+  ENVELOPE_HASH_RE,
   groupByShard,
+  isReportReason,
   isTokenKind,
+  openRegistrationCap,
   parseIceServers,
   PUSH_CHALLENGE_PREFIX,
+  pushHostsOnly,
   randomToken,
+  REPORT_REASONS,
   STUN_ONLY,
+  summariseReports,
   TOKEN_KINDS,
   tokenAllowance,
   tokenHash,
@@ -30,7 +36,7 @@ import {
 } from "./comms-logic";
 import { HttpError, base64ToBytes, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
 import { KNOWN_REGIONS } from "./regions";
-import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, type CoinTx, type Profile, type SignedKey } from "./mailbox";
+import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, SUSPENDED, type CoinTx, type Profile, type SignedKey } from "./mailbox";
 import { invitePage } from "./invite-page";
 import {
   FED_CLAIMS_BURST,
@@ -81,7 +87,11 @@ export { IncidentCache, Mailbox, Traffic };
  *   POST   /v1/register        {ts, secret | invite, ed25519, curve25519, sealing, signature, fallback, oneTimeKeys, sealingPrekey?, listed}
  *                              signed by ed25519 (X-Clairix-Sig over the body) → {number}. ts is epoch millis within
  *                              five minutes, and each key may belong to one account, so a captured body cannot be
- *                              replayed into a second account.
+ *                              replayed into a second account. With OPEN_REGISTRATION on (off by default), neither
+ *                              secret nor invite is needed, up to OPEN_REGISTRATION_PER_DAY accounts a UTC day.
+ *   GET    /v1/admin/reports                               → {numbers}: abuse reports by number, for the operator
+ *   DELETE /v1/admin/reports   {number, relay?}            → {closed}: reports about one number dealt with. Both carry
+ *                                                            X-Admin-Secret (ADMIN_SECRET; off without it), no identity
  *   GET    /i                                              → invite page; the invite itself is in the URL fragment,
  *                                                            which browsers never send to the relay
  * Anonymous (no identity header; refused if one is sent). Each request spends one single-use token of
@@ -99,6 +109,10 @@ export { IncidentCache, Mailbox, Traffic };
  *                              random few seconds and released in a shuffled batch (MIX_MAX_MS; see
  *                              Mailbox.enqueue). The app asks for it on everything but call set-up, SOS and
  *                              group changes; apps from before mixing never ask, so nothing of theirs waits.
+ *   POST   /v1/report          {number, relay?, envelope?, reason} → 202: someone is abusing this relay; a "report"
+ *                              token. envelope is the SHA-256 (hex) of an envelope they sent, reason one of
+ *                              REPORT_REASONS. Kept for the operator by the day, 90 days at most; nothing says who
+ *                              reported, and nothing of what was said reaches the relay.
  *   Traffic (one Durable Object per map region; "traffic" tokens, "report" tokens for new reports; probes,
  *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
  *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
@@ -113,8 +127,10 @@ export { IncidentCache, Mailbox, Traffic };
  *   GET    /v1/me                                          → profile + key counts, and whether a pass key is set
  *   PUT    /v1/keys            {oneTimeKeys, fallback?, sealingPrekey?} → replenish; a sealing prekey ({key, created, signature},
  *                                                            signed over clairix-sealing-prekey-v1|key|created) replaces
- *                                                            the one held only when newer
- *   PUT    /v1/listed          {listed}
+ *                                                            the one held only when newer; replace: true makes the keys
+ *                                                            given the whole pool (a phone restored from a recovery file,
+ *                                                            whose old keys' secrets went with the old phone)
+ *   PUT    /v1/listed         {listed}
  *   PUT    /v1/pass            {key|null}                  → the key contacts' passes are made with (32 bytes,
  *                                                            base64); the phone shares it only inside end-to-end
  *                                                            encrypted messages
@@ -133,8 +149,6 @@ export { IncidentCache, Mailbox, Traffic };
  *                                                            alone. pin (the ed25519 fingerprint from a QR) also
  *                                                            unlocks an unlisted number. The number travels in the
  *                                                            body, never in a URL anything might log.
- *   GET    /v1/bundle/:number[?pin=]                       → as a claiming lookup; for apps before 3.0.0-beta.3
- *   GET    /v1/identity/:number[?pin=]                     → as a non-claiming lookup; likewise
  *   PUT    /v1/transport       {key|null}                  → the phone's transport key (Ed25519). Requests signed
  *                                                            with it (X-Clairix-Key: transport) may only GET /v1/inbox,
  *                                                            POST /v1/ack and GET /v1/ws: a locked phone collects what
@@ -144,11 +158,33 @@ export { IncidentCache, Mailbox, Traffic };
  *   GET    /v1/ws                                          → live delivery (hibernatable WebSocket)
  *   GET    /v1/turn                                        → ICE servers for a call, with TURN credentials minted
  *                                                            for this request alone
- * ClairixCoin (each relay is its own coin community; balances live in the mailboxes):
+ * ClairixCoin (each relay is its own coin community; balances live in the mailboxes). On unless COIN is
+ * "off": then every route below answers 404, and GET / says coin: false, so the app shows no balance:
  *   GET    /v1/coin/balance                                → {balance, symbol: "AC"}
- *   POST   /v1/coin/pay        {to, amount, note?, txid?}  → {txid, balance, ok}: moves coins to a contact; a repeat with the same txid moves nothing twice
- *   GET    /v1/coin/history                                → {txs: [...]}, newest first
+ *   POST   /v1/coin/pay        {to, pin, amount, txid?, credit?} → {txid, credit, balance, ok}: moves coins to a contact; pin is the
+ *                                                            fingerprint of the payee's identity key, as a lookup
+ *                                                            takes. A number that does not exist and a pin that does
+ *                                                            not match are refused alike, before any coin moves. A
+ *                                                            repeat with the same txid moves nothing twice. The payer's
+ *                                                            ledger keeps the debit under txid, the payee's the credit
+ *                                                            under credit (a second id the payer's phone chose), so the
+ *                                                            two ledgers share no id
+ *   GET    /v1/coin/history                                → {txs: [{id, amount, ts, direction, note?}]}, newest first:
+ *                                                            the hour, never the moment, and no counterparty
  *   POST   /v1/admin/coin/mint {to, amount}                → {ok, balance}; X-Admin-Secret must match ADMIN_SECRET
+ * The operator (no signature; X-Admin-Secret must match ADMIN_SECRET; a few tries a minute per address):
+ *   DELETE /v1/admin/accounts/:number                      → {ok, number}: deletes the account as DELETE /v1/me
+ *                                                            does, for a deletion requested by email
+ *                                                            (scripts/delete-account.mjs)
+ * The operator, signed by an operator identity (a registered identity whose key OPERATOR_KEYS lists) and with
+ * X-Admin-Secret; off unless both are set; a few tries a minute per address (scripts/operator.mjs, docs/ABUSE.md):
+ *   POST   /v1/admin/suspend   {number}                    → {ok, number, suspended, since, already}: the number
+ *                                                            cannot sign in, its sockets close, its push endpoint
+ *                                                            goes, and to everyone else it reads as a number that
+ *                                                            does not exist (adminSuspend)
+ *   POST   /v1/admin/unsuspend {number}                    → {ok, number, suspended: false, wasSuspended}
+ * From LEGACY_CUTOFF (default 2027-01-01) the paths kept for apps before Beta 7 answer 426 and say to update
+ * Clairix: the old kind of token ({count} at /v1/tokens, and spending one) and envelopes in format 2.
  * Federation (federation.ts): /v1/send and /v1/lookup take an optional "relay", the https address of the
  * relay the number is on. When it is another relay, this one forwards the request there, signed with its own
  * key (RELAY_KEY), and passes the answer back; the other relay never sees the phone. Other relays reach this
@@ -214,6 +250,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       // (tokens.ts). The same for every caller: a phone checks the proof that
       // comes with its tokens against these.
       tokens: await blindTokenKeys(env),
+      // Whether this relay offers ClairixCoin (on unless COIN=off): the app
+      // hides the balance and the Pay button when this is false.
+      coin: coinOn(env),
     });
   }
 
@@ -254,6 +293,16 @@ async function route(request: Request, env: Env): Promise<Response> {
     return send(env, request, bodyText);
   }
 
+  if (path === "/v1/report") {
+    if (request.method !== "POST") throw new HttpError(405, "POST only");
+    return fileReport(env, request, bodyText);
+  }
+
+  // ── The operator, with the admin secret and no identity ───────────────
+  if (path === "/v1/admin/reports") {
+    return adminReports(env, request, bodyText);
+  }
+
   if (path.startsWith("/v1/traffic/")) {
     return trafficRoute(env, request, url, path, bodyText);
   }
@@ -266,6 +315,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const allowed = await other.rateOk("fed-send", FED_SENDS_PER_MINUTE, FED_SENDS_BURST);
       if (!allowed.ok) throw new HttpError(429, "Too many envelopes from your relay; try again shortly", allowed.retryAfter);
       const body = parseSendBody(bodyText, isLoopbackDev(request));
+      refuseLegacyEnvelope(env, body.envelope);
       if (!(await other.federatedSendOk(body.to, FED_SENDS_PER_TARGET_PER_MINUTE, FED_SENDS_PER_TARGET_BURST))) {
         // The bucket refills one envelope this often.
         throw new HttpError(429, "Too many envelopes from your relay to that number; try again shortly", Math.ceil(60 / FED_SENDS_PER_TARGET_PER_MINUTE));
@@ -282,6 +332,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     return answerLookup(env, body.target, body.pin, body.claim, async () => body.oneTime && (await other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST)));
   }
 
+  // ── The operator: the admin secret and no identity (adminDeleteAccount) ──
+  if (path.startsWith(ADMIN_ACCOUNTS_PREFIX)) {
+    if (request.method !== "DELETE") throw new HttpError(405, "DELETE only");
+    return adminDeleteAccount(env, request, path);
+  }
+
   // ── Authenticated ─────────────────────────────────────────────────────
   const signed = await parseSigned(request, bodyText);
   const me = env.MAILBOX.get(env.MAILBOX.idFromName(signed.number));
@@ -292,6 +348,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     throw new HttpError(403, "The transport key only fetches, acknowledges and streams envelopes");
   }
   const profile = await me.authenticate(signed.payload, signed.signature, signed.nonce, signed.ts, transport);
+  // Told to the number's own key holder only: the signature checked first.
+  if (profile === SUSPENDED) throw new HttpError(403, suspendedMessage(env));
   if (!profile) throw new HttpError(401, "Signature rejected");
   // An account from before keys were recorded as their owner's records them now.
   if (!profile.keysClaimed) {
@@ -328,11 +386,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/keys" && request.method === "PUT") {
-    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown; sealingPrekey?: unknown }>(bodyText);
+    const body = parseJson<{ oneTimeKeys?: unknown; fallback?: unknown; sealingPrekey?: unknown; replace?: unknown }>(bodyText);
     const oneTimeKeys = await checkedKeys(profile.ed25519, body.oneTimeKeys);
     const fallback = body.fallback === undefined || body.fallback === null ? null : (await checkedKeys(profile.ed25519, [body.fallback]))[0] ?? null;
     const sealingPrekey = await checkedSealingPrekey(profile.ed25519, body.sealingPrekey);
-    return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey));
+    if (body.replace !== undefined && typeof body.replace !== "boolean") throw new HttpError(400, "replace must be a boolean");
+    return json(await me.putKeys(oneTimeKeys, fallback, sealingPrekey, body.replace === true));
   }
 
   if (path === "/v1/transport" && request.method === "PUT") {
@@ -355,7 +414,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       await me.setPush(null);
       return json({ ok: true, verified: false });
     }
-    const check = checkPushEndpoint(body.endpoint, env.PUSH_HOSTS);
+    const check = checkPushEndpoint(body.endpoint, env.PUSH_HOSTS, pushHostsOnly(env.PUSH_HOSTS_ONLY));
     if (!check.ok) throw new HttpError(400, check.reason);
     const allowed = await me.allowanceOk("push", Mailbox.PUSH_PER_HOUR, Mailbox.PUSH_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many push endpoints; try again later", allowed.retryAfter);
@@ -399,6 +458,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!issued) throw new HttpError(400, "blinded must hold valid ristretto255 elements");
       return json({ kind, ...issued, expiresAt: epochExpiry(issued.epoch) });
     }
+    // The old kind of token, which apps before Beta 6 ask for: the relay makes
+    // it and could match it to this account. Refused from LEGACY_CUTOFF on.
+    refuseLegacy(env);
     const want = body.count;
     if (typeof want !== "number" || !Number.isInteger(want) || want < 1 || want > DELIVERY_TOKEN_BATCH_MAX) {
       throw new HttpError(400, `count must be a whole number from 1 to ${DELIVERY_TOKEN_BATCH_MAX}`);
@@ -441,22 +503,6 @@ async function route(request: Request, env: Env): Promise<Response> {
     return lookup(env, me, profile, body.target, body.pin, body.claim);
   }
 
-  // The lookups apps before 3.0.0-beta.3 make, with the number in the path.
-  // They answer exactly as /v1/lookup does, and go once every phone has moved.
-  const bundleMatch = /^\/v1\/bundle\/([0-9]{9})$/.exec(path);
-  if (bundleMatch && bundleMatch[1] && request.method === "GET") {
-    const target = normaliseNumber(bundleMatch[1]);
-    if (!target) throw new HttpError(400, "Bad number");
-    return lookup(env, me, profile, target, url.searchParams.get("pin"), true);
-  }
-
-  const identityMatch = /^\/v1\/identity\/([0-9]{9})$/.exec(path);
-  if (identityMatch && identityMatch[1] && request.method === "GET") {
-    const target = normaliseNumber(identityMatch[1]);
-    if (!target) throw new HttpError(400, "Bad number");
-    return lookup(env, me, profile, target, url.searchParams.get("pin"), false);
-  }
-
   if (path === "/v1/inbox" && request.method === "GET") {
     return json({ envelopes: await me.inbox() });
   }
@@ -486,51 +532,60 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   // ── ClairixCoin ─────────────────────────────────────────────────────────
   if (path === "/v1/coin/balance" && request.method === "GET") {
+    requireCoin(env);
     return json({ balance: await me.getBalance(), symbol: COIN_SYMBOL });
   }
 
   if (path === "/v1/coin/pay" && request.method === "POST") {
+    requireCoin(env);
     const allowed = await me.rateOk("pay", Mailbox.PAY_LIMIT);
     if (!allowed.ok) throw new HttpError(429, "Too many payments; try again in a minute", allowed.retryAfter);
-    const body = parseJson<{ to?: unknown; amount?: unknown; note?: unknown; txid?: unknown }>(bodyText);
+    const body = parseJson<{ to?: unknown; pin?: unknown; amount?: unknown; txid?: unknown; credit?: unknown }>(bodyText);
     const to = typeof body.to === "string" ? normaliseNumber(body.to) : null;
     if (!to) throw new HttpError(400, "to must be a Clairix number");
     if (to === profile.number) throw new HttpError(400, "You cannot pay yourself");
+    const pin = coinPin(body.pin);
     const amount = coinAmount(body.amount);
-    const note = coinNote(body.note);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
     // The phone names the payment, so a request it had to repeat (the answer
     // lost on the network) is the same payment: the debit and the credit are
     // each made once per txid, and a repeat gets the balance as it stands.
-    const txid = typeof body.txid === "string" && TXID_RE.test(body.txid) ? body.txid.toLowerCase() : crypto.randomUUID();
-    // The debit comes first, so a payer who cannot cover the amount hears the
-    // same thing whether or not the number exists: an unlisted number cannot
-    // be found by paying it what one does not have. Only a payment that would
-    // really have gone through tells the payer the number is real.
-    const debited = await me.debit(to, amount, txid, note);
+    const named = typeof body.txid === "string" && TXID_RE.test(body.txid);
+    const txid = named ? (body.txid as string).toLowerCase() : crypto.randomUUID();
+    // The payee's mailbox keeps the credit under another id ([coinCreditId]),
+    // which the payer's phone also chose and tells the payee only inside the
+    // end-to-end encrypted notice, so the two ledgers share no id.
+    const credit = coinCreditId(body.credit, named, txid);
+    // The payer shows it already knows whom it pays: the fingerprint of the
+    // payee's identity key, which its phone pinned when it added the contact,
+    // as a lookup of an unlisted number asks. A number that does not exist
+    // and a pin that does not match get the same answer, before any coin
+    // moves and whatever the payer holds, so paying tells nobody whether a
+    // number is real; and coins go only to the key the payer's phone knows,
+    // never to whoever was given the number since.
+    const payee = await them.profile();
+    if (!payee || !timingSafeEqual(await fingerprint(payee.ed25519), pin)) throw new HttpError(400, "Payment refused");
+    // A suspended payee is refused the same way, before any coin moves.
+    if (await them.suspension()) throw new HttpError(400, "Payment refused");
+    const debited = await me.debit(amount, txid);
     if (!debited.ok) throw new HttpError(400, debited.reason ?? "Payment refused");
+    let credited: number | null;
     try {
-      if (!(await them.profile())) {
-        await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
-        throw new HttpError(400, "Payment refused");
-      }
-      await them.credit(profile.number, amount, txid, note);
+      credited = await them.credit(amount, credit);
     } catch (e) {
-      if (e instanceof HttpError) throw e;
-      // The sender has paid and the recipient has not been credited: give the
-      // coins back. If even that fails the error is logged with the txid, so
-      // the operator can put it right by hand.
-      try {
-        await me.credit(to, amount, `${txid}:refund`, "Refund: payment could not be delivered");
-      } catch (refund) {
-        console.error(`coin payment ${txid} for ${amount}: credit failed and so did the refund`, e, refund);
-      }
+      await refundPayment(me, amount, txid, e);
       throw e;
     }
-    return json({ txid, balance: debited.balance, ok: true });
+    if (credited === null) {
+      // The payee's account was deleted between the check and the credit.
+      await refundPayment(me, amount, txid, "no such number");
+      throw new HttpError(400, "Payment refused");
+    }
+    return json({ txid, credit, balance: debited.balance, ok: true });
   }
 
   if (path === "/v1/coin/history" && request.method === "GET") {
+    requireCoin(env);
     const raw = Number(url.searchParams.get("limit") ?? "");
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(100, Math.floor(raw)) : 50;
     const txs: CoinTx[] = await me.txHistory(limit);
@@ -538,6 +593,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/v1/admin/coin/mint" && request.method === "POST") {
+    requireCoin(env);
     const secret = requireSecret(env, "ADMIN_SECRET");
     const given = request.headers.get("x-admin-secret") ?? "";
     if (!(await secretEquals(given, secret))) throw new HttpError(403, "Admin secret rejected");
@@ -547,12 +603,185 @@ async function route(request: Request, env: Env): Promise<Response> {
     const amount = coinAmount(body.amount);
     const them = env.MAILBOX.get(env.MAILBOX.idFromName(to));
     if (!(await them.profile())) throw new HttpError(404, "No such Clairix number on this relay");
-    const balance = await them.credit("mint", amount, crypto.randomUUID(), `Minted by ${profile.number}`);
+    // Recorded as a mint, in the same words for every mint: not which phone minted it.
+    const balance = await them.credit(amount, crypto.randomUUID(), true);
+    if (balance === null) throw new HttpError(404, "No such Clairix number on this relay");
     return json({ ok: true, balance });
+  }
+
+  // ── The operator: a signed operator identity and the admin secret ─────
+  if ((path === "/v1/admin/suspend" || path === "/v1/admin/unsuspend") && request.method === "POST") {
+    return adminSuspend(env, request, profile, bodyText, path === "/v1/admin/suspend");
   }
 
   throw new HttpError(404, "Not found");
 }
+
+/**
+ * POST /v1/admin/suspend and POST /v1/admin/unsuspend {number}: the operator
+ * stops a number that abuses this relay, or lets it back (the runbook is
+ * docs/ABUSE.md; scripts/operator.mjs makes the requests). Three things must
+ * hold, so neither the secret nor the operator's key is enough alone: the
+ * request is signed by an identity registered here, as every request in this
+ * section is (route() has checked it, nonce and all); that identity's key is
+ * one OPERATOR_KEYS lists; and X-Admin-Secret matches ADMIN_SECRET, compared in
+ * constant time, as the coin mint compares it. Off while either setting is
+ * unset, and a few tries a minute per address, as the other admin routes.
+ *
+ * What suspension does is Mailbox.suspend: the number cannot sign in, its
+ * sockets close, its push endpoint goes, and to everyone else it reads as a
+ * number that does not exist. Lifting it lets the phone back in with what was
+ * queued meanwhile, less what expired.
+ */
+async function adminSuspend(env: Env, request: Request, caller: Profile, bodyText: string, suspend: boolean): Promise<Response> {
+  const guard = env.MAILBOX.get(env.MAILBOX.idFromName(`admin-guard:${request.headers.get("cf-connecting-ip") ?? "unknown"}`));
+  const allowed = await guard.rateOk("admin", Mailbox.REGISTER_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many admin requests; try again in a minute", allowed.retryAfter);
+  const secret = requireSecret(env, "ADMIN_SECRET");
+  if (!(await secretEquals(request.headers.get("x-admin-secret") ?? "", secret))) throw new HttpError(403, "Admin secret rejected");
+  const operators = operatorKeys(env);
+  if (operators.length === 0) throw new HttpError(503, "Relay setting OPERATOR_KEYS is not configured");
+  if (!operators.some((spellings) => spellings.includes(caller.ed25519))) {
+    throw new HttpError(403, "This identity is not one of this relay's operators (OPERATOR_KEYS)");
+  }
+  const body = parseJson<{ number?: unknown }>(bodyText);
+  const number = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+  if (!number) throw new HttpError(400, "number must be a Clairix number");
+  // Suspended, the operator's identity could not sign the request that lifts it.
+  if (suspend && number === caller.number) throw new HttpError(400, "An operator identity cannot suspend itself");
+  const them = env.MAILBOX.get(env.MAILBOX.idFromName(number));
+  if (!(await them.profile())) throw new HttpError(404, "No such Clairix number on this relay");
+  if (suspend) {
+    const done = await them.suspend();
+    return json({ ok: true, number, suspended: true, since: done.since, already: done.already });
+  }
+  const was = await them.unsuspend();
+  return json({ ok: true, number, suspended: false, wasSuspended: was });
+}
+
+/**
+ * The operator identities OPERATOR_KEYS lists: Ed25519 public keys in
+ * standard base64, separated by commas or spaces, each as both of its
+ * spellings (with and without padding) so it matches however the identity
+ * registered it. Anything that is not such a key is left out.
+ */
+function operatorKeys(env: Pick<Env, "OPERATOR_KEYS">): [string, string][] {
+  return (env.OPERATOR_KEYS ?? "")
+    .split(/[\s,]+/)
+    .map((k) => keySpellings(k.trim()))
+    .filter((s): s is [string, string] => s !== null);
+}
+
+/**
+ * What a suspended number's own phone is told, on every signed request: that
+ * the relay's operator suspended it, what that stops, and where to appeal
+ * (OPERATOR_CONTACT, when the operator set one).
+ */
+function suspendedMessage(env: Pick<Env, "OPERATOR_CONTACT">): string {
+  const contact = operatorContact(env);
+  return "This Clairix number is suspended on this relay by its operator: it cannot sign in, collect messages or get " +
+    "new tokens here, and nothing sent to it is delivered. " +
+    (contact ? `To appeal, write to ${contact}.` : "To appeal, write to whoever runs this relay.");
+}
+
+/** OPERATOR_CONTACT: one line of at most 120 printable characters, or null. */
+function operatorContact(env: Pick<Env, "OPERATOR_CONTACT">): string | null {
+  const value = (env.OPERATOR_CONTACT ?? "").trim();
+  return value.length > 0 && value.length <= 120 && /^[\x20-\x7e]+$/.test(value) ? value : null;
+}
+
+/**
+ * The legacy paths kept for apps before 3.0.0 Beta 7 end at the start of this
+ * UTC day unless LEGACY_CUTOFF names another (YYYY-MM-DD): the old kind of
+ * token, which the relay makes and so could match to the account it went to
+ * (apps before Beta 6 ask for it), and envelopes in format 2, sealed to the
+ * recipient's long-term key with a sender signature anyone can check (apps
+ * before Beta 7 send them, and newer apps send them only to such apps).
+ * Supported versions (SECURITY.md) use blind tokens and format 3 between
+ * themselves; the date is two months after Beta 7 and Beta 8 came out, time
+ * for the users of older ones to update.
+ */
+const LEGACY_CUTOFF_DEFAULT = "2027-01-01";
+
+/** When the legacy paths end, in epoch millis: LEGACY_CUTOFF when it is a date, else the default. */
+function legacyCutoffMs(env: Pick<Env, "LEGACY_CUTOFF">): number {
+  const parse = (s: string): number | null => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+    if (!m) return null;
+    const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    // Date.UTC rolls 2027-02-30 into March; a day that does not exist is not a date.
+    return new Date(t).toISOString().slice(0, 10) === s.trim() ? t : null;
+  };
+  return parse(env.LEGACY_CUTOFF ?? "") ?? (parse(LEGACY_CUTOFF_DEFAULT) as number);
+}
+
+/** What a legacy request is told from the cutoff on: 426, and to update. */
+const LEGACY_MESSAGE =
+  "Relays stopped carrying the old tokens and envelopes of Clairix versions before 3.0.0 Beta 7. Update Clairix from " +
+  "clairix.app/download. If this phone is up to date, the person you are writing to needs to update theirs before " +
+  "they can receive your messages.";
+
+/** Refuses a legacy request once the cutoff has passed (426 Upgrade Required). */
+function refuseLegacy(env: Pick<Env, "LEGACY_CUTOFF">): void {
+  if (Date.now() >= legacyCutoffMs(env)) throw new HttpError(426, LEGACY_MESSAGE);
+}
+
+/**
+ * Refuses an envelope in format 2 (its first byte, the format, is 2) once the
+ * cutoff has passed. Checked on the envelope alone, before a token is spent or
+ * a mailbox is asked, so the answer is the same for every number.
+ */
+function refuseLegacyEnvelope(env: Pick<Env, "LEGACY_CUTOFF">, envelope: string): void {
+  if (envelope.length < 4 || Date.now() < legacyCutoffMs(env)) return;
+  let first: number | undefined;
+  try {
+    first = base64ToBytes(envelope.slice(0, 4))[0];
+  } catch {
+    return; // not base64 after all: the mailbox stores it as the bytes it is
+  }
+  if (first === ENVELOPE_FORMAT_2) throw new HttpError(426, LEGACY_MESSAGE);
+}
+
+/** The first byte of an envelope in format 2 (comms-crypto ENVELOPE_V2). */
+const ENVELOPE_FORMAT_2 = 2;
+
+/**
+ * DELETE /v1/admin/accounts/:number: the operator deletes an account on a
+ * request by email (scripts/delete-account.mjs; the runbook is README.md,
+ * "Deleting an account on request"). It does what the owner's own DELETE
+ * /v1/me does: the keys the account claimed are released and its mailbox
+ * (queued envelopes, push endpoint, pass key, coin balance and history) is
+ * wiped. Guarded like the coin mint above, by the timing-safe X-Admin-Secret
+ * check, and off unless ADMIN_SECRET is set; unlike the mint it takes no signed
+ * request, because the operator holds no key of the account's to sign with.
+ * Each address gets a few tries a minute, as registration does, so the secret
+ * cannot be guessed by brute force. Reached before signatures are parsed (see
+ * route()).
+ */
+async function adminDeleteAccount(env: Env, request: Request, path: string): Promise<Response> {
+  const guard = env.MAILBOX.get(env.MAILBOX.idFromName(`admin-guard:${request.headers.get("cf-connecting-ip") ?? "unknown"}`));
+  const allowed = await guard.rateOk("admin", Mailbox.REGISTER_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many admin requests; try again in a minute", allowed.retryAfter);
+  const secret = requireSecret(env, "ADMIN_SECRET");
+  const given = request.headers.get("x-admin-secret") ?? "";
+  if (!(await secretEquals(given, secret))) throw new HttpError(403, "Admin secret rejected");
+  let raw: string;
+  try {
+    raw = decodeURIComponent(path.slice(ADMIN_ACCOUNTS_PREFIX.length));
+  } catch {
+    throw new HttpError(400, "Not a Clairix number");
+  }
+  const number = normaliseNumber(raw);
+  if (!number) throw new HttpError(400, "Not a Clairix number");
+  const them = env.MAILBOX.get(env.MAILBOX.idFromName(number));
+  const profile = await them.profile();
+  if (!profile) throw new HttpError(404, "No such Clairix number on this relay");
+  await releaseKeys(env, profile);
+  await them.wipe();
+  return json({ ok: true, number });
+}
+
+const ADMIN_ACCOUNTS_PREFIX = "/v1/admin/accounts/";
 
 /**
  * A contact's keys, by Clairix number. Unlisted numbers are only handed out
@@ -653,6 +882,8 @@ async function spendToken(env: Env, request: Request, kind: TokenKind): Promise<
     return;
   }
   if (!DELIVERY_TOKEN_RE.test(token)) throw new HttpError(403, "Token rejected");
+  // The old kind, from apps before Beta 6: no longer spent from LEGACY_CUTOFF on.
+  refuseLegacy(env);
   const hash = await tokenHash(token);
   if (!(await env.MAILBOX.get(env.MAILBOX.idFromName(tokenShardName(hash, kind))).redeemToken(hash))) {
     throw new HttpError(403, `Token rejected: unknown, expired, already used, or not a ${kind} token`);
@@ -865,7 +1096,27 @@ async function refreshWzdx(env: Env, now: number): Promise<void> {
 }
 
 const COIN_SYMBOL = "AC";
-const COIN_NOTE_MAX = 140;
+
+/** The COIN values that switch ClairixCoin off; anything else, unset included, leaves it on. */
+const COIN_OFF = new Set(["off", "false", "0", "no"]);
+
+/**
+ * Whether this relay offers ClairixCoin: yes unless its operator switched it
+ * off (COIN=off), as it always did before the setting existed. Switched off,
+ * the coin routes answer 404, a new account starts with nothing whatever
+ * COIN_INITIAL_BALANCE says, nobody can mint, and GET / says coin: false,
+ * which is what makes the app hide the balance and the Pay button. Switching
+ * it off keeps the balances and ledgers there are; the ledgers still forget
+ * each transfer after 30 days.
+ */
+function coinOn(env: Pick<Env, "COIN">): boolean {
+  return !COIN_OFF.has((env.COIN ?? "").trim().toLowerCase());
+}
+
+/** Refuses a coin request on a relay whose operator switched the coin off. */
+function requireCoin(env: Env): void {
+  if (!coinOn(env)) throw new HttpError(404, "ClairixCoin is off on this relay");
+}
 
 /**
  * The other addresses this relay answers at, from RELAY_ALTERNATES: https
@@ -903,12 +1154,49 @@ function coinAmount(raw: unknown): number {
   return raw;
 }
 
-/** The optional note on a payment: a short string, or nothing. */
-function coinNote(raw: unknown): string {
-  if (raw === undefined || raw === null) return "";
-  if (typeof raw !== "string") throw new HttpError(400, "note must be a string");
-  if (raw.length > COIN_NOTE_MAX) throw new HttpError(400, `note must be at most ${COIN_NOTE_MAX} characters`);
+/**
+ * The payee's key fingerprint a payment names (as fingerprint() makes it, and
+ * a lookup's pin is), or a 400. Checked for its form only, before anything
+ * about the payee is read, so the answer says nothing about the number.
+ */
+function coinPin(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 64) throw new HttpError(400, "pin must be the payee's key fingerprint");
   return raw;
+}
+
+/**
+ * The id the payee's mailbox keeps a payment's credit under, or a 400. The
+ * payer's mailbox keeps the debit under [txid]; were the credit kept under the
+ * same id, anyone reading the relay's storage could join the two ledgers and
+ * read off who paid whom. So the payer's phone chooses a second id ([raw])
+ * and tells it to the payee only inside the end-to-end encrypted payment
+ * notice. A phone that names its payment ([named], so that a repeated request
+ * is the same payment) must name the credit too, and differently, or a repeat
+ * would be credited under a new id; a request that names neither gets two
+ * fresh ids. Checked for its form only, before anything about the payee is read.
+ */
+function coinCreditId(raw: unknown, named: boolean, txid: string): string {
+  if (typeof raw === "string" && TXID_RE.test(raw)) {
+    const credit = raw.toLowerCase();
+    if (credit === txid) throw new HttpError(400, "credit must differ from txid");
+    return credit;
+  }
+  if (raw !== undefined && raw !== null) throw new HttpError(400, "credit must be a UUID");
+  if (named) throw new HttpError(400, "A payment that names its txid must name its credit too");
+  return crypto.randomUUID();
+}
+
+/**
+ * Gives the payer back [amount] for the payment [txid], which was debited and
+ * then could not be credited ([cause] says why). If even that fails the error
+ * is logged with the txid, so the operator can put it right by hand.
+ */
+async function refundPayment(me: MailboxStub, amount: number, txid: string, cause: unknown): Promise<void> {
+  try {
+    await me.credit(amount, `${txid}:refund`);
+  } catch (refund) {
+    console.error(`coin payment ${txid} for ${amount}: the credit failed and so did the refund`, cause, refund);
+  }
 }
 
 /**
@@ -933,13 +1221,20 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     transportKey?: unknown;
     listed?: unknown;
   }>(bodyText);
-  // Either the relay's enrollment secret, or an invite a registered phone made.
+  // Either the relay's enrollment secret, or an invite a registered phone
+  // made; or, when the operator opened registration, neither, within the
+  // day's allowance for the whole relay (taken below, once the rest checks out).
   const invite = typeof body.invite === "string" ? body.invite : null;
+  const givenSecret = typeof body.secret === "string" && body.secret.length > 0 ? body.secret : null;
+  const openCap = invite === null && givenSecret === null ? openRegistrationCap(env) : null;
   if (invite !== null) {
     if (!INVITE_CODE_RE.test(invite)) throw new HttpError(403, "That invite code is not valid");
-  } else {
+  } else if (givenSecret !== null || openCap === null) {
+    if (givenSecret === null) {
+      throw new HttpError(403, "This relay gives new numbers by invite or with its enrollment secret: ask someone on it for an invite");
+    }
     const secret = requireSecret(env, "ENROLL_SECRET");
-    if (typeof body.secret !== "string" || !(await secretEquals(body.secret, secret))) throw new HttpError(403, "Enrollment code rejected");
+    if (!(await secretEquals(givenSecret, secret))) throw new HttpError(403, "Enrollment code rejected");
   }
   // The body is signed by the new key, and this is what keeps a captured body
   // (it carries the enrollment secret) from being replayed later: it must be
@@ -976,6 +1271,13 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     const redeemed = await inviteBox.redeemInvite();
     if (!redeemed.ok) throw new HttpError(403, redeemed.reason);
   }
+  const openBox = openCap === null ? null : env.MAILBOX.get(env.MAILBOX.idFromName(OPEN_REGISTRATION_NAME));
+  if (openBox && openCap !== null) {
+    const taken = await openBox.takeOpenRegistration(openCap);
+    if (!taken.ok) {
+      throw new HttpError(429, "This relay has given out all the new numbers it gives without an invite today; try again tomorrow, or ask someone on it for an invite", taken.retryAfter);
+    }
+  }
 
   for (let attempt = 0; attempt < 8; attempt++) {
     const number = randomNumber();
@@ -986,19 +1288,21 @@ async function register(env: Env, request: Request, bodyText: string): Promise<R
     if (await mailbox.claim(profile, oneTimeKeys)) {
       if (!(await claimKeys(env, profile, true))) {
         // One of the keys is already another account's. The number just taken
-        // goes back, and so does the invite, if one was used.
+        // goes back, and so does the invite or the open registration, if one was used.
         await mailbox.wipe();
         if (inviteBox) await inviteBox.releaseInvite();
+        if (openBox) await openBox.releaseOpenRegistration();
         throw new HttpError(409, "One of these keys is already registered to another Clairix number");
       }
       // A new member of this relay's coin community starts with what the
-      // operator set; nothing when they set nothing.
-      const initial = parseInt(env.COIN_INITIAL_BALANCE ?? "0", 10);
+      // operator set; nothing when they set nothing or the coin is off.
+      const initial = coinOn(env) ? parseInt(env.COIN_INITIAL_BALANCE ?? "0", 10) : 0;
       if (Number.isInteger(initial) && initial > 0) await mailbox.setInitialBalance(initial);
       return json({ number, profile: publicProfile(profile), oneTimeKeys: oneTimeKeys.length }, 201);
     }
   }
   if (inviteBox) await inviteBox.releaseInvite();
+  if (openBox) await openBox.releaseOpenRegistration();
   throw new HttpError(503, "Could not allocate a number; try again");
 }
 
@@ -1092,9 +1396,10 @@ function publicProfile(p: Profile) {
 /**
  * The relay API this Worker speaks; 3 is anonymous sending, claim tickets and
  * checked push endpoints; 4 is lookups by body, anonymous traffic and no
- * stored activity times.
+ * stored activity times; 5 is no lookups by URL at all, payments that name
+ * the payee's key, a coin ledger that names nobody, and "coin" at GET /.
  */
-const API_VERSION = 4;
+const API_VERSION = 5;
 
 /** The most a request body may be: nothing the relay accepts is near it (an envelope is 72 KiB sealed, 96 KiB in base64). */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -1178,6 +1483,7 @@ export function keySpellings(key: string): [string, string] | null {
  */
 async function send(env: Env, request: Request, bodyText: string): Promise<Response> {
   const body = parseSendBody(bodyText, isLoopbackDev(request));
+  refuseLegacyEnvelope(env, body.envelope);
   const foreign = body.relay !== null && !isOwnOrigin(env, request, body.relay);
   // Checked before the token is spent, so a phone on a relay that cannot
   // forward keeps its token.
@@ -1197,6 +1503,72 @@ async function send(env: Env, request: Request, bodyText: string): Promise<Respo
     return json({ id: res.json.id.slice(0, 80) }, 202);
   }
   return enqueueFor(env, body.to, body.envelope, body.claim, body.urgent, false, body.alert, body.pass);
+}
+
+/** The object that keeps abuse reports for the operator. */
+const REPORTS_NAME = "abuse-reports";
+/** The object that counts today's open registrations. */
+const OPEN_REGISTRATION_NAME = "open-registration";
+
+/**
+ * An abuse report: who is reported (a number, and the relay it is on when
+ * that is not this one), the hash of an envelope they sent, and why. It
+ * spends a "report" token and names nobody, so what the relay keeps is who
+ * was reported and why, never by whom; the relay never sees what was said.
+ * The answer is the same whether the number exists, was reported before,
+ * or has been reported as often as the relay keeps.
+ */
+async function fileReport(env: Env, request: Request, bodyText: string): Promise<Response> {
+  const body = parseJson<{ number?: unknown; relay?: unknown; envelope?: unknown; reason?: unknown }>(bodyText);
+  const number = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+  if (!number) throw new HttpError(400, "number must be a Clairix number");
+  const reason = body.reason;
+  if (!isReportReason(reason)) throw new HttpError(400, `reason must be one of ${REPORT_REASONS.join(", ")}`);
+  let envelope: string | null = null;
+  if (body.envelope !== undefined && body.envelope !== null) {
+    if (typeof body.envelope !== "string" || !ENVELOPE_HASH_RE.test(body.envelope)) {
+      throw new HttpError(400, "envelope must be an envelope's fingerprint: 64 lowercase hex characters");
+    }
+    envelope = body.envelope;
+  }
+  const named = parseRelayField(body.relay, isLoopbackDev(request));
+  const relay = named !== null && isOwnOrigin(env, request, named) ? null : named;
+  // Spent only once the report is well formed, as for a send.
+  await spendToken(env, request, "report");
+  // A number on this relay that nobody holds is not kept: reports about
+  // made-up numbers would otherwise fill the relay's share of reports and
+  // crowd out real ones. The answer is the same either way, so a report tells
+  // nobody whether the number exists.
+  const keep = relay !== null || (await env.MAILBOX.get(env.MAILBOX.idFromName(number)).profile()) !== null;
+  await env.MAILBOX.get(env.MAILBOX.idFromName(REPORTS_NAME)).fileReport({ number, relay, envelope, reason, day: dayFloor(Date.now()) }, keep);
+  return json({ ok: true }, 202);
+}
+
+/**
+ * What phones reported, for the operator, with ADMIN_SECRET in X-Admin-Secret
+ * (off while it is unset): GET lists every reported number with how often,
+ * why, the envelope hashes and the first and last day; DELETE {number,
+ * relay?} closes the reports about one number once the operator has dealt
+ * with it. A few attempts a minute per address, as for registration, so the
+ * secret cannot be guessed by brute force.
+ */
+async function adminReports(env: Env, request: Request, bodyText: string): Promise<Response> {
+  const guard = env.MAILBOX.get(env.MAILBOX.idFromName(`admin-guard:${request.headers.get("cf-connecting-ip") ?? "unknown"}`));
+  const allowed = await guard.rateOk("admin", Mailbox.REGISTER_LIMIT);
+  if (!allowed.ok) throw new HttpError(429, "Too many attempts; try again in a minute", allowed.retryAfter);
+  const secret = requireSecret(env, "ADMIN_SECRET");
+  if (!(await secretEquals(request.headers.get("x-admin-secret") ?? "", secret))) throw new HttpError(403, "Admin secret rejected");
+  const reports = env.MAILBOX.get(env.MAILBOX.idFromName(REPORTS_NAME));
+  if (request.method === "GET") return json({ numbers: summariseReports(await reports.listReports()) });
+  if (request.method === "DELETE") {
+    const body = parseJson<{ number?: unknown; relay?: unknown }>(bodyText);
+    const number = typeof body.number === "string" ? normaliseNumber(body.number) : null;
+    if (!number) throw new HttpError(400, "number must be a Clairix number");
+    const named = parseRelayField(body.relay, isLoopbackDev(request));
+    const relay = named !== null && isOwnOrigin(env, request, named) ? null : named;
+    return json({ closed: await reports.closeReports(number, relay) });
+  }
+  throw new HttpError(405, "GET or DELETE only");
 }
 
 interface SendBody {
@@ -1401,8 +1773,11 @@ async function enqueueFor(
 /**
  * ICE servers for a call. With a Cloudflare Realtime TURN key configured,
  * TURN credentials are minted for every request, live two hours and are never
- * cached or shared; without a key, or when minting fails, calls get STUN only
- * and connect when both phones can reach each other directly. Media is
+ * cached or shared; without a key, calls get STUN only and connect when both
+ * phones can reach each other directly. With a key set but minting failing,
+ * the request is answered 503 rather than with STUN only: the app records
+ * from a 200 whether this relay offers TURN, and a passing failure must not
+ * make it believe the relay offers none and set up a direct call. Media is
  * DTLS-SRTP between the two phones either way: a TURN server forwards packets
  * it cannot decrypt.
  */
@@ -1418,14 +1793,18 @@ async function iceServers(env: Env): Promise<IceServer[]> {
     });
   } catch (e) {
     console.error("TURN credential request threw", e);
-    return STUN_ONLY;
+    throw new HttpError(503, "The relay's call server is not answering; try again in a moment", 30);
   }
   if (!res.ok) {
     console.error("TURN credential request failed", res.status, await res.text());
-    return STUN_ONLY;
+    throw new HttpError(503, "The relay's call server is not answering; try again in a moment", 30);
   }
   const servers = parseIceServers(await res.json().catch(() => null));
-  return servers.length > 0 ? servers : STUN_ONLY;
+  if (!servers.some((s) => s.urls.some((u) => u.startsWith("turn")))) {
+    console.error("TURN credential response held no TURN server");
+    throw new HttpError(503, "The relay's call server is not answering; try again in a moment", 30);
+  }
+  return servers;
 }
 
 /** POSTs [body] to a push endpoint; returns the HTTP status, or 0 when it could not be reached. */

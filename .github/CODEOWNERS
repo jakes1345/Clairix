@@ -1,0 +1,11 @@
+# Who reads changes to the code that decides what stays secret: the app's security
+# and comms packages (in the app, its JVM tests and its device tests), the crypto
+# crate and the relay. GitHub asks the owner named here to review each pull request
+# that touches them. The main ruleset does not require that review yet: Clairix has
+# one maintainer, and GitHub lets nobody approve their own pull request
+# (docs/PROCESS.md says what changes when a second maintainer joins).
+
+/android/app/src/*/java/app/clairix/security/  @jakes1345
+/android/app/src/*/java/app/clairix/comms/     @jakes1345
+/comms-crypto/                                  @jakes1345
+/comms-worker/                                  @jakes1345

@@ -1,0 +1,64 @@
+# Clairix's detekt settings, read on top of detekt's own defaults
+# (buildUponDefaultConfig in android/app/build.gradle.kts). Only what differs
+# from the defaults is here, each with its reason.
+#
+# The defaults are written for a library. Run over this app they reported
+# about 6,500 findings, three quarters of them house style rather than defects:
+# lines over 120 characters, numbers in layouts (16.dp) and in detection
+# thresholds that are named in their comments, and Compose's PascalCase
+# @Composable functions, each a screen or a piece of one, whose length and
+# parameter lists follow from passing state and callbacks down. A gate that
+# fails on style is a gate people learn to baseline. What stays on is what
+# finds defects: exceptions caught and dropped, unused code, empty blocks,
+# wildcard imports, nesting and branching in logic that is not a layout.
+
+complexity:
+  # A Compose screen is one function by design, and its branches are layout.
+  LongMethod:
+    threshold: 100
+    ignoreAnnotated: ['Composable']
+  CyclomaticComplexMethod:
+    threshold: 20
+    ignoreSimpleWhenEntries: true
+    ignoreAnnotated: ['Composable']
+  NestedBlockDepth:
+    ignoreAnnotated: ['Composable']
+  # Hoisted state means a parameter for every value and callback.
+  LongParameterList:
+    functionThreshold: 8
+    # A class that is handed its services (stores, key stores, client
+    # factories) so a test can hand it fakes.
+    constructorThreshold: 8
+    ignoreDefaultParameters: true
+    ignoreAnnotated: ['Composable']
+  # How many functions a file or object holds is organisation, not a defect;
+  # LargeClass still reports a class that grows past 600 lines.
+  TooManyFunctions:
+    active: false
+
+naming:
+  # @Composable functions are named like types (Compose's own convention).
+  FunctionNaming:
+    ignoreAnnotated: ['Composable']
+
+style:
+  # Layout sizes (16.dp), alphas and the detectors' thresholds, which carry
+  # their reasoning in a comment beside them.
+  MagicNumber:
+    active: false
+  # No formatter is applied to this codebase; long lines are mostly strings
+  # the app shows, which read worse broken.
+  MaxLineLength:
+    active: false
+  # Early returns (guard clauses) are the house style for every decision
+  # function; the default allows two.
+  ReturnCount:
+    active: false
+  # A loop that skips several kinds of record with `continue` reads more
+  # plainly than the nesting the rule asks for instead.
+  LoopWithTooManyJumpStatements:
+    active: false
+  # The parsers of signed files (relay list, key list, version note, tiles)
+  # refuse each malformed field with its own message; two throws is too few.
+  ThrowsCount:
+    max: 4

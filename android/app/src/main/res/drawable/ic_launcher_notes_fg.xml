@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Discreet mode's "Notes" launcher entry, foreground layer: a white notepad
+    page with a darker binding strip and ruled lines, over
+    @color/ic_launcher_notes_background. Nothing of the Clairix mark. 108dp
+    adaptive canvas; the page is 40 x 48dp and every corner sits inside the 66dp
+    safe circle.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Page, corners rounded by 4. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,30h32a4,4 0,0 1,4 4v40a4,4 0,0 1,-4 4h-32a4,4 0,0 1,-4 -4v-40a4,4 0,0 1,4 -4z" />
+
+    <!-- Binding strip along the top of the page. -->
+    <path
+        android:fillColor="#FFC98A1E"
+        android:pathData="M38,30h32a4,4 0,0 1,4 4v4h-40v-4a4,4 0,0 1,4 -4z" />
+
+    <!-- Ruled lines, the last one short. -->
+    <path
+        android:fillColor="#FFB5B5B5"
+        android:pathData="M40,45h28v3h-28zM40,53h28v3h-28zM40,61h28v3h-28zM40,69h18v3h-18z" />
+
+</vector>

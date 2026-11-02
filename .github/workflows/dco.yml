@@ -1,0 +1,55 @@
+name: DCO
+
+# Every commit a pull request adds must carry a Signed-off-by line from a person:
+# the Developer Certificate of Origin in CONTRIBUTING.md. A sign-off by an AI tool,
+# a bot or GitHub itself does not count. Merge commits are not checked, and
+# neither are commits a GitHub App made in a pull request that app opened
+# (Dependabot's updates); the person who approves those answers for them.
+# The rule starts with the first pull request opened against a base that already
+# has this workflow: the pull request that adds it, and commits made before it
+# existed, are not checked.
+# Nothing from the pull request runs: the job only reads commit messages.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  signoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check every commit for a sign-off by a person
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          OPENED_BY_APP: ${{ github.event.pull_request.user.type == 'Bot' }}
+        run: |
+          if ! git cat-file -e "$BASE:.github/workflows/dco.yml" 2>/dev/null; then
+            echo "The base of this pull request has no sign-off rule yet (this pull request adds it), so its commits are not checked; every pull request after it is."
+            exit 0
+          fi
+          bad=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            what=$(git show -s --format='%h %s' "$c" | sed 's/%/%25/g')
+            if [ "$OPENED_BY_APP" = true ] && git show -s --format='%ae' "$c" | grep -qE '\[bot\]@users\.noreply\.github\.com$'; then
+              echo "$what: made by the GitHub App that opened this pull request; not checked"
+              continue
+            fi
+            people=$(git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$c" \
+              | grep -E '<[^<>@]+@[^<>]+>' \
+              | grep -viE '\[bot\] <|<(noreply@anthropic\.com|noreply@github\.com|[^<>]*\[bot\]@users\.noreply\.github\.com|[0-9]+\+copilot@users\.noreply\.github\.com)>' || true)
+            if [ -z "$people" ]; then
+              echo "::error::$what: no Signed-off-by from a person (CONTRIBUTING.md, Developer Certificate of Origin)"
+              bad=1
+            fi
+          done
+          if [ "$bad" = 0 ]; then echo "Every commit is signed off by a person."; fi
+          exit "$bad"

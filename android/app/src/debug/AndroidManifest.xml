@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug builds only. The emulator workflow's power checks settle the running
+    scanner with a broadcast (analysis/DebugPace.kt, .github/workflows/emulator.yml)
+    and then read `dumpsys location`. Only holders of DUMP (the shell, the system)
+    can send it; release builds have neither the receiver nor anything listening.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name=".DebugPaceReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="app.clairix.debug.FORCE_STILL" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

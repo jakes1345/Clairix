@@ -1,0 +1,11 @@
+{
+  "format": "clairix-rust-crates",
+  "licences": [
+{{#each licenses}}    {
+      "id": {{{json id}}},
+      "name": {{{json name}}},
+      "crates": [{{#each used_by}}{{#if @index}}, {{/if}}{"name": {{{json crate.name}}}, "version": {{{json crate.version}}}}{{/each}}],
+      "text": {{{json text}}}
+    }{{#unless @last}},{{/unless}}
+{{/each}}  ]
+}

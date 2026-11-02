@@ -27,6 +27,8 @@ import app.clairix.analysis.CheckState
 import app.clairix.analysis.Gnss
 import app.clairix.analysis.GnssMonitor
 import app.clairix.analysis.GnssVerdict
+import app.clairix.analysis.PositionText
+import app.clairix.analysis.Positioning
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.Hairline
@@ -50,13 +52,16 @@ internal fun GnssScreen() {
     val context = LocalContext.current
     val a by Registry.gnss.collectAsStateWithLifecycle()
     val status by Registry.status.collectAsStateWithLifecycle()
+    val positioning by Registry.positioning.collectAsStateWithLifecycle()
     val hasLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
 
     // While the screen is open and in front the receiver is switched on, so the
     // checks have data whether or not anything else is using it. Leaving the app
     // switches it off again: a page left open in the background kept GPS running.
+    // Where positions come from is looked up afresh each time, scanner or not.
     LifecycleStartEffect(hasLocation) {
+        Positioning.refresh(context)
         val handle = if (hasLocation) GnssMonitor.acquire(context, foreground = true) else null
         onStopOrDispose { handle?.let { GnssMonitor.release(it) } }
     }
@@ -83,7 +88,7 @@ internal fun GnssScreen() {
                 body = when (a.verdict) {
                     GnssVerdict.SPOOFED -> "The position the phone is being given does not come from satellites. Do not trust the map or any app's location until this clears."
                     GnssVerdict.JAMMED -> "Something is drowning out the satellites here. Navigation, and any tracker that relies on GPS, has lost them."
-                    GnssVerdict.SUSPECT -> "Two or more checks look off. Not proof; keep an eye on it."
+                    GnssVerdict.SUSPECT -> "One check failed on its own, or two look off, and nothing else corroborates it. Not proof; keep an eye on it."
                     GnssVerdict.GENUINE -> "${a.usedCount} satellites in the fix from ${a.constellationsUsed.joinToString(", ").ifEmpty { "one system" }}, behaving like satellites."
                     GnssVerdict.NO_FIX -> "Satellites are not in the fix right now: indoors, underground or in a deep street canyon. Step outside to check."
                     GnssVerdict.NO_DATA -> if (!hasLocation) "Precise location permission is needed to read the satellites."
@@ -99,12 +104,38 @@ internal fun GnssScreen() {
             }
         }
 
-        if (a.verdict == GnssVerdict.SPOOFED && a.networkLat != null && a.networkLon != null) {
+        // Where the phone's positions come from, when that is not Google Play services.
+        // Why the Wi-Fi/cell comparison cannot run, when it cannot, is said on its row below.
+        PositionText.source(positioning.source)?.let { line ->
+            item(key = "§source") {
+                Notice(
+                    if (PositionText.sourceIsProblem(positioning.source)) Tone.Caution else Tone.Info,
+                    line,
+                    title = "Position source"
+                )
+            }
+        }
+
+        // The network position is offered as the real one only when a recent one agrees
+        // with the satellites: when the two disagree nothing here knows which is wrong
+        // (a confidently wrong Wi-Fi fix looks exactly like a spoofer), and an old one
+        // says nothing about now.
+        val vouched = a.vouchedNetwork
+        if (a.verdict == GnssVerdict.SPOOFED && vouched != null) {
             item(key = "§real") {
                 Notice(
                     Tone.Danger,
                     title = "Where Wi-Fi and cell towers put you",
-                    text = "%.5f, %.5f. A spoofer can move the satellite position; it cannot move the towers and access points around you.".format(a.networkLat, a.networkLon)
+                    text = "%.5f, %.5f. A spoofer can move the satellite position; it cannot move the towers and access points around you.".format(vouched.first, vouched.second)
+                )
+            }
+        }
+        if ((a.verdict == GnssVerdict.SPOOFED || a.verdict == GnssVerdict.SUSPECT) && a.networkDisputed) {
+            item(key = "§disputed") {
+                Notice(
+                    if (a.verdict == GnssVerdict.SPOOFED) Tone.Danger else Tone.Caution,
+                    title = "Two positions disagree",
+                    text = "The satellites and the Wi-Fi and cell position put this phone in different places. A spoofer moves the satellite position; a mis-mapped access point or a stale cell fix moves the other. Clairix cannot tell which is wrong, so do not navigate by either until they agree again."
                 )
             }
         }
@@ -164,8 +195,9 @@ internal fun GnssScreen() {
                 text = "It catches the spoofers that are cheap to build: one transmitter on the ground, a recording replayed, " +
                     "a simulator started at the wrong time, a mock-location app. A careful attacker who simulates a full sky at " +
                     "realistic strengths and the right time passes the signal tests; the Wi-Fi and cell comparison is the one " +
-                    "they cannot pass while a tower or access point is in range. Not every phone reports raw measurements or gain, " +
-                    "and those checks say so instead of passing."
+                    "they cannot pass while a tower or access point is in range. That comparison needs a Wi-Fi/cell position " +
+                    "source on the phone and the cross-check on (Settings, Location); its row says when it cannot run. Not " +
+                    "every phone reports raw measurements or gain, and those checks say so instead of passing."
             )
         }
     }

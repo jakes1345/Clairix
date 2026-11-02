@@ -85,7 +85,7 @@ object CommsWire {
     // Organisation groups: fanned out client-side to every member, one envelope each.
     /** A text message to a group: "gid", "id", "body". */
     const val T_GROUP_MSG = "gmsg"
-    /** A roster change: "gid", "op" (add | remove | roster) and the fields of that op. */
+    /** A roster change: "gid", "op" (add | join | remove | leave | roster | rosterreq) and the fields of that op. */
     const val T_GROUP_CTRL = "gctl"
     /** A threat detection shared with a group: "gid", "id", "ts", "kind", "sev", "lat", "lon", "title", "detail", "exp", optional "ble"/"cell". */
     const val T_THREAT = "threat"
@@ -106,6 +106,14 @@ object CommsWire {
      * key: sent to every contact when the key is first made or replaced.
      */
     const val T_PASS = "pass"
+    /**
+     * The sender just registered with the invite in "inv", which the
+     * recipient made: their phone knows the invite, so the newcomer comes in
+     * as a contact rather than as a message request. Apps from before it
+     * ignore it.
+     */
+    const val T_JOINED = "joined"
+    const val F_INVITE = "inv"
     /**
      * The sender's pass key (32 bytes, base64), on every payload once their
      * relay holds it, and when they made it ("pts"), so an older key arriving
@@ -140,8 +148,27 @@ object CommsWire {
     const val OP_REMOVE = "remove"
     /** Sent by a member to everyone else as they go; it carries nothing more. */
     const val OP_LEAVE = "leave"
-    /** Sent to a newly added member: the group's name and its whole roster. */
+    /**
+     * An admin's whole roster ("members"), numbered ("rv"), with the group's
+     * name ("gname"), creator ("by") and creation time ("cts"): sent to every
+     * remaining member after each change the admin makes, and in answer to
+     * [OP_ROSTER_REQUEST]. A phone holding an older number takes it as the
+     * roster; one that is not on it was removed. See [RosterSync].
+     */
     const val OP_ROSTER = "roster"
+    /**
+     * Asks an admin for the group's roster: sent by a member that heard a
+     * newer roster number than its own, so it missed a change. Carries
+     * nothing more; the admin answers with [OP_ROSTER]. Apps from before
+     * roster numbers ignore it.
+     */
+    const val OP_ROSTER_REQUEST = "rosterreq"
+    /**
+     * The number of the roster the sender holds, on every group payload from
+     * an app that keeps one (and on a numbered change, the change's number).
+     * An admin numbers each change it makes; see [RosterSync].
+     */
+    const val F_ROSTER_VERSION = "rv"
 
     // threat / panic
     const val F_KIND = "kind"
@@ -263,6 +290,9 @@ object CommsWire {
     /** Nothing but this phone's pass key, which the sender fields added on sending carry. */
     fun pass(): JSONObject = base(T_PASS)
 
+    /** This phone registered with [invite], a code the recipient made; see [T_JOINED]. */
+    fun joined(invite: String): JSONObject = base(T_JOINED).put(F_INVITE, invite)
+
     /** Cover traffic: [fill] is random filler, so the padded envelope is sized like a text. */
     fun noise(fill: String): JSONObject = base(T_NOISE).put(F_BODY, fill)
 
@@ -315,8 +345,8 @@ object CommsWire {
         withTtl(base(T_GROUP_MSG).put(F_GID, gid).put(F_ID, msgId).put(F_TS, ts).put(F_BODY, body), ttl)
 
     /**
-     * A roster change in group [gid]: [op] is [OP_ADD], [OP_REMOVE] or
-     * [OP_ROSTER], and [extra] holds that op's fields (null values are left out).
+     * A roster change in group [gid]: [op] is one of the OP_ constants, and
+     * [extra] holds that op's fields (null values are left out).
      * The sender's identity fields are reserved; see [withSender].
      */
     fun groupCtrl(gid: String, op: String, extra: Map<String, Any?> = emptyMap()): JSONObject {
@@ -405,6 +435,14 @@ object CommsWire {
         val arr = payload.optJSONArray(F_IDS) ?: return emptyList()
         return (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { s -> s.isNotBlank() } }
     }
+
+    /** The roster number a group payload carries ([F_ROSTER_VERSION]), or null when it carries none (an app from before them). */
+    fun rosterVersion(payload: JSONObject): Long? =
+        if (payload.has(F_ROSTER_VERSION)) payload.optLong(F_ROSTER_VERSION, -1L).takeIf { it >= 0L } else null
+
+    /** [payload] with the sender's roster number [rv]; a group that was never numbered (0) adds nothing. */
+    fun withRosterVersion(payload: JSONObject, rv: Long): JSONObject =
+        if (rv > 0L) payload.put(F_ROSTER_VERSION, rv) else payload
 
     /** One member as read back from an [OP_ROSTER] payload's "members" array. */
     data class RosterEntry(val number: String, val name: String, val role: String, val ed25519: String)

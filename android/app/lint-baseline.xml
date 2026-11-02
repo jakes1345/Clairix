@@ -1,0 +1,1485 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.7.3" type="baseline" client="gradle" dependencies="true" name="AGP (8.7.3)" variant="all" version="8.7.3">
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        val name = runCatching { BleNames.cleanName(device.alias) ?: BleNames.cleanName(device.name) }.getOrNull()"
+        errorLine2="                                                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BluetoothExposure.kt"
+            line="113"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        val name = runCatching { BleNames.cleanName(device.alias) ?: BleNames.cleanName(device.name) }.getOrNull()"
+        errorLine2="                                                                                        ~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BluetoothExposure.kt"
+            line="113"
+            column="89"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        val type = runCatching { device.type }.getOrDefault(BluetoothDevice.DEVICE_TYPE_UNKNOWN)"
+        errorLine2="                                 ~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BluetoothExposure.kt"
+            line="115"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BluetoothExposure.kt"
+            line="117"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        val bonded = adapter.bondedDevices ?: return null"
+        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            line="218"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="            device.createRfcommSocketToServiceRecord(SPP_UUID)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            line="232"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                primary.connect()"
+        errorLine2="                ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            line="239"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="            fallback.connect()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            line="263"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                p.edit().putBoolean(K_BIOMETRIC, false).commit()"
+        errorLine2="                                                        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="247"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                p.edit().putBoolean(K_BIOMETRIC, false).commit()"
+        errorLine2="                                                        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="254"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            p.edit().putBoolean(K_BIOMETRIC, true).commit()"
+        errorLine2="                                                   ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="258"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            prefs(context).edit().putBoolean(K_BIOMETRIC, false).commit()"
+        errorLine2="                                                                 ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="337"
+            column="66"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        prefs(context).edit().putLong(K_RELOCK_MS, ms).commit()"
+        errorLine2="                                                       ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="373"
+            column="56"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                p.edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()"
+        errorLine2="                                                                 ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="539"
+            column="66"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        p.edit().putString(K_WRONG_AT, stamps.takeLast(WRONG_KEPT).joinToString(&quot;,&quot;)).commit()"
+        errorLine2="                                                                                      ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="565"
+            column="87"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        p.edit().remove(K_WRONG_AT).commit()"
+        errorLine2="                                    ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="579"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        edit.commit()"
+        errorLine2="             ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="602"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            p.edit().putLong(K_LAST_FAIL, now).commit()"
+        errorLine2="                                               ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="620"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            prefs(context).edit().clear().commit()"
+        errorLine2="                                          ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="715"
+            column="43"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        prefs().edit().remove(PREFS_KEY_V1).commit()"
+        errorLine2="                                            ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/CardVault.kt"
+            line="165"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            prefs().edit().remove(PREFS_KEY_V1).remove(PREFS_KEY_V2).commit()"
+        errorLine2="                                                                     ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/CardVault.kt"
+            line="224"
+            column="70"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()"
+        errorLine2="                                                                                                              ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsDb.kt"
+            line="67"
+            column="111"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                    prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).commit()"
+        errorLine2="                                                                                                                               ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsDb.kt"
+            line="97"
+            column="128"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_WRAPPED).commit()"
+        errorLine2="                                                                                         ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsDb.kt"
+            line="115"
+            column="90"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        if (days in CHOICES) prefs(context).edit().putInt(K_DAYS, days).commit()"
+        errorLine2="                                                                        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/HistoryRetention.kt"
+            line="75"
+            column="73"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()"
+        errorLine2="                                                                                                              ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/IdentityStore.kt"
+            line="69"
+            column="111"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        if (sync) edit.commit() else edit.apply()"
+        errorLine2="                       ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/ScannerHealth.kt"
+            line="173"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            if (persist()) legacy.edit().clear().commit()"
+        errorLine2="                                                 ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/SealedPrefs.kt"
+            line="35"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            prefs?.edit()?.putBoolean(KEY_ENABLED, on)?.commit()"
+        errorLine2="                                                        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TorTransport.kt"
+            line="155"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                prefs.edit().putString(KEY_SEED, Base64.encodeToString(KeystoreBox.encrypt(seed), Base64.NO_WRAP)).commit()"
+        errorLine2="                                                                                                                   ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TransportKeyStore.kt"
+            line="34"
+            column="116"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        prefs.edit().clear().commit()"
+        errorLine2="                             ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TransportKeyStore.kt"
+            line="54"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                p.edit().putString(WRAPPED_LOCKED, wrapped).remove(WRAPPED_OPEN).commit()"
+        errorLine2="                                                                                 ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/VaultBox.kt"
+            line="154"
+            column="82"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        p.edit().putString(WRAPPED_OPEN, wrap(OPEN_ALIAS, unlockedDeviceRequired = false, key)).remove(WRAPPED_LOCKED).commit()"
+        errorLine2="                                                                                                                       ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/VaultBox.kt"
+            line="160"
+            column="120"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="        prefs?.edit()?.remove(WRAPPED_LOCKED)?.remove(WRAPPED_OPEN)?.commit()"
+        errorLine2="                                                                     ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/VaultBox.kt"
+            line="227"
+            column="70"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            app.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()"
+        errorLine2="                                                                                ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/Wiper.kt"
+            line="377"
+            column="81"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="            edit.putBoolean(ONBOARDING_DONE_KEY, true).putBoolean(TOUR_SEEN_KEY, true).commit()"
+        errorLine2="                                                                                       ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/Wiper.kt"
+            line="398"
+            column="88"/>
+    </issue>
+
+    <issue
+        id="ExifInterface"
+        message="Avoid using `android.media.ExifInterface`; use `androidx.exifinterface.media.ExifInterface` instead"
+        errorLine1="import android.media.ExifInterface"
+        errorLine2="       ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsMedia.kt"
+            line="7"
+            column="8"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 34 (current min is 31): `android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_SHORT_SERVICE`"
+        errorLine1="            ServiceCompat.startForeground(this, FakeCall.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE)"
+        errorLine2="                                                                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/FakeCall.kt"
+            line="624"
+            column="89"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 31): `android.Manifest.permission#POST_NOTIFICATIONS`"
+        errorLine1="    Manifest.permission.POST_NOTIFICATIONS"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/MainActivity.kt"
+            line="167"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 31): `android.Manifest.permission#POST_NOTIFICATIONS`"
+        errorLine1="    Manifest.permission.POST_NOTIFICATIONS,"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/MainActivity.kt"
+            line="187"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 31): `android.Manifest.permission#POST_NOTIFICATIONS`"
+        errorLine1="        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED"
+        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/PlatformAlerts.kt"
+            line="133"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 31): `android.Manifest.permission#POST_NOTIFICATIONS`"
+        errorLine1="            ?.let { !ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true"
+        errorLine2="                                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/SafetyTools.kt"
+            line="78"
+            column="78"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 34, or core library desugaring (current min is 31): `java.time.LocalDate#ofInstant`"
+        errorLine1="        val daysCovered = fixes.map { LocalDate.ofInstant(Instant.ofEpochMilli(it.time), zone) }.toSet().size"
+        errorLine2="                                                ~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/PatternOfLife.kt"
+            line="219"
+            column="49"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 34, or core library desugaring (current min is 31): `java.time.LocalDate#ofInstant`"
+        errorLine1="                days = p.stays.map { LocalDate.ofInstant(Instant.ofEpochMilli(it.start), zone) }.toSet().size,"
+        errorLine2="                                               ~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/PatternOfLife.kt"
+            line="237"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 34, or core library desugaring (current min is 31): `java.time.LocalDate#ofInstant`"
+        errorLine1="        val weekdaysObserved = fixes.map { LocalDate.ofInstant(Instant.ofEpochMilli(it.time), zone) }.toSet()"
+        errorLine2="                                                     ~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/PatternOfLife.kt"
+            line="256"
+            column="54"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 33 (current min is 31): `android.os.UserManager#isProfile`"
+        errorLine1="            !um.isProfile -> null"
+        errorLine2="                ~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/StalkwareScanner.kt"
+            line="1128"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 33 (current min is 31): `java.lang.ref.Cleaner#create`"
+        errorLine1="    val cleaner = java.lang.ref.Cleaner.create()"
+        errorLine2="                                        ~~~~~~">
+        <location
+            file="build/rust/kotlin/uniffi/clairix_comms_crypto/clairix_comms_crypto.kt"
+            line="1233"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 33 (current min is 31): `java.lang.ref.Cleaner#register`"
+        errorLine1="        JavaLangRefCleanable(cleaner.register(value, cleanUpTask))"
+        errorLine2="                                     ~~~~~~~~">
+        <location
+            file="build/rust/kotlin/uniffi/clairix_comms_crypto/clairix_comms_crypto.kt"
+            line="1236"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 33 (current min is 31): `java.lang.ref.Cleaner.Cleanable#clean`"
+        errorLine1="    override fun clean() = cleanable.clean()"
+        errorLine2="                                     ~~~~~">
+        <location
+            file="build/rust/kotlin/uniffi/clairix_comms_crypto/clairix_comms_crypto.kt"
+            line="1242"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="PrivateApi"
+        message="Accessing internal APIs via reflection is not supported and may not work on all devices or in the future"
+        errorLine1="        val cls = runCatching { Class.forName(&quot;android.security.advancedprotection.AdvancedProtectionManager&quot;) }.getOrNull()"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/AdvancedProtection.kt"
+            line="44"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `enableOnBackInvokedCallback` is only used in API level 33 and higher (current min is 31)"
+        errorLine1="        android:enableOnBackInvokedCallback=&quot;true&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="58"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: BluetoothStatusCodes.SUCCESS, BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION, BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND, BluetoothStatusCodes.ERROR_GATT_WRITE_NOT_ALLOWED, BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY, BluetoothStatusCodes.ERROR_UNKNOWN"
+        errorLine1="                gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS"
+        errorLine2="                                                                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/mesh/MeshNode.kt"
+            line="361"
+            column="98"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: BluetoothStatusCodes.SUCCESS, BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION, BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND, BluetoothStatusCodes.ERROR_GATT_WRITE_NOT_ALLOWED, BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY, BluetoothStatusCodes.ERROR_UNKNOWN"
+        errorLine1="                    gatt.writeCharacteristic(ch, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS"
+        errorLine2="                                                                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/mesh/MeshNode.kt"
+            line="463"
+            column="107"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: BluetoothStatusCodes.SUCCESS, BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION, BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND, BluetoothStatusCodes.ERROR_UNKNOWN"
+        errorLine1="                    s.notifyCharacteristicChanged(c.device, ch, false, next) == BluetoothGatt.GATT_SUCCESS"
+        errorLine2="                                                                                ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/mesh/MeshNode.kt"
+            line="476"
+            column="81"/>
+    </issue>
+
+    <issue
+        id="BatteryLife"
+        message="Use of `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` violates the Play Store Content Policy regarding acceptable use cases, as described in https://developer.android.com/training/monitoring-device-state/doze-standby.html"
+        errorLine1="    val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse(&quot;package:${context.packageName}&quot;))"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ui/BatteryExemptionCard.kt"
+            line="111"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="BatteryLife"
+        message="Use of `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` violates the Play Store Content Policy regarding acceptable use cases, as described in https://developer.android.com/training/monitoring-device-state/doze-standby.html"
+        errorLine1="        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsNotifications.kt"
+            line="832"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="CustomSplashScreen"
+        message="The application should not provide its own launch screen"
+        errorLine1="class WipeRelaunchActivity : Activity() {"
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/WipeRelaunchActivity.kt"
+            line="28"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="RedundantLabel"
+        message="Redundant label can be removed"
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="75"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.13.1 is available: 1.19.1"
+        errorLine1="    implementation(&quot;androidx.core:core-ktx:1.13.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="348"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.8.7 is available: 2.11.0"
+        errorLine1="    implementation(&quot;androidx.lifecycle:lifecycle-runtime-ktx:2.8.7&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="349"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="    implementation(&quot;androidx.lifecycle:lifecycle-runtime-compose:2.8.7&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="350"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="    implementation(&quot;androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="351"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-service than 2.8.7 is available: 2.11.0"
+        errorLine1="    implementation(&quot;androidx.lifecycle:lifecycle-service:2.8.7&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="353"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        errorLine1="    implementation(&quot;androidx.activity:activity-compose:1.9.3&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="354"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-android than 1.8.1 is available: 1.9.0"
+        errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="355"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.10.01 is available: 2026.09.00"
+        errorLine1="    implementation(platform(&quot;androidx.compose:compose-bom:2024.10.01&quot;))"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="357"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.gms:play-services-location than 21.3.0 is available: 21.4.0"
+        errorLine1="    implementation(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="365"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.camera:camera-core than 1.4.1 is available: 1.6.2"
+        errorLine1="    implementation(&quot;androidx.camera:camera-core:1.4.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="370"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.camera:camera-camera2 than 1.4.1 is available: 1.6.2"
+        errorLine1="    implementation(&quot;androidx.camera:camera-camera2:1.4.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="371"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.camera:camera-lifecycle than 1.4.1 is available: 1.6.2"
+        errorLine1="    implementation(&quot;androidx.camera:camera-lifecycle:1.4.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="372"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.camera:camera-view than 1.4.1 is available: 1.6.2"
+        errorLine1="    implementation(&quot;androidx.camera:camera-view:1.4.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="373"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.appcompat:appcompat than 1.7.0 is available: 1.8.0"
+        errorLine1="    implementation(&quot;androidx.appcompat:appcompat:1.7.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="381"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.sqlite:sqlite than 2.6.2 is available: 2.7.1"
+        errorLine1="    implementation(&quot;androidx.sqlite:sqlite:2.6.2&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="398"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test:runner than 1.6.2 is available: 1.7.0"
+        errorLine1="    androidTestImplementation(&quot;androidx.test:runner:1.6.2&quot;)"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="408"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test:rules than 1.6.1 is available: 1.7.0"
+        errorLine1="    androidTestImplementation(&quot;androidx.test:rules:1.6.1&quot;)"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="409"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test.ext:junit than 1.2.1 is available: 1.3.0"
+        errorLine1="    androidTestImplementation(&quot;androidx.test.ext:junit:1.2.1&quot;)"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="410"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test.uiautomator:uiautomator than 2.3.0 is available: 2.4.0"
+        errorLine1="    androidTestImplementation(&quot;androidx.test.uiautomator:uiautomator:2.3.0&quot;)"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="411"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="77"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="124"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="134"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="246"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="264"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val snapshot by produceState&lt;BluetoothExposure.Snapshot?>(initialValue = null, connected, refresh) {"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/BluetoothTools.kt"
+            line="65"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val accessoryUse by produceState&lt;List&lt;VehicleTrips.AccessoryUse>>(initialValue = emptyList(), refresh) {"
+        errorLine2="                        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/BluetoothTools.kt"
+            line="71"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val photo by produceState&lt;Pair&lt;Boolean, ImageBitmap?>>(initialValue = false to null, attachment) {"
+        errorLine2="                 ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CameraSweepScreen.kt"
+            line="970"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val threads by produceState(initialValue = emptyList&lt;ChatThread>(), version) {"
+        errorLine2="                   ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="666"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val groupThreads by produceState(initialValue = emptyList&lt;GroupThread>(), version) {"
+        errorLine2="                        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="669"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val requests by produceState(initialValue = emptyList&lt;ChatThread>(), version) {"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="673"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val timer by produceState(initialValue = 0, version, peer) {"
+        errorLine2="                 ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="830"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val contact by produceState&lt;Contact?>(initialValue = null, version, peer) {"
+        errorLine2="                   ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1199"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val messages by produceState(initialValue = emptyList&lt;ChatMessage>(), version, peer) {"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1202"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val held by produceState(initialValue = 0, version, peer) {"
+        errorLine2="                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1206"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val full by produceState&lt;ImageBitmap?>(initialValue = null, m.id, m.status) {"
+        errorLine2="                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1774"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="                val image by produceState&lt;ImageBitmap?>(initialValue = null, m.id) {"
+        errorLine2="                             ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1931"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val lookup by produceState&lt;Pair&lt;Boolean, Contact?>>(initialValue = false to null, version, peer) {"
+        errorLine2="                  ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="2157"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val blocked by produceState(initialValue = emptyList&lt;ContactGate.Blocked>(), version) {"
+        errorLine2="                   ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="2795"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val kept by produceState(initialValue = emptyMap&lt;String, Contact>(), version) {"
+        errorLine2="                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="2798"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val group by produceState&lt;Group?>(null, groupId, version) {"
+        errorLine2="                 ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="3105"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val messages by produceState(emptyList&lt;ChatMessage>(), groupId, version) {"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="3108"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val members by produceState(emptyList&lt;GroupMember>(), groupId, version) {"
+        errorLine2="                   ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="3111"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val group by produceState&lt;Group?>(null, groupId, version) {"
+        errorLine2="                 ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="3337"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val members by produceState(emptyList&lt;GroupMember>(), groupId, version) {"
+        errorLine2="                   ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="3340"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="ProduceStateDoesNotAssignValue"
+        message="produceState calls should assign `value` inside the producer lambda"
+        errorLine1="    val contacts by produceState(emptyList&lt;Contact>(), version) {"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="3456"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="77"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="124"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="134"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="246"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="264"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ChromeOsAbiSupport"
+        message="Missing x86_64 ABI support for ChromeOS"
+        errorLine1="        ndk { abiFilters += rustAbis }"
+        errorLine2="                            ~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="343"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="PermissionImpliesUnsupportedChromeOsHardware"
+        message="Permission exists without corresponding hardware `&lt;uses-feature android:name=&quot;android.hardware.camera&quot; required=&quot;false&quot;>` tag"
+        errorLine1="    &lt;uses-permission android:name=&quot;android.permission.CAMERA&quot; />"
+        errorLine2="     ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="25"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="TrustAllX509TrustManager"
+        message="`checkClientTrusted` is empty, which could cause insecure network traffic due to trusting arbitrary TLS/SSL certificates presented by peers"
+        errorLine1="                override fun checkClientTrusted(chain: Array&lt;X509Certificate>, authType: String) {}"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="724"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="CustomX509TrustManager"
+        message="Implementing a custom `X509TrustManager` is error-prone and likely to be insecure. It is likely to disable certificate validation altogether, and is non-trivial to implement correctly without calling Android&apos;s default implementation."
+        errorLine1="class PinningTrustManager("
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/RelayTls.kt"
+            line="60"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="CustomX509TrustManager"
+        message="Implementing a custom `X509TrustManager` is error-prone and likely to be insecure. It is likely to disable certificate validation altogether, and is non-trivial to implement correctly without calling Android&apos;s default implementation."
+        errorLine1="            init(null, arrayOf&lt;X509TrustManager>(object : X509TrustManager {"
+        errorLine2="                                                 ~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="723"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="IntentFilterExportedReceiver"
+        message="As of Android 12, `android:exported` must be set; use `true` to make the activity available to other apps, and `false` otherwise."
+        errorLine1="        &lt;activity android:name=&quot;.MainActivity&quot;>"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="src/suite/AndroidManifest.xml"
+            line="107"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="Recycle"
+        message="This `Cursor` should be freed up after use with `#close()`"
+        errorLine1="                helper.readableDatabase.query(LEGACY_TABLE, arrayOf(&quot;ts&quot;, &quot;event&quot;, &quot;extra&quot;), null, null, null, null, &quot;ts ASC&quot;).use { c ->"
+        errorLine2="                                        ~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/UnlockLedger.kt"
+            line="159"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is never &lt; 31"
+        errorLine1="        if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.Q || info !is CellInfoNr) return null"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/CellMonitor.kt"
+            line="320"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="This folder configuration (`v26`) is unnecessary; `minSdkVersion` is 31. Merge all the resources in this folder into `mipmap-anydpi`.">
+        <location
+            file="src/main/res/mipmap-anydpi-v26"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `JavaAudioDeviceModule` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="    /** The audio module behind [factory]; kept to find the microphone session WebRTC opens. */"
+        errorLine2="    ^">
+        <location
+            file="src/main/java/app/clairix/comms/CallManager.kt"
+            line="140"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `Ringer` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="    private var ringer: Ringer? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CallManager.kt"
+            line="155"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `CommsStore` which has field `mContext` pointing to `Context`); this is a memory leak"
+        errorLine1="    /** The message database while the vault is open; null while the phone is locked. */"
+        errorLine2="    ^">
+        <location
+            file="src/main/java/app/clairix/comms/CommsRepository.kt"
+            line="160"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `GnssMonitor` which has field `app` pointing to `Context`); this is a memory leak"
+        errorLine1="/**"
+        errorLine2="^">
+        <location
+            file="src/main/java/app/clairix/analysis/GnssMonitor.kt"
+            line="24"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields; this is a memory leak"
+        errorLine1="    private var app: Context? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/GnssMonitor.kt"
+            line="69"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `SealedPrefs` which has field `app` pointing to `Context`); this is a memory leak"
+        errorLine1="    @Volatile"
+        errorLine2="    ^">
+        <location
+            file="src/main/java/app/clairix/comms/LinkHealth.kt"
+            line="24"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `MeshNode` which has field `app` pointing to `Context`); this is a memory leak"
+        errorLine1="    @Volatile private var node: MeshNode? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/mesh/Mesh.kt"
+            line="27"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `PhoneHealthMonitor` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="        /** The monitor currently registered for callbacks, if the service is running. */"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/analysis/PhoneHealthMonitor.kt"
+            line="880"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `StalkwareWatch` which has field `watchedBy` pointing to `Context`); this is a memory leak"
+        errorLine1="/**"
+        errorLine2="^">
+        <location
+            file="src/main/java/app/clairix/analysis/StalkwareWatch.kt"
+            line="31"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields; this is a memory leak"
+        errorLine1="    private var watchedBy: Context? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/StalkwareWatch.kt"
+            line="254"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var tabIndex by rememberSaveable { mutableStateOf(0) }"
+        errorLine2="                                       ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CameraSweepScreen.kt"
+            line="121"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var modeIndex by rememberSaveable { mutableStateOf(0) }"
+        errorLine2="                                        ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CameraSweepScreen.kt"
+            line="217"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var maxZoom by remember { mutableStateOf(1f) }"
+        errorLine2="                              ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CameraSweepScreen.kt"
+            line="222"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var groupCount by remember { mutableStateOf(-1) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/SafetyTools.kt"
+            line="360"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="                    var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }"
+        errorLine2="                                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="863"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="UsableSpace"
+        message="Consider also using `StorageManager#getAllocatableBytes` and `allocateBytes` which will consider clearable cached data"
+        errorLine1="            val free = withContext(Dispatchers.IO) { runCatching { ctx.filesDir.usableSpace }.getOrDefault(0L) }"
+        errorLine2="                                                                                ~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="383"
+            column="81"/>
+    </issue>
+
+    <issue
+        id="UseOfNonLambdaOffsetOverload"
+        message="State backed values should use the lambda overload of Modifier.offset"
+        errorLine1="                    .offset(x = if (shake) shakeX.dp else 0.dp)"
+        errorLine2="                     ~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/LockScreen.kt"
+            line="213"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="KtxExtensionAvailable"
+        message="Add suffix `-ktx` to enable the Kotlin extensions for this library"
+        errorLine1="    implementation(&quot;androidx.sqlite:sqlite:2.6.2&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="398"
+            column="20"/>
+    </issue>
+
+</issues>

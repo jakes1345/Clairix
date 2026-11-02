@@ -22,7 +22,6 @@ body:
       options:
         - Clairix Full (clairix-vX.apk)
         - Clairix Comms (clairix-comms-vX.apk)
-        - Google Play
     validations:
       required: true
   - type: input

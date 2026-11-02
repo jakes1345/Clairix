@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The Play edition. Google Play's policy does not allow an app to disguise its
+    launcher icon, so discreet mode's neutral launcher entries are removed here
+    and the Clairix entry is the only one (BuildConfig.LAUNCHER_DISGUISE is false
+    in this edition). The rest of discreet mode is the same in every edition.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <activity-alias
+            android:name=".LauncherCompass"
+            tools:node="remove" />
+        <activity-alias
+            android:name=".LauncherNotes"
+            tools:node="remove" />
+    </application>
+</manifest>

@@ -39,10 +39,12 @@ import java.util.concurrent.TimeUnit
  *
  * Two sources write the same ledger:
  *
- * - [UnlockAdminReceiver], a device admin with only the watch-login policy. The
- *   platform calls it on every lock-screen success, failure and credential
- *   change, in real time and whether or not Clairix is running. Enabling it is a
- *   one-time step the owner takes from the Device tab ([requestAdminIntent]).
+ * - [UnlockAdminReceiver], a device admin with the watch-login policy (and
+ *   force-lock, which only the Fake call page's "Schedule and lock" uses; see
+ *   [FakeCall.lockNow]). The platform calls it on every lock-screen success,
+ *   failure and credential change, in real time and whether or not Clairix is
+ *   running. Enabling it is a one-time step the owner takes from the Device tab
+ *   ([requestAdminIntent]).
  * - [UsageStatsManager]'s event stream, which records KEYGUARD_HIDDEN /
  *   KEYGUARD_SHOWN and SCREEN_INTERACTIVE / SCREEN_NON_INTERACTIVE for every
  *   app with usage access. It fills in history from before the admin was
@@ -81,6 +83,8 @@ object UnlockLedger {
     private const val K_SLEEP_END = "sleep_end_min"
     private const val K_BACKFILL_TS = "backfill_ts"
     private const val K_SLEEP_CHECK_TS = "sleep_check_ts"
+    /** Set once the owner has answered "When do you usually sleep?"; see [sleepWindowAnswered]. */
+    private const val K_SLEEP_ASKED = "sleep_window_asked"
 
     /** Minutes after midnight: the sleep window, 23:00 to 07:00 unless the owner changes it. */
     const val DEFAULT_SLEEP_START_MIN = 23 * 60
@@ -104,6 +108,8 @@ object UnlockLedger {
     @Volatile private var store: Store? = null
     /** "ts:kind" of every row held, so neither source writes a moment already written. */
     private val held = HashSet<String>()
+    /** Opens the sealed document: [Store] with the Keystore cipher; a JVM test, which has no Keystore, hands in another. */
+    @Volatile internal var openStore: (Context) -> Store = { Store(it, FILE) }
 
     /** The legacy database, opened only to read it into the store. */
     private class LegacyDb(context: Context) : SQLiteOpenHelper(context, LEGACY_DB_NAME, null, 1) {
@@ -129,7 +135,7 @@ object UnlockLedger {
      */
     private fun ledgerLocked(): Pair<Store, JSONArray>? {
         val app = appContext ?: return null
-        val s = store ?: Store(app, FILE).also { fresh ->
+        val s = store ?: openStore(app).also { fresh ->
             val root = fresh.json
             val arr = root.optJSONArray(KEY_ROWS) ?: JSONArray().also { root.put(KEY_ROWS, it) }
             held.clear()
@@ -149,7 +155,7 @@ object UnlockLedger {
      */
     private fun migrateLocked(app: Context, s: Store) {
         if (!app.getDatabasePath(LEGACY_DB_NAME).exists()) return
-        runCatching {
+        val copied = runCatching {
             val helper = LegacyDb(app)
             try {
                 helper.readableDatabase.query(LEGACY_TABLE, arrayOf("ts", "event", "extra"), null, null, null, null, "ts ASC").use { c ->
@@ -161,9 +167,16 @@ object UnlockLedger {
             } finally {
                 helper.close()
             }
+            // insertLocked leaves the write to its caller: without this the copied
+            // rows stayed in memory and the database below was deleted all the same.
+            s.markDirty()
             s.flush()
-        }
-        runCatching { app.deleteDatabase(LEGACY_DB_NAME) }
+            // flush() keeps quiet about a write that failed (a Keystore that would not
+            // seal): the database is the only other copy, so it stays until one lands.
+            check(s.isWritten()) { "the copied rows are not on disk yet" }
+        }.isSuccess
+        // Deleted only once its rows are in the sealed file; a failed read keeps it for the next start.
+        if (copied) runCatching { app.deleteDatabase(LEGACY_DB_NAME) }
     }
 
     // ── Writing ─────────────────────────────────────────────────────────────
@@ -183,9 +196,14 @@ object UnlockLedger {
     }
 
     /** Inserts one row and schedules the write; null when it was a duplicate or the store is unavailable. */
-    private fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = synchronized(lock) {
+    internal fun insert(ts: Long, kind: UnlockKind, extra: String?): UnlockEvent? = synchronized(lock) {
         val (s, _) = ledgerLocked() ?: return null
         val event = insertLocked(ts, kind, extra) ?: return null
+        // The device-admin receiver writes here on every unlock whether or not
+        // the app or the scanner runs, so it also drops what has aged past the
+        // owner's retention: the ledger cannot outgrow it on a phone whose owner
+        // never opens Clairix (HistoryRetention covers the rest).
+        appContext?.let { app -> HistoryRetention.cutoff(app)?.let { cutoff -> dropOlderThanLocked(cutoff) } }
         // The row is in memory; the sealed file follows within seconds, one
         // write for a burst of rows, serialised under [lock] on the IO dispatcher.
         s.touch(5_000L, guard = lock)
@@ -213,7 +231,22 @@ object UnlockLedger {
 
     /** Deletes rows before [cutoff] and writes the ledger; returns how many. Blocking; call off the main thread. */
     fun pruneOlderThan(cutoff: Long): Int = synchronized(lock) {
+        val (s, _) = ledgerLocked() ?: return 0
+        val removed = dropOlderThanLocked(cutoff)
+        if (removed > 0) s.flush()
+        removed
+    }
+
+    /**
+     * Takes rows before [cutoff] out of the document, leaving the write to the
+     * caller; returns how many. Every row is looked at: a backfill can add rows
+     * older than the newest ones. Caller holds [lock].
+     */
+    private fun dropOlderThanLocked(cutoff: Long): Int {
         val (s, arr) = ledgerLocked() ?: return 0
+        var oldest = Long.MAX_VALUE
+        for (i in 0 until arr.length()) arr.optJSONArray(i)?.let { oldest = minOf(oldest, it.optLong(1)) }
+        if (oldest >= cutoff) return 0
         val kept = JSONArray()
         for (i in 0 until arr.length()) {
             val row = arr.optJSONArray(i) ?: continue
@@ -225,9 +258,16 @@ object UnlockLedger {
             held.clear()
             for (i in 0 until kept.length()) kept.optJSONArray(i)?.let { held += key(it.optLong(1), it.optString(2)) }
             s.markDirty()
-            s.flush()
         }
-        removed
+        return removed
+    }
+
+    /** Forgets the open document and the app, as a new process would start; for JVM tests. */
+    internal fun closeForTest() = synchronized(lock) {
+        store = null
+        held.clear()
+        appContext = null
+        _recent.value = null
     }
 
     private fun publish(event: UnlockEvent) {
@@ -286,9 +326,10 @@ object UnlockLedger {
             .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent(context))
             .putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "Lets Clairix keep a record of every time this phone is unlocked, fails to unlock, or has its " +
-                    "PIN changed — so you can see whether it was used while you slept. Clairix never locks, " +
-                    "wipes or sets a password policy with this."
+                // Shown on Android's own screen, which anyone looking at the phone can read: it
+                // says what the grant does, not what it is for, and in discreet mode not even
+                // the app's name (Android still shows the package's label above it).
+                DiscreetText.adminExplanation(DiscreetMode.on(context))
             )
 
     // ── Usage access ────────────────────────────────────────────────────────
@@ -349,15 +390,36 @@ object UnlockLedger {
     fun sleepStartMinutes(context: Context): Int = prefs(context).getInt(K_SLEEP_START, DEFAULT_SLEEP_START_MIN)
     fun sleepEndMinutes(context: Context): Int = prefs(context).getInt(K_SLEEP_END, DEFAULT_SLEEP_END_MIN)
 
-    /** Sets the window as minutes after midnight; it may cross midnight (23:00 to 07:00 is 1380 to 420). */
+    /**
+     * Sets the window as minutes after midnight; it may cross midnight (23:00 to 07:00 is 1380 to
+     * 420). Saving one answers "When do you usually sleep?" ([sleepWindowAnswered]).
+     */
     fun setSleepWindow(context: Context, startMinutes: Int, endMinutes: Int) {
         require(startMinutes in 0 until 24 * 60 && endMinutes in 0 until 24 * 60) { "minutes out of range" }
-        prefs(context).edit().putInt(K_SLEEP_START, startMinutes).putInt(K_SLEEP_END, endMinutes).apply()
+        prefs(context).edit()
+            .putInt(K_SLEEP_START, startMinutes).putInt(K_SLEEP_END, endMinutes).putBoolean(K_SLEEP_ASKED, true)
+            .apply()
     }
 
-    /** Whether [ts], in the phone's local time, falls inside the sleep window. */
+    /**
+     * Whether the owner has said when they sleep. The Unlock ledger page asks as a source is
+     * switched on, and nothing is judged until it has an answer: no unlock is "in the sleep
+     * window" and [checkSleepWindow] holds back, so the first judgement reaches back over the days
+     * held, with the owner's own hours rather than a guess.
+     */
+    fun sleepWindowAnswered(context: Context): Boolean = sleepWindowAnswered(prefs(context))
+
+    /**
+     * Answered: the question, or a window saved before the question existed, or a ledger that was
+     * already judging with the default window then (an install from before it: its judgement goes on).
+     */
+    internal fun sleepWindowAnswered(p: SharedPreferences): Boolean =
+        p.getBoolean(K_SLEEP_ASKED, false) || p.contains(K_SLEEP_START) || p.getLong(K_SLEEP_CHECK_TS, 0L) != 0L
+
+    /** Whether [ts], in the phone's local time, falls inside the sleep window; never before the owner has given one. */
     fun inSleepWindow(ts: Long): Boolean {
         val ctx = appContext ?: return false
+        if (!sleepWindowAnswered(ctx)) return false
         val start = sleepStartMinutes(ctx)
         val end = sleepEndMinutes(ctx)
         if (start == end) return false
@@ -368,12 +430,14 @@ object UnlockLedger {
 
     /**
      * Raises an alert for any unlock inside the sleep window that has not been
-     * judged yet. Blocking. Returns the anomalies found this time.
+     * judged yet. Blocking. Returns the anomalies found this time. Nothing, and
+     * nothing marked as judged, until the owner has said when they sleep.
      */
     fun checkSleepWindow(context: Context): List<UnlockEvent> {
         init(context)
         val app = context.applicationContext
         val p = prefs(app)
+        if (!sleepWindowAnswered(p)) return emptyList()
         val now = System.currentTimeMillis()
         val since = p.getLong(K_SLEEP_CHECK_TS, 0L).let { if (it == 0L) now - BACKFILL_HORIZON_MS else it }
         val found = sleepAnomalies(since)
@@ -455,8 +519,9 @@ class UnlockAdminReceiver : DeviceAdminReceiver() {
                 title = "Unlock recording was switched off",
                 detail = "Clairix's device admin was deactivated, so lock-screen events are no longer recorded " +
                     "in real time. If you did not do this, someone with access to the phone did. " +
-                    "Re-enable it from the Device tab.",
-                kind = EventKind.PLATFORM,
+                    "Re-enable it on the Unlock ledger page.",
+                // With the sleep unlocks and the changed lock: someone at the phone, not a setting.
+                kind = EventKind.UNLOCK_ANOMALY,
                 dedupeKey = "unlock_admin_off"
             ),
             dedupeWindowMs = 0L

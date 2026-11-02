@@ -21,7 +21,7 @@ import kotlin.math.sqrt
  * 500 fixes in memory, so nothing survived a restart; this is the on-disk record,
  * a [Store]-backed JSON file:
  *
- *   {"fixes": [[ts, lat, lon, accuracy], …]}   oldest first, at most [CAP] rows
+ *   {"fixes": [[ts, lat, lon, accuracy, speed], …]}   oldest first, at most [CAP] rows
  *
  * [ScanService] records each fix it receives; a fix is kept when the phone moved
  * at least 25 m or 30 s passed, and coarse fixes (worse than 100 m) are dropped.
@@ -53,7 +53,7 @@ object LocationHistory {
             val s = store(context)
             val root = s.json
             var arr = root.optJSONArray(KEY) ?: JSONArray().also { root.put(KEY, it) }
-            arr.put(JSONArray().put(fix.time).put(fix.lat).put(fix.lon).put((fix.accuracy ?: -1f).toDouble()))
+            arr.put(row(fix))
             if (arr.length() > CAP + CAP / 10) {
                 // Trim in one go rather than removing the head row by row on every fix.
                 val trimmed = JSONArray()
@@ -72,24 +72,40 @@ object LocationHistory {
     fun load(context: Context): List<Fix> {
         val arr = store(context).json.optJSONArray(KEY) ?: return emptyList()
         val out = ArrayList<Fix>(arr.length())
-        for (i in 0 until arr.length()) {
-            val row = arr.optJSONArray(i) ?: continue
-            if (row.length() < 3) continue
-            val acc = if (row.length() > 3) row.optDouble(3, -1.0).toFloat().takeIf { it >= 0f } else null
-            out += Fix(row.optDouble(1), row.optDouble(2), null, row.optLong(0), acc)
-        }
+        for (i in 0 until arr.length()) out += fixOf(arr.optJSONArray(i) ?: continue) ?: continue
         out.sortBy { it.time }
         return out
     }
 
+    /**
+     * One stored row: time, latitude, longitude, accuracy and speed, -1 for an
+     * accuracy or a speed the fix did not have. The speed is what lets
+     * [PatternOfLife] leave fixes taken on the move out of a stay; rows written
+     * before it was kept have four columns and read back without one.
+     */
+    internal fun row(fix: Fix): JSONArray = JSONArray().put(fix.time).put(fix.lat).put(fix.lon)
+        .put((fix.accuracy ?: -1f).toDouble()).put((fix.speed ?: -1f).toDouble())
+
+    /** The fix a stored [row] holds, or null when it has no time and place. */
+    internal fun fixOf(row: JSONArray): Fix? {
+        if (row.length() < 3) return null
+        fun optional(i: Int): Float? = if (row.length() > i) row.optDouble(i, -1.0).toFloat().takeIf { it >= 0f } else null
+        return Fix(row.optDouble(1), row.optDouble(2), optional(4), row.optLong(0), optional(3))
+    }
+
     fun size(context: Context): Int = store(context).json.optJSONArray(KEY)?.length() ?: 0
 
-    /** Deletes fixes before [cutoff] and writes the log; returns how many. File I/O; call off the main thread. */
+    /**
+     * Deletes fixes before [cutoff] and writes the log; returns how many. Rows are kept
+     * oldest first, so when the first is inside the retention nothing is older and the
+     * walk over up to [CAP] rows is skipped. File I/O; call off the main thread.
+     */
     fun pruneOlderThan(context: Context, cutoff: Long): Int {
         synchronized(lock) {
             val s = store(context)
             val root = s.json
             val arr = root.optJSONArray(KEY) ?: return 0
+            if (!ScanPacing.holdsOlderThan(oldestTime(arr), cutoff)) return 0
             val kept = JSONArray()
             for (i in 0 until arr.length()) {
                 val row = arr.optJSONArray(i) ?: continue
@@ -105,10 +121,23 @@ object LocationHistory {
         }
     }
 
+    /**
+     * The time of the first, oldest, row of a log array, or null when it has none. A
+     * malformed first row reads as older than any cutoff, so the walk runs and drops
+     * it, as it drops every row it cannot read.
+     */
+    internal fun oldestTime(arr: JSONArray): Long? {
+        if (arr.length() == 0) return null
+        return arr.optJSONArray(0)?.optLong(0) ?: Long.MIN_VALUE
+    }
+
     fun clear(context: Context) {
         synchronized(lock) {
             last = null
-            store(context).replace(JSONObject().put(KEY, JSONArray()))
+            val s = store(context)
+            // The owner's clear: the file goes even if this run could not read it.
+            s.discardUnread()
+            s.replace(JSONObject().put(KEY, JSONArray()))
         }
     }
 
@@ -125,7 +154,8 @@ data class DepartureStats(
     val stdMinutes: Float,
     val samples: Int
 ) {
-    val label: String get() = "%s %s ± %d min".format(Locale.US, weekday.name.take(3).lowercase().replaceFirstChar { it.uppercase() }, clock(meanMinuteOfDay), stdMinutes.toInt())
+    /** "Mon 07:45 ± 6 min": to the quarter hour, as the suggestions are, so a glance at the page does not take away the minute. */
+    val label: String get() = "%s %s ± %d min".format(Locale.US, weekday.name.take(3).lowercase().replaceFirstChar { it.uppercase() }, clock(nearestQuarter(meanMinuteOfDay)), stdMinutes.toInt())
 }
 
 /** A place the owner stops at, found from the fixes alone. */
@@ -240,8 +270,6 @@ object PatternOfLife {
         } else { windowLo = 0; windowHi = 0; windowMin = 0 }
         val weekdaysObserved = fixes.map { LocalDate.ofInstant(Instant.ofEpochMilli(it.time), zone) }.toSet()
             .count { it.dayOfWeek != DayOfWeek.SATURDAY && it.dayOfWeek != DayOfWeek.SUNDAY }
-        val inWindow = homeWeekdayDepartures.values.count { it in windowLo..windowHi }
-        val inWindowPct = if (weekdaysObserved > 0 && windowMin > 0) inWindow * 100 / weekdaysObserved else 0
 
         // 4. Route repetition.
         val (tripCount, repeated, repeatedOf) = routeRepetition(fixes, stays)
@@ -258,10 +286,14 @@ object PatternOfLife {
             else -> 0f
         }.coerceIn(0f, 1f)
 
-        // 6. Suggestions.
+        // 6. Suggestions. Times in them go to the quarter hour ("07:45–08:15", not
+        // "07:52–08:04"): enough for the owner to see her habit, and less for
+        // anyone reading over her shoulder. The share is counted for that window.
         val suggestions = ArrayList<String>()
         if (home != null && depMinutes.size >= 3) {
-            suggestions += "You leave home ${clock(windowLo)}–${clock(windowHi)} on $inWindowPct% of weekdays."
+            val (shownLo, shownHi) = quarterWindow(windowLo, windowHi)
+            val shownPct = if (weekdaysObserved > 0) homeWeekdayDepartures.values.count { it in shownLo..shownHi } * 100 / weekdaysObserved else 0
+            suggestions += "You leave home ${clock(shownLo)}–${clock(shownHi)} on $shownPct% of weekdays."
             if (windowMin <= 30) suggestions += "Consider varying your departure time by ±15 minutes."
             else if (windowMin <= 60) suggestions += "Your departure window is under an hour; widening it makes you harder to wait for."
         } else if (home != null) {
@@ -272,7 +304,7 @@ object PatternOfLife {
             if (back.isNotEmpty()) {
                 val tightest = back.minByOrNull { it.stdMinutes }!!
                 if (tightest.stdMinutes <= 20f) {
-                    suggestions += "You leave work around ${clock(tightest.meanMinuteOfDay)} on ${tightest.weekday.name.lowercase().replaceFirstChar { it.uppercase() }}s (± ${tightest.stdMinutes.toInt()} min). Someone who knows that knows where to stand."
+                    suggestions += "You leave work around ${clock(nearestQuarter(tightest.meanMinuteOfDay))} on ${tightest.weekday.name.lowercase().replaceFirstChar { it.uppercase() }}s (± ${tightest.stdMinutes.toInt()} min). Someone who knows that knows where to stand."
                 }
             }
         }
@@ -340,7 +372,11 @@ object PatternOfLife {
      */
     private fun dbscan(fixes: List<Fix>): IntArray {
         val n = fixes.size
-        val labels = IntArray(n) { UNVISITED }
+        // A fix taken on the move (a walk, a slow drive) is never part of a stay: at
+        // walking pace consecutive fixes fall within EPS_M and WINDOW_MS of each
+        // other and chained two places into one. Unknown speed counts as still.
+        val moving = BooleanArray(n) { (fixes[it].speed ?: 0f) > STILL_MAX_MPS }
+        val labels = IntArray(n) { if (moving[it]) NOISE else UNVISITED }
         val index = GridIndex(fixes, EPS_M)
         var cluster = 0
         val queue = ArrayDeque<Int>()
@@ -353,6 +389,7 @@ object PatternOfLife {
             queue.addAll(neigh)
             while (queue.isNotEmpty()) {
                 val j = queue.removeFirst()
+                if (moving[j]) continue
                 if (labels[j] == NOISE) labels[j] = cluster
                 if (labels[j] != UNVISITED) continue
                 labels[j] = cluster
@@ -364,6 +401,8 @@ object PatternOfLife {
         return labels
     }
 
+    /** Above this reported speed a fix is taken on the move (a slow walk is about 1.1 m/s). */
+    private const val STILL_MAX_MPS = 1.0f
     private const val UNVISITED = -2
     private const val NOISE = -1
 
@@ -609,6 +648,20 @@ object PatternOfLife {
         return if (union == 0) 0.0 else inter.toDouble() / union
     }
 }
+
+/**
+ * A departure window as the suggestions show it, widened out to whole quarter
+ * hours so it still holds every departure the measured one did: 07:52–08:04 is
+ * 07:45–08:15. A window inside one quarter hour shows as that quarter.
+ */
+internal fun quarterWindow(loMinute: Int, hiMinute: Int): Pair<Int, Int> {
+    val lo = Math.floorDiv(loMinute, 15) * 15
+    val hi = Math.floorDiv(hiMinute + 14, 15) * 15
+    return lo to if (hi > lo) hi else lo + 15
+}
+
+/** A time of day to the nearest quarter hour: 17:37 is 17:30, 17:38 is 17:45. */
+internal fun nearestQuarter(minuteOfDay: Int): Int = Math.floorDiv(minuteOfDay + 7, 15) * 15
 
 /** "08:05" for 485 minutes into the day. */
 internal fun clock(minuteOfDay: Int): String {

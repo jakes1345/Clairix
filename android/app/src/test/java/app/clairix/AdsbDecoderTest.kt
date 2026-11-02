@@ -27,6 +27,17 @@ class AdsbDecoderTest {
     }
 
     @Test
+    fun clearForgetsEveryAircraftAndPublishesTheEmptyList() {
+        // Once the stream stops (the stick pulled out) nothing ages tracks out; the list must not stand frozen.
+        val d = AdsbDecoder()
+        assertTrue(d.decodeHex("8D4840D6202CC371C32CE0576098", 1_000))
+        assertFalse(d.snapshot(1_000).isEmpty())
+        d.clear()
+        assertTrue(d.aircraft.value.isEmpty())
+        assertTrue(d.snapshot(2_000).isEmpty())
+    }
+
+    @Test
     fun aCorruptedFrameIsRejected() {
         val d = AdsbDecoder()
         assertFalse(d.decodeHex("8D4840D6202CC371C32CE0576099", 1_000))

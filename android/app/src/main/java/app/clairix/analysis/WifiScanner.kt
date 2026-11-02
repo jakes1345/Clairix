@@ -16,6 +16,7 @@ import android.net.wifi.WifiManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import app.clairix.Threat
+import app.clairix.VpnCoverage
 import app.clairix.WifiAnomaly
 import app.clairix.WifiConnection
 import app.clairix.WifiNetwork
@@ -27,37 +28,60 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 
 /**
+ * One access point as the platform reported it: what [android.net.wifi.ScanResult]
+ * carries, without the platform class, so the rules can be run on captured beacon
+ * lists in a JVM test.
+ */
+data class WifiBeacon(
+    val ssid: String?,
+    val bssid: String?,
+    val rssi: Int,
+    /** The capability string, e.g. `[WPA2-PSK-CCMP][RSN-SAE-CCMP][ESS]`; `[ESS]` alone is open. */
+    val capabilities: String?
+) {
+    companion object {
+        fun of(r: ScanResult): WifiBeacon = WifiBeacon(r.SSID, r.BSSID, r.level, r.capabilities)
+    }
+}
+
+/**
  * Looks for access points that behave like bait rather than like infrastructure.
  *
  * The hard part here is not finding suspicious networks, it is not crying wolf. An
  * earlier version flagged `xfinitywifi`, `attwifi`, `netgear` and every network
  * broadcasting on more than two frequencies — which is to say every carrier hotspot
- * and every dual-band router in the country. A scanner that lights up on a walk down
- * the street teaches you to ignore it, so each rule below has to describe something
- * a normal network does not do.
+ * and every dual-band router in the country. A later one kept `xfinitywifi` and
+ * `attwifi` as HIGH "bait" on the theory that a real carrier hotspot is never open,
+ * which is wrong: those are the open captive-portal names the operators broadcast by
+ * design (the secured siblings are XFINITY, BTWifi-X, SpectrumWiFi Plus). A scanner
+ * that lights up on a walk down the street teaches you to ignore it, so each HIGH
+ * rule below has to describe something a normal network does not do. An open
+ * carrier hotspot is noted for what it is — a captive portal that reads whatever is
+ * not encrypted — at LOW, with no alert and no timeline event.
  */
 object WifiScanner {
 
     /**
-     * Default SSIDs of actual interception and research equipment. Deliberately short:
-     * a network being *popular* is not evidence, and carrier hotspot names belong to
-     * the open-network rule below, where being unencrypted is what carries the signal.
+     * Default SSIDs of actual Wi-Fi interception and research kit, and nothing else.
+     * Deliberately short: a network being *popular* is not evidence. The cellular
+     * interceptor product names an earlier version listed here (stingray, kingfish,
+     * hailstorm, dirtbox and friends) broadcast no Wi-Fi at all, so the only thing
+     * they ever matched was a joke router name; the generic test names it also held
+     * ("AndroidWifi" is the emulator's own network, "testssid") are not interception
+     * kit either.
      */
     private val KNOWN_TOOL_SSIDS = setOf(
-        "drt", "hailstorm", "kingfish", "stingray", "dirtbox", "triggerfish",
-        "gossamer", "harpoon", "crossbow", "porpoise",
-        "androidwifi", "test_ssid", "testssid", "wifi_test",
         "pineapple", "wifipineapple", "hak5", "evil_twin", "eviltwin"
     )
 
     /**
      * Operator brands distinctive enough to match as whole tokens anywhere in an
-     * SSID: none of them is an ordinary word, so an open "Verizon Guest" is bait and
-     * nothing innocent looks like it. Brands that *are* ordinary words — Orange,
-     * Metro, Boost, Cox, Charter, Frontier, Spectrum, Sprint, Cricket, Optimum,
-     * Lumen, EE, O2, Three — are deliberately absent: as tokens they flagged
-     * "Orange County Library" and "Metro Transit WiFi" as HIGH. They appear only in
-     * [KNOWN_HOTSPOT_SSIDS], as the exact names their hotspots broadcast.
+     * SSID: none of them is an ordinary word, so an open "Verizon Guest" is a
+     * carrier hotspot and nothing innocent looks like it. Brands that *are* ordinary
+     * words — Orange, Metro, Boost, Cox, Charter, Frontier, Spectrum, Sprint,
+     * Cricket, Optimum, Lumen, EE, O2, Three — are deliberately absent: as tokens
+     * they flagged "Orange County Library" and "Metro Transit WiFi". They appear only
+     * in [KNOWN_HOTSPOT_SSIDS], as the exact names their hotspots broadcast.
      */
     private val CARRIER_BRANDS = setOf(
         "at&t", "xfinity", "verizon", "t-mobile", "tmobile", "comcast", "vodafone",
@@ -126,50 +150,74 @@ object WifiScanner {
     private val KNOWN_HOTSPOT_KEYS: Set<String> =
         KNOWN_HOTSPOT_SSIDS.map { canonical(it) }.filter { it.isNotEmpty() }.toSet()
 
+    /** Reason of the one informational (LOW) flag; everything else this emits is HIGH. */
+    const val REASON_OPEN_CARRIER_HOTSPOT = "carrier_open_network"
+
     fun scan(context: Context): List<WifiAnomaly> {
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             ?: return emptyList()
         val results = try { wifi.scanResults } catch (_: SecurityException) { return emptyList() }
         if (results.isNullOrEmpty()) return emptyList()
+        return classify(results.map { WifiBeacon.of(it) }, System.currentTimeMillis())
+    }
 
+    /**
+     * The rules, on a beacon list. Two kinds of result come out:
+     *
+     * - HIGH: a network that behaves like bait — the default name of Wi-Fi
+     *   interception kit, or an open network wearing the name of one that is
+     *   encrypted elsewhere in range. These alert, go on the timeline and count
+     *   towards correlated surveillance.
+     * - LOW: an open carrier hotspot (`xfinitywifi`, `attwifi`, `BTWifi-with-FON`, an
+     *   open "Verizon Guest"). That is what those operators broadcast by design, so it
+     *   is information for the Wi-Fi tab — a captive portal reads whatever is not
+     *   encrypted, so use a VPN on it — and never an alarm.
+     *
+     * The Karma canary is a separate check ([app.clairix.detect.KarmaCanary]).
+     */
+    fun classify(results: List<WifiBeacon>, now: Long): List<WifiAnomaly> {
+        if (results.isEmpty()) return emptyList()
         val anomalies = ArrayList<WifiAnomaly>()
-        val now = System.currentTimeMillis()
 
         // Whether any access point on each SSID is encrypted — needed for the
         // evil-twin rule.
         val securedSsids = HashSet<String>()
 
         for (r in results) {
-            val ssid = normalise(r.SSID) ?: continue
-            if (r.BSSID == null) continue
-            if (!isOpen(r)) securedSsids.add(ssid)
+            val ssid = normalise(r.ssid) ?: continue
+            if (r.bssid == null) continue
+            if (!isOpen(r.capabilities)) securedSsids.add(ssid)
         }
 
         for (r in results) {
-            val ssid = normalise(r.SSID) ?: continue
-            val bssid = r.BSSID ?: continue
-            val label = r.SSID?.trim()?.trim('"').orEmpty().ifBlank { ssid }
-            val open = isOpen(r)
+            val ssid = normalise(r.ssid) ?: continue
+            val bssid = r.bssid ?: continue
+            val label = r.ssid?.trim()?.trim('"').orEmpty().ifBlank { ssid }
+            val open = isOpen(r.capabilities)
 
-            // 1 — Default SSID of known interception or pentest equipment.
+            // 1 — Default SSID of known Wi-Fi interception or pentest equipment.
             if (KNOWN_TOOL_SSIDS.contains(ssid)) {
-                anomalies.add(WifiAnomaly(label, bssid, r.level, "known_catcher_ssid", Threat.HIGH, now))
+                anomalies.add(WifiAnomaly(label, bssid, r.rssi, "known_catcher_ssid", Threat.HIGH, now))
                 continue
             }
 
-            // 2 — An operator's brand on an unencrypted network. Real carrier hotspots
-            // use Passpoint or WPA2-Enterprise; an open one wearing the name is bait.
-            // The exact hotspot names are tried first, then the distinctive brands.
-            if (open && (isKnownHotspotName(ssid) || containsCarrier(tokens(ssid)))) {
-                anomalies.add(WifiAnomaly(label, bssid, r.level, "carrier_open_network", Threat.HIGH, now))
-                continue
-            }
-
-            // 3 — An open network using the name of a network that is encrypted
+            // 2 — An open network using the name of a network that is encrypted
             // elsewhere in range. That is an evil twin of a real access point, and
-            // unlike a strong signal it has no innocent explanation.
+            // unlike a strong signal it has no innocent explanation. Judged before
+            // the hotspot note so an open "XFINITY" beside the real WPA2 "XFINITY" is
+            // the twin it is, not a footnote.
             if (open && securedSsids.contains(ssid)) {
-                anomalies.add(WifiAnomaly(label, bssid, r.level, "open_twin_of_secured", Threat.HIGH, now))
+                anomalies.add(WifiAnomaly(label, bssid, r.rssi, "open_twin_of_secured", Threat.HIGH, now))
+                continue
+            }
+
+            // 3 — An operator's name on an unencrypted network, informational only.
+            // An earlier version called this HIGH "bait" on the premise that real
+            // carrier hotspots are never open. They are: xfinitywifi, attwifi,
+            // BTWifi-with-FON, CableWiFi and SpectrumWiFi are open captive portals by
+            // design, and every Comcast gateway in a US street broadcasts one.
+            if (open && isOpenCarrierHotspot(ssid)) {
+                anomalies.add(WifiAnomaly(label, bssid, r.rssi, REASON_OPEN_CARRIER_HOTSPOT, Threat.LOW, now))
             }
         }
 
@@ -267,7 +315,7 @@ object WifiScanner {
         val securedSsids = HashSet<String>()
         for (r in results) {
             val ssid = normalise(r.SSID) ?: continue
-            if (!isOpen(r)) securedSsids.add(ssid)
+            if (!isOpen(r.capabilities)) securedSsids.add(ssid)
         }
         val connectedSsid = connection?.ssid?.let { normalise(it) }
         val connectedBssid = connection?.bssid?.lowercase()
@@ -282,9 +330,8 @@ object WifiScanner {
                 ssidKey != null && KNOWN_TOOL_SSIDS.contains(ssidKey) -> flags += "Default name of interception/pentest equipment"
                 security == WifiSecurity.OPEN && ssidKey != null && securedSsids.contains(ssidKey) ->
                     flags += "Open copy of an encrypted network — evil twin"
-                security == WifiSecurity.OPEN && ssidKey != null &&
-                    (isKnownHotspotName(ssidKey) || containsCarrier(tokens(ssidKey))) ->
-                    flags += "Carrier name on an open network — bait"
+                security == WifiSecurity.OPEN && ssidKey != null && isOpenCarrierHotspot(ssidKey) ->
+                    flags += "Open carrier hotspot — captive portal, unencrypted; use a VPN on it"
                 security == WifiSecurity.OPEN -> flags += "Open — traffic readable by anyone in range"
                 security == WifiSecurity.WEP -> flags += "WEP — broken encryption, crackable in minutes"
                 security == WifiSecurity.WPA -> flags += "WPA (TKIP) — obsolete encryption"
@@ -331,9 +378,15 @@ object WifiScanner {
         }
         val caps = wifiNet?.let { cm?.getNetworkCapabilities(it) }
         val link: LinkProperties? = wifiNet?.let { cm?.getLinkProperties(it) }
-        val activeCaps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
-        val vpn = networks.any { n -> cm?.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true } ||
-            activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        // Android picks the default network per app, and it is a VPN only when the VPN
+        // carries this app. A VPN set to cover some apps is still in the list of networks,
+        // which is all the row used to look at: "Active", in green, with Clairix outside it.
+        val active = cm?.activeNetwork
+        val activeCaps = active?.let { cm?.getNetworkCapabilities(it) }
+        val appOnVpn = activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        val vpnOnDevice = appOnVpn ||
+            networks.any { n -> cm?.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
+        val vpn = NetworkLeaks.coverage(vpnOnDevice, appHasNetwork = active != null, appOnVpn = appOnVpn)
 
         val ssid = info?.ssid?.trim()?.trim('"')?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
         val bssid = info?.bssid?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" && it != "00:00:00:00:00:00" }
@@ -360,6 +413,8 @@ object WifiScanner {
         if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == false) flags += "No confirmed internet access on this network"
         if (dns.isNotEmpty() && gateway != null && dns.all { it == gateway } && privateDns == null) flags += "DNS is answered by the router itself — it sees every site you look up"
         if (dns.any { it in SUSPICIOUS_DNS }) flags += "DNS points at an unusual resolver"
+        if (vpn == VpnCoverage.EXCLUDES_APP) flags += "A VPN is up, but Clairix's traffic does not go through it: it covers " +
+            "only some apps, or a work profile. Other apps may be outside it too."
 
         return WifiConnection(
             ssid = ssid, bssid = bssid?.lowercase(), rssi = rssi,
@@ -371,7 +426,7 @@ object WifiScanner {
             txMbps = info?.txLinkSpeedMbps?.takeIf { it > 0 },
             rxMbps = info?.rxLinkSpeedMbps?.takeIf { it > 0 },
             ipv4 = v4, ipv6 = v6, gateway = gateway, dnsServers = dns,
-            privateDns = privateDns, vpnActive = vpn,
+            privateDns = privateDns, vpn = vpn,
             captivePortal = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true,
             metered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false,
             flags = flags
@@ -471,6 +526,15 @@ object WifiScanner {
     private fun isKnownHotspotName(ssid: String): Boolean =
         KNOWN_HOTSPOT_KEYS.contains(canonical(ssid))
 
+    /**
+     * True when the SSID is a carrier hotspot's name: either exactly one of the names
+     * they broadcast, or a distinctive operator brand as whole words inside it. On an
+     * open network that is the captive portal the operator runs, which is worth a
+     * note and nothing more.
+     */
+    private fun isOpenCarrierHotspot(ssid: String): Boolean =
+        isKnownHotspotName(ssid) || containsCarrier(tokens(ssid))
+
     /** True when some carrier's full token sequence appears as consecutive tokens. */
     private fun containsCarrier(ssidTokens: List<String>): Boolean =
         CARRIER_TOKENS.any { carrier ->
@@ -491,8 +555,8 @@ object WifiScanner {
      * which quietly classified every WPA3 network — advertised as `[RSN-SAE-CCMP]` —
      * as wide open, and then flagged it.
      */
-    private fun isOpen(r: ScanResult): Boolean {
-        val caps = r.capabilities ?: return false
+    private fun isOpen(capabilities: String?): Boolean {
+        val caps = capabilities ?: return false
         val secured = listOf("WPA", "WEP", "RSN", "SAE", "PSK", "EAP", "OWE", "WAPI")
             .any { caps.contains(it, ignoreCase = true) }
         return !secured

@@ -8,10 +8,18 @@ name: Release
 # The branch form exists for environments that can push branches but not tags.
 #
 # What a release carries:
-#   clairix-<tag>.apk          full edition, whole app   (fullSuiteRelease)
-#   clairix-comms-<tag>.apk    full edition, comms only  (fullCommsRelease)
-#   clairix-play-<tag>.aab     Play edition bundle for the Play Console (playSuiteRelease)
-#   SHA256SUMS.txt             SHA-256 of each of the three
+#   clairix-<tag>.apk                 full edition, whole app   (fullSuiteRelease)
+#   clairix-comms-<tag>.apk           full edition, comms only  (fullCommsRelease)
+#   clairix-play-<tag>.aab            Play edition bundle for the Play Console (playSuiteRelease)
+#   sbom-android-<tag>.cdx.json       CycloneDX bill of materials: the Java and Kotlin libraries
+#   sbom-comms-crypto-<tag>.cdx.json  CycloneDX bill of materials: the Rust crates in the crypto library
+#   SHA256SUMS.txt                    SHA-256 of each of the five
+#
+# Nothing is signed until the Android APK workflow has passed on the commit
+# (job checks), an Emulator smoke test run has passed on the same tree (job
+# emulator) and the bills of materials are made (job sbom). The signing keys
+# are secrets of the `release` environment, read by the release job alone
+# (docs/PROCESS.md).
 #
 # A tag with a pre-release suffix (v3.0.0-beta.1, -alpha.N, -rc.N) is published
 # as a GitHub pre-release; a plain vX.Y.Z is a normal release.
@@ -27,17 +35,124 @@ on:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
         default: 'v3.0.0-beta.8'
+      allow_throwaway_key:
+        description: 'Build without ANDROID_KEYSTORE_BASE64, signing with a throwaway key. The files are kept as a workflow artifact only; no GitHub release is published.'
+        type: boolean
+        required: false
+        default: false
 
-# Every action is pinned to a commit: this job holds the release signing key
-# and a token that can publish, so a moved tag would be a trojaned release.
+# Every action is pinned to a commit: the release job holds the release signing
+# key and a token that can publish, so a moved tag would be a trojaned release.
+# Read-only by default; the release job alone can write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  # The whole Android APK workflow on this commit: the crypto crate's tests,
+  # the Kotlin unit tests, the screenshots, lint, detekt and the build on two
+  # machines that must come out the same. No secrets are passed to it.
+  checks:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/android.yml
+
+  # The emulator suite takes hours on four Android versions, so it is not run
+  # a second time here. This job requires a run of it, started by a push or by
+  # hand, that passed on a commit where the app, the crate, the relay and the
+  # relay list are the same as on this one, and waits for such a run that is
+  # still going (.github/scripts/wait_for_runs.py). With none, it fails and
+  # says how to start one. A throwaway-key run publishes nothing and skips it.
+  emulator:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a passing emulator run on this tree
+        if: inputs.allow_throwaway_key != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/wait_for_runs.py covered --sha "$GITHUB_SHA" --workflow emulator.yml \
+            --paths android comms-crypto comms-worker relays .github/workflows/emulator.yml --wait-minutes 225
+
+  # CycloneDX bills of materials: the libraries in the app (Gradle) and the
+  # Rust crates in its crypto library (cargo-cyclonedx). Made in a job that
+  # holds no secrets; the release job attaches them and lists them in
+  # SHA256SUMS.txt, so the signature covers them too.
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: 1.97.0
+          targets: aarch64-linux-android
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+
+      # The crates in libclairix_comms_crypto.so, resolved for arm64 Android
+      # (the 32-bit ARM and x86_64 libraries are built from the same
+      # Cargo.lock), leaving out what only build scripts use.
+      - name: Bill of materials of the crypto crate
+        run: |
+          cargo cyclonedx --manifest-path comms-crypto/Cargo.toml --format json --spec-version 1.5 \
+            --target aarch64-linux-android --no-build-deps --override-filename comms-crypto.cdx
+          mkdir -p sbom
+          mv comms-crypto/comms-crypto.cdx.json sbom/
+
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      # Resolves the release classpath; nothing is compiled.
+      - name: Bill of materials of the app's libraries
+        working-directory: android
+        run: |
+          ./gradlew :app:cyclonedxDirectBom --no-daemon --stacktrace
+          cp app/build/reports/cyclonedx/clairix-android.cdx.json ../sbom/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: sbom/*.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [checks, emulator, sbom]
+    runs-on: ubuntu-latest
+    # The release signing key, its passwords and the asset signing key are
+    # secrets of this environment (docs/PROCESS.md): no other job can read
+    # them, and only on the refs the environment allows.
+    environment: release
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.tag.outputs.name }}
+      stable: ${{ steps.signing.outputs.stable }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -134,8 +249,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Hash-pinned: pip refuses any file whose hash tools/signing/requirements.txt does not list.
       - name: Install the asset signing tool
-        run: python -m pip install -r tools/signing/requirements.txt
+        run: python -m pip install --require-hashes -r tools/signing/requirements.txt
 
       # Android refuses to install an update whose signing certificate differs from
       # the one already on the device. This step used to run `keytool -genkey` on
@@ -145,15 +261,19 @@ jobs:
       # log and the trusted-device list with it.
       #
       # With the ANDROID_KEYSTORE_BASE64 secret set, every release is signed by the
-      # same key and installs straight over the last one. Without it we fall back to
-      # the old throwaway key so the build still produces something installable, and
-      # the release notes say plainly that it needs a clean install. The keystore
-      # is written under the runner's temp directory, outside the checkout, and is
-      # gone when the job ends.
+      # same key and installs straight over the last one. Without it the run stops
+      # here: a lost or mis-rotated secret must not publish a release that no
+      # existing install can take and that looks tampered. The one exception is a
+      # manual run with allow_throwaway_key, for trying the build itself: it signs
+      # with a throwaway key, keeps the files as a workflow artifact and publishes
+      # no GitHub release (the upload steps below require stable == 'true'). The
+      # keystore is written under the runner's temp directory, outside the
+      # checkout, and is gone when the job ends.
       - name: Prepare signing key
         id: signing
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ALLOW_THROWAWAY: ${{ inputs.allow_throwaway_key == true }}
         run: |
           mkdir -p "$RUNNER_TEMP/signing"
           KS="$RUNNER_TEMP/signing/release.keystore"
@@ -161,6 +281,9 @@ jobs:
             printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
             echo "stable=true" >> "$GITHUB_OUTPUT"
             echo "Signing with the persistent release key."
+          elif [ "$ALLOW_THROWAWAY" != "true" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. A release signed with any other key cannot be installed over an earlier one, so nothing is built or published. Restore the secret (android/README.md, Signing), or start the workflow by hand with allow_throwaway_key to get a throwaway-signed build as a workflow artifact only."
+            exit 1
           else
             keytool -genkeypair -v \
               -keystore "$KS" \
@@ -172,7 +295,7 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
             echo "stable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so these builds are signed with a throwaway key: the APKs cannot be installed over an earlier release, and the AAB must not be uploaded to Google Play."
+            echo "::warning::allow_throwaway_key: these builds are signed with a throwaway key. They are kept as a workflow artifact and not published as a release; the APKs cannot be installed over an earlier release, and the AAB must not be uploaded to Google Play."
           fi
 
       # Gradle signs the release builds itself from these four variables (see
@@ -215,6 +338,40 @@ jobs:
           done
           echo "No card emulation in the Play edition."
 
+      # The Comms edition's manifest declares none of the scanner/tool components or
+      # permissions, so the toolkit is unreachable — but the dex still carries the
+      # code (MainActivity references the Drive/NFC/vault entry points unconditionally,
+      # so R8 keeps them). Until that is fixed by moving the entry points into
+      # edition/tier source sets behind a TierShell interface (so R8 drops them),
+      # count the classes that must not be reachable and warn. This is informational,
+      # not a gate: it does not fail the release.
+      - name: Count unreachable toolkit classes in the Comms APK (warning)
+        run: |
+          # R8 renames these classes (proguard-rules.pro keeps none of them and renames
+          # the source-file attribute), so their names are not in the dex whether or not
+          # the code is: grepping the dex would always say "none". The mapping file R8
+          # writes for the variant lists every class it kept, under its original name.
+          MAP=android/app/build/outputs/mapping/fullCommsRelease/mapping.txt
+          if [ ! -f "$MAP" ]; then echo "::warning::R8 mapping for the Comms APK not found at $MAP; cannot tell which toolkit classes it carries"; exit 0; fi
+          total=0
+          for cls in app.clairix.SdrUsbDriver app.clairix.ScannerMonitor app.clairix.AdsbDecoder app.clairix.ObdBluetoothManager app.clairix.analysis.NfcScanner app.clairix.analysis.CardVault app.clairix.CardEmulationService; do
+            n=$(grep -c "^${cls//./\\.} -> " "$MAP" || true)
+            echo "  $cls: $n"
+            total=$((total + n))
+          done
+          if [ "$total" -gt 0 ]; then
+            echo "::warning::The Comms APK still carries $total of the scanner/NFC/vault classes (R8 kept them; see mapping.txt). They are unreachable (no components, no permissions) but not yet removed; move the entry points into edition/tier source sets behind TierShell so R8 drops them, then make this a gate (the count must be 0)."
+          else
+            echo "R8 kept none of the listed scanner/NFC/vault classes in the Comms APK."
+          fi
+
+      # The bills of materials the sbom job made from this commit.
+      - name: Fetch the bills of materials
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom
+
       - name: Collect and verify artifacts
         env:
           TAG: ${{ steps.tag.outputs.name }}
@@ -226,6 +383,8 @@ jobs:
           cp android/app/build/outputs/apk/fullSuite/release/app-full-suite-release.apk "$OUT/clairix-${TAG}.apk"
           cp android/app/build/outputs/apk/fullComms/release/app-full-comms-release.apk "$OUT/clairix-comms-${TAG}.apk"
           cp android/app/build/outputs/bundle/playSuiteRelease/app-play-suite-release.aab "$OUT/clairix-play-${TAG}.aab"
+          cp "$RUNNER_TEMP/sbom/clairix-android.cdx.json" "$OUT/sbom-android-${TAG}.cdx.json"
+          cp "$RUNNER_TEMP/sbom/comms-crypto.cdx.json" "$OUT/sbom-comms-crypto-${TAG}.cdx.json"
           # The certificate digest is what decides whether a phone will accept an
           # APK as an update to the installed build, so print it: two releases that
           # share this value will install over each other, and two that do not
@@ -233,10 +392,40 @@ jobs:
           for apk in "$OUT"/*.apk; do
             "$APKSIGNER" verify --print-certs "$apk"
           done
-          # The bundle is jar-signed; Play checks it against the registered upload key.
+          # The bundle is jar-signed; Play checks it against the upload key registered
+          # at the first upload, which is to be this same release key (android/README.md,
+          # "Cutting a release" step 5a).
           keytool -printcert -jarfile "$OUT/clairix-play-${TAG}.aab"
-          (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-play-${TAG}.aab" > SHA256SUMS.txt)
+          (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-play-${TAG}.aab" \
+            "sbom-android-${TAG}.cdx.json" "sbom-comms-crypto-${TAG}.cdx.json" > SHA256SUMS.txt)
           cat "$OUT/SHA256SUMS.txt"
+
+      # Android 15+ devices with 16 KB pages load only libraries built for them, and
+      # Google Play requires it: every LOAD segment of each 64-bit library must be
+      # 0x4000-aligned, and the APKs must place the libraries on 16 KiB boundaries
+      # (zipalign -c -P 16 -v 4; the bundle's libraries are read the same way, and
+      # bundletool does its own aligning). Today that holds because cargo-ndk 4.1.2
+      # passes max-page-size for NDK 27; this step stops a release the day it stops.
+      - name: Check the native libraries are built for 16 KB pages
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          OUT=android/app/build/outputs/release-files
+          tools/android/check-16k-alignment.sh "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk" "$OUT/clairix-play-${TAG}.aab"
+
+      # At the first Play upload this release key is enrolled in Play App Signing
+      # ("Use an existing key", android/README.md "Cutting a release" step 5a), so
+      # the APKs Play delivers carry the same certificate as the APKs here and the
+      # editions install over each other. That holds only while the bundle is
+      # signed by the key that signs the APKs; this step fails the release when they
+      # differ, and the digest it prints is the one a Play-delivered APK must show
+      # (step 5a's verification).
+      - name: Check the bundle and the APKs share one signing certificate
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          OUT=android/app/build/outputs/release-files
+          tools/android/check-bundle-signer.sh "$OUT/clairix-play-${TAG}.aab" "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk"
 
       # The checksum file is signed with the asset signing key (tools/signing),
       # whose public half is committed as android/asset-signing.pem, so a
@@ -463,9 +652,10 @@ jobs:
             echo "- **A new look.** Every screen has been redesigned: clearer status at the top of"
             echo "  each tab, bigger touch targets, and a choice of dark colour themes in"
             echo "  Settings → Appearance."
-            echo "- **Two editions.** Clairix now comes in a Google Play edition and a Full edition"
-            echo "  (this download). They are the same app, except that the Play edition leaves out"
-            echo "  the Card Vault with card emulation and ClairixCoin."
+            echo "- **Two editions.** Clairix is built as the Full edition (this download) and a"
+            echo "  Google Play edition, which is in preparation; https://clairix.app/download says"
+            echo "  whether it is out. They are the same app, except that the Play edition leaves"
+            echo "  out the Card Vault with card emulation and ClairixCoin."
             echo "- **Fixes** across the app, including the colour theme when an incoming call"
             echo "  starts Clairix and clearer wording on the certificate-pinning check."
             echo
@@ -474,8 +664,10 @@ jobs:
             echo "| File | What it is |"
             echo "|---|---|"
             echo "| \`clairix-${TAG}.apk\` | **The Full edition.** The whole app, including the Card Vault and ClairixCoin. Most people want this one. |"
-            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: no scanner, no tools and none of their permissions. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
-            echo "| \`clairix-play-${TAG}.aab\` | The Google Play bundle. Phones can't install this file directly; it is here for the Play Console. |"
+            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: the scanner and tools are not reachable and none of their permissions are requested. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
+            echo "| \`clairix-play-${TAG}.aab\` | The bundle for the Play Console, signed with the same key as the APKs. Phones can't install this file directly. |"
+            echo "| \`sbom-android-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Java and Kotlin library in the three files above, with its version. |"
+            echo "| \`sbom-comms-crypto-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Rust crate in the encryption library the three files carry, with its version. |"
             echo "| \`SHA256SUMS.txt\` | Checksums to confirm your download is intact. |"
             echo "| \`SHA256SUMS.txt.sig\` | Signature over the checksums by the Clairix asset signing key, so a swapped release cannot come with matching checksums. |"
             echo
@@ -502,9 +694,10 @@ jobs:
               echo "4. Grant Nearby devices and Location (precise). Notifications is optional — declining it costs the alert, not the detector."
             else
               echo "> [!WARNING]"
-              echo "> This build is signed with a throwaway key, so Android will refuse to install it"
-              echo "> over an earlier release. You have to uninstall the old version first, which"
-              echo "> clears the cell baseline, the event log and the trusted-device list."
+              echo "> This build is signed with a throwaway key (a manual run with allow_throwaway_key),"
+              echo "> so it was kept as a workflow artifact and not published as a release. Android will"
+              echo "> refuse to install it over an earlier release: you have to uninstall the old version"
+              echo "> first, which clears the cell baseline, the event log and the trusted-device list."
               echo
               echo "1. Uninstall any existing Clairix."
               echo "2. Download \`clairix-${TAG}.apk\` below and tap it."
@@ -542,7 +735,11 @@ jobs:
             fi
           } > "$RUNNER_TEMP/notes.md"
 
+      # Only files signed with the release key are attached to a release: a
+      # throwaway-signed build (allow_throwaway_key) is kept as an artifact of this
+      # run instead, with the notes that say what it is.
       - name: Create GitHub Release
+        if: steps.signing.outputs.stable == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
@@ -553,19 +750,65 @@ jobs:
             android/app/build/outputs/release-files/clairix-${{ steps.tag.outputs.name }}.apk
             android/app/build/outputs/release-files/clairix-comms-${{ steps.tag.outputs.name }}.apk
             android/app/build/outputs/release-files/clairix-play-${{ steps.tag.outputs.name }}.aab
+            android/app/build/outputs/release-files/sbom-android-${{ steps.tag.outputs.name }}.cdx.json
+            android/app/build/outputs/release-files/sbom-comms-crypto-${{ steps.tag.outputs.name }}.cdx.json
             android/app/build/outputs/release-files/SHA256SUMS.txt
             android/app/build/outputs/release-files/SHA256SUMS.txt.sig
           draft: false
           prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
 
+      - name: Keep the throwaway-signed build as a workflow artifact
+        if: steps.signing.outputs.stable != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          cp "$RUNNER_TEMP/notes.md" android/app/build/outputs/release-files/NOTES.md
+          echo "::notice::Signed with a throwaway key, so no GitHub release was published; the files are in this run's throwaway-signed-${TAG} artifact."
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.signing.outputs.stable != 'true'
+        with:
+          name: throwaway-signed-${{ steps.tag.outputs.name }}
+          path: android/app/build/outputs/release-files/
+          if-no-files-found: error
+          retention-days: 7
+
   # A release published with this workflow's own token starts no other
   # workflow, so the rebuild-and-compare check is called from here: a runner
   # that never saw this build makes it again from the tag and requires the
-  # published APKs to match (verify-release.yml).
+  # published APKs to match (verify-release.yml). A throwaway-signed build
+  # published nothing, so there is nothing to verify.
   verify:
     needs: release
+    if: needs.release.outputs.stable == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/verify-release.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
+
+  # A failed release, or one whose rebuild did not match, is seen on the Actions
+  # tab by whoever started it; this opens an issue as well, or adds the run to
+  # the open one (.github/scripts/report-failure.sh), so it is not lost.
+  alert:
+    needs: [checks, emulator, sbom, release, verify]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_TITLE: Release workflow failing
+          FAILURE_MEANS: >-
+            The release for the tag named in the run was not published: its checks (the Android APK
+            workflow, a passing emulator run on the same tree, the bills of materials) or the release
+            job failed; or its rebuild-and-compare check (verify-release.yml) did not match the
+            published APKs.
+        run: .github/scripts/report-failure.sh

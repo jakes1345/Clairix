@@ -1,5 +1,6 @@
 package app.clairix.comms
 
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -270,6 +271,49 @@ class EndToEndTest {
         }
     }
 
+    /**
+     * An SOS while the relay is away goes once it is back (the 2026-10-31
+     * audit, item 4). Only the computer the emulator runs on can stop what
+     * the emulator reaches, so the test asks for it in the log: the
+     * workflow's watcher removes the adb reverse port for relay A when it
+     * sees [RELAY_DOWN] (every connection from the phone to relay A is then
+     * refused, as when the relay is down) and restores it at [RELAY_UP]. The
+     * SOS is queued and said to be retrying, never sent; once relay A answers
+     * again the group outbox delivers it, the peer gets it, and the result
+     * says it reached them.
+     *
+     *   am instrument ... -e relayToggle true
+     */
+    @Test
+    fun k_anSosWhileTheRelayIsDownGoesOnceItIsBack() = runBlocking {
+        setUp()
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("pass relayToggle, with the workflow's watcher running, to take relay A away mid-test", args.getString("relayToggle") == "true")
+        val peer = local
+        val gid = repo.createGroup("SOS circle")
+        repo.addGroupMember(gid, peer.number).getOrThrow()
+        peer.receive { CommsWire.type(it) == CommsWire.T_GROUP_CTRL && it.optString(CommsWire.F_GID) == gid }
+        val port = java.net.URI(args.getString("relayA")!!).port
+        val first = try {
+            Log.i(TAG, RELAY_DOWN)
+            waitFor("relay A to go away", 60_000) { !reachable(port) }
+            repo.sendSos()
+        } finally {
+            Log.i(TAG, RELAY_UP)
+        }
+        assertTrue("the SOS is queued and retried: ${first.headline()}", first.retrying)
+        assertEquals("nobody is reached while the relay is away: ${first.headline()}", 0, first.reached)
+        assertTrue(first.headline(), first.headline().startsWith("SOS not sent yet"))
+
+        waitFor("relay A to come back", 150_000) { reachable(port) }
+        eventually("the SOS reaches everyone once the relay is back", 120_000) {
+            repo.panicResult.value?.let { it.attempt == first.attempt && !it.retrying && it.people > 0 && it.reached == it.people } == true
+        }
+        assertEquals("SOS reached 1 person", repo.panicResult.value!!.headline())
+        val sos = peer.receive(120_000) { CommsWire.type(it) == CommsWire.T_PANIC && it.optString(CommsWire.F_GID) == gid }
+        assertEquals(gid, sos.getString(CommsWire.F_GID))
+    }
+
     @Test
     fun z_unpairing() = runBlocking {
         setUp()
@@ -317,7 +361,26 @@ class EndToEndTest {
         }
     }
 
+    /** Waits, without syncing, until [check] holds, or fails after [timeoutMs]. */
+    private suspend fun waitFor(what: String, timeoutMs: Long, check: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!check()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionError("$what: not within ${timeoutMs / 1000} s")
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
+    /** Whether anything on this phone answers on [port]: relay A, through adb reverse, while the runner lets it. */
+    private fun reachable(port: Int): Boolean = runCatching {
+        java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 2_000) }
+    }.isSuccess
+
     companion object {
+        private const val TAG = "EndToEndTest"
+        /** What the emulator workflow's watcher looks for in the log to take relay A away, and to give it back. */
+        private const val RELAY_DOWN = "CLAIRIX_E2E_RELAY_A_DOWN"
+        private const val RELAY_UP = "CLAIRIX_E2E_RELAY_A_UP"
+
         @Volatile private var shared: PairingCode? = null
         private lateinit var app: PairingCode
         private lateinit var local: TestPeer
