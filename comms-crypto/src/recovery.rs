@@ -666,4 +666,16 @@ mod tests {
         assert_ne!(a.public_bundle().one_time_keys[0].id, b.public_bundle().one_time_keys[0].id);
         assert_ne!(a.public_bundle().fallback.unwrap().id, b.public_bundle().fallback.unwrap().id);
     }
+
+    // Argon2id known answers, pinned with argon2 0.5.3 and kept across
+    // upgrades: a recovery file made by one app version must open in the next,
+    // so the key a code and salt derive can never change.
+    #[test]
+    fn argon2id_matches_its_pinned_answers() {
+        let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let fast = derive_key(b"ABCD-EFGH-JKLM-NPQR", &[0x5a; SALT_LEN], FAST).unwrap();
+        let default = derive_key(b"ABCD-EFGH-JKLM-NPQR", &[0x5a; SALT_LEN], DEFAULT_KDF).unwrap();
+        assert_eq!(hex(fast.as_ref()), "0e5418a883aec61baecb4e1358f8663caf4856d55f7e1712a7c23b72a9530333");
+        assert_eq!(hex(default.as_ref()), "e9bc2152fd6003f2cf4b7905c3b0c894a0f0b2e2f177d94b2fd9bc6d05460740");
+    }
 }
