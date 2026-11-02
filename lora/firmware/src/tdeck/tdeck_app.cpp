@@ -43,14 +43,14 @@ enum class Screen { Setup, Lock, Home, Chat, ChatMenu, ConfirmRemove, ContactInf
 
 RadioNode* node = nullptr;
 
-enum Align { TL, TR, ML, MR, MC, BL };
+enum class Align { TopLeft, TopRight, MidLeft, MidRight, Centre, BottomLeft };
 
 /** Draws [text] with its [a] corner or edge at (x, y), in the current font. */
 void put(const std::string& text, int x, int y, Align a) {
     const int w = canvas.textWidth(text.c_str());
     const int h = canvas.fontHeight();
-    const int dx = a == TR || a == MR ? -w : (a == MC ? -w / 2 : 0);
-    const int dy = a == ML || a == MR || a == MC ? -h / 2 : (a == BL ? -h : 0);
+    const int dx = a == Align::TopRight || a == Align::MidRight ? -w : (a == Align::Centre ? -w / 2 : 0);
+    const int dy = a == Align::MidLeft || a == Align::MidRight || a == Align::Centre ? -h / 2 : (a == Align::BottomLeft ? -h : 0);
     canvas.drawString(text.c_str(), x + dx, y + dy);
 }
 
@@ -178,7 +178,7 @@ void header(uint64_t now) {
     canvas.fillRect(0, 0, W, HEADER, 0x10A2);
     canvas.setFont(SMALL);
     canvas.setTextColor(FG);
-    put(app.unlocked ? app.hh.name.c_str() : "Clairix", 4, HEADER / 2, ML);
+    put(app.unlocked ? app.hh.name.c_str() : "Clairix", 4, HEADER / 2, Align::MidLeft);
 
     std::string right;
     if (node->phone.enabled() && app.radioStarted) right += node->phone.connected() ? "Phone  " : "";
@@ -193,13 +193,13 @@ void header(uint64_t now) {
         right += std::to_string(pct) + "%  ";
     }
     right += clockText(app.radioStarted ? wallMinutes(now) : 0);
-    put(right.c_str(), W - 4, HEADER / 2, MR);
+    put(right.c_str(), W - 4, HEADER / 2, Align::MidRight);
 }
 
 void footer(const char* hint) {
     canvas.setFont(SMALL);
     canvas.setTextColor(DIM);
-    put(hint, 4, H - 2, BL);
+    put(hint, 4, H - 2, Align::BottomLeft);
 }
 
 void title(const char* t) {
@@ -218,10 +218,10 @@ void list(const std::vector<std::pair<std::string, std::string>>& rows, int top)
         const int y = top + (i - first) * rowH;
         if (i == app.sel) canvas.fillRoundRect(2, y, W - 4, rowH - 2, 4, SELECT_BG);
         canvas.setTextColor(FG);
-        put(rows[size_t(i)].first.c_str(), 10, y + rowH / 2 - 1, ML);
+        put(rows[size_t(i)].first.c_str(), 10, y + rowH / 2 - 1, Align::MidLeft);
         if (!rows[size_t(i)].second.empty()) {
             canvas.setTextColor(DIM);
-            put(rows[size_t(i)].second.c_str(), W - 10, y + rowH / 2 - 1, MR);
+            put(rows[size_t(i)].second.c_str(), W - 10, y + rowH / 2 - 1, Align::MidRight);
         }
     }
 }
@@ -233,7 +233,7 @@ void textBox(int y, const std::string& text, bool masked) {
     std::string shown = masked ? std::string(text.size(), '*') : text;
     // Keep the end of the text, where the cursor is, in view.
     while (canvas.textWidth((shown + "_").c_str()) > W - 24 && !shown.empty()) shown.erase(0, 1);
-    put((shown + "_").c_str(), 12, y + 14, ML);
+    put((shown + "_").c_str(), 12, y + 14, Align::MidLeft);
 }
 
 void paragraph(const std::string& text, int y, uint16_t color = FG) {
@@ -250,7 +250,7 @@ void busy(const char* text) {
     canvas.fillScreen(BG);
     canvas.setFont(BODY);
     canvas.setTextColor(FG);
-    put(text, W / 2, H / 2, MC);
+    put(text, W / 2, H / 2, Align::Centre);
     canvas.pushSprite(0, 0);
 }
 
@@ -419,7 +419,7 @@ void drawChat(uint64_t now) {
     canvas.drawString(c.name.c_str(), 6, HEADER + 3);
     canvas.setFont(SMALL);
     canvas.setTextColor(DIM);
-    put(clx::fingerprint(c.pub).c_str(), W - 6, HEADER + 6, TR);
+    put(clx::fingerprint(c.pub).c_str(), W - 6, HEADER + 6, Align::TopRight);
 
     // Lines from the newest message up, then shown bottom-first above the compose box.
     struct Line { std::string text; uint16_t color; bool right; const lgfx::IFont* font; };
@@ -459,7 +459,7 @@ void drawChat(uint64_t now) {
         if (y < top) break;
         canvas.setFont(l.font);
         canvas.setTextColor(l.color);
-        put(l.text.c_str(), l.right ? W - 6 : 6, y, (l.right ? TR : TL));
+        put(l.text.c_str(), l.right ? W - 6 : 6, y, (l.right ? Align::TopRight : Align::TopLeft));
     }
     if (lines.empty()) paragraph("No messages yet. Type below and press Enter.", top + 10, DIM);
     textBox(H - 31, app.input, false);
@@ -485,7 +485,7 @@ void drawPair() {
             snprintf(d, sizeof d, "%06lu", static_cast<unsigned long>(app.pairing->digits()));
             canvas.setFont(BIG);
             canvas.setTextColor(GOOD);
-            put(d, W / 2, 130, MC);
+            put(d, W / 2, 130, Align::Centre);
             paragraph("Their name: " + app.pairing->peerName(), 162);
             footer("Y: the same, add them    N: not the same, cancel");
             break;
@@ -611,7 +611,7 @@ void draw(uint64_t now) {
         const int w = std::min(W - 20, int(canvas.textWidth(app.toast.c_str())) + 20);
         canvas.fillRoundRect((W - w) / 2, H - 58, w, 26, 6, 0x31A6);
         canvas.setTextColor(FG);
-        put(app.toast.c_str(), W / 2, H - 45, MC);
+        put(app.toast.c_str(), W / 2, H - 45, Align::Centre);
     }
     const uint32_t passkey = app.radioStarted ? node->phone.passkey() : 0;
     if (passkey != 0) {
@@ -619,13 +619,13 @@ void draw(uint64_t now) {
         canvas.drawRoundRect(30, 50, W - 60, 130, 8, ACCENT);
         canvas.setFont(BODY);
         canvas.setTextColor(FG);
-        put("Bluetooth passkey", W / 2, 72, MC);
+        put("Bluetooth passkey", W / 2, 72, Align::Centre);
         char d[8];
         snprintf(d, sizeof d, "%06lu", static_cast<unsigned long>(passkey));
         canvas.setFont(BIG);
-        put(d, W / 2, 112, MC);
+        put(d, W / 2, 112, Align::Centre);
         canvas.setFont(SMALL);
-        put("Type it on your phone", W / 2, 155, MC);
+        put("Type it on your phone", W / 2, 155, Align::Centre);
     }
     canvas.pushSprite(0, 0);
 }
@@ -649,7 +649,7 @@ void handle(const InputEvent& e, uint64_t now) {
     switch (app.screen) {
         case Screen::Setup:
             if (e.kind != InputKind::Enter) {
-                type(e, app.step == 0 ? clx::NAME_MAX : 64);
+                type(e, app.step == 0 ? clx::CONTACT_NAME_MAX : 64);
                 return;
             }
             if (app.step == 0) {
@@ -922,7 +922,7 @@ void handle(const InputEvent& e, uint64_t now) {
                 go(Screen::Settings);
                 return;
             }
-            type(e, clx::NAME_MAX);
+            type(e, clx::CONTACT_NAME_MAX);
             return;
 
         case Screen::ChangePin:

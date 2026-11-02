@@ -15,7 +15,7 @@ static constexpr size_t REPLAY_MAX = 512;
 HandheldState freshState(const std::string& name) {
     HandheldState s;
     s.id = LiteIdentity::generate();
-    s.name = name.substr(0, NAME_MAX);
+    s.name = name.substr(0, CONTACT_NAME_MAX);
     publicNetworkKey(s.settings.networkKey);
     return s;
 }
@@ -37,7 +37,7 @@ Bytes serializeState(const HandheldState& s) {
     Bytes b;
     b.push_back(STATE_VERSION);
     append(b, s.id.secret, 32);
-    putString(b, s.name, NAME_MAX);
+    putString(b, s.name, CONTACT_NAME_MAX);
     b.push_back(s.settings.preset);
     b.push_back(uint8_t(s.settings.txPower));
     b.push_back(s.settings.hopLimit);
@@ -46,7 +46,7 @@ Bytes serializeState(const HandheldState& s) {
     b.push_back(uint8_t(s.contacts.size()));
     for (const Contact& c : s.contacts) {
         append(b, c.pub, 32);
-        putString(b, c.name, NAME_MAX);
+        putString(b, c.name, CONTACT_NAME_MAX);
         append32(b, c.addedMinutes);
         append16(b, c.unread);
     }
@@ -71,7 +71,7 @@ bool deserializeState(const Bytes& b, HandheldState& s) {
     if (!r.take(secret, 32)) return false;
     s.id = LiteIdentity::fromSecret(secret);
     wipe(secret, 32);
-    if (!getString(r, s.name, NAME_MAX)) return false;
+    if (!getString(r, s.name, CONTACT_NAME_MAX)) return false;
     s.settings.preset = r.u8();
     s.settings.txPower = int8_t(r.u8());
     s.settings.hopLimit = r.u8();
@@ -85,7 +85,7 @@ bool deserializeState(const Bytes& b, HandheldState& s) {
     for (uint8_t i = 0; i < nc; i++) {
         Contact c;
         r.take(c.pub, 32);
-        if (!getString(r, c.name, NAME_MAX)) return false;
+        if (!getString(r, c.name, CONTACT_NAME_MAX)) return false;
         c.addedMinutes = r.u32();
         c.unread = r.u16();
         s.contacts.push_back(std::move(c));
@@ -128,14 +128,14 @@ bool Messenger::addContact(const uint8_t pub[32], const std::string& name, uint3
     int at = contactIndex(pub);
     if (at >= 0) {
         // Paired again: the name may have changed.
-        state_.contacts[size_t(at)].name = name.substr(0, NAME_MAX);
+        state_.contacts[size_t(at)].name = name.substr(0, CONTACT_NAME_MAX);
         dirty = true;
         return true;
     }
     if (state_.contacts.size() >= MAX_CONTACTS) return false;
     Contact c;
     std::memcpy(c.pub, pub, 32);
-    c.name = name.substr(0, NAME_MAX);
+    c.name = name.substr(0, CONTACT_NAME_MAX);
     c.addedMinutes = wallMinutes;
     state_.contacts.push_back(std::move(c));
     dirty = true;

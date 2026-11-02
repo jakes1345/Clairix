@@ -25,7 +25,7 @@ namespace clx {
 
 constexpr size_t MAX_CONTACTS = 32;
 constexpr size_t MAX_MESSAGES = 300;
-constexpr size_t NAME_MAX = PAIR_NAME_MAX;
+constexpr size_t CONTACT_NAME_MAX = PAIR_NAME_MAX;
 
 enum class MsgState : uint8_t { Sending = 0, Sent = 1, Delivered = 2, Received = 3, Failed = 4 };
 
