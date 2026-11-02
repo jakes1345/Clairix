@@ -628,7 +628,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     // The real org.json: android.jar only carries stubs of it.
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260814")
     // The desktop JNA jar carries the native dispatch library for the build machine.
     testImplementation("net.java.dev.jna:jna:5.19.1")
     // A real Context, SharedPreferences and SQLite for the few JVM tests that need the
