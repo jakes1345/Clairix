@@ -1620,10 +1620,11 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         }
         items(shown, key = { "region-${it.slug}" }) { region ->
             val have = installed.any { it.slug == region.slug }
+            // Up to date as far as is known; it can still be downloaded again.
+            val upToDate = have && region.slug !in updates
             val label = when {
                 !have -> stringResource(R.string.drive_download)
-                region.slug in updates -> stringResource(R.string.drive_update)
-                // Up to date as far as is known; it can still be downloaded again.
+                !upToDate -> stringResource(R.string.drive_update)
                 else -> stringResource(R.string.drive_on_this_phone)
             }
             Row(
@@ -1637,7 +1638,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                 Text(region.name, Modifier.weight(1f))
                 Text(
                     label,
-                    color = if (busy || label == "On this phone") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    color = if (busy || upToDate) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelLarge,
                 )
             }

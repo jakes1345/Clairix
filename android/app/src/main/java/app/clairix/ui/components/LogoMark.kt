@@ -62,7 +62,7 @@ private val MarkSmall: ImageVector by lazy(LazyThreadSafetyMode.NONE) { markVect
  * book's minimum-size rules require. It never takes a theme colour.
  */
 @Composable
-fun LogoMark(modifier: Modifier = Modifier, size: Dp = 32.dp, contentDescription: String? = stringResource(R.string.app_name)) {
+fun LogoMark(modifier: Modifier = Modifier, size: Dp = 32.dp, contentDescription: String? = stringResource(R.string.brand_name)) {
     Image(
         imageVector = if (size < 40.dp) MarkSmall else MarkRegular,
         contentDescription = contentDescription,

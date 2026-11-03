@@ -187,7 +187,13 @@ object CommsNotifications {
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle(context.getString(R.string.comms_incoming_encrypted_call))
-            .setContentText(if (hidden) context.getString(R.string.comms_unlock_to_see_who_is_calling) else call.peer.name.ifBlank { formatClairixNumber(call.peer.number) } + if (call.peer.verified) "" else " (unverified)")
+            .setContentText(
+                when {
+                    hidden -> context.getString(R.string.comms_unlock_to_see_who_is_calling)
+                    call.peer.verified -> call.peer.name.ifBlank { formatClairixNumber(call.peer.number) }
+                    else -> context.getString(R.string.comms_name_unverified, call.peer.name.ifBlank { formatClairixNumber(call.peer.number) })
+                }
+            )
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -494,7 +500,7 @@ object CommsNotifications {
         }
         if (any && canPost(context)) {
             ensureChannels(context)
-            manager.notify(SUMMARY_NOTIFICATION_ID, unlockToRead(context, context.getString(R.string.app_name), context.getString(R.string.comms_unlock_to_read), SUMMARY_NOTIFICATION_ID))
+            manager.notify(SUMMARY_NOTIFICATION_ID, unlockToRead(context, context.getString(R.string.brand_name), context.getString(R.string.comms_unlock_to_read), SUMMARY_NOTIFICATION_ID))
         }
     }
 

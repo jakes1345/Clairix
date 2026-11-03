@@ -9,6 +9,10 @@
 -->
 <resources>
     <string name="app_name">Clairix</string>
+    <!-- The brand itself, the same in every build: app_name reads "Clairix Comms" in the
+         Comms tier, and discreet mode's unbranding (NotificationPresentation.APP) matches
+         this exact word. -->
+    <string name="brand_name" translatable="false">Clairix</string>
     <!-- Discreet mode's neutral launcher entries (security/DiscreetMode.kt); the Play edition has neither. -->
     <string name="launcher_compass">Compass</string>
     <string name="launcher_notes">Notes</string>
@@ -1430,7 +1434,7 @@
     <string name="scan_findings">Findings</string>
     <string name="scan_strong">" · %1$s strong"</string>
     <string name="scan_ir_unconfirmed">IR, unconfirmed</string>
-    <string name="scan_5f_5f" formatted="false">%.5f, %.5f</string>
+    <string name="scan_5f_5f">%1$.5f, %2$.5f</string>
     <string name="scan_can_you_see_this_light_with">Can you see this light with your own eyes?</string>
     <string name="scan_i_can_see_it_led">I can see it (LED)</string>
     <string name="scan_i_cannot_see_it">I cannot see it</string>
@@ -1861,7 +1865,7 @@
     <string name="drive_open_the_map_data_licence">Open the map data licence</string>
     <string name="drive_navigation_needs_your_precise_location_to">Navigation needs your precise location to plan routes and follow your drive.</string>
     <string name="drive_allow_location">Allow location</string>
-    <string name="drive_fuel_at_2f_gal" formatted="false">Fuel at $%.2f/gal</string>
+    <string name="drive_fuel_at_2f_gal">Fuel at $%1$.2f/gal</string>
     <string name="drive_route_around_known_plate_readers">Route around known plate readers</string>
     <string name="drive_say_when_one_is_ahead">Say when one is ahead</string>
     <string name="drive_plate_readers_known_in_this_map">%1$s plate readers known in this map, from OpenStreetMap. Only what has been mapped: an unmapped camera is not avoided.</string>
@@ -1876,7 +1880,7 @@
     <string name="drive_no_traffic_delay">No traffic delay</string>
     <string name="drive_tolls_for">"Tolls for "</string>
     <string name="drive_no_tolls">No tolls</string>
-    <string name="drive_2f_gal_1f_l_2f_fuel" formatted="false">%.2f gal (%.1f L) · $%.2f fuel</string>
+    <string name="drive_2f_gal_1f_l_2f_fuel">%1$.2f gal (%2$.1f L) · $%3$.2f fuel</string>
     <string name="drive_plate_readers_not_counted_yet">Plate readers not counted yet</string>
     <string name="drive_passes_no_known_plate_reader">Passes no known plate reader</string>
     <string name="drive_passes_1_known_plate_reader">Passes 1 known plate reader</string>
@@ -1899,14 +1903,14 @@
     <string name="drive_the_map_could_not_be_opened">The %1$s map could not be opened</string>
     <string name="drive_delete_it_and_download_it_again">Delete it and download it again.</string>
     <string name="drive_on_this_phone">On this phone</string>
-    <string name="drive_0f_mb_built_s" formatted="false">%.0f MB · built %s</string>
+    <string name="drive_0f_mb_built_s">%1$.0f MB · built %2$s</string>
     <string name="drive_in_use">In use</string>
     <string name="drive_use">Use</string>
     <string name="drive_download_a_state">Download a state</string>
     <string name="drive_filter_states">Filter states</string>
     <string name="drive_download">Download</string>
     <string name="drive_delete">Delete %1$s?</string>
-    <string name="drive_frees_0f_mb_you_can_download" formatted="false">Frees %.0f MB. You can download it again later.</string>
+    <string name="drive_frees_0f_mb_you_can_download">Frees %1$.0f MB. You can download it again later.</string>
     <string name="drive_checking_the_maps_size">Checking the map\'s size…</string>
     <string name="drive_download_2">Download %1$s?</string>
     <string name="drive_update_2">Update %1$s?</string>
@@ -1922,8 +1926,8 @@
     <string name="drive_up_to_about_200_mb">up to about 200 MB</string>
     <string name="drive_download_anyway">Download anyway</string>
     <string name="drive_downloading">Downloading %1$s</string>
-    <string name="drive_1f_mb" formatted="false">%.1f MB</string>
-    <string name="drive_of_1f_mb" formatted="false">" of %.1f MB"</string>
+    <string name="drive_1f_mb">%1$.1f MB</string>
+    <string name="drive_of_1f_mb">" of %1$.1f MB"</string>
     <string name="drive_installing">Installing %1$s…</string>
     <!-- MapChrome.kt -->
     <string name="drive_map_tiles_unavailable">Map tiles unavailable</string>

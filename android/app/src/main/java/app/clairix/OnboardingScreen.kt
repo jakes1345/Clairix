@@ -297,7 +297,7 @@ private fun IntroPage(eyebrow: String, title: String, lead: String, note: String
                 .background(c.surface, ClairixShapes.Octagon),
             contentAlignment = Alignment.Center
         ) {
-            LogoMark(size = 88.dp, contentDescription = stringResource(R.string.app_name))
+            LogoMark(size = 88.dp, contentDescription = stringResource(R.string.brand_name))
         }
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
