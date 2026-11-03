@@ -49,8 +49,11 @@ jobs:
         run: |
           TAG="${RELEASE_TAG:-$INPUT_TAG}"
           if [ -z "$TAG" ]; then
-            # A pull request: the newest release, prereleases included.
-            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName')
+            # A pull request: the newest app release, prereleases included. Data
+            # releases (ioc, relays, maps, work zones) are published under tags that
+            # are not versions and are skipped: "ioc" was the newest on 2 November.
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+              --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"))][0] // ""')
           fi
           if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
             echo "::error::Not a release tag: $TAG"; exit 1
