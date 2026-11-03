@@ -574,6 +574,12 @@ android {
         // shown in every report without failing it; take this line out with the
         // move to AGP 9 and targetSdk 37.
         informational += "OldTargetApi"
+        // NewerVersionAvailable asks Maven Central, at the moment lint runs, whether
+        // any dependency has a newer release, so its answer changes whenever a
+        // library publishes: on 3 November okhttp 5.5.1 failed every build with no
+        // change in this repository. Updates are proposed by Dependabot
+        // (.github/dependabot.yml, weekly), so lint reports them without failing.
+        informational += "NewerVersionAvailable"
     }
 
     sourceSets {
