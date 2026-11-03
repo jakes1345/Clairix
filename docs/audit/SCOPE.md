@@ -1,15 +1,21 @@
 # Audit scope
 
 In order of priority. If the budget covers only part of this, stop at the end
-of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
-(tag `v3.0.0-beta.7`); audit that tag or the commit agreed with us.
+of a tier rather than skimming all of them. Line counts (`wc -l`) are for the
+tree on 3 November 2026, after the newest release tag, `v3.0.0-beta.8`; several
+of these files have grown a good deal since Beta 7 (`CommsRepository.kt` from
+3,542 lines to 5,210, `mailbox.ts` from 1,280 to 1,699). Audit the commit
+agreed with us, and count again there.
 
 ## Tier 1: the cryptography
 
 **Files:**
-- `comms-crypto/src/lib.rs` (2,725 lines, Rust): identity, sessions, padding,
+- `comms-crypto/src/lib.rs` (2,733 lines, Rust): identity, sessions, padding,
   sealed envelopes formats 2 and 3, sealing prekeys, blind tokens on the
   client side, mesh tags, transport key, pickling.
+- `comms-crypto/src/recovery.rs` (669 lines; added after Beta 8, so in no release yet): the recovery
+  file, the identity saved by its owner under a generated 120-bit code
+  (Argon2id, then ChaCha20-Poly1305 with the header as associated data).
 - `comms-worker/src/tokens.ts` (180 lines) and `comms-worker/voprf/`: blind
   tokens on the relay side.
 
@@ -26,7 +32,8 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
 3. **Downgrades.** Can a relay or a network attacker force format 2 or an old
    prekey? Once a peer has a prekey, the code refuses format 2 to them.
    Can a stale or future-dated prekey get through? See the `PREKEY_*`
-   constants and `StalePrekey`.
+   constants and `StalePrekey`, and on the app's side `LegacyEnvelope.kt`,
+   which says when the app still sends format 2.
 4. **Deleting prekeys.** Is the deletion schedule (`prune_sealing_prekeys`,
    `PREKEY_DRAIN_GRACE_MS`, `PREKEY_KEEP_MS`) sound? Can an envelope be lost
    before it can be read, or a key be kept longer than claimed?
@@ -49,16 +56,22 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
    - double-spend protection.
 9. **Mesh tags** (`mesh_tag`). Can anyone but the two contacts recognise or
    link a pair's bundles?
+10. **The recovery file** (`recovery.rs`). Can a file that someone else made,
+    or that was changed, be opened or partly restored? Does a restore really
+    leave out sessions, one-time and fallback key secrets, and keep new key
+    ids clear of ones the old phone handed out? Are the Argon2id parameters
+    read from the file bounded, so a crafted file cannot exhaust the phone?
 
 ## Tier 2: the relay
 
 **Files:**
-- `comms-worker/src/index.ts` (1,435 lines)
-- `mailbox.ts` (1,280)
+- `comms-worker/src/index.ts` (1,856 lines)
+- `mailbox.ts` (1,699)
 - `federation.ts` (369)
-- `comms-logic.ts` (416)
+- `comms-logic.ts` (592)
 - `auth.ts` (60)
-- `env.ts` (173)
+- `env.ts` (219)
+- `invite-page.ts` (the page an invite link opens)
 
 **Questions:**
 1. **Request authentication** (`auth.ts`). Replay, canonicalisation of the
@@ -93,11 +106,14 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
 ## Tier 3: the app's protocol and storage
 
 **Files:**
-- `android/app/src/main/java/app/clairix/comms/CommsRepository.kt` (3,542 lines)
-- `RelayClient.kt` (1,149)
-- `CommsStore.kt` (1,401)
-- `CommsWire.kt` (403)
+- `android/app/src/main/java/app/clairix/comms/CommsRepository.kt` (5,210 lines)
+- `RelayClient.kt` (1,285)
+- `CommsStore.kt` (1,888)
+- `CommsWire.kt` (458)
 - `KeyChangeGuard.kt` (89)
+- `ContactGate.kt` (234): blocking and message requests
+- `RecoveryFile.kt` (360) and `RecoveryRestorer.kt` (224): the app's half of
+  the recovery file, and putting a restored identity back
 - `IdentityStore.kt`, `Vault.kt`, `VaultBox.kt`, `KeystoreBox.kt`,
   `TransportKeyStore.kt`, `LockedInbox.kt`, `CommsDb.kt`, `SealedPrefs.kt`
 - `TorTransport.kt` and `comms-crypto/src/tor.rs` (455)
@@ -129,6 +145,9 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
    - Is the onion fallback safe?
 7. **Transport.** TLS configuration, the optional certificate pin, alternate
    addresses, and the anonymous send's separate connection and TLS session.
+8. **Restoring a recovery file** (`RecoveryRestorer.kt`). Can a restore bring
+   back trust it should not, such as a contact marked verified under keys the
+   file did not pin, or leave the old phone's pass key in use?
 
 ## Tier 4: the rest, if there is time
 
@@ -137,10 +156,13 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
     wipe threshold.
   - `Wiper.kt`: completeness and order.
   - `DuressPhrase.kt`
+  - `WipeLimit.kt` (the wipe threshold is applied only once the owner chose
+    it) and `RelayFarewell.kt` (the relay account deletion a wipe asks for,
+    signed before the identity key is destroyed).
   - What accessibility services can see behind the lock.
 - **Card Vault and card emulation** (`src/suite`: `analysis/CardVault.kt`,
   `analysis/NfcScanner.kt`'s `capture`/`runIsoDep` path, `NfcVaultHost.kt`,
-  `EmulationGuard.kt`; `src/fullSuite`: `CardEmulationService.kt`; full edition only): the auth-bound Keystore key and what is stored at rest; that
+  `EmulationGuard.kt`; `src/fullSuite`: `CardEmulationService.kt`; in the full and foss editions, not the Play edition or the comms tier): the auth-bound Keystore key and what is stored at rest; that
   an ordinary scan records no APDU pairs and only the explicit re-tap does; that a
   payment card is never recorded or emulable; and that emulation disarms on lock,
   wipe, screen-off and timeout. See the "Card Vault and card emulation" section of

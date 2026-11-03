@@ -6,7 +6,7 @@ changes. It claims no listing that does not exist.
 
 ## Where it stands
 
-| Channel | State on 1 November 2026 |
+| Channel | State on 1 November 2026 (the F-Droid row on 3 November) |
 |---|---|
 | GitHub Releases | **Live.** The only place an APK is published. Every release carries `clairix-<tag>.apk` (Clairix Full), `clairix-comms-<tag>.apk` (Clairix Comms) and the Play bundle (`.github/workflows/release.yml`). Every release so far is a beta and is marked as a pre-release. |
 | clairix.app/download | **Live.** Links to the Full APK on GitHub Releases with its SHA-256 (`website/src/config/release.ts`). |
