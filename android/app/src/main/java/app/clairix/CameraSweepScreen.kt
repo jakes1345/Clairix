@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -135,7 +136,7 @@ fun CameraSweepScreen(onBack: (() -> Unit)? = null) {
 
     Column(Modifier.fillMaxSize().background(ClairixTheme.colors.base)) {
         // Shown on its own screen it brings its own bar; under the shell it has one already.
-        if (onBack != null) ClairixTopBar(title = "Hidden cameras", onBack = onBack)
+        if (onBack != null) ClairixTopBar(title = stringResource(R.string.scan_hidden_cameras), onBack = onBack)
 
         // ── Status first: what the sweep has found so far ──────────────────
         val tone = when {
@@ -154,15 +155,15 @@ fun CameraSweepScreen(onBack: (() -> Unit)? = null) {
                 Column(Modifier.weight(1f)) {
                     Text(
                         when {
-                            strong > 0 -> if (strong == 1) "1 strong finding" else "$strong strong findings"
-                            findings.isNotEmpty() -> "${findings.size} to check"
-                            else -> "Nothing found yet"
+                            strong > 0 -> if (strong == 1) stringResource(R.string.scan_1_strong_finding) else stringResource(R.string.scan_strong_findings, strong)
+                            findings.isNotEmpty() -> stringResource(R.string.scan_to_check, findings.size)
+                            else -> stringResource(R.string.scan_nothing_found_yet)
                         },
                         style = MaterialTheme.typography.titleMedium,
                         color = ClairixTheme.colors.text
                     )
                     Text(
-                        "Lens glint, infrared, the Wi-Fi, the air and your hands",
+                        stringResource(R.string.scan_lens_glint_infrared_the_wi_fi),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -261,28 +262,28 @@ private fun OpticalTab(findings: List<CameraFinding>) {
             )
             // For ceiling fixtures: a pinhole two metres up gets twice the pixels.
             if (maxZoom > 1.01f) GhostButton(if (zoomed) "1×" else "2×", onClick = { zoomed = !zoomed }, tone = Tone.Neutral)
-            GhostButton(if (live) "Pause" else "Resume", onClick = { live = !live }, tone = Tone.Neutral)
+            GhostButton(if (live) stringResource(R.string.scan_pause) else stringResource(R.string.scan_resume), onClick = { live = !live }, tone = Tone.Neutral)
         }
 
         if (!granted) {
             ClairixCard(spacing = 4.dp) {
-                Text("Camera permission", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.scan_camera_permission), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "The optical sweep looks through the phone's camera for lenses looking back. Frames are analysed in memory and are not saved or sent, unless you press Keep a photo on a finding: that one picture is kept, encrypted, on this phone.",
+                    stringResource(R.string.scan_the_optical_sweep_looks_through_the),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
                 Spacer(Modifier.height(8.dp))
                 if (blocked) {
                     // Android no longer shows the prompt once it has been refused for good: only Settings can grant it.
-                    PrimaryButton("Open app settings", onClick = {
+                    PrimaryButton(stringResource(R.string.settings_open_app_settings), onClick = {
                         ctx.startActivity(
                             android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                                 .setData(android.net.Uri.fromParts("package", ctx.packageName, null))
                         )
                     }, modifier = Modifier.fillMaxWidth())
                 } else {
-                    PrimaryButton("Allow camera", onClick = { ask.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth())
+                    PrimaryButton(stringResource(R.string.scan_allow_camera), onClick = { ask.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth())
                 }
             }
         } else {
@@ -294,7 +295,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                     GlintOverlay(state.tracks, isRed, isLed)
                 } else {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Paused", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                        Text(stringResource(R.string.scan_paused), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                     }
                 }
                 // Status strip
@@ -304,17 +305,17 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                 ) {
                     val status = when {
                         state.error != null -> state.error!!
-                        !state.running -> "Opening camera…"
-                        mode == OpticalMode.GLINT && !state.hasTorch -> "This camera has no torch, so the glint check cannot work"
-                        state.checking -> "Checking a spot: torch off for a moment"
-                        state.tooBright -> "Too bright for IR. Darken the room"
-                        state.washedOut -> "Washed out. Back away from the surface"
-                        red.isNotEmpty() -> if (mode == OpticalMode.GLINT) "Steady reflection. Look for a pinhole" else "A light you cannot see. Look for a lens"
-                        unconfirmedIr -> "Point of light. Can you see it with your own eyes?"
-                        state.torchUnseen -> "Could not see the torch go off. Dim the lights, hold still"
-                        state.tracks.any { !it.lightSource && !isLed(it) } -> "${state.tracks.count { !it.lightSource && !isLed(it) }} bright spot(s), hold still"
-                        state.tracks.isNotEmpty() -> "Only light sources in view"
-                        else -> if (mode == OpticalMode.GLINT) "Hold still over each area, torch on" else "Point at suspect objects"
+                        !state.running -> stringResource(R.string.scan_opening_camera)
+                        mode == OpticalMode.GLINT && !state.hasTorch -> stringResource(R.string.scan_this_camera_has_no_torch_so)
+                        state.checking -> stringResource(R.string.scan_checking_a_spot_torch_off_for)
+                        state.tooBright -> stringResource(R.string.scan_too_bright_for_ir_darken_the)
+                        state.washedOut -> stringResource(R.string.scan_washed_out_back_away_from_the)
+                        red.isNotEmpty() -> if (mode == OpticalMode.GLINT) stringResource(R.string.scan_steady_reflection_look_for_a_pinhole) else stringResource(R.string.scan_a_light_you_cannot_see_look)
+                        unconfirmedIr -> stringResource(R.string.scan_point_of_light_can_you_see)
+                        state.torchUnseen -> stringResource(R.string.scan_could_not_see_the_torch_go)
+                        state.tracks.any { !it.lightSource && !isLed(it) } -> stringResource(R.string.scan_bright_spot_s_hold_still, state.tracks.count { !it.lightSource && !isLed(it) })
+                        state.tracks.isNotEmpty() -> stringResource(R.string.scan_only_light_sources_in_view)
+                        else -> if (mode == OpticalMode.GLINT) stringResource(R.string.scan_hold_still_over_each_area_torch) else stringResource(R.string.scan_point_at_suspect_objects)
                     }
                     val col = when {
                         state.error != null -> ClairixTheme.colors.danger
@@ -328,7 +329,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                         modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }
                     )
                     Text(
-                        "Y ${state.meanLuma.roundToInt()} · Δ${(state.lumaChange * 100).roundToInt()}% · ${state.fps.roundToInt()} fps",
+                        stringResource(R.string.scan_y_fps, state.meanLuma.roundToInt(), (state.lumaChange * 100).roundToInt(), state.fps.roundToInt()),
                         style = MaterialTheme.typography.monoSmall,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -337,14 +338,14 @@ private fun OpticalTab(findings: List<CameraFinding>) {
 
             if (live && red.isNotEmpty()) {
                 PrimaryButton(
-                    "Keep a photo of this",
+                    stringResource(R.string.scan_keep_a_photo_of_this),
                     tone = Tone.Danger,
                     enabled = !keeping,
                     loading = keeping,
                     onClick = {
                         val shot = runCatching { previewView.bitmap }.getOrNull()
                         if (shot == null) {
-                            Toast.makeText(ctx, "The camera has no picture yet", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.scan_the_camera_has_no_picture_yet), Toast.LENGTH_SHORT).show()
                             return@PrimaryButton
                         }
                         keeping = true
@@ -365,7 +366,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "Saves this view with the circle, the time and your position written on it, encrypted on this phone and attached to the finding on your timeline. Nothing is saved unless you press it.",
+                    stringResource(R.string.scan_saves_this_view_with_the_circle),
                     style = MaterialTheme.typography.bodySmall,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -375,8 +376,8 @@ private fun OpticalTab(findings: List<CameraFinding>) {
         if (granted && mode == OpticalMode.GLINT && state.running && !state.hasTorch) {
             Notice(
                 Tone.Caution,
-                "This phone's back camera has no torch, so lens glint cannot test a spot and tracks nothing in this mode. Use the IR view in a dark room, and the other tabs.",
-                title = "No torch on this camera"
+                stringResource(R.string.scan_this_phones_back_camera_has_no),
+                title = stringResource(R.string.scan_no_torch_on_this_camera)
             )
         }
 
@@ -387,26 +388,26 @@ private fun OpticalTab(findings: List<CameraFinding>) {
 
         ClairixCard(spacing = 4.dp) {
             if (mode == OpticalMode.GLINT) {
-                Text("How glint works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.scan_how_glint_works), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "The torch is on. A lens, even a pinhole, sends light straight back along its own axis, so it shows as a tiny round spot. Hold the phone still over each suspect area for about a second. A spot that stays put is tested: the torch goes off, and once the picture shows it dark, a reflection has gone dark with it while a light (a standby LED, a screen) stays lit. Reflections turn red; lights are shown grey and not reported, and are tested again if you keep holding on them. Screw heads, glass and chrome flash too, but their highlights slide as you move.",
+                    stringResource(R.string.scan_the_torch_is_on_a_lens),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
                 Text(
-                    "It works best within about a metre of the surface: for ceiling fixtures, stand on a chair or use the 2× zoom. A lens behind a dark plastic window throws back no visible light; dark glossy panels on clocks, detectors and chargers get the IR view in the dark and a close look by hand.",
+                    stringResource(R.string.scan_it_works_best_within_about_a),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
             } else {
-                Text("How the IR view works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.scan_how_the_ir_view_works), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "Torch off, front camera. Night-vision cameras light the room with 850 nm infrared LEDs the eye cannot see; some phones' front cameras let that light through as a white or violet dot. First run the check above with a TV remote: if this phone cannot see the remote flash, an empty result here means nothing. Then make the room as dark as you can (the view greys out if there is too much light) and point the screen side at smoke detectors, clocks, chargers and vents. A point of light you can see with your own eyes is an ordinary LED; the app asks.",
+                    stringResource(R.string.scan_torch_off_front_camera_night_vision),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
                 Text(
-                    "Cameras sold as \"no-glow\" use 940 nm LEDs that most phone cameras cannot see at all. An empty IR result does not clear them; the physical steps do.",
+                    stringResource(R.string.scan_cameras_sold_as_no_glow_use),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -415,7 +416,7 @@ private fun OpticalTab(findings: List<CameraFinding>) {
 
         FindingsSection(
             mine, methodsFor(SweepTab.OPTICAL),
-            if (mode == OpticalMode.GLINT) "No steady reflections recorded yet" else HiddenCameraScanner.irEmptyText(irRecord)
+            if (mode == OpticalMode.GLINT) stringResource(R.string.scan_no_steady_reflections_recorded_yet) else HiddenCameraScanner.irEmptyText(irRecord)
         )
         Spacer(Modifier.height(24.dp))
     }
@@ -426,13 +427,13 @@ private fun OpticalTab(findings: List<CameraFinding>) {
 private fun IrCheckCard(record: IrCheck, until: Long, now: Long, canRun: Boolean) {
     val checking = until > 0L
     ClairixCard(spacing = 4.dp) {
-        Text("Can this phone see infrared?", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+        Text(stringResource(R.string.scan_can_this_phone_see_infrared), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
         Text(
             when {
-                checking -> "Hold a TV remote close to the front camera and keep a button pressed. ${((until - now) / 1000L).coerceAtLeast(0L)} s left."
-                record.seen -> "Yes. Its front camera showed a TV remote flashing on ${dayFmt.format(Date(record.passedTs))}."
-                record.failedTs > 0L -> "Not shown yet. The check on ${dayFmt.format(Date(record.failedTs))} saw no remote flashing."
-                else -> "Not checked yet. A TV remote's buttons flash infrared; on a phone that can see it, the remote shows as a blinking dot."
+                checking -> stringResource(R.string.scan_hold_a_tv_remote_close_to, ((until - now) / 1000L).coerceAtLeast(0L))
+                record.seen -> stringResource(R.string.scan_yes_its_front_camera_showed_a, dayFmt.format(Date(record.passedTs)))
+                record.failedTs > 0L -> stringResource(R.string.scan_not_shown_yet_the_check_on, dayFmt.format(Date(record.failedTs)))
+                else -> stringResource(R.string.scan_not_checked_yet_a_tv_remotes)
             },
             style = MaterialTheme.typography.bodyMedium,
             color = if (record.seen && !checking) ClairixTheme.colors.safe else ClairixTheme.colors.textMuted
@@ -440,9 +441,9 @@ private fun IrCheckCard(record: IrCheck, until: Long, now: Long, canRun: Boolean
         Spacer(Modifier.height(8.dp))
         SecondaryButton(
             when {
-                checking -> "Checking…"
-                record.seen -> "Check again"
-                else -> "Check with a TV remote"
+                checking -> stringResource(R.string.scan_checking_2)
+                record.seen -> stringResource(R.string.scan_check_again)
+                else -> stringResource(R.string.scan_check_with_a_tv_remote)
             },
             onClick = { HiddenCameraScanner.startIrCheck() },
             enabled = canRun && !checking,
@@ -628,14 +629,14 @@ private fun NetworkTab(findings: List<CameraFinding>) {
     ) {
         Spacer(Modifier.height(4.dp))
         ClairixCard(spacing = 4.dp) {
-            Text("This network", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
+            Text(stringResource(R.string.scan_this_network), style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
             val conn = wifi.connection
             Text(
-                conn?.ssid ?: progress.ssid ?: "Not connected to Wi-Fi",
+                conn?.ssid ?: progress.ssid ?: stringResource(R.string.scan_not_connected_to_wi_fi),
                 style = MaterialTheme.typography.titleMedium,
                 color = if (conn != null || progress.ssid != null) ClairixTheme.colors.text else ClairixTheme.colors.textMuted
             )
-            val sub = progress.subnet ?: conn?.ipv4?.let { "phone at $it" }
+            val sub = progress.subnet ?: conn?.ipv4?.let { stringResource(R.string.scan_phone_at, it) }
             if (sub != null) Text(sub, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             Spacer(Modifier.height(8.dp))
             if (progress.running) {
@@ -644,10 +645,10 @@ private fun NetworkTab(findings: List<CameraFinding>) {
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(progress.phase, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
-                    Text("${progress.hostsDone}/${progress.hostsTotal} · ${progress.liveHosts} live", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.scan_live, progress.hostsDone, progress.hostsTotal, progress.liveHosts), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                 }
                 Spacer(Modifier.height(8.dp))
-                SecondaryButton("Cancel", onClick = { HiddenCameraScanner.cancelNetworkScan() }, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.settings_cancel), onClick = { HiddenCameraScanner.cancelNetworkScan() }, modifier = Modifier.fillMaxWidth())
             } else {
                 progress.error?.let { SweepWarning(it) }
                 if (progress.lastScanTs > 0 && progress.error == null) {
@@ -658,22 +659,22 @@ private fun NetworkTab(findings: List<CameraFinding>) {
                     )
                 }
                 // "Nothing found" and "could not look" are different answers; this is the second.
-                if (progress.error == null) progress.inconclusiveReason?.let { Notice(Tone.Caution, it, title = "Sweep inconclusive") }
+                if (progress.error == null) progress.inconclusiveReason?.let { Notice(Tone.Caution, it, title = stringResource(R.string.scan_sweep_inconclusive)) }
                 Spacer(Modifier.height(6.dp))
-                PrimaryButton("Sweep the Wi-Fi for cameras", onClick = { HiddenCameraScanner.startNetworkScan(ctx) }, modifier = Modifier.fillMaxWidth())
+                PrimaryButton(stringResource(R.string.scan_sweep_the_wi_fi_for_cameras), onClick = { HiddenCameraScanner.startNetworkScan(ctx) }, modifier = Modifier.fillMaxWidth())
             }
         }
 
         ClairixCard(spacing = 4.dp) {
-            Text("What it looks for", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.scan_what_it_looks_for), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
-                "Every address in the /24 around your phone is tried on the camera ports — RTSP (554, 8554), the Dahua and XMeye recorder ports (37777, 34567), the web ports — and whatever answers is asked for its banner. At the same time an ONVIF discovery probe goes out, which most ONVIF cameras answer (a setting some brands ship switched off), and mDNS is browsed for RTSP, Axis, PSIA, ONVIF and HomeKit camera services. A host with just a web page and no camera fingerprint is left out: that is every printer and router. Join the venue's Wi-Fi first. A guest network that isolates clients hides everything; when only the router answers, the sweep says so instead of reporting a clean result.",
+                stringResource(R.string.scan_every_address_in_the_24_around),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textMuted
             )
         }
 
-        Notice(Tone.Info, HiddenCameraScanner.CLOUD_ONLY_NOTE, title = "What this sweep cannot see")
+        Notice(Tone.Info, HiddenCameraScanner.CLOUD_ONLY_NOTE, title = stringResource(R.string.scan_what_this_sweep_cannot_see))
 
         FindingsSection(mine, methodsFor(SweepTab.NETWORK), NetworkSweepCoverage.emptyText(progress))
         Spacer(Modifier.height(24.dp))
@@ -695,9 +696,9 @@ private fun WirelessTab(findings: List<CameraFinding>) {
     ) {
         Spacer(Modifier.height(4.dp))
         ClairixCard(spacing = 4.dp) {
-            Text("Wi-Fi setup hotspots", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.scan_wi_fi_setup_hotspots), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
-                "A camera nobody has finished installing broadcasts its own hotspot — usually open, named for its maker with a few hex digits. The venue's own networks never look like that.",
+                stringResource(R.string.scan_a_camera_nobody_has_finished_installing),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textMuted
             )
@@ -706,14 +707,14 @@ private fun WirelessTab(findings: List<CameraFinding>) {
             if (state.wifiScannedTs > 0) {
                 Text(
                     "Readings from ${fmtAgo(now, state.wifiScannedTs)} · ${state.wifiApsSeen} networks in range" +
-                        if (now - state.wifiScannedTs > 30_000L) " · Android limits Wi-Fi scans to four every two minutes" else "",
+                        if (now - state.wifiScannedTs > 30_000L) stringResource(R.string.scan_android_limits_wi_fi_scans_to) else "",
                     style = MaterialTheme.typography.monoSmall,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Spacer(Modifier.height(6.dp))
             }
             PrimaryButton(
-                if (state.wifiScanning) "Scanning…" else "Scan for setup hotspots",
+                if (state.wifiScanning) stringResource(R.string.scan_scanning) else stringResource(R.string.scan_scan_for_setup_hotspots),
                 onClick = { HiddenCameraScanner.startWifiSetupScan(ctx) },
                 enabled = !state.wifiScanning,
                 loading = state.wifiScanning,
@@ -722,9 +723,9 @@ private fun WirelessTab(findings: List<CameraFinding>) {
         }
 
         ClairixCard(spacing = 4.dp) {
-            Text("Bluetooth setup beacons", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.scan_bluetooth_setup_beacons), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
-                "Before it has Wi-Fi credentials a camera advertises over Bluetooth so an app can hand them over. Twenty seconds of listening catches everything in the room that is still waiting.",
+                stringResource(R.string.scan_before_it_has_wi_fi_credentials),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textMuted
             )
@@ -733,22 +734,22 @@ private fun WirelessTab(findings: List<CameraFinding>) {
             if (state.bleListening) {
                 val left = ((state.bleUntilTs - now) / 1000L).coerceAtLeast(0L)
                 Text(
-                    "Listening · ${left}s left · ${state.bleDevicesSeen} devices heard",
+                    stringResource(R.string.scan_listening_s_left_devices_heard, left, state.bleDevicesSeen),
                     style = MaterialTheme.typography.monoSmall,
                     color = ClairixTheme.colors.accent
                 )
                 Spacer(Modifier.height(6.dp))
-                SecondaryButton("Stop", onClick = { HiddenCameraScanner.stopBleListening() }, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.comms_stop), onClick = { HiddenCameraScanner.stopBleListening() }, modifier = Modifier.fillMaxWidth())
             } else {
                 if (state.bleDevicesSeen > 0) {
-                    Text("Last window heard ${state.bleDevicesSeen} devices", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.scan_last_window_heard_devices, state.bleDevicesSeen), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                     Spacer(Modifier.height(6.dp))
                 }
-                SecondaryButton("Listen for 20 seconds", onClick = { HiddenCameraScanner.startBleListening(ctx, 20_000L) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.scan_listen_for_20_seconds), onClick = { HiddenCameraScanner.startBleListening(ctx, 20_000L) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
             }
         }
 
-        FindingsSection(mine, methodsFor(SweepTab.WIRELESS), "Nothing in range is announcing itself as a camera")
+        FindingsSection(mine, methodsFor(SweepTab.WIRELESS), stringResource(R.string.scan_nothing_in_range_is_announcing_itself))
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -775,9 +776,9 @@ private fun GuidedTab(findings: List<CameraFinding>) {
         // Magnetometer gauge
         ClairixCard(spacing = 4.dp) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Magnetic gauge", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.scan_magnetic_gauge), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
                 ClairixButton(
-                    if (mag.active) "Stop" else "Start",
+                    if (mag.active) stringResource(R.string.comms_stop) else stringResource(R.string.scan_start),
                     onClick = { if (mag.active) HiddenCameraScanner.stopMagnetic() else HiddenCameraScanner.startMagnetic(ctx) },
                     kind = if (mag.active) ButtonKind.Secondary else ButtonKind.Primary
                 )
@@ -790,10 +791,10 @@ private fun GuidedTab(findings: List<CameraFinding>) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
                         when {
-                            mag.unreliable -> "Paused: recalibrate"
-                            mag.warmingUp -> "Settling…"
-                            mag.triggered -> "Anomaly. Look here"
-                            else -> "Quiet"
+                            mag.unreliable -> stringResource(R.string.scan_paused_recalibrate)
+                            mag.warmingUp -> stringResource(R.string.scan_settling)
+                            mag.triggered -> stringResource(R.string.scan_anomaly_look_here)
+                            else -> stringResource(R.string.scan_quiet)
                         },
                         style = MaterialTheme.typography.titleSmall,
                         color = when {
@@ -804,21 +805,21 @@ private fun GuidedTab(findings: List<CameraFinding>) {
                         }
                     )
                     Text(
-                        "${mag.fieldUt.roundToInt()} µT · base ${mag.baselineUt.roundToInt()} · Δ${mag.deltaUt.roundToInt()} / ${mag.thresholdUt.roundToInt()}",
+                        stringResource(R.string.scan_t_base, mag.fieldUt.roundToInt(), mag.baselineUt.roundToInt(), mag.deltaUt.roundToInt(), mag.thresholdUt.roundToInt()),
                         style = MaterialTheme.typography.monoSmall,
                         color = ClairixTheme.colors.textSubtle
                     )
                 }
                 if (mag.unreliable) {
                     Text(
-                        "The compass reports its own readings as unreliable, so the gauge shows no verdict. Wave the phone in a figure of eight, away from metal; the gauge settles again by itself once the compass recovers.",
+                        stringResource(R.string.scan_the_compass_reports_its_own_readings),
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.caution
                     )
                 }
             } else {
                 Text(
-                    "Start the gauge, then slide the back of the phone slowly along the surfaces listed below. The baseline learns the room's field; a magnet inside something jumps the needle well past the trigger line. Moving onto a steel stud or a door frame also jumps it, and then settles as the gauge learns the new level.",
+                    stringResource(R.string.scan_start_the_gauge_then_slide_the),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -827,9 +828,9 @@ private fun GuidedTab(findings: List<CameraFinding>) {
 
         // Checklist
         SectionHeader(
-            "Room sweep · ${done.count { id -> steps.any { it.id == id } }} of ${steps.size}",
+            stringResource(R.string.scan_room_sweep_of, done.count { id -> steps.any { it.id == id } }, steps.size),
             action = if (done.isNotEmpty()) {
-                { GhostButton("Reset", onClick = { HiddenCameraScanner.resetSweep() }, tone = Tone.Neutral) }
+                { GhostButton(stringResource(R.string.scan_reset), onClick = { HiddenCameraScanner.resetSweep() }, tone = Tone.Neutral) }
             } else null
         )
         steps.forEachIndexed { i, step ->
@@ -867,9 +868,9 @@ private fun GuidedTab(findings: List<CameraFinding>) {
         }
 
         // The honest limit
-        Notice(Tone.Caution, HiddenCameraScanner.ANALOG_RF_NOTE, title = "What the phone can't see")
+        Notice(Tone.Caution, HiddenCameraScanner.ANALOG_RF_NOTE, title = stringResource(R.string.scan_what_the_phone_cant_see))
 
-        FindingsSection(mine, methodsFor(SweepTab.GUIDED), "No magnetic anomalies recorded")
+        FindingsSection(mine, methodsFor(SweepTab.GUIDED), stringResource(R.string.scan_no_magnetic_anomalies_recorded))
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -902,11 +903,11 @@ private fun MagneticBar(field: Float, baseline: Float, threshold: Float, trigger
 private fun FindingsSection(rows: List<CameraFinding>, methods: Set<CameraFindMethod>, emptyText: String) {
     val strong = rows.count { it.confidence >= 0.7f }
     SectionHeader(
-        "Findings",
+        stringResource(R.string.scan_findings),
         tone = if (strong > 0) Tone.Danger else Tone.Accent,
-        supporting = if (rows.isEmpty()) null else "${rows.size}" + if (strong > 0) " · $strong strong" else "",
+        supporting = if (rows.isEmpty()) null else "${rows.size}" + if (strong > 0) stringResource(R.string.scan_strong, strong) else "",
         action = if (rows.isNotEmpty()) {
-            { GhostButton("Clear", onClick = { methods.forEach { HiddenCameraScanner.clear(it) } }, tone = Tone.Neutral) }
+            { GhostButton(stringResource(R.string.comms_clear), onClick = { methods.forEach { HiddenCameraScanner.clear(it) } }, tone = Tone.Neutral) }
         } else null
     )
     if (rows.isEmpty()) {
@@ -926,7 +927,7 @@ private fun FindingRow(f: CameraFinding) {
     }
     ClairixCard(tone = tone, spacing = 4.dp) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatusPill(if (f.needsConfirmation) "IR, unconfirmed" else HiddenCameraScanner.methodLabel(f.method), tone)
+            StatusPill(if (f.needsConfirmation) stringResource(R.string.scan_ir_unconfirmed) else HiddenCameraScanner.methodLabel(f.method), tone)
             Spacer(Modifier.weight(1f))
             Text("${(f.confidence * 100).roundToInt()} %", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
             Text(timeFmt.format(Date(f.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
@@ -935,17 +936,17 @@ private fun FindingRow(f: CameraFinding) {
         Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
         if (f.lat != null && f.lon != null) {
             Text(
-                String.format(Locale.US, "%.5f, %.5f", f.lat, f.lon),
+                String.format(Locale.US, stringResource(R.string.scan_5f_5f), f.lat, f.lon),
                 style = MaterialTheme.typography.monoSmall,
                 color = ClairixTheme.colors.textSubtle
             )
         }
         if (f.needsConfirmation) {
             Spacer(Modifier.height(4.dp))
-            Text("Can you see this light with your own eyes?", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.scan_can_you_see_this_light_with), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SecondaryButton("I can see it (LED)", onClick = { HiddenCameraScanner.dismissIr(f.id) }, modifier = Modifier.weight(1f))
-                SecondaryButton("I cannot see it", onClick = { HiddenCameraScanner.confirmIr(f.id) }, tone = Tone.Danger, modifier = Modifier.weight(1f))
+                SecondaryButton(stringResource(R.string.scan_i_can_see_it_led), onClick = { HiddenCameraScanner.dismissIr(f.id) }, modifier = Modifier.weight(1f))
+                SecondaryButton(stringResource(R.string.scan_i_cannot_see_it), onClick = { HiddenCameraScanner.confirmIr(f.id) }, tone = Tone.Danger, modifier = Modifier.weight(1f))
             }
         }
         f.photo?.let { SweepPhotoButton(it) }
@@ -959,7 +960,7 @@ private fun FindingRow(f: CameraFinding) {
 @Composable
 internal fun SweepPhotoButton(attachment: String) {
     var open by remember(attachment) { mutableStateOf(false) }
-    GhostButton("View photo", onClick = { open = true })
+    GhostButton(stringResource(R.string.scan_view_photo), onClick = { open = true })
     if (open) SweepPhotoDialog(attachment, onDismiss = { open = false })
 }
 
@@ -973,9 +974,9 @@ private fun SweepPhotoDialog(attachment: String, onDismiss: () -> Unit) {
         }
     }
     ClairixDialog(
-        title = "Kept photo",
+        title = stringResource(R.string.scan_kept_photo),
         onDismiss = onDismiss,
-        confirmLabel = "Close",
+        confirmLabel = stringResource(R.string.comms_close),
         onConfirm = onDismiss,
         dismissLabel = null
     ) {
@@ -983,12 +984,12 @@ private fun SweepPhotoDialog(attachment: String, onDismiss: () -> Unit) {
         when {
             image != null -> Image(
                 image,
-                contentDescription = "The photo kept from the camera sweep, with the candidate circled and the time and position written on it",
+                contentDescription = stringResource(R.string.scan_the_photo_kept_from_the_camera),
                 modifier = Modifier.fillMaxWidth(),
                 contentScale = ContentScale.FillWidth
             )
-            loaded -> Text("This photo is no longer on this phone, or could not be opened.", style = MaterialTheme.typography.bodyMedium)
-            else -> Text("Opening…", style = MaterialTheme.typography.bodyMedium)
+            loaded -> Text(stringResource(R.string.scan_this_photo_is_no_longer_on), style = MaterialTheme.typography.bodyMedium)
+            else -> Text(stringResource(R.string.scan_opening), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -1012,12 +1013,13 @@ private fun rememberNow(periodMs: Long): Long {
     return now
 }
 
+@Composable
 private fun fmtAgo(now: Long, ts: Long): String {
     val s = ((now - ts) / 1000L).coerceAtLeast(0L)
     return when {
-        s < 5 -> "just now"
-        s < 60 -> "${s}s ago"
-        s < 3600 -> "${s / 60}m ago"
-        else -> "${s / 3600}h ago"
+        s < 5 -> stringResource(R.string.comms_just_now)
+        s < 60 -> stringResource(R.string.scan_s_ago_2, s)
+        s < 3600 -> stringResource(R.string.scan_m_ago, s / 60)
+        else -> stringResource(R.string.scan_h_ago, s / 3600)
     }
 }

@@ -25,6 +25,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.clairix.analysis.AccountChecklist
 import app.clairix.analysis.AccountChecklist.Action
@@ -51,8 +52,7 @@ private fun formatTicked(ts: Long): String =
 
 /** The Health tab's line about the checklist, from [AccountChecklist.progress]. */
 internal fun accountChecklistLine(p: AccountChecklist.Progress, format: (Long) -> String): String = when {
-    !p.started -> "Not done yet. Most watching by someone you know goes through your accounts, not an app: " +
-        "this checklist takes you to each place it shows."
+    !p.started -> "Not done yet. Most watching by someone you know goes through your accounts, not an app: this checklist takes you to each place it shows."
     p.done -> "All ${p.total} checked. Last ticked ${format(p.lastTickAt ?: 0L)}."
     else -> "${p.checked} of ${p.total} checked. Last ticked ${format(p.lastTickAt ?: 0L)}."
 }
@@ -62,7 +62,7 @@ internal fun accountChecklistLine(p: AccountChecklist.Progress, format: (Long) -
  * ticked, and a button to it.
  */
 internal fun LazyListScope.accountChecklistSummaryItems(onOpen: () -> Unit) {
-    item(key = "accounts_hdr") { SectionHeader("Who else can see this phone") }
+    item(key = "accounts_hdr") { SectionHeader(stringResource(R.string.scan_who_else_can_see_this_phone)) }
     item(key = "accounts_card") { AccountChecklistSummary(onOpen) }
 }
 
@@ -82,7 +82,7 @@ private fun AccountChecklistSummary(onOpen: () -> Unit) {
             color = ClairixTheme.colors.text
         )
         SecondaryButton(
-            if (progress.started) "Open the checklist" else "Start the checklist",
+            if (progress.started) stringResource(R.string.scan_open_the_checklist) else stringResource(R.string.scan_start_the_checklist),
             onClick = onOpen,
             tone = Tone.Accent,
             modifier = Modifier.fillMaxWidth()
@@ -140,13 +140,10 @@ internal fun AccountChecklistPage(onBack: (() -> Unit)? = null) {
 
     val progress = AccountChecklist.progress(rows, ticks)
 
-    ToolPageList(title = "Who else can see this phone", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.scan_who_else_can_see_this_phone), onBack = onBack) {
         item(key = "§intro") {
             Text(
-                "Someone who knows you rarely needs an app to watch you. A Google or Samsung account they also sign " +
-                    "in to, location sharing, a family group, a recovery number they control or calls forwarded at the " +
-                    "carrier show them as much, and no app on the phone can see any of it, Clairix included. Each row " +
-                    "opens the page where it shows and says what to look for there. Tick a row once you have looked.",
+                stringResource(R.string.scan_someone_who_knows_you_rarely_needs),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -154,18 +151,15 @@ internal fun AccountChecklistPage(onBack: (() -> Unit)? = null) {
         item(key = "§before") {
             Notice(
                 Tone.Caution,
-                "Looking changes nothing. Changing something can be noticed: a device signed out, location sharing " +
-                    "stopped or a password changed can tell the other person you found it, and Google tells an account's " +
-                    "recovery addresses about some changes. If it may not be safe yet, look first, take screenshots if " +
-                    "you may want them as evidence, and talk to an advocate before you change anything.",
-                title = "Before you change anything",
-                action = { GhostButton("Get help", onClick = { Registry.requestHelp() }) }
+                stringResource(R.string.scan_looking_changes_nothing_changing_something_can),
+                title = stringResource(R.string.scan_before_you_change_anything),
+                action = { GhostButton(stringResource(R.string.settings_get_help), onClick = { Registry.requestHelp() }) }
             )
         }
         item(key = "§progress") {
             SectionHeader(
-                "Checklist",
-                supporting = "${progress.checked} of ${progress.total} checked"
+                stringResource(R.string.scan_checklist),
+                supporting = stringResource(R.string.scan_of_checked, progress.checked, progress.total)
             )
         }
         items(rows, key = { it.id }) { row ->
@@ -179,7 +173,7 @@ internal fun AccountChecklistPage(onBack: (() -> Unit)? = null) {
         if (progress.started) {
             item(key = "§again") {
                 GhostButton(
-                    "Start again",
+                    stringResource(R.string.scan_start_again),
                     onClick = {
                         ticks = emptyMap()
                         scope.launch(Dispatchers.IO) { runCatching { AccountChecklist.clear(context) } }
@@ -228,8 +222,8 @@ private fun AccountCheckRowCard(
             }
         }
         ToggleRow(
-            title = "I have checked this",
-            subtitle = tickedAt?.let { "Ticked ${formatTicked(it)}" },
+            title = stringResource(R.string.scan_i_have_checked_this),
+            subtitle = tickedAt?.let { stringResource(R.string.scan_ticked, formatTicked(it)) },
             checked = tickedAt != null,
             onCheckedChange = onChecked
         )

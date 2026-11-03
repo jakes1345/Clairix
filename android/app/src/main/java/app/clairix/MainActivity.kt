@@ -35,6 +35,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -96,6 +98,7 @@ import app.clairix.comms.KeepOffScreen
 import app.clairix.comms.PairingCode
 import app.clairix.comms.PanicResult
 import app.clairix.comms.SosGate
+import app.clairix.ui.appResources
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -615,22 +618,23 @@ private val dayYearFmt = SimpleDateFormat("MMM d yyyy", Locale.US)
 internal fun fmtTime(ts: Long): String = fullFmt.format(Date(ts))
 private fun fmtClock(ts: Long): String = clockFmt.format(Date(ts))
 
-private fun fmtAgo(now: Long, ts: Long): String {
+private fun fmtAgo(res: Resources, now: Long, ts: Long): String {
     val s = ((now - ts) / 1000L).coerceAtLeast(0L)
     return when {
-        s < 60 -> "$s s ago"
-        s < 3600 -> "${s / 60} min ago"
-        s < 86_400 -> "${s / 3600} h ${(s % 3600) / 60} min ago"
-        else -> "${s / 86_400} d ago"
+        s < 60 -> res.getString(R.string.scan_seconds_ago, s)
+        s < 3600 -> res.getString(R.string.comms_minutes_ago, s / 60)
+        s < 86_400 -> res.getString(R.string.scan_hours_minutes_ago, s / 3600, (s % 3600) / 60)
+        else -> res.getString(R.string.scan_days_ago, s / 86_400)
     }
 }
 
+@Composable
 private fun fmtDuration(ms: Long): String {
     val s = (ms / 1000L).coerceAtLeast(0L)
     return when {
-        s < 60 -> "$s s"
-        s < 3600 -> "${s / 60} min ${s % 60} s"
-        else -> "${s / 3600} h ${(s % 3600) / 60} min"
+        s < 60 -> stringResource(R.string.scan_seconds, s)
+        s < 3600 -> stringResource(R.string.scan_minutes_seconds, s / 60, s % 60)
+        else -> stringResource(R.string.settings_h_min, s / 3600, (s % 3600) / 60)
     }
 }
 
@@ -653,7 +657,7 @@ private fun compass(bearing: Double): String {
     return dirs[((bearing + 22.5) / 45.0).toInt() % 8]
 }
 
-private fun dayLabel(ts: Long, now: Long): String {
+private fun dayLabel(res: Resources, ts: Long, now: Long): String {
     val cal = Calendar.getInstance()
     cal.timeInMillis = now
     cal.set(Calendar.HOUR_OF_DAY, 0)
@@ -664,8 +668,8 @@ private fun dayLabel(ts: Long, now: Long): String {
     val thisYear = cal.get(Calendar.YEAR)
     cal.add(Calendar.DAY_OF_YEAR, -1)
     val yesterdayStart = cal.timeInMillis
-    if (ts >= todayStart) return "Today"
-    if (ts >= yesterdayStart) return "Yesterday"
+    if (ts >= todayStart) return res.getString(R.string.scan_today)
+    if (ts >= yesterdayStart) return res.getString(R.string.scan_yesterday)
     cal.timeInMillis = ts
     val fmt = if (cal.get(Calendar.YEAR) == thisYear) dayFmt else dayYearFmt
     return fmt.format(Date(ts))
@@ -791,7 +795,7 @@ internal fun SosButton(
             .background(c.danger)
             .border(2.dp, c.base.copy(alpha = 0.6f), ClairixShapes.Octagon)
             .semantics {
-                contentDescription = "SOS. Hold to send an emergency alert to your groups"
+                contentDescription = context.getString(R.string.scan_sos_hold_to_send_an_emergency)
                 role = Role.Button
             }
             .pointerInput(Unit) {
@@ -817,9 +821,9 @@ internal fun SosButton(
 
     if (showSosConfirm) {
         ClairixDialog(
-            title = "Send an SOS?",
-            text = "Every member of your groups gets an alert with your position right away. You are told how many people it reached.",
-            confirmLabel = "Send SOS",
+            title = stringResource(R.string.scan_send_an_sos),
+            text = stringResource(R.string.scan_every_member_of_your_groups_gets),
+            confirmLabel = stringResource(R.string.scan_send_sos),
             confirmTone = Tone.Danger,
             onConfirm = {
                 showSosConfirm = false
@@ -847,29 +851,27 @@ internal fun SosButton(
         val notRegistered = why == SosGate.NOT_REGISTERED
         // With an extra set up there is still something to do here, and "nothing was
         // sent" would turn false once the text goes: the sentence names Clairix.
-        val nothing = if (extras.any) "No Clairix SOS was sent." else "Nothing was sent."
+        val nothing = if (extras.any) stringResource(R.string.scan_no_clairix_sos_was_sent) else stringResource(R.string.scan_nothing_was_sent)
         ClairixDialog(
-            title = "Nobody would receive this",
+            title = stringResource(R.string.scan_nobody_would_receive_this),
             text = if (notRegistered) {
-                "An SOS goes to the members of your Clairix groups, and this phone is not set up for Comms. " +
-                    "Set it up, then make a group or accept an invitation to one. $nothing"
+                stringResource(R.string.scan_an_sos_goes_to_the_members, nothing)
             } else {
-                "An SOS goes to the members of your Clairix groups, and this phone is in no group with anyone else in it. " +
-                    "Make a group in Comms, or accept an invitation to one. $nothing"
+                stringResource(R.string.scan_an_sos_goes_to_the_members_2, nothing)
             },
             content = if (extras.any) {
                 { SosExtrasSheet(extras, emergency, offerText = true) }
             } else {
                 null
             },
-            confirmLabel = if (notRegistered) "Set up Comms" else "Open Comms",
+            confirmLabel = if (notRegistered) stringResource(R.string.scan_set_up_comms) else stringResource(R.string.scan_open_comms),
             onConfirm = {
                 sosBlocked = null
                 sosProgress = 0f
                 onSetUpComms()
             },
             onDismiss = { sosBlocked = null; sosProgress = 0f },
-            dismissLabel = "Not now"
+            dismissLabel = stringResource(R.string.comms_not_now)
         )
     }
 }
@@ -1165,13 +1167,13 @@ private fun MainApp(
                             val hadFix = s.lat != null && s.lon != null
                             val first = CommsRepository.sendSos()
                             val findingFix = !hadFix && first.blocked == null && first.error == null
-                            toast(first.headline() + if (findingFix) ". Finding your location…" else "")
+                            toast(first.headline() + if (findingFix) context.getString(R.string.scan_finding_your_location) else "")
                             if (first.retrying) followUp(first, "SOS")
                             if (!findingFix) return@launch
                             // Never an app's faked position, and the toast says why there is none.
                             SosLocation.missing(SosLocation.locate(context))?.let { toast(it); return@launch }
                             val second = CommsRepository.sendSos()
-                            toast(second.headline("Your location"))
+                            toast(second.headline(context.getString(R.string.scan_your_location)))
                             if (second.retrying) followUp(second, "Your location")
                         }
                     }
@@ -1200,7 +1202,7 @@ private fun MainApp(
                     )
                 } else {
                     // The trail of where she has been: behind the passcode whenever one is set.
-                    OwnerGate(title = "Map", purpose = "open the map", onBack = null) { MapScreen() }
+                    OwnerGate(title = stringResource(R.string.scan_map), purpose = stringResource(R.string.scan_open_the_map), onBack = null) { MapScreen() }
                 }
                 category == ScanCategory.CAMERAS -> CameraSweepScreen()
                 category == ScanCategory.CELL -> CellScreen(
@@ -1318,11 +1320,9 @@ internal fun ScanScreen(
         if (detections.isEmpty()) {
             if (status.scanning) item(key = "§empty") {
                 EmptyState(
-                    title = "Nothing flagged yet",
+                    title = stringResource(R.string.scan_nothing_flagged_yet),
                     // The thresholds as set in Settings, not the defaults.
-                    body = "Proving something follows you takes " +
-                        FollowerStatus.proof(AppSettings.persistenceThresholdMin, AppSettings.followThresholdM) +
-                        ". Leave it running.",
+                    body = stringResource(R.string.scan_proving_something_follows_you_takes_leave, FollowerStatus.proof(AppSettings.persistenceThresholdMin, AppSettings.followThresholdM)),
                     icon = ClairixIcons.BluetoothSearching,
                     tone = Tone.Safe
                 )
@@ -1330,8 +1330,8 @@ internal fun ScanScreen(
         } else {
             item(key = "§list-label") {
                 SectionHeader(
-                    "Flagged devices",
-                    supporting = "${live.size} live · ${detections.size - live.size} trusted"
+                    stringResource(R.string.scan_flagged_devices),
+                    supporting = stringResource(R.string.scan_live_trusted, live.size, detections.size - live.size)
                 )
             }
             items(ordered, key = { it.key }) { d ->
@@ -1349,7 +1349,7 @@ internal fun ScanScreen(
         item(key = "§export") {
             // With a passcode set, each export asks for it (or a biometric) every time;
             // then the period and the warning, then the share sheet.
-            EvidenceExportButtons("Export evidence report", modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+            EvidenceExportButtons(stringResource(R.string.scan_export_evidence_report), modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
         }
     }
 }
@@ -1372,72 +1372,64 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, now: Lo
     val (headline, body, tone) = when {
         // Wanted on and unable to scan (Bluetooth off, a refused restart): the cause,
         // which is what there is to act on, as the hub puts it first too.
-        !status.scanning && error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
+        !status.scanning && error != null -> Triple(stringResource(R.string.scan_scanner_cannot_hear), error, Tone.Caution)
         // Ended by an update, a kill or a battery manager: said so, not "off" as if she had.
         !status.scanning && status.stoppedBySystem -> Triple(
-            "Scanner stopped",
+            stringResource(R.string.scan_scanner_stopped),
             ScannerHealth.stoppedBySystemLine(status.stoppedAt),
             Tone.Caution
         )
         !status.scanning -> Triple(
-            "Scanner off",
-            "Start scanning to check for Bluetooth trackers travelling with you.",
+            stringResource(R.string.scan_scanner_off),
+            stringResource(R.string.scan_start_scanning_to_check_for_bluetooth),
             Tone.Neutral
         )
         trackers.size == 1 -> Triple(
-            "Tracker on you",
-            "${trackers[0].name} was heard ${trackers[0].displacementM.roundToInt()} m apart while you moved. " +
-                "Open it below to see where to look.",
+            stringResource(R.string.scan_tracker_on_you),
+            stringResource(R.string.scan_was_heard_m_apart_while_you, trackers[0].name, trackers[0].displacementM.roundToInt()),
             Tone.Danger
         )
         trackers.size > 1 -> Triple(
-            "${trackers.size} trackers on you",
-            "They were heard in different places while you moved. Open each one below to see where to look.",
+            stringResource(R.string.scan_trackers_on_you, trackers.size),
+            stringResource(R.string.scan_they_were_heard_in_different_places),
             Tone.Danger
         )
         riders.size == 1 -> Triple(
-            "A device is travelling with you",
-            "${riders[0].name} was heard ${riders[0].displacementM.roundToInt()} m apart while you moved. " +
-                "It is not recognised as a tracker away from its owner: a companion's phone, watch or keys, or the " +
-                "vehicle's own electronics, look the same. If you are alone, open it below and check the car.",
+            stringResource(R.string.scan_a_device_is_travelling_with_you),
+            stringResource(R.string.scan_was_heard_m_apart_while_you_2, riders[0].name, riders[0].displacementM.roundToInt()),
             Tone.Caution
         )
         riders.size > 1 -> Triple(
-            "${riders.size} devices are travelling with you",
-            "They were heard in different places while you moved. None is recognised as a tracker away from its " +
-                "owner: companions' phones, watches and keys, or the vehicle's own electronics, look the same. " +
-                "If you are alone, open each one below and check the car.",
+            stringResource(R.string.scan_devices_are_travelling_with_you, riders.size),
+            stringResource(R.string.scan_they_were_heard_in_different_places_2),
             Tone.Caution
         )
         // Confirmed earlier and quiet since: asleep, out of range, or still where it was put.
         earlier.isNotEmpty() -> Triple(
-            if (earlier.size == 1) "A tracker followed you earlier" else "${earlier.size} trackers followed you earlier",
-            (if (earlier.size == 1) "${earlier[0].name} was last heard ${fmtAgo(now, earlier[0].lastSeen)}. "
-            else "The last was heard ${fmtAgo(now, earlier.maxOf { it.lastSeen })}. ") +
-                "A tracker can sleep or be out of range and still be where it was put, so search the car and your " +
-                "bags. Once you have found one, open it below and tap I found it.",
+            if (earlier.size == 1) stringResource(R.string.scan_a_tracker_followed_you_earlier) else stringResource(R.string.scan_trackers_followed_you_earlier, earlier.size),
+            stringResource(R.string.scan_a_tracker_can_sleep_or_be, (if (earlier.size == 1) stringResource(R.string.scan_was_last_heard, earlier[0].name, fmtAgo(appResources(), now, earlier[0].lastSeen))
+            else stringResource(R.string.scan_the_last_was_heard, fmtAgo(appResources(), now, earlier.maxOf { it.lastSeen })))),
             Tone.Caution
         )
         // Registered and hearing nothing (Location off, five quiet minutes): a confirmed
         // follower or rider above still stands, but "nothing following" below would be unproven.
-        error != null -> Triple("Scanner cannot hear", error, Tone.Caution)
+        error != null -> Triple(stringResource(R.string.scan_scanner_cannot_hear), error, Tone.Caution)
         // An app supplies the phone's positions: following can be neither confirmed nor
         // ruled out, so "nothing following" below would be unproven too.
-        faking -> Triple("Position faked", app.clairix.analysis.PositionText.FAKED, Tone.Caution)
+        faking -> Triple(stringResource(R.string.scan_position_faked), app.clairix.analysis.PositionText.FAKED, Tone.Caution)
         persistent > 0 -> Triple(
-            "Keep watching",
-            "${plural(persistent, "device")} keep showing up. Following is only confirmed once you move about " +
-                "${AppSettings.followThresholdM.toInt()} m with GPS on.",
+            stringResource(R.string.scan_keep_watching),
+            pluralStringResource(R.plurals.scan_devices_keep_showing_up, persistent, persistent, AppSettings.followThresholdM.toInt()),
             Tone.Caution
         )
         else -> Triple(
-            "Nothing following",
-            "Watching ${plural(status.nearbyCount, "device")} nearby. Nothing has moved with you.",
+            stringResource(R.string.scan_nothing_following),
+            pluralStringResource(R.plurals.scan_watching_devices, status.nearbyCount, status.nearbyCount),
             Tone.Safe
         )
     }
     StatusHero(
-        eyebrow = if (status.scanning) "Trackers · scanning" else "Trackers",
+        eyebrow = if (status.scanning) stringResource(R.string.scan_trackers_scanning) else stringResource(R.string.scan_trackers),
         headline = headline,
         body = body,
         tone = tone,
@@ -1446,16 +1438,16 @@ private fun TrackerStatusHero(status: ScanStatus, live: List<Detection>, now: Lo
             if (status.scanning) {
                 if (error == ScannerHealth.LOCATION_OFF) {
                     SecondaryButton(
-                        "Open Location settings",
+                        stringResource(R.string.scan_open_location_settings),
                         onClick = { openExternal(context, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
                         tone = Tone.Accent,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                SecondaryButton("Stop scanning", onClick = onToggle, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.scan_stop_scanning), onClick = onToggle, modifier = Modifier.fillMaxWidth())
             } else {
                 PrimaryButton(
-                    if (status.stoppedBySystem) "Resume scanning" else "Start scanning",
+                    if (status.stoppedBySystem) stringResource(R.string.scan_resume_scanning) else stringResource(R.string.scan_start_scanning),
                     onClick = onToggle,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1482,10 +1474,10 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatTile("$score", "Threat level of 100", Modifier.weight(1f), tone = scoreTone)
-            StatTile("${status.nearbyCount}", "In range", Modifier.weight(1f))
+            StatTile("$score", stringResource(R.string.scan_threat_level_of_100), Modifier.weight(1f), tone = scoreTone)
+            StatTile("${status.nearbyCount}", stringResource(R.string.scan_in_range), Modifier.weight(1f))
             StatTile(
-                "${detections.size}", "Flagged", Modifier.weight(1f),
+                "${detections.size}", stringResource(R.string.scan_flagged), Modifier.weight(1f),
                 tone = when {
                     live.any { it.following && it.threat == Threat.CRITICAL } -> Tone.Danger
                     live.any { it.following } -> Tone.Caution
@@ -1496,7 +1488,7 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
         ClairixCard(spacing = 8.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Threat level",
+                    stringResource(R.string.scan_threat_level),
                     style = MaterialTheme.typography.titleSmall,
                     color = ClairixTheme.colors.text,
                     modifier = Modifier.weight(1f)
@@ -1505,7 +1497,7 @@ private fun ScanFigures(status: ScanStatus, detections: List<Detection>, live: L
             }
             ClairixProgressBar(fraction, tone = scoreTone)
             Text(
-                "Bluetooth peak $bleScore · cellular $cellScore. The higher of the two sets the level.",
+                stringResource(R.string.scan_bluetooth_peak_cellular_the_higher_of, bleScore, cellScore),
                 style = MaterialTheme.typography.bodySmall,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -1520,14 +1512,14 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
     val positioning by Registry.positioning.collectAsStateWithLifecycle()
     ClairixCard(spacing = 4.dp) {
         val scanText = when {
-            !status.scanning -> "Idle"
-            status.nearbyCount > detections.size -> "${detections.size} flagged of ${status.nearbyCount} in range"
+            !status.scanning -> stringResource(R.string.scan_idle)
+            status.nearbyCount > detections.size -> stringResource(R.string.scan_flagged_of_in_range, detections.size, status.nearbyCount)
             else -> "${plural(detections.size, "device")} flagged"
         }
-        KeyValueRow("Scan", scanText)
+        KeyValueRow(stringResource(R.string.scan_scan), scanText)
         val filtered = status.nearbyCount - detections.size
         if (status.scanning && filtered > 0) {
-            KeyValueRow("Filtered out", "$filtered passing signals")
+            KeyValueRow(stringResource(R.string.scan_filtered_out), stringResource(R.string.scan_passing_signals, filtered))
         }
         // The scan's own pulse: a scan that is registered but hears nothing shows it here
         // first. The time is published to the half minute (see ScannerHealth), so it reads
@@ -1535,21 +1527,21 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
         if (status.scanning) {
             val heard = status.lastPacketAt
             KeyValueRow(
-                "Last heard",
+                stringResource(R.string.scan_last_heard),
                 when {
-                    heard == 0L -> "nothing yet"
-                    now - heard < 60_000L -> "within the last minute"
-                    else -> fmtAgo(now, heard)
+                    heard == 0L -> stringResource(R.string.scan_nothing_yet)
+                    now - heard < 60_000L -> stringResource(R.string.scan_within_the_last_minute)
+                    else -> fmtAgo(appResources(), now, heard)
                 }
             )
         }
         if (status.packetErrors > 0) {
-            KeyValueRow("Packet errors", "${status.packetErrors}", valueColor = ClairixTheme.colors.caution)
+            KeyValueRow(stringResource(R.string.scan_packet_errors), "${status.packetErrors}", valueColor = ClairixTheme.colors.caution)
         }
         if (status.hasFix) {
-            KeyValueRow("Position", "%.4f, %.4f".format(Locale.US, status.lat ?: 0.0, status.lon ?: 0.0))
+            KeyValueRow(stringResource(R.string.settings_position), "%.4f, %.4f".format(Locale.US, status.lat ?: 0.0, status.lon ?: 0.0))
             KeyValueRow(
-                "Movement",
+                stringResource(R.string.scan_movement),
                 "${if (status.moving) "Moving" else "Still"} · %.1f km".format(Locale.US, status.travelledM / 1000.0)
             )
         } else {
@@ -1566,7 +1558,7 @@ private fun ScanDetailsCard(status: ScanStatus, detections: List<Detection>, tru
             else Text(line, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         }
         if (trusted.isNotEmpty()) {
-            KeyValueRow("Marked safe", "${plural(trusted.size, "device")}, left out of the threat level", mono = false)
+            KeyValueRow(stringResource(R.string.scan_marked_safe), pluralStringResource(R.plurals.scan_trusted_left_out, trusted.size, trusted.size), mono = false)
         }
         status.error?.let { WarningLine(it, Tone.Danger) }
     }
@@ -1619,7 +1611,7 @@ private fun DetectionRow(
         tone = tone,
         emphasis = FollowerStatus.withYou(d) && d.threat == Threat.CRITICAL && !trusted,
         onClick = { expanded = !expanded },
-        onClickLabel = if (expanded) "Hide details" else "Show details"
+        onClickLabel = if (expanded) stringResource(R.string.scan_hide_details) else stringResource(R.string.scan_show_details)
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -1635,8 +1627,8 @@ private fun DetectionRow(
                 overflow = TextOverflow.Ellipsis
             )
             when {
-                trusted -> StatusPill("Trusted", Tone.Neutral)
-                d.resolved -> StatusPill("Found", Tone.Neutral)
+                trusted -> StatusPill(stringResource(R.string.scan_trusted), Tone.Neutral)
+                d.resolved -> StatusPill(stringResource(R.string.scan_found), Tone.Neutral)
                 else -> StatusPill(if (d.following) followingPill(d) else levelLabel(d.threat.name), d.threat.tone())
             }
             Icon(
@@ -1658,7 +1650,7 @@ private fun DetectionRow(
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "${d.sightings}× · ${fmtAgo(now, d.lastSeen)}",
+                "${d.sightings}× · ${fmtAgo(appResources(), now, d.lastSeen)}",
                 style = MaterialTheme.typography.monoSmall,
                 color = c.textSubtle,
                 modifier = Modifier.weight(1f),
@@ -1670,15 +1662,15 @@ private fun DetectionRow(
 
         if (d.resolved && !trusted) {
             Text(
-                "Marked found at ${fmtClock(d.resolvedAt)}. It no longer counts as on you.",
+                stringResource(R.string.scan_marked_found_at_it_no_longer, fmtClock(d.resolvedAt)),
                 style = MaterialTheme.typography.bodyMedium,
                 color = c.textMuted
             )
         } else if (d.following && !trusted) {
             if (d.threat == Threat.CRITICAL) {
-                WarningLine("Moving with you. Heard ${d.displacementM.roundToInt()} m apart.", Tone.Danger)
+                WarningLine(stringResource(R.string.scan_moving_with_you_heard_m_apart, d.displacementM.roundToInt()), Tone.Danger)
             } else {
-                WarningLine("Travelling with you: heard ${d.displacementM.roundToInt()} m apart. Not recognised as a tracker away from its owner.", Tone.Caution)
+                WarningLine(stringResource(R.string.scan_travelling_with_you_heard_m_apart, d.displacementM.roundToInt()), Tone.Caution)
             }
         }
 
@@ -1693,44 +1685,39 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
         Hairline()
 
         // ── Follow assessment first: it is the answer to "is this on me?" ──
-        SectionHeader("Is it following you?")
+        SectionHeader(stringResource(R.string.scan_is_it_following_you))
         // No position because an app supplies fake ones, said as that rather than as no GPS.
         val positioning by Registry.positioning.collectAsStateWithLifecycle()
         val faking = positioning.faking(System.currentTimeMillis())
         val (line, lineTone) = when (d.confidence) {
-            FollowConfidence.NONE -> "Not enough data yet" to Tone.Neutral
+            FollowConfidence.NONE -> stringResource(R.string.scan_not_enough_data_yet) to Tone.Neutral
             FollowConfidence.NO_POSITION ->
-                (if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE else "No position fix, so movement can't be confirmed") to Tone.Caution
-            FollowConfidence.NOT_MOVED_ENOUGH -> "Nearby, not following" to Tone.Caution
+                (if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE else stringResource(R.string.scan_no_position_fix_so_movement_cant)) to Tone.Caution
+            FollowConfidence.NOT_MOVED_ENOUGH -> stringResource(R.string.scan_nearby_not_following) to Tone.Caution
             FollowConfidence.CONFIRMED ->
-                if (d.threat == Threat.CRITICAL) "Following you" to Tone.Danger else "Travelling with you" to Tone.Caution
+                if (d.threat == Threat.CRITICAL) stringResource(R.string.scan_following_you) to Tone.Danger else stringResource(R.string.scan_travelling_with_you) to Tone.Caution
         }
         Text(line, style = MaterialTheme.typography.titleSmall, color = if (trusted) c.textSubtle else lineTone.color())
         val explanation = when (d.confidence) {
             FollowConfidence.NONE ->
-                if (d.identified) "Known tracker type, but heard too briefly to show a pattern."
-                else "Watching for a pattern of it staying with you."
+                if (d.identified) stringResource(R.string.scan_known_tracker_type_but_heard_too)
+                else stringResource(R.string.scan_watching_for_a_pattern_of_it)
             FollowConfidence.NO_POSITION ->
                 if (faking) app.clairix.analysis.PositionText.FAKED_CONFIDENCE_DETAIL
-                else "It keeps showing up. A position fix is needed to prove it moves with you."
+                else stringResource(R.string.scan_it_keeps_showing_up_a_position)
             FollowConfidence.NOT_MOVED_ENOUGH ->
-                "It keeps showing up, but only ${d.displacementM.roundToInt()} m of shared travel so far. " +
-                    "Confirming it needs about ${AppSettings.followThresholdM.roundToInt()} m."
+                stringResource(R.string.scan_it_keeps_showing_up_but_only, d.displacementM.roundToInt(), AppSettings.followThresholdM.roundToInt())
             FollowConfidence.CONFIRMED ->
                 if (d.threat == Threat.CRITICAL) {
-                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, so it is on you or your vehicle. " +
-                        "Check wheel wells, bumper covers, the OBD-II port, under seats and bag linings."
+                    stringResource(R.string.scan_heard_m_apart_while_moving_with, d.displacementM.roundToInt())
                 } else {
-                    "Heard ${d.displacementM.roundToInt()} m apart while moving with you, but it is not recognised as a " +
-                        "tracker away from its owner. It may be the phone, earbuds, watch or keys of someone travelling with you, " +
-                        "or your vehicle's own electronics. A hardwired GPS tracker looks the same: if you are alone, check the " +
-                        "OBD-II port, under the dash, wheel wells and bumpers. Mark it as yours if you recognise it."
+                    stringResource(R.string.scan_heard_m_apart_while_moving_with_2, d.displacementM.roundToInt())
                 }
         }
         Text(explanation, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
 
         // ── What it is ──
-        SectionHeader("Tracker type")
+        SectionHeader(stringResource(R.string.scan_tracker_type))
         val t = d.tracker
         if (t != null) {
             Column(
@@ -1741,51 +1728,51 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                     Text(t.label, style = MaterialTheme.typography.titleSmall, color = c.text, modifier = Modifier.weight(1f))
                     StatusPill(levelLabel(t.threat.name), t.threat.tone())
                 }
-                Text("Made by ${t.brand}", style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+                Text(stringResource(R.string.scan_made_by, t.brand), style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
                 Text(t.notes, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
             }
         } else {
             Text(
-                "No known tracker signature matched. Flagged on behaviour alone: how long it stays, how it moves and its signal.",
+                stringResource(R.string.scan_no_known_tracker_signature_matched_flagged),
                 style = MaterialTheme.typography.bodyMedium,
                 color = c.textSubtle
             )
         }
 
         // What the radio itself says, resolved through the Bluetooth SIG assigned numbers.
-        SectionHeader("Identification")
+        SectionHeader(stringResource(R.string.scan_identification))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            KeyValueRow("Advertised name", d.advertisedName ?: "None broadcast", valueColor = if (d.advertisedName != null) c.text else c.textSubtle)
-            KeyValueRow("Manufacturer", d.manufacturer ?: "Not advertised", valueColor = if (d.manufacturer != null) c.textMuted else c.textSubtle)
-            KeyValueRow("Radio", d.radio)
+            KeyValueRow(stringResource(R.string.scan_advertised_name), d.advertisedName ?: stringResource(R.string.scan_none_broadcast), valueColor = if (d.advertisedName != null) c.text else c.textSubtle)
+            KeyValueRow(stringResource(R.string.scan_manufacturer), d.manufacturer ?: stringResource(R.string.scan_not_advertised), valueColor = if (d.manufacturer != null) c.textMuted else c.textSubtle)
+            KeyValueRow(stringResource(R.string.comms_radio), d.radio)
             KeyValueRow(
-                "Services",
-                if (d.services.isEmpty()) "None advertised" else d.services.joinToString(" / "),
+                stringResource(R.string.scan_services),
+                if (d.services.isEmpty()) stringResource(R.string.scan_none_advertised) else d.services.joinToString(" / "),
                 valueColor = if (d.services.isEmpty()) c.textSubtle else c.textMuted
             )
-            KeyValueRow("Address", BleNames.formatMac(d.address) + (d.addressKind?.let { " · $it" } ?: ""))
+            KeyValueRow(stringResource(R.string.scan_address), BleNames.formatMac(d.address) + (d.addressKind?.let { " · $it" } ?: ""))
         }
 
-        SectionHeader("Observation")
+        SectionHeader(stringResource(R.string.scan_observation))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            KeyValueRow("First seen", fmtTime(d.firstSeen))
-            KeyValueRow("Last seen", fmtTime(d.lastSeen))
-            KeyValueRow("Present for", fmtDuration(d.lastSeen - d.firstSeen))
+            KeyValueRow(stringResource(R.string.scan_first_seen), fmtTime(d.firstSeen))
+            KeyValueRow(stringResource(R.string.scan_last_seen), fmtTime(d.lastSeen))
+            KeyValueRow(stringResource(R.string.scan_present_for), fmtDuration(d.lastSeen - d.firstSeen))
             KeyValueRow(
-                "Sightings",
+                stringResource(R.string.scan_sightings),
                 if (d.places > 0) "${d.sightings} across ${plural(d.places, "place")}"
-                else "${d.sightings}, no location data"
+                else stringResource(R.string.scan_no_location_data, d.sightings)
             )
-            KeyValueRow("Distance", d.approxMetres?.let { fmtMetres(it) } ?: "Unknown")
-            KeyValueRow("Signal", "${fmtDbm(d.rssi)} · ${BleNames.signalLabel(d.rssi)}")
-            KeyValueRow("Spread", "${d.displacementM.roundToInt()} m apart")
+            KeyValueRow(stringResource(R.string.scan_distance), d.approxMetres?.let { fmtMetres(it) } ?: stringResource(R.string.scan_unknown))
+            KeyValueRow(stringResource(R.string.scan_signal), "${fmtDbm(d.rssi)} · ${BleNames.signalLabel(d.rssi)}")
+            KeyValueRow(stringResource(R.string.scan_spread), stringResource(R.string.scan_m_apart, d.displacementM.roundToInt()))
             KeyValueRow(
-                "Address changes",
-                if (d.rotations > 0) "${d.rotations}× · ${d.addresses} ${if (d.addresses == 1) "address" else "addresses"} seen"
-                else "Stable address",
+                stringResource(R.string.scan_address_changes),
+                if (d.rotations > 0) pluralStringResource(R.plurals.scan_rotations_addresses, d.addresses, d.rotations, d.addresses)
+                else stringResource(R.string.scan_stable_address),
                 valueColor = if (d.rotations > 0) c.caution else c.textMuted
             )
-            KeyValueRow("Threat score", "${d.score} / 100", valueColor = if (trusted) c.textSubtle else d.threat.tone().color())
+            KeyValueRow(stringResource(R.string.scan_threat_score), "${d.score} / 100", valueColor = if (trusted) c.textSubtle else d.threat.tone().color())
         }
 
         // ── Actions ──
@@ -1793,53 +1780,49 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
         val scanning = Registry.status.collectAsStateWithLifecycle().value.scanning
         if (trusted) {
             SecondaryButton(
-                "Put it back in the threat level",
+                stringResource(R.string.scan_put_it_back_in_the_threat),
                 onClick = { Registry.untrust(d.address) },
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
             if (onShowExplainer != null) {
-                PrimaryButton("What is this, and what do I do?", onClick = onShowExplainer, modifier = Modifier.fillMaxWidth())
+                PrimaryButton(stringResource(R.string.scan_what_is_this_and_what_do), onClick = onShowExplainer, modifier = Modifier.fillMaxWidth())
             }
             // Found and dealt with: it stops counting as on you, without teaching the
             // app to ignore it if it comes back. Acts on the running scanner's record.
             if (d.resolved) {
                 SecondaryButton(
-                    "Not found after all",
+                    stringResource(R.string.scan_not_found_after_all),
                     onClick = { ScanService.sendFound(context, d.key, found = false) },
                     enabled = scanning,
                     modifier = Modifier.fillMaxWidth()
                 )
             } else if (d.following || d.persistent) {
                 SecondaryButton(
-                    "I found it",
+                    stringResource(R.string.scan_i_found_it),
                     onClick = { ScanService.sendFound(context, d.key, found = true) },
                     tone = Tone.Accent,
                     enabled = scanning,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "Once you have found and removed it. It stops counting as on you and stays in the timeline and " +
-                        "the evidence report; if it is heard again after an hour away, Clairix watches it afresh.",
+                    stringResource(R.string.scan_once_you_have_found_and_removed),
                     style = MaterialTheme.typography.bodySmall,
                     color = c.textSubtle
                 )
             }
             val rotating = TrustBook.rotating(d)
             SecondaryButton(
-                "Mark as mine",
+                stringResource(R.string.scan_mark_as_mine),
                 onClick = { Registry.trust(d.address, label = d.name, rotating = rotating) },
                 tone = Tone.Safe,
                 modifier = Modifier.fillMaxWidth()
             )
             Text(
                 if (rotating) {
-                    "Marking it as yours removes it from the threat level. This device changes its Bluetooth address: " +
-                        "Clairix keeps it as yours across a change only when it can prove it is the same device, which " +
-                        "it cannot for a tracker tag (two of one make look alike), and asks you again after 24 hours. " +
-                        "You can undo this here or in Settings."
+                    stringResource(R.string.scan_marking_it_as_yours_removes_it)
                 } else {
-                    "Marking it as yours removes it from the threat level. You can undo this here or in Settings."
+                    stringResource(R.string.scan_marking_it_as_yours_removes_it_2)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = c.textSubtle
@@ -1985,7 +1968,7 @@ private fun MapScreen() {
             val marker = Marker(mapView).apply {
                 position = GeoPoint(threat.lat, threat.lon)
                 title = "${threat.fromName}: ${threat.title}"
-                snippet = "${threat.kind} · ${fmtAgo(now, threat.ts)}"
+                snippet = "${threat.kind} · ${fmtAgo(mapView.context.resources, now, threat.ts)}"
                 icon = markerBitmap(markerArgb, 10, outlineArgb = palette.ring)
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             }
@@ -2119,14 +2102,14 @@ private fun MapScreen() {
         ) {
             MapChip(
                 text = buildString {
-                    append(if (status.hasFix) "GPS fix" else "No fix")
+                    append(if (status.hasFix) stringResource(R.string.scan_gps_fix) else stringResource(R.string.scan_no_fix))
                     if (status.lat != null) append(" · %.5f, %.5f".format(Locale.US, status.lat, status.lon))
                     if (mapData.devices.isNotEmpty()) append(" · ${plural(mapData.devices.size, "device")}")
                 },
                 tone = if (status.hasFix) Tone.Neutral else Tone.Caution
             )
-            if (cellHot) MapChip("Sketchy cell tower nearby · ${levelLabel(cell.level.name)}", Tone.Caution)
-            app.clairix.nav.TilesUnavailableNotice("Your position, the devices and their trails are still drawn.")
+            if (cellHot) MapChip(stringResource(R.string.scan_sketchy_cell_tower_nearby, levelLabel(cell.level.name)), Tone.Caution)
+            app.clairix.nav.TilesUnavailableNotice(stringResource(R.string.scan_your_position_the_devices_and_their))
         }
 
         // The data credit the licence asks for, on the map and clear of the SOS
@@ -2145,7 +2128,7 @@ private fun MapScreen() {
             ) {
                 Icon(Icons.Filled.Warning, contentDescription = null, tint = ClairixTheme.colors.onDanger, modifier = Modifier.size(18.dp))
                 Text(
-                    if (followingTrails == 1) "1 tracker on you" else "$followingTrails trackers on you",
+                    if (followingTrails == 1) stringResource(R.string.scan_1_tracker_on_you) else stringResource(R.string.scan_trackers_on_you, followingTrails),
                     style = MaterialTheme.typography.titleSmall,
                     color = ClairixTheme.colors.onDanger
                 )
@@ -2153,7 +2136,7 @@ private fun MapScreen() {
         } else if (travellingTrails > 0) {
             Box(Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 88.dp, bottom = 36.dp)) {
                 MapChip(
-                    if (travellingTrails == 1) "1 device travelling with you" else "$travellingTrails devices travelling with you",
+                    if (travellingTrails == 1) stringResource(R.string.scan_1_device_travelling_with_you) else stringResource(R.string.scan_devices_travelling_with_you, travellingTrails),
                     Tone.Caution
                 )
             }
@@ -2190,9 +2173,10 @@ internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer:
     val status by Registry.status.collectAsStateWithLifecycle()
     val now = rememberNow(60_000L)
     // Log is newest-first, so groups come out Today, Yesterday, then older days.
-    val groups = remember(events, now / 60_000L) { events.groupBy { dayLabel(it.ts, now) } }
+    val res = appResources()
+    val groups = remember(events, now / 60_000L, res) { events.groupBy { dayLabel(res, it.ts, now) } }
     val flagged = remember(events) { events.count { it.severity.ordinal >= Severity.HIGH.ordinal || it.kind == EventKind.PANIC } }
-    val today = groups[dayLabel(now, now)]?.size ?: 0
+    val today = groups[dayLabel(res, now, now)]?.size ?: 0
     // The newest stop on record. When it was the system's and the scanner is still
     // down, its row offers to resume; older stops are history.
     val latestStop = remember(events) { events.firstOrNull { it.kind == EventKind.SCAN_STOP } }
@@ -2204,16 +2188,16 @@ internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer:
         // ── Status first: how much is on record and how much of it matters ──
         item(key = "§figures") {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatTile("$today", "Today", Modifier.weight(1f))
-                StatTile("$flagged", "Flagged", Modifier.weight(1f), tone = if (flagged > 0) Tone.Danger else Tone.Neutral)
-                StatTile("${events.size}", "On record", Modifier.weight(1f))
+                StatTile("$today", stringResource(R.string.scan_today), Modifier.weight(1f))
+                StatTile("$flagged", stringResource(R.string.scan_flagged), Modifier.weight(1f), tone = if (flagged > 0) Tone.Danger else Tone.Neutral)
+                StatTile("${events.size}", stringResource(R.string.scan_on_record), Modifier.weight(1f))
             }
         }
         if (events.isEmpty()) {
             item(key = "§empty") {
                 EmptyState(
-                    title = "Nothing recorded yet",
-                    body = "Every finding lands here with the time and place it happened. Start scanning to begin.",
+                    title = stringResource(R.string.scan_nothing_recorded_yet),
+                    body = stringResource(R.string.scan_every_finding_lands_here_with_the),
                     icon = ClairixIcons.Timeline
                 )
             }
@@ -2251,9 +2235,10 @@ internal fun TimelineScreen(onResumeScan: (() -> Unit)? = null, onShowExplainer:
  * so a row from a group member is not mistaken for a local detection. Null for
  * the ordinary kinds, whose title already says what happened.
  */
+@Composable
 private fun eventKindTag(kind: EventKind): Pair<String, Tone>? = when (kind) {
-    EventKind.SHARED_THREAT -> "Community report" to Tone.Info
-    EventKind.PANIC -> "SOS alert" to Tone.Danger
+    EventKind.SHARED_THREAT -> stringResource(R.string.scan_community_report) to Tone.Info
+    EventKind.PANIC -> stringResource(R.string.scan_sos_alert) to Tone.Danger
     else -> null
 }
 
@@ -2285,7 +2270,7 @@ private fun TimelineRow(
     ClairixCard(
         tone = tone,
         onClick = { open = !open },
-        onClickLabel = if (open) "Hide details" else "Show details",
+        onClickLabel = if (open) stringResource(R.string.scan_hide_details) else stringResource(R.string.scan_show_details),
         spacing = 4.dp
     ) {
         Row(
@@ -2314,9 +2299,9 @@ private fun TimelineRow(
             )
         }
         // A scanner the system stopped, still down: "tap to resume" means this row.
-        if (onResume != null) GhostButton("Resume scanning", onClick = onResume)
+        if (onResume != null) GhostButton(stringResource(R.string.scan_resume_scanning), onClick = onResume)
         // A device on several journeys that nothing tied to her car: the co-traveller explanation.
-        if (onExplain != null) GhostButton("What is this, and what do I do?", onClick = onExplain)
+        if (onExplain != null) GhostButton(stringResource(R.string.scan_what_is_this_and_what_do), onClick = onExplain)
         if (lat != null && lon != null) {
             Text("%.5f, %.5f".format(Locale.US, lat, lon), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         }
@@ -2327,13 +2312,13 @@ private fun TimelineRow(
             // the alert tells you to do next can also tell whoever did it.
             if (SafetyFirst.forEvent(e.kind)) SafetyFirstCard(title = SafetyFirst.TITLE_PHONE)
             Hairline(Modifier.padding(vertical = 4.dp))
-            KeyValueRow("Time", fmtTime(e.ts))
-            KeyValueRow("Kind", e.kind.name.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }, mono = false)
-            KeyValueRow("Severity", levelLabel(e.severity.name), valueColor = if (tone == Tone.Neutral) null else tone.color(), mono = false)
+            KeyValueRow(stringResource(R.string.scan_time), fmtTime(e.ts))
+            KeyValueRow(stringResource(R.string.scan_kind), e.kind.name.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }, mono = false)
+            KeyValueRow(stringResource(R.string.scan_severity), levelLabel(e.severity.name), valueColor = if (tone == Tone.Neutral) null else tone.color(), mono = false)
             if (lat != null && lon != null) {
                 EventLocationSnapshot(lat, lon, status)
             } else {
-                Text("No location recorded for this event", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+                Text(stringResource(R.string.scan_no_location_recorded_for_this_event), style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
             }
         }
     }
@@ -2342,11 +2327,12 @@ private fun TimelineRow(
 /** A square showing where the event happened relative to where the phone is now. */
 @Composable
 private fun EventLocationSnapshot(lat: Double, lon: Double, status: ScanStatus) {
+    val context = LocalContext.current
     val c = ClairixTheme.colors
     val curLat = status.lat
     val curLon = status.lon
     if (!status.hasFix || curLat == null || curLon == null) {
-        Text("No current fix to compare with", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+        Text(stringResource(R.string.scan_no_current_fix_to_compare_with), style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
         return
     }
     val mPerDegLat = 111320.0
@@ -2365,7 +2351,7 @@ private fun EventLocationSnapshot(lat: Double, lon: Double, status: ScanStatus) 
             Modifier.size(104.dp)
                 .background(c.base, ClairixShapes.Card)
                 .border(1.dp, c.border, ClairixShapes.Card)
-                .semantics { contentDescription = "Event position relative to you" }
+                .semantics { contentDescription = context.getString(R.string.scan_event_position_relative_to_you) }
         ) {
             val centre = Offset(size.width / 2f, size.height / 2f)
             val maxR = size.minDimension / 2f - 10f
@@ -2382,12 +2368,12 @@ private fun EventLocationSnapshot(lat: Double, lon: Double, status: ScanStatus) 
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                if (dist < 1.0) "Right here" else "${fmtMetres(dist).removePrefix("~")} away",
+                if (dist < 1.0) stringResource(R.string.scan_right_here) else "${fmtMetres(dist).removePrefix("~")} away",
                 style = MaterialTheme.typography.titleSmall,
                 color = c.text
             )
-            if (dist >= 1.0) Text("${compass(bearing)} of you", style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
-            Text("Centre is where you are now", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+            if (dist >= 1.0) Text(stringResource(R.string.scan_of_you, compass(bearing)), style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
+            Text(stringResource(R.string.scan_centre_is_where_you_are_now), style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
         }
     }
 }
@@ -2421,7 +2407,7 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
         if (cell.available && cell.analysing) {
             if (cell.findings.isNotEmpty()) {
                 item(key = "§indicators") {
-                    SectionHeader("Indicators", supporting = "${cell.findings.size} active", tone = Tone.Danger)
+                    SectionHeader(stringResource(R.string.scan_indicators), supporting = "${cell.findings.size} active", tone = Tone.Danger)
                 }
                 items(cell.findings, key = { it.id }) { f ->
                     FindingRow(
@@ -2434,12 +2420,8 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
                 item(key = "§no-indicators") {
                     Notice(
                         Tone.Safe,
-                        "Twelve checks run against your baseline with every reading, every 15 s while the phone is in use " +
-                            "or moving and up to a minute apart while it rests: forced 2G/3G downgrades, a tower in the " +
-                            "wrong area, area changes while you stand still, signal above the area's record, unknown " +
-                            "cells in familiar places, towers that appear and vanish, rapid switching, no neighbours, " +
-                            "a transmitter within 78 m, signal spikes and technology flip-flopping.",
-                        title = "No indicators right now"
+                        stringResource(R.string.scan_twelve_checks_run_against_your_baseline),
+                        title = stringResource(R.string.scan_no_indicators_right_now)
                     )
                 }
             }
@@ -2449,14 +2431,17 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
             item(key = "§baseline") {
                 ClairixCard(spacing = 8.dp) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Baseline", style = MaterialTheme.typography.titleSmall, color = palette.text, modifier = Modifier.weight(1f))
-                        StatusPill(if (cell.mature) "Ready" else "Learning", if (cell.mature) Tone.Safe else Tone.Caution)
+                        Text(stringResource(R.string.scan_baseline), style = MaterialTheme.typography.titleSmall, color = palette.text, modifier = Modifier.weight(1f))
+                        StatusPill(if (cell.mature) stringResource(R.string.scan_ready) else stringResource(R.string.scan_learning), if (cell.mature) Tone.Safe else Tone.Caution)
                     }
                     ClairixProgressBar(cell.maturity, tone = if (cell.mature) Tone.Safe else Tone.Caution)
                     Text(
-                        if (cell.mature) "${plural(cell.knownCells, "cell")} · ${plural(cell.visits, "visit")}. Clairix knows your usual towers."
-                        else "${cell.visits} of 10 visits. Keep scanning where you usually are; a visit is a return to an " +
-                            "area after time spent somewhere else.",
+                        if (cell.mature) stringResource(
+                            R.string.scan_cells_visits_known,
+                            pluralStringResource(R.plurals.scan_cells, cell.knownCells, cell.knownCells),
+                            pluralStringResource(R.plurals.scan_visits, cell.visits, cell.visits)
+                        )
+                        else stringResource(R.string.scan_of_10_visits_keep_scanning_where, cell.visits),
                         style = MaterialTheme.typography.bodyMedium,
                         color = palette.textSubtle
                     )
@@ -2466,9 +2451,8 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
             item(key = "§not-analysing") {
                 Notice(
                     Tone.Caution,
-                    "Live tower data is below, but fake-tower detection only runs while scanning is on. " +
-                        "Start scanning from Trackers.",
-                    title = "Not checked yet"
+                    stringResource(R.string.scan_live_tower_data_is_below_but),
+                    title = stringResource(R.string.scan_not_checked_yet)
                 )
             }
         }
@@ -2476,34 +2460,34 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
         if (!cell.available && radio != null && (radio.operatorName != null || radio.simOperatorName != null)) {
             item(key = "§unavailable") {
                 ClairixCard(spacing = 4.dp) {
-                    KeyValueRow("Registered on", radio.operatorName ?: "Unknown", mono = false)
-                    KeyValueRow("SIM", radio.simOperatorName ?: "Unknown", mono = false)
-                    radio.simState?.let { KeyValueRow("SIM state", it, mono = false) }
+                    KeyValueRow(stringResource(R.string.scan_registered_on), radio.operatorName ?: stringResource(R.string.scan_unknown), mono = false)
+                    KeyValueRow("SIM", radio.simOperatorName ?: stringResource(R.string.scan_unknown), mono = false)
+                    radio.simState?.let { KeyValueRow(stringResource(R.string.scan_sim_state), it, mono = false) }
                 }
             }
         }
 
         if (c != null) {
-            item(key = "§details-hdr") { SectionHeader("Serving tower") }
+            item(key = "§details-hdr") { SectionHeader(stringResource(R.string.scan_serving_tower)) }
             // ── Operator & radio ──────────────────────────────────────────────
             item(key = "§operator") {
                 ClairixCard(spacing = 4.dp) {
                     val decoded = Plmn.describe(c.mcc, c.mnc)
-                    val operator = radio?.operatorName ?: c.plmnCarrier ?: "Unknown operator"
+                    val operator = radio?.operatorName ?: c.plmnCarrier ?: stringResource(R.string.scan_unknown_operator)
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(operator, style = MaterialTheme.typography.titleLarge, color = palette.text, modifier = Modifier.weight(1f))
-                        if (radio?.roaming == true) StatusPill("Roaming", Tone.Caution)
+                        if (radio?.roaming == true) StatusPill(stringResource(R.string.scan_roaming), Tone.Caution)
                     }
-                    KeyValueRow("Network type", radio?.dataNetworkType ?: c.rat.label)
-                    KeyValueRow("Radio", c.rat.label)
-                    KeyValueRow("PLMN (MCC-MNC)", "${c.mcc ?: "?"}-${c.mnc ?: "?"}" + (decoded?.let { "  $it" } ?: ""))
+                    KeyValueRow(stringResource(R.string.scan_network_type), radio?.dataNetworkType ?: c.rat.label)
+                    KeyValueRow(stringResource(R.string.comms_radio), c.rat.label)
+                    KeyValueRow(stringResource(R.string.scan_plmn_mcc_mnc), "${c.mcc ?: "?"}-${c.mnc ?: "?"}" + (decoded?.let { "  $it" } ?: ""))
                     if (radio != null && (radio.simOperatorName != null || radio.simPlmn != null)) {
                         val simLine = listOfNotNull(radio.simOperatorName, radio.simPlmn).joinToString(" · ")
-                        KeyValueRow("SIM carrier", simLine)
+                        KeyValueRow(stringResource(R.string.scan_sim_carrier), simLine)
                     }
                     if (radio != null) {
-                        KeyValueRow("Mobile data", if (radio.dataConnected) "Connected" else "Not connected")
-                        if (radio.simState != null && radio.simState != "Ready") KeyValueRow("SIM state", radio.simState)
+                        KeyValueRow(stringResource(R.string.scan_mobile_data), if (radio.dataConnected) stringResource(R.string.scan_connected) else stringResource(R.string.scan_not_connected))
+                        if (radio.simState != null && radio.simState != "Ready") KeyValueRow(stringResource(R.string.scan_sim_state), radio.simState)
                     }
                     // Roaming on a network whose PLMN decodes to a different carrier than
                     // the SIM's is the ordinary case; a home PLMN that the modem names
@@ -2514,8 +2498,7 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
                         !decodedCarrier.contains(simName, ignoreCase = true) && !simName.contains(decodedCarrier.substringBefore(' '), ignoreCase = true)
                     ) {
                         WarningLine(
-                            "Not roaming, but the tower's network decodes to $decodedCarrier while the SIM is $simName. " +
-                                "Usually a partner or merged network; a fake tower posing as your carrier can look like this too.",
+                            stringResource(R.string.scan_not_roaming_but_the_towers_network, decodedCarrier, simName),
                             Tone.Caution,
                             Modifier.padding(top = 4.dp)
                         )
@@ -2530,12 +2513,12 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         SignalBars(bars, tone = signalTone(bars))
                         Column(Modifier.weight(1f)) {
-                            Text(c.signalDbm?.let { fmtDbm(it) } ?: "— dBm", style = MaterialTheme.typography.monoLarge, color = palette.text)
+                            Text(c.signalDbm?.let { fmtDbm(it) } ?: stringResource(R.string.scan_dbm), style = MaterialTheme.typography.monoLarge, color = palette.text)
                             Text(signalWord(bars, c.rat), style = MaterialTheme.typography.bodyMedium, color = palette.textSubtle)
                         }
                         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            if (c.rsrq != null) Text("RSRQ ${c.rsrq} dB", style = MaterialTheme.typography.monoSmall, color = palette.textMuted)
-                            if (c.sinr != null) Text("SINR ${c.sinr} dB", style = MaterialTheme.typography.monoSmall, color = palette.textMuted)
+                            if (c.rsrq != null) Text(stringResource(R.string.scan_rsrq_db, c.rsrq), style = MaterialTheme.typography.monoSmall, color = palette.textMuted)
+                            if (c.sinr != null) Text(stringResource(R.string.scan_sinr_db, c.sinr), style = MaterialTheme.typography.monoSmall, color = palette.textMuted)
                             c.timingAdvance?.let { ta ->
                                 val metres = if (c.rat == Rat.GSM) ta * 550 else ta * 78
                                 Text(
@@ -2552,45 +2535,45 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
             // ── Serving cell identity ─────────────────────────────────────────
             item(key = "§serving") {
                 ClairixCard(spacing = 4.dp) {
-                    KeyValueRow("Cell ID", c.cellId)
+                    KeyValueRow(stringResource(R.string.scan_cell_id), c.cellId)
                     if (c.rat == Rat.LTE) {
                         c.cellId.toLongOrNull()?.let { ci ->
-                            KeyValueRow("eNodeB / sector", "${ci shr 8} / ${ci and 0xFF}")
+                            KeyValueRow(stringResource(R.string.scan_enodeb_sector), "${ci shr 8} / ${ci and 0xFF}")
                         }
                     }
                     if (c.rat == Rat.NR5G) {
                         c.cellId.toLongOrNull()?.let { nci ->
                             // gNB id length varies (22–32 bits); the common 24-bit split is shown.
-                            KeyValueRow("gNodeB / cell (24-bit split)", "${nci shr 12} / ${nci and 0xFFF}")
+                            KeyValueRow(stringResource(R.string.scan_gnodeb_cell_24_bit_split), "${nci shr 12} / ${nci and 0xFFF}")
                         }
                     }
-                    KeyValueRow(if (c.rat.rank >= Rat.LTE.rank) "Tracking area (TAC)" else "Location area (LAC)", c.tac ?: "Not reported")
+                    KeyValueRow(if (c.rat.rank >= Rat.LTE.rank) stringResource(R.string.scan_tracking_area_tac) else stringResource(R.string.scan_location_area_lac), c.tac ?: stringResource(R.string.scan_not_reported))
                     c.pci?.let {
                         KeyValueRow(
                             when (c.rat) { Rat.GSM -> "BSIC"; Rat.UMTS -> "Scrambling code"; else -> "Physical cell ID" },
                             it.toString()
                         )
                     }
-                    KeyValueRow("Band", c.band ?: "Not reported")
+                    KeyValueRow(stringResource(R.string.scan_band), c.band ?: stringResource(R.string.scan_not_reported))
                     c.arfcn?.let {
                         KeyValueRow(
                             when (c.rat) { Rat.LTE -> "EARFCN"; Rat.NR5G -> "NR-ARFCN"; Rat.UMTS -> "UARFCN"; else -> "ARFCN" },
                             it.toString()
                         )
                     }
-                    c.bandwidthKhz?.let { KeyValueRow("Bandwidth", "${it / 1000} MHz") }
-                    KeyValueRow("Neighbours heard", "${c.neighbors ?: "Not reported"}")
-                    KeyValueRow("Read", "${fmtClock(c.ts)} · ${fmtAgo(now, c.ts)}")
+                    c.bandwidthKhz?.let { KeyValueRow(stringResource(R.string.scan_bandwidth), "${it / 1000} MHz") }
+                    KeyValueRow(stringResource(R.string.scan_neighbours_heard), "${c.neighbors ?: "Not reported"}")
+                    KeyValueRow(stringResource(R.string.comms_read), "${fmtClock(c.ts)} · ${fmtAgo(appResources(), now, c.ts)}")
                 }
             }
 
             // ── Neighbours ────────────────────────────────────────────────────
             if (cell.neighbors.isNotEmpty()) {
-                item(key = "§neighbours-hdr") { SectionHeader("Neighbouring cells", supporting = "${cell.neighbors.size} heard") }
+                item(key = "§neighbours-hdr") { SectionHeader(stringResource(R.string.scan_neighbouring_cells), supporting = "${cell.neighbors.size} heard") }
                 item(key = "§neighbours") {
                     ClairixCard(spacing = 8.dp) {
                         Text(
-                            "What else the modem can hear. A real tower always has company; a lone transmitter does not.",
+                            stringResource(R.string.scan_what_else_the_modem_can_hear),
                             style = MaterialTheme.typography.bodyMedium,
                             color = palette.textSubtle
                         )
@@ -2603,7 +2586,7 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
                             }
                         }
                         if (cell.neighbors.size > 12) {
-                            Text("+${cell.neighbors.size - 12} more", style = MaterialTheme.typography.bodySmall, color = palette.textSubtle)
+                            Text(stringResource(R.string.scan_more, cell.neighbors.size - 12), style = MaterialTheme.typography.bodySmall, color = palette.textSubtle)
                         }
                     }
                 }
@@ -2615,44 +2598,44 @@ internal fun CellScreen(onShowExplainer: ((CatcherFinding) -> Unit)? = null, onS
 /** The headline of the Cell screen: one verdict from the detector, or why there is none. */
 @Composable
 private fun CellVerdict(cell: CellStatus) {
-    val (eyebrow, headline, body, tone) = when {
+    val copy = when {
         !cell.available -> CellCopy(
-            "Cell towers", "No reading",
-            (cell.reason ?: "Reading the modem…").trimEnd('.') + ". Tower details appear here once the modem reports a serving cell.",
+            stringResource(R.string.scan_cell_towers), stringResource(R.string.scan_no_reading),
+            stringResource(R.string.scan_tower_details_appear_here_once_the, (cell.reason ?: stringResource(R.string.scan_reading_the_modem)).trimEnd('.')),
             Tone.Neutral
         )
-        !cell.analysing -> CellCopy("Cell towers", "Not checked", "Tower details are live below. Start scanning to check them for fakes.", Tone.Neutral)
+        !cell.analysing -> CellCopy(stringResource(R.string.scan_cell_towers), stringResource(R.string.scan_not_checked), stringResource(R.string.scan_tower_details_are_live_below_start), Tone.Neutral)
         cell.level == Threat.CRITICAL -> CellCopy(
-            "Cell towers · analysing", "Fake tower likely",
-            "Several signs point to a fake cell tower nearby. Avoid calls and SMS here; use Clairix calls over Wi-Fi.",
+            stringResource(R.string.scan_cell_towers_analysing), stringResource(R.string.scan_fake_tower_likely),
+            stringResource(R.string.scan_several_signs_point_to_a_fake),
             Tone.Danger
         )
         cell.level == Threat.HIGH -> CellCopy(
-            "Cell towers · analysing", "Sketchy tower",
-            "This tower doesn't match your baseline. Avoid sensitive calls and SMS until you've moved on.",
+            stringResource(R.string.scan_cell_towers_analysing), stringResource(R.string.scan_sketchy_tower),
+            stringResource(R.string.scan_this_tower_doesnt_match_your_baseline),
             Tone.Danger
         )
         cell.level == Threat.MEDIUM -> CellCopy(
-            "Cell towers · analysing", "Worth a look",
-            "Some indicators fired. Not conclusive on its own; watch whether more appear.",
+            stringResource(R.string.scan_cell_towers_analysing), stringResource(R.string.scan_worth_a_look),
+            stringResource(R.string.scan_some_indicators_fired_not_conclusive_on),
             Tone.Caution
         )
         !cell.mature -> CellCopy(
-            "Cell towers · learning", "Learning",
-            "Clairix is still learning your usual towers. Nothing suspicious so far.",
+            stringResource(R.string.scan_cell_towers_learning), stringResource(R.string.scan_learning),
+            stringResource(R.string.scan_clairix_is_still_learning_your_usual),
             Tone.Neutral
         )
         else -> CellCopy(
-            "Cell towers · analysing", "Towers clear",
-            "Your towers match the baseline. Nothing points to a fake tower.",
+            stringResource(R.string.scan_cell_towers_analysing), stringResource(R.string.scan_towers_clear),
+            stringResource(R.string.scan_your_towers_match_the_baseline_nothing),
             Tone.Safe
         )
     }
     StatusHero(
-        eyebrow = eyebrow,
-        headline = headline,
-        body = body + if (cell.available && cell.analysing) " Score ${cell.score} / 100." else "",
-        tone = tone,
+        eyebrow = copy.eyebrow,
+        headline = copy.headline,
+        body = copy.body + if (cell.available && cell.analysing) stringResource(R.string.scan_score_100, cell.score) else "",
+        tone = copy.tone,
         modifier = Modifier.padding(top = 8.dp)
     )
 }
@@ -2672,12 +2655,13 @@ private fun barsFromDbm(dbm: Int?, rat: Rat): Int {
     }
 }
 
+@Composable
 private fun signalWord(bars: Int, rat: Rat): String = when (bars) {
-    4 -> "Excellent"
-    3 -> "Good"
-    2 -> "Fair"
-    1 -> "Poor"
-    else -> "No signal"
+    4 -> stringResource(R.string.scan_excellent)
+    3 -> stringResource(R.string.scan_good)
+    2 -> stringResource(R.string.scan_fair)
+    1 -> stringResource(R.string.scan_poor)
+    else -> stringResource(R.string.scan_no_signal)
 } + when (rat) {
     Rat.LTE, Rat.NR5G -> " (RSRP)"
     else -> " (RSSI)"
@@ -2692,12 +2676,13 @@ private fun signalTone(bars: Int): Tone = when (bars) {
 
 @Composable
 private fun SignalBars(bars: Int, tone: Tone, height: androidx.compose.ui.unit.Dp = 24.dp) {
+    val context = LocalContext.current
     val c = ClairixTheme.colors
     val on = if (tone == Tone.Neutral) c.textMuted else tone.color()
     Row(
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = Modifier.semantics { contentDescription = "$bars of 4 bars" }
+        modifier = Modifier.semantics { contentDescription = context.getString(R.string.scan_of_4_bars, bars) }
     ) {
         for (i in 1..4) {
             Box(
@@ -2718,7 +2703,7 @@ private fun CatcherAlarm(cell: CellStatus) {
     val c = ClairixTheme.colors
     ClairixCard(tone = tone, emphasis = true) {
         Text(
-            "What set it off",
+            stringResource(R.string.scan_what_set_it_off),
             style = MaterialTheme.typography.titleSmall,
             color = tone.color()
         )
@@ -2730,16 +2715,15 @@ private fun CatcherAlarm(cell: CellStatus) {
         }
         cell.cell?.let { cc ->
             Text(
-                "On ${cc.rat.label} cell ${cc.cellId}" + (cc.band?.let { " · $it" } ?: "") +
-                    (cc.signalDbm?.let { " · ${fmtDbm(it)}" } ?: ""),
+                stringResource(R.string.scan_on_cell, cc.rat.label, cc.cellId, (cc.band?.let { " · $it" } ?: ""), (cc.signalDbm?.let { " · ${fmtDbm(it)}" } ?: "")),
                 style = MaterialTheme.typography.monoSmall,
                 color = c.textMuted
             )
         }
         Text(
             when (cell.level) {
-                Threat.CRITICAL, Threat.HIGH -> "Avoid calls and SMS here. Use end-to-end encrypted messaging over Wi-Fi with a VPN, or airplane mode. Tap an indicator below for details."
-                else -> "Not conclusive on its own. Watch whether more indicators appear; tap one below for what it means."
+                Threat.CRITICAL, Threat.HIGH -> stringResource(R.string.scan_avoid_calls_and_sms_here_use)
+                else -> stringResource(R.string.scan_not_conclusive_on_its_own_watch)
             },
             style = MaterialTheme.typography.bodyMedium,
             color = c.text
@@ -2750,17 +2734,17 @@ private fun CatcherAlarm(cell: CellStatus) {
 @Composable
 private fun WhatThisMeans(score: Int) {
     val text = when {
-        score < 30 -> "A small change from your baseline. Usually normal network wobble."
-        score < 50 -> "A moderate change from your baseline. Some risk of a spoofed tower; consider moving."
-        score < 80 -> "A big change from your baseline. A fake tower may be nearby; avoid sensitive calls."
-        else -> "Strong signs of a fake tower. Turn off mobile data and use Wi-Fi with a VPN."
+        score < 30 -> stringResource(R.string.scan_a_small_change_from_your_baseline)
+        score < 50 -> stringResource(R.string.scan_a_moderate_change_from_your_baseline)
+        score < 80 -> stringResource(R.string.scan_a_big_change_from_your_baseline)
+        else -> stringResource(R.string.scan_strong_signs_of_a_fake_tower)
     }
     val tone = when {
         score < 30 -> Tone.Neutral
         score < 50 -> Tone.Caution
         else -> Tone.Danger
     }
-    Notice(tone, text, title = "What this means")
+    Notice(tone, text, title = stringResource(R.string.scan_what_this_means))
 }
 
 @Composable
@@ -2769,7 +2753,7 @@ private fun FindingRow(f: CatcherFinding, onShowExplainer: (() -> Unit)? = null)
     ClairixCard(
         tone = f.severity.tone(),
         onClick = onShowExplainer,
-        onClickLabel = "Explain this indicator",
+        onClickLabel = stringResource(R.string.scan_explain_this_indicator),
         spacing = 4.dp
     ) {
         Row(
@@ -2782,7 +2766,7 @@ private fun FindingRow(f: CatcherFinding, onShowExplainer: (() -> Unit)? = null)
         }
         Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
         if (onShowExplainer != null) {
-            Text("Tap for what it means and what to do", style = MaterialTheme.typography.labelMedium, color = c.accent)
+            Text(stringResource(R.string.scan_tap_for_what_it_means_and), style = MaterialTheme.typography.labelMedium, color = c.accent)
         }
     }
 }
@@ -2822,9 +2806,9 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
 
         item(key = "figures") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatTile("$checked", "Checks run", Modifier.weight(1f))
+                StatTile("$checked", stringResource(R.string.scan_checks_run), Modifier.weight(1f))
                 StatTile(
-                    "$issues", if (issues == 1) "Issue" else "Issues", Modifier.weight(1f),
+                    "$issues", if (issues == 1) stringResource(R.string.scan_issue) else stringResource(R.string.scan_issues), Modifier.weight(1f),
                     tone = when {
                         issues == 0 -> Tone.Safe
                         health.level.ordinal >= Threat.HIGH.ordinal -> Tone.Danger
@@ -2832,7 +2816,7 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
                     }
                 )
                 StatTile(
-                    if (liveMonitoring) "On" else "Off", "Mic and camera watch", Modifier.weight(1f),
+                    if (liveMonitoring) stringResource(R.string.comms_on) else stringResource(R.string.comms_off), stringResource(R.string.scan_mic_and_camera_watch), Modifier.weight(1f),
                     tone = if (liveMonitoring) Tone.Safe else Tone.Neutral
                 )
             }
@@ -2848,21 +2832,21 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
             item(key = "mic_banner") {
                 Notice(
                     Tone.Caution,
-                    (if (health.activeRecordings == 1) "An app is recording audio right now. "
-                    else "Apps are recording audio right now (${health.activeRecordings} recordings). ") + SENSOR_HINT,
-                    title = "Microphone in use"
+                    (if (health.activeRecordings == 1) stringResource(R.string.scan_an_app_is_recording_audio_right)
+                    else stringResource(R.string.scan_apps_are_recording_audio_right_now, health.activeRecordings)) + SENSOR_HINT,
+                    title = stringResource(R.string.scan_microphone_in_use)
                 )
             }
         }
         if (health.cameraInUse) {
             item(key = "cam_banner") {
-                Notice(Tone.Caution, "Another app is using the camera right now. $SENSOR_HINT", title = "Camera in use")
+                Notice(Tone.Caution, stringResource(R.string.scan_another_app_is_using_the_camera, SENSOR_HINT), title = stringResource(R.string.scan_camera_in_use))
             }
         }
         if (!health.sensorActive && !liveMonitoring) {
             item(key = "sensors_off") {
                 Text(
-                    "Microphone and camera use is only watched while scanning is on.",
+                    stringResource(R.string.scan_microphone_and_camera_use_is_only),
                     style = MaterialTheme.typography.bodyMedium,
                     color = c.textSubtle,
                     modifier = Modifier.padding(horizontal = 4.dp)
@@ -2873,7 +2857,7 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
         // ── Findings: things installed or granted that need acting on ────────
         if (health.findings.isNotEmpty()) {
             item(key = "findings_head") {
-                SectionHeader("Apps with spy-level access", supporting = "${health.findings.size}", tone = Tone.Danger)
+                SectionHeader(stringResource(R.string.scan_apps_with_spy_level_access), supporting = "${health.findings.size}", tone = Tone.Danger)
             }
             // These say how to revoke or uninstall, so the safety card comes first, as on the Stalkerware page.
             item(key = "findings_safety_first") { SafetyFirstCard(title = SafetyFirst.TITLE_APP) }
@@ -2894,7 +2878,7 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
                 val rows = groups[cat] ?: continue
                 item(key = "cat_$cat") {
                     val flagged = rows.count { it.severity != null && it.severity.ordinal >= Severity.MEDIUM.ordinal }
-                    SectionHeader(cat, supporting = if (flagged > 0) "$flagged to check" else "All passed")
+                    SectionHeader(cat, supporting = if (flagged > 0) stringResource(R.string.scan_to_check, flagged) else stringResource(R.string.scan_all_passed))
                 }
                 item(key = "facts_$cat") {
                     ListGroup {
@@ -2911,53 +2895,49 @@ internal fun DeviceScreen(onShown: () -> Unit, onOpenAccounts: () -> Unit = {}) 
 
 /** Where Android shows which app holds the microphone or camera. */
 private const val SENSOR_HINT =
-    "Android doesn't tell Clairix which app. Tap the green privacy dot in the status bar, or open " +
-        "Settings → Security & privacy → Privacy dashboard."
+    "Android doesn't tell Clairix which app. Tap the green privacy dot in the status bar, or open Settings → Security & privacy → Privacy dashboard."
 
 @Composable
 private fun PhoneVerdict(health: PhoneHealth, checked: Int, issues: Int) {
     val sensor = when {
-        health.activeRecordings > 0 && health.cameraInUse -> "Mic and camera on"
-        health.activeRecordings > 0 -> "Mic in use"
-        health.cameraInUse -> "Camera in use"
+        health.activeRecordings > 0 && health.cameraInUse -> stringResource(R.string.scan_mic_and_camera_on)
+        health.activeRecordings > 0 -> stringResource(R.string.scan_mic_in_use)
+        health.cameraInUse -> stringResource(R.string.scan_camera_in_use)
         else -> null
     }
     val (headline, body, tone) = when {
         health.findingsScannedTs == 0L -> Triple(
-            "Checking",
-            "Root, bootloader, verified boot, SELinux, encryption, debug access, accessibility services, " +
-                "device admins and known spyware.",
+            stringResource(R.string.scan_checking),
+            stringResource(R.string.scan_root_bootloader_verified_boot_selinux_encryption),
             Tone.Neutral
         )
         issues > 0 -> Triple(
-            if (issues == 1) "1 to fix" else "$issues to fix",
+            if (issues == 1) stringResource(R.string.scan_1_to_fix) else stringResource(R.string.scan_to_fix, issues),
             (health.findings.map { it.title } + health.problems.map { it.label })
                 .take(3).joinToString(" · ") + if (issues > 3) " · and more" else "",
             if (health.level.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
         )
         sensor != null -> Triple(
             sensor,
-            (if (health.spywareScannedTs > 0L) "No spyware or risky settings found in $checked checks. "
-            else "No risky settings found in $checked checks; installed apps are still being checked. ") +
-                "Something is using a sensor right now; see below.",
+            stringResource(R.string.scan_something_is_using_a_sensor_right, (if (health.spywareScannedTs > 0L) stringResource(R.string.scan_no_spyware_or_risky_settings_found, checked)
+            else stringResource(R.string.scan_no_risky_settings_found_in_checks, checked))),
             Tone.Caution
         )
         // "Known spyware" is only said once the stalkerware check has run.
         health.spywareScannedTs == 0L -> Triple(
-            "Checking apps",
-            "$checked checks passed. No root, debug access or unknown admins. Installed apps are still being checked for spyware.",
+            stringResource(R.string.scan_checking_apps),
+            stringResource(R.string.scan_checks_passed_no_root_debug_access, checked),
             Tone.Neutral
         )
         else -> Triple(
-            "Phone clear",
+            stringResource(R.string.scan_phone_clear),
             // Two times: the settings pass runs often, the check of installed apps (the "known spyware") less often.
-            "$checked checks passed. No root, debug access, unknown admins or known spyware. " +
-                "Settings checked ${fmtClock(health.findingsScannedTs)}, apps checked ${fmtTime(health.spywareScannedTs)}.",
+            stringResource(R.string.scan_checks_passed_no_root_debug_access_2, checked, fmtClock(health.findingsScannedTs), fmtTime(health.spywareScannedTs)),
             Tone.Safe
         )
     }
     StatusHero(
-        eyebrow = "Phone check",
+        eyebrow = stringResource(R.string.scan_phone_check),
         headline = headline,
         body = body,
         tone = tone,
@@ -3017,7 +2997,7 @@ private fun HealthFactRow(f: HealthFact, onAnswer: (String) -> Unit) {
         val answer = f.answer
         if (fix != null || answer != null) {
             Row(Modifier.padding(start = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (fix != null) GhostButton("Open settings", onClick = { openFix(context, fix) })
+                if (fix != null) GhostButton(stringResource(R.string.scan_open_settings), onClick = { openFix(context, fix) })
                 if (answer != null) GhostButton(answer.label, onClick = { onAnswer(answer.id) })
             }
         }
@@ -3056,11 +3036,12 @@ private fun HealthFindingRow(f: PhoneHealthFinding) {
 
 // ── WiFi screen ────────────────────────────────────────────────────────
 
+@Composable
 private fun wifiReason(reason: String): String = when (reason) {
-    "known_catcher_ssid" -> "Default SSID of known interception equipment"
-    "carrier_open_network" -> "Open carrier hotspot — captive portal, unencrypted; use a VPN on it"
-    "open_twin_of_secured" -> "Open copy of a network that is encrypted nearby — evil twin"
-    "open_unsecured" -> "Open, unsecured network — traffic can be intercepted"
+    "known_catcher_ssid" -> stringResource(R.string.scan_default_ssid_of_known_interception_equipment)
+    "carrier_open_network" -> stringResource(R.string.scan_open_carrier_hotspot_captive_portal_unencrypted)
+    "open_twin_of_secured" -> stringResource(R.string.scan_open_copy_of_a_network_that)
+    "open_unsecured" -> stringResource(R.string.scan_open_unsecured_network_traffic_can_be)
     else -> reason.replace('_', ' ').replaceFirstChar { it.uppercase(Locale.US) }
 }
 
@@ -3097,24 +3078,24 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         // ── Status first ──
         item(key = "§hero") {
             StatusHero(
-                eyebrow = "Wi-Fi",
+                eyebrow = stringResource(R.string.scan_wi_fi),
                 // Being joined to an open network outranks notes about networks nearby,
                 // as the tone below already does.
                 headline = when {
-                    high > 0 -> if (high == 1) "Bait network" else "$high bait networks"
-                    conn != null && !conn.security.secure -> "Open network"
-                    onlyHotspots -> "Open hotspots nearby"
-                    sorted.isNotEmpty() -> "Worth a look"
-                    wifi.scannedTs > 0 -> "Wi-Fi clean"
-                    else -> "Checking"
+                    high > 0 -> if (high == 1) stringResource(R.string.scan_bait_network) else stringResource(R.string.scan_bait_networks, high)
+                    conn != null && !conn.security.secure -> stringResource(R.string.scan_open_network)
+                    onlyHotspots -> stringResource(R.string.scan_open_hotspots_nearby)
+                    sorted.isNotEmpty() -> stringResource(R.string.scan_worth_a_look)
+                    wifi.scannedTs > 0 -> stringResource(R.string.scan_wi_fi_clean)
+                    else -> stringResource(R.string.scan_checking)
                 },
                 body = when {
-                    high > 0 -> "Networks below look built to catch your traffic. Don't join them."
-                    conn != null && !conn.security.secure -> "You're on an unencrypted network. Anyone nearby can read what isn't end-to-end encrypted."
-                    onlyHotspots -> "${plural(sorted.size, "open carrier hotspot")} nearby. Not bait: captive portals that leave traffic unencrypted, so use a VPN if you join one."
-                    sorted.isNotEmpty() -> "${plural(sorted.size, "network")} nearby look off. Nothing you're joined to is flagged."
-                    wifi.scannedTs > 0 -> "${plural(wifi.nearby.size, "network")} in range, none flagged. Checked ${fmtAgo(now, wifi.scannedTs)}."
-                    else -> "Reading what's in range. Results fill in within a few seconds."
+                    high > 0 -> stringResource(R.string.scan_networks_below_look_built_to_catch)
+                    conn != null && !conn.security.secure -> stringResource(R.string.scan_youre_on_an_unencrypted_network_anyone)
+                    onlyHotspots -> pluralStringResource(R.plurals.scan_wifi_hotspots_nearby, sorted.size, sorted.size)
+                    sorted.isNotEmpty() -> pluralStringResource(R.plurals.scan_wifi_look_off, sorted.size, sorted.size)
+                    wifi.scannedTs > 0 -> pluralStringResource(R.plurals.scan_wifi_in_range, wifi.nearby.size, wifi.nearby.size, fmtAgo(appResources(), now, wifi.scannedTs))
+                    else -> stringResource(R.string.scan_reading_whats_in_range_results_fill)
                 },
                 tone = when {
                     high > 0 || (conn != null && !conn.security.secure) -> Tone.Danger
@@ -3130,8 +3111,8 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         if (sorted.isNotEmpty()) {
             item(key = "§anomaly-head") {
                 SectionHeader(
-                    if (onlyHotspots) "Open carrier hotspots" else "Suspicious networks",
-                    supporting = "${sorted.size}" + if (high > 0) " · $high high" else "",
+                    if (onlyHotspots) stringResource(R.string.scan_open_carrier_hotspots) else stringResource(R.string.scan_suspicious_networks),
+                    supporting = "${sorted.size}" + if (high > 0) stringResource(R.string.scan_high, high) else "",
                     tone = if (high > 0) Tone.Danger else Tone.Caution
                 )
             }
@@ -3152,14 +3133,14 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         }
 
         // ── Connected network ─────────────────────────────────────────────────
-        item(key = "§conn-head") { SectionHeader("Your connection") }
+        item(key = "§conn-head") { SectionHeader(stringResource(R.string.scan_your_connection)) }
         if (!wifi.available) {
             item(key = "§unavailable") {
-                EmptyState(title = wifi.reason ?: "Reading the Wi-Fi radio…", body = "Connection details appear here once Wi-Fi reports in.", icon = ClairixIcons.Wifi)
+                EmptyState(title = wifi.reason ?: stringResource(R.string.scan_reading_the_wi_fi_radio), body = stringResource(R.string.scan_connection_details_appear_here_once_wi), icon = ClairixIcons.Wifi)
             }
         } else if (conn == null) {
             item(key = "§disconnected") {
-                EmptyState(title = "Not connected", body = "Wi-Fi is on, but the phone hasn't joined a network.", icon = ClairixIcons.Wifi)
+                EmptyState(title = stringResource(R.string.scan_not_connected), body = stringResource(R.string.scan_wi_fi_is_on_but_the), icon = ClairixIcons.Wifi)
             }
         } else {
             item(key = "§connected") {
@@ -3168,44 +3149,44 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
                         SignalBars(conn.level, tone = signalTone(conn.level))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                conn.ssid ?: "Name hidden (is location off?)",
+                                conn.ssid ?: stringResource(R.string.scan_name_hidden_is_location_off),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = c.text,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Text(conn.bssid ?: "BSSID unavailable", style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+                            Text(conn.bssid ?: stringResource(R.string.scan_bssid_unavailable), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
                         }
                         StatusPill(conn.security.label, if (conn.security.secure) Tone.Safe else Tone.Danger)
                     }
                     Spacer(Modifier.height(4.dp))
-                    KeyValueRow("Signal", "${fmtDbm(conn.rssi)} · ${signalWord(conn.level, Rat.UNKNOWN).substringBefore(" (")}")
-                    KeyValueRow("Frequency", buildString {
+                    KeyValueRow(stringResource(R.string.scan_signal), "${fmtDbm(conn.rssi)} · ${signalWord(conn.level, Rat.UNKNOWN).substringBefore(" (")}")
+                    KeyValueRow(stringResource(R.string.scan_frequency), buildString {
                         append(conn.band)
-                        if (conn.frequencyMhz > 0) append(" · ${conn.frequencyMhz} MHz")
-                        conn.channel?.let { append(" · ch $it") }
+                        if (conn.frequencyMhz > 0) append(stringResource(R.string.scan_mhz, conn.frequencyMhz))
+                        conn.channel?.let { append(stringResource(R.string.scan_ch, it)) }
                     })
-                    conn.standard?.let { KeyValueRow("Standard", it) }
-                    KeyValueRow("Security", conn.security.label, valueColor = if (conn.security.secure) null else c.danger)
+                    conn.standard?.let { KeyValueRow(stringResource(R.string.scan_standard), it) }
+                    KeyValueRow(stringResource(R.string.scan_security), conn.security.label, valueColor = if (conn.security.secure) null else c.danger)
                     val speed = listOfNotNull(
                         conn.txMbps?.let { "↑$it" }, conn.rxMbps?.let { "↓$it" }
                     ).joinToString(" ").ifBlank { conn.linkSpeedMbps?.toString() ?: "" }
-                    if (speed.isNotBlank()) KeyValueRow("Link speed", "$speed Mbps")
+                    if (speed.isNotBlank()) KeyValueRow(stringResource(R.string.scan_link_speed), stringResource(R.string.scan_mbps, speed))
                     Hairline(Modifier.padding(vertical = 4.dp))
-                    KeyValueRow("IPv4", conn.ipv4 ?: "None")
+                    KeyValueRow("IPv4", conn.ipv4 ?: stringResource(R.string.scan_none))
                     conn.ipv6?.let { KeyValueRow("IPv6", it) }
-                    KeyValueRow("Gateway", conn.gateway ?: "Unknown")
-                    KeyValueRow("DNS", if (conn.dnsServers.isEmpty()) "None" else conn.dnsServers.joinToString("\n"))
-                    KeyValueRow("Private DNS", conn.privateDns ?: "Off", valueColor = if (conn.privateDns != null) c.safe else null)
+                    KeyValueRow(stringResource(R.string.scan_gateway), conn.gateway ?: stringResource(R.string.scan_unknown))
+                    KeyValueRow("DNS", if (conn.dnsServers.isEmpty()) stringResource(R.string.scan_none) else conn.dnsServers.joinToString("\n"))
+                    KeyValueRow(stringResource(R.string.scan_private_dns), conn.privateDns ?: stringResource(R.string.comms_off), valueColor = if (conn.privateDns != null) c.safe else null)
                     // Whether Clairix's own traffic goes through a VPN: a VPN set to carry
                     // only some apps is not protection for the rest, and is not shown as such.
                     when (conn.vpn) {
-                        VpnCoverage.COVERS_APP -> KeyValueRow("VPN", "Active for Clairix", valueColor = c.safe)
-                        VpnCoverage.EXCLUDES_APP -> KeyValueRow("VPN", "Active, not covering Clairix", valueColor = c.caution)
-                        VpnCoverage.APP_OFFLINE -> KeyValueRow("VPN", "Active, Clairix offline")
-                        VpnCoverage.NONE -> KeyValueRow("VPN", "None")
+                        VpnCoverage.COVERS_APP -> KeyValueRow("VPN", stringResource(R.string.scan_active_for_clairix), valueColor = c.safe)
+                        VpnCoverage.EXCLUDES_APP -> KeyValueRow("VPN", stringResource(R.string.scan_active_not_covering_clairix), valueColor = c.caution)
+                        VpnCoverage.APP_OFFLINE -> KeyValueRow("VPN", stringResource(R.string.scan_active_clairix_offline))
+                        VpnCoverage.NONE -> KeyValueRow("VPN", stringResource(R.string.scan_none))
                     }
-                    if (conn.metered) KeyValueRow("Metered", "Yes")
+                    if (conn.metered) KeyValueRow(stringResource(R.string.scan_metered), stringResource(R.string.scan_yes))
                     conn.flags.forEach { flag ->
                         WarningLine(flag, if (conn.security.secure) Tone.Caution else Tone.Danger, Modifier.padding(top = 4.dp))
                     }
@@ -3217,11 +3198,11 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
         if (wifi.available) {
             item(key = "§nearby-head") {
                 SectionHeader(
-                    "In range",
+                    stringResource(R.string.scan_in_range),
                     supporting = buildString {
                         append("${wifi.nearby.size}")
-                        if (open > 0) append(" · $open open")
-                        if (flagged > 0) append(" · $flagged flagged")
+                        if (open > 0) append(stringResource(R.string.scan_open, open))
+                        if (flagged > 0) append(stringResource(R.string.scan_flagged_2, flagged))
                     }
                 )
             }
@@ -3229,9 +3210,9 @@ internal fun WifiScreen(onShown: () -> Unit = {}) {
                 item(key = "§none-nearby") {
                     Text(
                         if (status.scanning) {
-                            "Nothing in range when the scanner last looked, ${fmtAgo(now, wifi.scannedTs)}. It looks again every two minutes while the screen is on."
+                            stringResource(R.string.scan_nothing_in_range_when_the_scanner, fmtAgo(appResources(), now, wifi.scannedTs))
                         } else {
-                            "No scan results yet. Android hands out cached results first; a fresh scan has been asked for and the list fills in within a few seconds."
+                            stringResource(R.string.scan_no_scan_results_yet_android_hands)
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
@@ -3308,14 +3289,14 @@ private fun NearbyWifiRow(n: WifiNetwork) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    if (n.hidden) "Hidden network" else n.ssid,
+                    if (n.hidden) stringResource(R.string.scan_hidden_network) else n.ssid,
                     style = MaterialTheme.typography.titleSmall,
                     color = if (n.hidden) c.textSubtle else c.text,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                if (n.connected) StatusPill("Connected", Tone.Safe)
+                if (n.connected) StatusPill(stringResource(R.string.scan_connected), Tone.Safe)
             }
             Text(
                 "${n.bssid} · ${n.band}" + (n.channel?.let { " ch $it" } ?: "") + (n.standard?.let { " · ${it.substringBefore(" (")}" } ?: ""),
@@ -3346,7 +3327,7 @@ private fun WifiRow(a: WifiAnomaly) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                a.ssid.ifBlank { "Hidden network" }, style = MaterialTheme.typography.titleMedium, color = c.text,
+                a.ssid.ifBlank { stringResource(R.string.scan_hidden_network) }, style = MaterialTheme.typography.titleMedium, color = c.text,
                 modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             StatusPill(levelLabel(a.threat.name), tone)
@@ -3366,34 +3347,23 @@ private data class ExplainerContent(
     val tone: Tone
 )
 
+@Composable
 private fun bleExplainerContent(d: Detection): ExplainerContent {
     val tone = if (d.threat.ordinal >= Threat.HIGH.ordinal) Tone.Danger else Tone.Caution
     return when {
         d.resolved -> ExplainerContent(
-            headline = "Marked found: ${d.name}",
-            whatIsThis = "You marked this device found at ${fmtClock(d.resolvedAt)}. " +
-                (if (d.following) "Before that it was confirmed moving with you, heard at places ${d.displacementM.roundToInt()} metres apart."
-                else "Before that it kept showing up near you.") +
-                (d.tracker?.let { " It identifies itself as ${it.label} (${it.brand})." } ?: ""),
-            whatToDo = "Keep what you found as evidence: photograph it where it was, and do not throw it away. The " +
-                "timeline and the evidence report keep the record. If it is heard again after an hour away, Clairix " +
-                "watches it afresh and tells you if it follows you again. If you marked it by mistake, tap Not found after all.",
-            howCertain = "The record is what was confirmed before you marked it: ${d.sightings} sightings, threat score ${d.score}/100.",
+            headline = stringResource(R.string.scan_marked_found, d.name),
+            whatIsThis = "You marked this device found at ${fmtClock(d.resolvedAt)}. ${(if (d.following) "Before that it was confirmed moving with you, heard at places ${d.displacementM.roundToInt()} metres apart."
+                else "Before that it kept showing up near you.")}${(d.tracker?.let { " It identifies itself as ${it.label} (${it.brand})." } ?: "")}",
+            whatToDo = stringResource(R.string.scan_keep_what_you_found_as_evidence),
+            howCertain = stringResource(R.string.scan_the_record_is_what_was_confirmed, d.sightings, d.score),
             tone = Tone.Caution
         )
         d.following && d.threat == Threat.CRITICAL -> ExplainerContent(
-            headline = "Tracker on you: ${d.name}",
-            whatIsThis = "A Bluetooth tracker has been verified as following your movements. " +
-                "It was heard at places ${d.displacementM.roundToInt()} metres apart while your own position " +
-                "showed you travelling between them, which cannot be explained by proximity alone." +
-                (d.tracker?.let { " It identifies itself as ${it.label} (${it.brand}), away from its owner." } ?: ""),
-            whatToDo = "Stop and search the vehicle or your belongings now. Check: wheel wells, bumper covers and cavities, " +
-                "OBD-II diagnostic port (under dashboard), under seats and floor mats, inside bag linings and seams. " +
-                "If found, do not discard it on the roadside — it is evidence. Photograph it in place before removing it. " +
-                "Consider filing a police report and contacting legal counsel.",
-            howCertain = "High confidence. Confirmation requires the device to be heard, more than once, at places " +
-                "${d.displacementM.roundToInt()} m apart, with your own travelled distance accounting for the separation. " +
-                "Threat score: ${d.score}/100 across ${d.sightings} sightings.",
+            headline = stringResource(R.string.scan_tracker_on_you_2, d.name),
+            whatIsThis = "A Bluetooth tracker has been verified as following your movements. It was heard at places ${d.displacementM.roundToInt()} metres apart while your own position showed you travelling between them, which cannot be explained by proximity alone.${(d.tracker?.let { " It identifies itself as ${it.label} (${it.brand}), away from its owner." } ?: "")}",
+            whatToDo = stringResource(R.string.scan_stop_and_search_the_vehicle_or),
+            howCertain = stringResource(R.string.scan_high_confidence_confirmation_requires_the_device, d.displacementM.roundToInt(), d.score, d.sightings),
             tone = tone
         )
         d.following -> {
@@ -3401,61 +3371,40 @@ private fun bleExplainerContent(d: Detection): ExplainerContent {
             // nothing identifies it, or it is a tag with its owner's phone in range.
             val known = d.tracker
             ExplainerContent(
-                headline = "Travelling with you: ${d.name}",
-                whatIsThis = "This device was heard at places ${d.displacementM.roundToInt()} metres apart while you travelled, " +
-                    "so it moved with you. " +
-                    (if (known != null) {
+                headline = stringResource(R.string.scan_travelling_with_you_2, d.name),
+                whatIsThis = "This device was heard at places ${d.displacementM.roundToInt()} metres apart while you travelled, so it moved with you. ${(if (known != null) {
                         "It identifies itself as ${known.label}, which Clairix does not count as a tracker away from its owner. ${known.notes}"
                     } else {
-                        "Nothing identifies it as a tracker: the phone, earbuds or watch of someone travelling with you " +
-                            "look exactly like this, and so do a vehicle's own electronics. A hardwired GPS tracker looks " +
-                            "the same, which is why it is shown."
-                    }),
-                whatToDo = "If you were alone, check the vehicle: the OBD-II port under the dashboard, under the dash and seats, " +
-                    "wheel wells and bumpers. If you recognise the device, mark it as yours below and it will not be raised again. " +
-                    "If it keeps turning up on journeys you make alone, treat it as a tracker: photograph anything you find " +
-                    "in place, keep it as evidence, and consider contacting the police.",
-                howCertain = "That it moved with you is confirmed over ${d.sightings} sightings. " +
-                    (if (known != null) "It is not a tracker away from its owner, so Clairix does not say it is following you. "
-                    else "What it is remains unknown, so Clairix does not call it a tracker. ") +
-                    "Threat score: ${d.score}/100.",
+                        "Nothing identifies it as a tracker: the phone, earbuds or watch of someone travelling with you look exactly like this, and so do a vehicle's own electronics. A hardwired GPS tracker looks the same, which is why it is shown."
+                    })}",
+                whatToDo = stringResource(R.string.scan_if_you_were_alone_check_the),
+                howCertain = "That it moved with you is confirmed over ${d.sightings} sightings. ${(if (known != null) "It is not a tracker away from its owner, so Clairix does not say it is following you. "
+                    else "What it is remains unknown, so Clairix does not call it a tracker. ")}Threat score: ${d.score}/100.",
                 tone = Tone.Caution
             )
         }
         d.persistent && d.identified -> ExplainerContent(
-            headline = "Known tracker nearby: ${d.name}",
+            headline = stringResource(R.string.scan_known_tracker_nearby, d.name),
             whatIsThis = "A ${d.tracker?.brand ?: "commercial"} ${d.tracker?.label ?: "tracker"} has been " +
                 "present for an extended period. Known trackers are purpose-built surveillance devices. " +
                 "Extended presence without confirmed movement suggests it may be attached to your vehicle or belongings.",
-            whatToDo = "Monitor this device. If it remains present as you travel, it will be promoted to " +
-                "following automatically. If you believe it does not belong to you, physically search " +
-                "your vehicle and belongings. Pay attention to whether the signal strength (RSSI) stays consistent, " +
-                "which would indicate it is on or very near your person.",
-            howCertain = "Medium-to-high confidence. Device is identified as a commercial tracker with " +
-                "${d.sightings} sightings over an extended period. Following confirmation requires GPS movement. " +
-                "Threat score: ${d.score}/100.",
+            whatToDo = stringResource(R.string.scan_monitor_this_device_if_it_remains),
+            howCertain = stringResource(R.string.scan_medium_to_high_confidence_device_is, d.sightings, d.score),
             tone = tone
         )
         d.persistent -> ExplainerContent(
-            headline = "Unknown device keeps showing up: ${d.name}",
-            whatIsThis = "An unidentified Bluetooth device has been present continuously for an extended period. " +
-                "This could be a benign device (a neighbour's router, a fixed sensor) or a tracker that does not " +
-                "match the known signature database. Its persistence pattern is unusual for a passing device.",
-            whatToDo = "Watch for this device across different locations. If it follows you as you travel, " +
-                "it will be flagged as following. If it is stationary and you remain in one place, it is " +
-                "likely part of the surroundings. Mark it as yours below if you know what it is.",
-            howCertain = "Low-to-medium confidence. No known tracker signature matched — flagged on " +
-                "behaviour alone. Threat score: ${d.score}/100 over ${d.sightings} sightings.",
+            headline = stringResource(R.string.scan_unknown_device_keeps_showing_up, d.name),
+            whatIsThis = stringResource(R.string.scan_an_unidentified_bluetooth_device_has_been),
+            whatToDo = stringResource(R.string.scan_watch_for_this_device_across_different),
+            howCertain = stringResource(R.string.scan_low_to_medium_confidence_no_known, d.score, d.sightings),
             tone = tone
         )
         else -> ExplainerContent(
             headline = "${levelLabel(d.threat.name)} risk: ${d.name}",
             whatIsThis = "This device has characteristics associated with surveillance trackers. " +
                 "${d.tracker?.let { "It matches the signature of a ${it.brand} ${it.label}." } ?: "No exact tracker signature matched, but its signal pattern warrants monitoring."}",
-            whatToDo = "Continue monitoring. The scan needs more time and movement to determine whether " +
-                "this device is following you. Keep the scan running as you travel.",
-            howCertain = "Building confidence. Score ${d.score}/100 · ${d.sightings} sightings. " +
-                "GPS confirmation of following requires approximately ${AppSettings.followThresholdM.roundToInt()} m of shared movement.",
+            whatToDo = stringResource(R.string.scan_continue_monitoring_the_scan_needs_more),
+            howCertain = stringResource(R.string.scan_building_confidence_score_100_sightings_gps, d.score, d.sightings, AppSettings.followThresholdM.roundToInt()),
             tone = tone
         )
     }
@@ -3467,140 +3416,73 @@ private fun bleExplainerContent(d: Detection): ExplainerContent {
  * that turn encryption off. Neither can be read or set by an app.
  */
 private const val CELL_PLATFORM_DEFENCE =
-    "For the next time: if your phone has the \"Allow 2G\" switch, turn it off (Phone check → Health shows it), " +
-        "and on Android 14 and later turn on Android's own cell network protections, on phones whose modem " +
-        "supports them, so the phone refuses or warns about a network that turns encryption off (Settings, " +
-        "search for \"network security\")."
+    "For the next time: if your phone has the \"Allow 2G\" switch, turn it off (Phone check → Health shows it), and on Android 14 and later turn on Android's own cell network protections, on phones whose modem supports them, so the phone refuses or warns about a network that turns encryption off (Settings, search for \"network security\")."
 
+@Composable
 private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
     val tone = f.severity.tone()
     // Findings that can fire for more than one cell carry it after a colon, so the
     // explainer keys off the heuristic name in front of it.
     val (what, todo, certain) = when (f.id.substringBefore(':')) {
         "rat_downgrade" -> Triple(
-            "Your device has dropped from a newer radio technology (4G/5G) to an older one (2G/3G) while " +
-            "standing still, with no voice call in progress. IMSI catchers force this because the older " +
-            "protocols have weaker encryption and are easier to intercept. Legitimate networks only downgrade " +
-            "where there is no newer coverage, and a phone without VoLTE drops to 3G or 2G for every call; " +
-            "Clairix does not count a reading taken during a call or within five minutes of one.",
-            "Avoid making voice calls or sending SMS until you leave the area. Use end-to-end encrypted " +
-            "messaging apps over WiFi or data. Do not transmit sensitive information. Move away from the " +
-            "area and observe whether the technology level returns to normal. $CELL_PLATFORM_DEFENCE",
-            "High confidence indicator. A drop to 2G/3G within half an hour of 4G/5G serving you at the " +
-            "same spot, without you having moved and without a call, is a primary IMSI catcher signature. " +
-            "Moving resets the comparison, so a drive into a basement car park does not count, and neither " +
-            "does a call falling back to the older network."
+            stringResource(R.string.scan_your_device_has_dropped_from_a),
+            stringResource(R.string.scan_avoid_making_voice_calls_or_sending, CELL_PLATFORM_DEFENCE),
+            stringResource(R.string.scan_high_confidence_indicator_a_drop_to)
         )
         "cellid_tac_mismatch" -> Triple(
-            "A cell tower ID that you have seen before, on the same radio technology, is now claiming to be " +
-            "in a different area (tracking area code). Real base stations have fixed area assignments. A " +
-            "portable IMSI catcher borrowing a real cell's number produces inconsistent area codes.",
-            "Monitor for additional indicators. A single mismatch could be a network reconfiguration, but " +
-            "combined with other findings it is significant. Avoid sensitive calls in this area.",
-            "High confidence indicator when combined with other findings. Alone it may reflect a carrier " +
-            "re-plan: if this cell keeps reporting the new area consistently for forty readings over an " +
-            "hour or more, Clairix accepts the new area as its baseline and this finding clears."
+            stringResource(R.string.scan_a_cell_tower_id_that_you),
+            stringResource(R.string.scan_monitor_for_additional_indicators_a_single),
+            stringResource(R.string.scan_high_confidence_indicator_when_combined_with)
         )
         "tac_change_stationary" -> Triple(
-            "Your device registered a different tracking area while you were not moving. " +
-            "Tracking area changes normally happen when you travel across cell boundaries. When you are " +
-            "stationary, a change indicates a new transmitter has appeared near you and forced re-registration.",
-            "Note your exact location and time. A stationary area change combined with other indicators " +
-            "is a strong surveillance signal. Consider moving away from the area.",
-            "Medium confidence. Stationary area changes can occur due to legitimate network maintenance, " +
-            "but are uncommon and warrant attention alongside other findings. A change during a voice call, " +
-            "or within five minutes of one, is not counted: a call can move the phone to another network layer."
+            stringResource(R.string.scan_your_device_registered_a_different_tracking),
+            stringResource(R.string.scan_note_your_exact_location_and_time),
+            stringResource(R.string.scan_medium_confidence_stationary_area_changes_can)
         )
         "signal_outlier" -> Triple(
-            "The cell signal is significantly stronger than the historical maximum for this area. " +
-            "A portable transmitter placed near you — in a vehicle, building, or backpack — produces " +
-            "a much stronger signal than a distant tower.",
-            "Check your surroundings for parked vehicles with unusual equipment, people lingering nearby, " +
-            "or recently placed objects. A strong signal alone is insufficient for action, but note the " +
-            "location and observe whether it moves with you.",
-            "Medium confidence. Signal strength varies for many reasons. This indicator is most meaningful " +
-            "when combined with technology downgrade or unknown cell findings."
+            stringResource(R.string.scan_the_cell_signal_is_significantly_stronger),
+            stringResource(R.string.scan_check_your_surroundings_for_parked_vehicles),
+            stringResource(R.string.scan_medium_confidence_signal_strength_varies_for)
         )
         "unknown_cell" -> Triple(
-            "A cell tower that has never appeared in this area before has become your serving cell. " +
-            "You have visited this area at least 20 separate times, and the tower infrastructure here is well-established. " +
-            "Portable IMSI catchers appear as unknown cells in familiar areas.",
-            "A new cell at a familiar location deserves caution. If you also see technology downgrade or " +
-            "signal strength anomalies, treat this as a serious surveillance indicator. Do not make sensitive " +
-            "calls. Move away and observe whether the new cell disappears.",
-            "Medium confidence. New towers do get installed occasionally, but this detection requires " +
-            "at least 20 separate visits to the area (returns more than 30 minutes apart) before triggering."
+            stringResource(R.string.scan_a_cell_tower_that_has_never),
+            stringResource(R.string.scan_a_new_cell_at_a_familiar),
+            stringResource(R.string.scan_medium_confidence_new_towers_do_get)
         )
         "ephemeral_cell", "ephemeral_cell_strict" -> Triple(
-            "A cell tower appeared briefly as your serving cell, then vanished. Real base stations " +
-            "broadcast continuously — they do not appear for a few minutes and disappear. " +
-            "A portable surveillance device driven into and away from an area looks exactly like this.",
-            "Note the time and location. An ephemeral cell that appeared and disappeared suggests a " +
-            "mobile surveillance asset that has moved on. Review your surroundings at the time of detection.",
-            "Medium-to-high confidence. Ephemeral cells have few legitimate explanations once the two " +
-            "common ones are ruled out: a cell that served while you were moving, and a 3G or 2G cell " +
-            "that carried a voice call on a phone without VoLTE, are never counted. A duration under " +
-            "90 seconds is the strictest threshold."
+            stringResource(R.string.scan_a_cell_tower_appeared_briefly_as),
+            stringResource(R.string.scan_note_the_time_and_location_an),
+            stringResource(R.string.scan_medium_to_high_confidence_ephemeral_cells)
         )
         "cell_flapping" -> Triple(
-            "Your device has switched between multiple different cell towers rapidly while you were " +
-            "stationary. IMSI catchers force repeated re-registrations to capture authentication events. " +
-            "Normal network handover does not produce this pattern at a single location.",
-            "Avoid making calls or sending messages while this is occurring. If it persists, " +
-            "move away from the area. The flapping pattern suggests active interference with your " +
-            "device's network registration.",
-            "Medium confidence. Rapid cell switching can also result from poor coverage areas, " +
-            "but is unusual when stationary in a normally covered location."
+            stringResource(R.string.scan_your_device_has_switched_between_multiple),
+            stringResource(R.string.scan_avoid_making_calls_or_sending_messages),
+            stringResource(R.string.scan_medium_confidence_rapid_cell_switching_can)
         )
         "no_neighbors" -> Triple(
-            "Your serving cell is reporting zero neighbouring cells. Real base stations always have " +
-            "overlapping coverage with adjacent towers — this is fundamental to how cellular networks " +
-            "are designed. A portable IMSI catcher operating alone has no neighbours to report.",
-            "This is a supporting indicator rather than an action trigger alone. Watch for it " +
-            "alongside technology downgrade or unknown cell findings, at which point you should " +
-            "follow the high-confidence response guidance.",
-            "Low confidence as a standalone indicator. Meaningful when combined with other findings."
+            stringResource(R.string.scan_your_serving_cell_is_reporting_zero),
+            stringResource(R.string.scan_this_is_a_supporting_indicator_rather),
+            stringResource(R.string.scan_low_confidence_as_a_standalone_indicator)
         )
         "timing_advance_zero" -> Triple(
-            "LTE timing advance of zero means the transmitter serving you is within about 78 metres. " +
-            "A rooftop site, an in-building antenna or a small cell is this close legitimately, and so " +
-            "is a portable IMSI catcher in a parked vehicle or a nearby building. On its own the reading " +
-            "does not say which.",
-            "Nothing on its own. If it appears together with other indicators, note the time and place, " +
-            "look for a vehicle or equipment that was not there before, avoid sensitive calls and see " +
-            "whether the indicator follows you when you move.",
-            "Low confidence alone. The distance is a precise physical measurement; what is at that " +
-            "distance is not. Clairix remembers each cell: once one has read timing advance zero on " +
-            "twenty readings spread over a day, it treats that as normal there and stops listing it."
+            stringResource(R.string.scan_lte_timing_advance_of_zero_means),
+            stringResource(R.string.scan_nothing_on_its_own_if_it),
+            stringResource(R.string.scan_low_confidence_alone_the_distance_is)
         )
         "signal_spike" -> Triple(
-            "The signal strength on your current cell tower jumped suddenly between two consecutive " +
-            "readings. A macro cell tower at a fixed location has a stable signal. A mobile transmitter " +
-            "moving towards you — in a vehicle, for example — produces exactly this kind of spike.",
-            "A sudden signal spike suggests a mobile surveillance asset moving closer to your position. " +
-            "Be aware of your surroundings. If the spike is combined with other indicators, follow " +
-            "the high-confidence response protocol immediately.",
-            "Medium confidence. Signal spikes can result from device movements, building reflections, " +
-            "or other environmental factors, but are notable when combined with other findings."
+            stringResource(R.string.scan_the_signal_strength_on_your_current),
+            stringResource(R.string.scan_a_sudden_signal_spike_suggests_a),
+            stringResource(R.string.scan_medium_confidence_signal_spikes_can_result)
         )
         "rat_oscillation" -> Triple(
-            "Your device has switched between three or more radio technologies (2G, 3G, 4G, 5G) in " +
-            "a short window while standing still and not on a call. IMSI catchers force devices through " +
-            "technology cycles to capture separate authentication events on each technology, revealing " +
-            "the device's IMSI. A voice call on a phone without VoLTE walks 5G to 3G and back on its " +
-            "own, so readings taken in a call, or within five minutes of one, are not counted.",
-            "Multiple technology switches in a short window strongly indicate active interference. " +
-            "Avoid all calls and data use. Use WiFi with a VPN for any communications. " +
-            "Move out of the area and observe whether the switching stops. $CELL_PLATFORM_DEFENCE",
-            "High confidence. Rapid multi-technology oscillation outside a call is a strong signature " +
-            "of active IMSI capture operations."
+            stringResource(R.string.scan_your_device_has_switched_between_three),
+            stringResource(R.string.scan_multiple_technology_switches_in_a_short, CELL_PLATFORM_DEFENCE),
+            stringResource(R.string.scan_high_confidence_rapid_multi_technology_oscillati)
         )
         else -> Triple(
-            "An anomaly was detected in your cellular environment that deviates from your established " +
-            "baseline. The specific indicator ID is: ${f.id}. See the full detail for more context.",
-            "Monitor for additional indicators. If multiple anomalies appear simultaneously, " +
-            "treat the situation as a potential IMSI catcher and avoid sensitive communications.",
-            "Confidence level: ${f.severity.name.lowercase()}."
+            stringResource(R.string.scan_an_anomaly_was_detected_in_your, f.id),
+            stringResource(R.string.scan_monitor_for_additional_indicators_if_multiple),
+            stringResource(R.string.scan_confidence_level, f.severity.name.lowercase())
         )
     }
     return ExplainerContent(
@@ -3617,6 +3499,7 @@ private fun cellExplainerContent(f: CatcherFinding): ExplainerContent {
  * in the owner's car: probably the bus, the train or a fellow commuter, and what to do
  * if they were in her car after all.
  */
+@Composable
 private fun journeysExplainerContent(e: TimelineEvent): ExplainerContent = ExplainerContent(
     headline = e.title,
     whatIsThis = VehicleTrips.CO_TRAVELLER_WHAT_IS_THIS,
@@ -3648,9 +3531,9 @@ private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatusPill(
                 when (content.tone) {
-                    Tone.Danger -> "Act now"
-                    Tone.Caution -> "Keep watching"
-                    else -> "For your information"
+                    Tone.Danger -> stringResource(R.string.scan_act_now)
+                    Tone.Caution -> stringResource(R.string.scan_keep_watching)
+                    else -> stringResource(R.string.scan_for_your_information)
                 },
                 content.tone
             )
@@ -3663,15 +3546,15 @@ private fun ThreatExplainerSheet(target: ExplainerTarget, onDismiss: () -> Unit)
         )
 
         // Most useful first: what to do, then what it is, then how sure.
-        ExplainerSection("What to do", content.whatToDo, Tone.Accent)
+        ExplainerSection(stringResource(R.string.scan_what_to_do), content.whatToDo, Tone.Accent)
         // A tracker on you, a device travelling with you or a known tracker that
         // stays: removing it can tell whoever placed it, so that is said next.
         val detection = (target as? ExplainerTarget.BleDevice)?.detection
         if (detection != null && SafetyFirst.forDetection(detection)) SafetyFirstCard()
-        ExplainerSection("What this is", content.whatIsThis, Tone.Neutral)
-        ExplainerSection("How sure we are", content.howCertain, Tone.Neutral)
+        ExplainerSection(stringResource(R.string.scan_what_this_is), content.whatIsThis, Tone.Neutral)
+        ExplainerSection(stringResource(R.string.scan_how_sure_we_are), content.howCertain, Tone.Neutral)
 
-        PrimaryButton("Got it", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+        PrimaryButton(stringResource(R.string.scan_got_it), onClick = onDismiss, modifier = Modifier.fillMaxWidth())
     }
 }
 

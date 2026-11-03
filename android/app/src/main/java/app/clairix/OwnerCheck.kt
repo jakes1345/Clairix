@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -201,18 +202,17 @@ private fun OwnerCheckCard(purpose: String, onConfirmed: () -> Unit) {
             Text(CONFIRM_TITLE, style = MaterialTheme.typography.titleMedium, color = c.text)
         }
         Text(
-            "Enter your Clairix passcode to $purpose. It is asked every time, so someone holding this phone " +
-                "while it is unlocked cannot see it.",
+            stringResource(R.string.scan_enter_your_clairix_passcode_to_it, purpose),
             style = MaterialTheme.typography.bodyMedium,
             color = c.textSubtle
         )
         PasscodeField(entry)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (biometricEnabled && activity != null) {
-                GhostButton("Use biometrics", onClick = { entry.biometric(activity) }, tone = Tone.Neutral, enabled = !entry.checking)
+                GhostButton(stringResource(R.string.scan_use_biometrics), onClick = { entry.biometric(activity) }, tone = Tone.Neutral, enabled = !entry.checking)
             }
             Spacer(Modifier.weight(1f))
-            PrimaryButton("Open", onClick = { entry.submit() }, enabled = !entry.checking)
+            PrimaryButton(stringResource(R.string.comms_open), onClick = { entry.submit() }, enabled = !entry.checking)
         }
     }
 }
@@ -226,15 +226,15 @@ internal fun OwnerCheckDialog(purpose: String, onConfirmed: () -> Unit, onDismis
 
     ClairixDialog(
         title = CONFIRM_TITLE,
-        text = "Enter your Clairix passcode to $purpose.",
-        confirmLabel = "Continue",
+        text = stringResource(R.string.scan_enter_your_clairix_passcode_to, purpose),
+        confirmLabel = stringResource(R.string.settings_continue),
         onConfirm = { entry.submit() },
         onDismiss = onDismiss,
         confirmEnabled = !entry.checking
     ) {
         PasscodeField(entry)
         if (biometricEnabled && activity != null) {
-            GhostButton("Use biometrics", onClick = { entry.biometric(activity) }, tone = Tone.Neutral, enabled = !entry.checking)
+            GhostButton(stringResource(R.string.scan_use_biometrics), onClick = { entry.biometric(activity) }, tone = Tone.Neutral, enabled = !entry.checking)
         }
     }
 }
@@ -247,7 +247,7 @@ private fun PasscodeField(entry: OwnerCheckEntry) {
     ClairixTextField(
         value = entry.code,
         onValueChange = { v -> entry.code = v.filter { it.isDigit() }.take(AppLock.MAX_LENGTH); entry.error = "" },
-        label = "Passcode",
+        label = stringResource(R.string.settings_passcode),
         keyboardType = KeyboardType.NumberPassword,
         isError = entry.error.isNotEmpty(),
         visualTransformation = PasswordVisualTransformation(),
@@ -276,9 +276,9 @@ private fun showConfirmPrompt(activity: FragmentActivity, cipher: Cipher, onConf
     }
     val info = BiometricPrompt.PromptInfo.Builder()
         .setTitle(CONFIRM_TITLE)
-        .setSubtitle("Clairix asks again before showing this")
+        .setSubtitle(activity.getString(R.string.scan_clairix_asks_again_before_showing_this))
         .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-        .setNegativeButtonText("Use passcode")
+        .setNegativeButtonText(activity.getString(R.string.scan_use_passcode))
         .build()
     runCatching {
         BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
@@ -331,8 +331,8 @@ internal fun NoPasscodeBanner(setting: Boolean, onSettingChange: (Boolean) -> Un
         if (!enabled) {
             Notice(
                 Tone.Caution,
-                "Anyone holding this unlocked phone can read this.",
-                action = { if (!setting) GhostButton("Set passcode", onClick = { onSettingChange(true) }) }
+                stringResource(R.string.scan_anyone_holding_this_unlocked_phone_can),
+                action = { if (!setting) GhostButton(stringResource(R.string.settings_set_passcode), onClick = { onSettingChange(true) }) }
             )
         }
         if (setting) {
@@ -362,9 +362,8 @@ internal fun WrongPasscodeNotice() {
     val attempts = notice ?: return
     if (locked) return
     ClairixDialog(
-        title = "Wrong passcode entered",
-        text = wrongAttemptsMessage(attempts, System.currentTimeMillis()) +
-            " If that was not you, someone has tried to get into Clairix.",
+        title = stringResource(R.string.scan_wrong_passcode_entered),
+        text = stringResource(R.string.scan_if_that_was_not_you_someone, wrongAttemptsMessage(attempts, System.currentTimeMillis())),
         confirmLabel = "OK",
         onConfirm = { AppLock.dismissWrongAttempts() },
         onDismiss = { AppLock.dismissWrongAttempts() },

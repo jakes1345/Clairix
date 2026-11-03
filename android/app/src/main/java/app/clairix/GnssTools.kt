@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -76,23 +77,23 @@ internal fun GnssScreen() {
     ScreenList {
         item(key = "§verdict") {
             StatusHero(
-                eyebrow = "Satellite signals",
+                eyebrow = stringResource(R.string.scan_satellite_signals),
                 headline = when (a.verdict) {
-                    GnssVerdict.SPOOFED -> "Spoofed"
-                    GnssVerdict.JAMMED -> "Jammed"
-                    GnssVerdict.SUSPECT -> "Unusual"
-                    GnssVerdict.GENUINE -> "Genuine"
-                    GnssVerdict.NO_FIX -> "No fix"
-                    GnssVerdict.NO_DATA -> "Waiting"
+                    GnssVerdict.SPOOFED -> stringResource(R.string.scan_spoofed)
+                    GnssVerdict.JAMMED -> stringResource(R.string.scan_jammed)
+                    GnssVerdict.SUSPECT -> stringResource(R.string.scan_unusual)
+                    GnssVerdict.GENUINE -> stringResource(R.string.scan_genuine)
+                    GnssVerdict.NO_FIX -> stringResource(R.string.scan_no_fix)
+                    GnssVerdict.NO_DATA -> stringResource(R.string.scan_waiting)
                 },
                 body = when (a.verdict) {
-                    GnssVerdict.SPOOFED -> "The position the phone is being given does not come from satellites. Do not trust the map or any app's location until this clears."
-                    GnssVerdict.JAMMED -> "Something is drowning out the satellites here. Navigation, and any tracker that relies on GPS, has lost them."
-                    GnssVerdict.SUSPECT -> "One check failed on its own, or two look off, and nothing else corroborates it. Not proof; keep an eye on it."
+                    GnssVerdict.SPOOFED -> stringResource(R.string.scan_the_position_the_phone_is_being)
+                    GnssVerdict.JAMMED -> stringResource(R.string.scan_something_is_drowning_out_the_satellites)
+                    GnssVerdict.SUSPECT -> stringResource(R.string.scan_one_check_failed_on_its_own)
                     GnssVerdict.GENUINE -> "${a.usedCount} satellites in the fix from ${a.constellationsUsed.joinToString(", ").ifEmpty { "one system" }}, behaving like satellites."
-                    GnssVerdict.NO_FIX -> "Satellites are not in the fix right now: indoors, underground or in a deep street canyon. Step outside to check."
-                    GnssVerdict.NO_DATA -> if (!hasLocation) "Precise location permission is needed to read the satellites."
-                        else "Starting the receiver. A first fix outdoors takes up to a minute."
+                    GnssVerdict.NO_FIX -> stringResource(R.string.scan_satellites_are_not_in_the_fix)
+                    GnssVerdict.NO_DATA -> if (!hasLocation) stringResource(R.string.scan_precise_location_permission_is_needed_to)
+                        else stringResource(R.string.scan_starting_the_receiver_a_first_fix)
                 },
                 tone = tone
             )
@@ -100,7 +101,7 @@ internal fun GnssScreen() {
 
         if (!hasLocation) {
             item(key = "§perm") {
-                Notice(Tone.Caution, "Grant precise location to Clairix in Android Settings → Apps → Clairix → Permissions.", title = "No location permission")
+                Notice(Tone.Caution, stringResource(R.string.scan_grant_precise_location_to_clairix_in), title = stringResource(R.string.scan_no_location_permission))
             }
         }
 
@@ -111,7 +112,7 @@ internal fun GnssScreen() {
                 Notice(
                     if (PositionText.sourceIsProblem(positioning.source)) Tone.Caution else Tone.Info,
                     line,
-                    title = "Position source"
+                    title = stringResource(R.string.scan_position_source)
                 )
             }
         }
@@ -125,7 +126,7 @@ internal fun GnssScreen() {
             item(key = "§real") {
                 Notice(
                     Tone.Danger,
-                    title = "Where Wi-Fi and cell towers put you",
+                    title = stringResource(R.string.scan_where_wi_fi_and_cell_towers),
                     text = "%.5f, %.5f. A spoofer can move the satellite position; it cannot move the towers and access points around you.".format(vouched.first, vouched.second)
                 )
             }
@@ -134,21 +135,21 @@ internal fun GnssScreen() {
             item(key = "§disputed") {
                 Notice(
                     if (a.verdict == GnssVerdict.SPOOFED) Tone.Danger else Tone.Caution,
-                    title = "Two positions disagree",
-                    text = "The satellites and the Wi-Fi and cell position put this phone in different places. A spoofer moves the satellite position; a mis-mapped access point or a stale cell fix moves the other. Clairix cannot tell which is wrong, so do not navigate by either until they agree again."
+                    title = stringResource(R.string.scan_two_positions_disagree),
+                    text = stringResource(R.string.scan_the_satellites_and_the_wi_fi)
                 )
             }
         }
 
         if (!status.scanning) {
             item(key = "§off") {
-                Notice(Tone.Info, "The checks run while this screen is open. Start the scanner to keep them running in the background whenever the GPS is on, as it is when you navigate.", title = "Background checks off")
+                Notice(Tone.Info, stringResource(R.string.scan_the_checks_run_while_this_screen), title = stringResource(R.string.scan_background_checks_off))
             }
         }
 
         item(key = "§checks-hdr") {
             val bad = a.failing.size + a.warning.size
-            SectionHeader("Checks", supporting = if (bad == 0) null else "$bad flagged", tone = if (a.failing.isNotEmpty()) Tone.Danger else Tone.Accent)
+            SectionHeader(stringResource(R.string.scan_checks), supporting = if (bad == 0) null else "$bad flagged", tone = if (a.failing.isNotEmpty()) Tone.Danger else Tone.Accent)
         }
         item(key = "§checks") {
             ListGroup {
@@ -158,46 +159,41 @@ internal fun GnssScreen() {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(ch.label, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
                             when (ch.state) {
-                                CheckState.PASS -> StatusPill("Pass", Tone.Safe)
-                                CheckState.WARN -> StatusPill("Unusual", Tone.Caution)
-                                CheckState.FAIL -> StatusPill("Fail", Tone.Danger)
-                                CheckState.NO_DATA -> StatusPill("No data", Tone.Neutral)
+                                CheckState.PASS -> StatusPill(stringResource(R.string.scan_pass), Tone.Safe)
+                                CheckState.WARN -> StatusPill(stringResource(R.string.scan_unusual), Tone.Caution)
+                                CheckState.FAIL -> StatusPill(stringResource(R.string.scan_fail), Tone.Danger)
+                                CheckState.NO_DATA -> StatusPill(stringResource(R.string.scan_no_data), Tone.Neutral)
                             }
                         }
                         Text(ch.detail, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                     }
                 }
                 if (a.checks.isEmpty()) {
-                    Text("No reading yet.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted, modifier = Modifier.padding(16.dp))
+                    Text(stringResource(R.string.scan_no_reading_yet), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted, modifier = Modifier.padding(16.dp))
                 }
             }
         }
 
         item(key = "§sky-hdr") {
-            SectionHeader("Sky", supporting = if (a.visibleCount == 0) null else "${a.usedCount} of ${a.visibleCount} in the fix")
+            SectionHeader(stringResource(R.string.scan_sky), supporting = if (a.visibleCount == 0) null else stringResource(R.string.scan_of_in_the_fix, a.usedCount, a.visibleCount))
         }
         item(key = "§sky-sum") {
             ClairixCard {
-                KeyValueRow("Mean strength", a.meanCn0?.let { "%.1f dB-Hz".format(it) } ?: "—")
-                KeyValueRow("Spread", a.spreadCn0?.let { "%.1f dB-Hz".format(it) } ?: "—")
-                KeyValueRow("Satellite time vs network", a.timeOffsetMs?.let { "%+.1f s".format(it / 1000.0) } ?: "—")
-                KeyValueRow("GPS band gain vs normal", a.agcDeviationDb?.let { "%+.1f dB".format(it) } ?: "Not reported")
+                KeyValueRow(stringResource(R.string.scan_mean_strength), a.meanCn0?.let { "%.1f dB-Hz".format(it) } ?: "—")
+                KeyValueRow(stringResource(R.string.scan_spread), a.spreadCn0?.let { "%.1f dB-Hz".format(it) } ?: "—")
+                KeyValueRow(stringResource(R.string.scan_satellite_time_vs_network), a.timeOffsetMs?.let { "%+.1f s".format(it / 1000.0) } ?: "—")
+                KeyValueRow(stringResource(R.string.scan_gps_band_gain_vs_normal), a.agcDeviationDb?.let { "%+.1f dB".format(it) } ?: stringResource(R.string.scan_not_reported))
             }
         }
         if (a.sats.isNotEmpty()) {
-            items(a.sats.take(40), key = { "sat|${it.constellation}|${it.svid}|${it.carrierHz}" }) { s -> SatelliteRow(s) }
+            items(a.sats.take(40), key = { "sat|${it.constellation}|${it.svid}|${it.carrierHz.toString()}" }) { s -> SatelliteRow(s) }
         }
 
         item(key = "§limits") {
             Notice(
                 Tone.Info,
-                title = "What this can and cannot catch",
-                text = "It catches the spoofers that are cheap to build: one transmitter on the ground, a recording replayed, " +
-                    "a simulator started at the wrong time, a mock-location app. A careful attacker who simulates a full sky at " +
-                    "realistic strengths and the right time passes the signal tests; the Wi-Fi and cell comparison is the one " +
-                    "they cannot pass while a tower or access point is in range. That comparison needs a Wi-Fi/cell position " +
-                    "source on the phone and the cross-check on (Settings, Location); its row says when it cannot run. Not " +
-                    "every phone reports raw measurements or gain, and those checks say so instead of passing."
+                title = stringResource(R.string.scan_what_this_can_and_cannot_catch),
+                text = stringResource(R.string.scan_it_catches_the_spoofers_that_are)
             )
         }
     }
@@ -217,7 +213,7 @@ private fun SatelliteRow(s: app.clairix.analysis.GnssSat) {
                 )
             }
             Text("%.0f".format(s.cn0), style = MaterialTheme.typography.monoSmall, color = c.textMuted, modifier = Modifier.width(28.dp))
-            if (s.used) StatusPill("Fix", Tone.Safe)
+            if (s.used) StatusPill(stringResource(R.string.comms_fix), Tone.Safe)
         }
     }
 }
