@@ -1057,15 +1057,15 @@ private fun RouteOptionsSheet(
 
 /** What "Share traffic data" sends, with Comms set up; the website's egress table says the same. */
 internal const val SHARE_TRAFFIC_ON =
-    "While you navigate, anonymous speed samples (a road segment, its map position, a speed and a time; never " +
+    "With Comms set up, while you navigate, anonymous speed samples (a road segment, its map position, a speed and a time; never " +
         "your GPS track) go to the Clairix relay, which can read them but is not told who sent them. While you " +
         "navigate or look at routes, the box around the route, at most about 55 km across, goes through the relay " +
         "to HERE and TomTom for incidents; they see the relay, never your phone."
 
 /** What still goes with "Share traffic data" off. */
 internal const val SHARE_TRAFFIC_OFF =
-    "Off: no speed samples and no route box for HERE and TomTom are sent. Live speeds for this map region, " +
-        "typical speeds for the roads of a route, and incidents you report yourself still go through the relay."
+    "Off: no speed samples and no route box for HERE and TomTom are sent. With Comms set up, live speeds for this " +
+        "map region, typical speeds for the roads of a route, and incidents you report yourself still go through the relay."
 
 /** Android's text-to-speech settings, where an offline voice is installed. */
 private const val TTS_SETTINGS = "com.android.settings.TTS_SETTINGS"
