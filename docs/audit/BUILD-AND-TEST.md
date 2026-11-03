@@ -6,7 +6,7 @@ Everything below runs on Linux. The same commands run in CI on every change
 ## Tools
 
 - **JDK 17**, and the **Android SDK** with the API 36 platform and NDK `27.2.12479018`
-  (`sdkmanager "ndk;27.2.12479018"`).
+  (`sdkmanager "ndk;27.2.12479018" "platforms;android-36"`).
 - **Rust** `1.97.0`: rustup installs it from `comms-crypto/rust-toolchain.toml`,
   with the three Android targets.
 - **cargo-ndk** `4.1.2`: `cargo install cargo-ndk --version 4.1.2 --locked`.

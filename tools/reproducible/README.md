@@ -30,12 +30,12 @@ tools/reproducible/compare-apk.sh \
     clairix-v3.1.0.apk
 ```
 
-You need JDK 17, the Android SDK (API 35), NDK `27.2.12479018`, `cargo-ndk`
+You need JDK 17, the Android SDK (API 36 platform), NDK `27.2.12479018`, `cargo-ndk`
 `4.1.2` and Rust `1.97.0`, which rustup installs from
 `comms-crypto/rust-toolchain.toml` on the first build:
 
 ```
-sdkmanager "ndk;27.2.12479018"
+sdkmanager "ndk;27.2.12479018" "platforms;android-36"
 cargo install cargo-ndk --version 4.1.2 --locked
 ```
 
