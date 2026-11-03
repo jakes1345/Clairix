@@ -1,7 +1,286 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The words the app shows. English is the only locale: a translation is a
+    values-<language>/strings.xml beside this file with the same names. Each
+    value is the exact text the screen showed when it was written in the code
+    (the JVM, screenshot and device tests compare them), and a sentence built
+    from parts is one format string with numbered arguments, so a translation
+    can reorder them. Counts use <plurals>.
+-->
 <resources>
     <string name="app_name">Clairix</string>
     <!-- Discreet mode's neutral launcher entries (security/DiscreetMode.kt); the Play edition has neither. -->
     <string name="launcher_compass">Compass</string>
     <string name="launcher_notes">Notes</string>
+    <!-- SettingsScreen.kt -->
+    <string name="settings_allow_location_all_the_time">Allow location all the time?</string>
+    <string name="settings_clairix_uses_your_location_when_the">Clairix uses your location when the app is closed to keep the tracker scan running and to tell whether a Bluetooth device is moving with you, including after the phone restarts. Your location history stays on this phone and is never uploaded.\n\nAndroid opens the location permission page for Clairix next: choose \"Allow all the time\" there, then come back.</string>
+    <string name="settings_continue">Continue</string>
+    <string name="settings_clear_all_data">Clear all data?</string>
+    <string name="settings_clear_data">Clear data</string>
+    <string name="settings_give_up_this_clairix_number">Give up this Clairix number?</string>
+    <string name="settings_the_relay_deletes_your_mailbox_and">The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. Registering again gives a different number; contacts will have to add you afresh. Everything else in Clairix stays.</string>
+    <string name="settings_delete_identity_and_number">Delete identity and number</string>
+    <string name="settings_settings">Settings</string>
+    <string name="settings_get_help">Get help</string>
+    <string name="settings_helplines_for_abuse_and_stalking_where">Helplines for abuse and stalking where you are, to call, text or chat</string>
+    <string name="settings_open_get_help">Open Get help</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_pick_the_colours_the_app_uses">Pick the colours the app uses. The logo and icon stay Acid in every theme.</string>
+    <string name="settings_scanning">Scanning</string>
+    <string name="settings_aggressive_scan">Aggressive scan</string>
+    <string name="settings_faster_detection_more_battery_low_latency">Faster detection, more battery. Low-latency Bluetooth scan.</string>
+    <string name="settings_balanced_scan_recommended_for_everyday_use">Balanced scan. Recommended for everyday use.</string>
+    <string name="settings_alert_on_surveillance_hardware">Alert on surveillance hardware</string>
+    <string name="settings_a_notification_when_a_flock_safety">A notification when a Flock Safety camera battery, Raven gunshot detector or Flock hotspot is heard nearby. Off, it is still written to the timeline.</string>
+    <string name="settings_resume_after_reboot">Resume after reboot</string>
+    <string name="settings_restarts_the_scanner_when_the_phone">Restarts the scanner when the phone boots, if it was running before.</string>
+    <string name="settings_needs_location_set_to_allow_all">Needs location set to \"Allow all the time\". Android asks for this separately: turning this on takes you to Clairix\'s location permission page.</string>
+    <string name="settings_open_app_settings">Open app settings</string>
+    <string name="settings_allow_all_the_time_is_granted">\"Allow all the time\" is granted but unused while this is off. You can set it back to \"Only while using the app\" in Android settings.</string>
+    <string name="settings_following_distance">Following distance</string>
+    <string name="settings_how_far_a_device_has_to">How far a device has to move with you before it counts as following.</string>
+    <string name="settings_default_300_m">Default 300 m</string>
+    <string name="settings_persistence_time">Persistence time</string>
+    <string name="settings_minutes_a_device_has_to_stay">Minutes a device has to stay near you before it\'s flagged. Capped at %1$s min: some trackers (Samsung SmartTag) change their Bluetooth address about every 15 minutes, and a longer wait would let one rotate before it could ever be flagged.</string>
+    <string name="settings_default_min">Default %1$s min</string>
+    <string name="settings_trusted_devices">Trusted devices</string>
+    <string name="settings_no_trusted_devices_yet">No trusted devices yet</string>
+    <string name="settings_mark_a_flagged_device_as_yours">Mark a flagged device as yours on the Trackers screen and its address lands here.</string>
+    <string name="settings_remove">Remove</string>
+    <string name="settings_location">Location</string>
+    <string name="settings_satellite_only_positioning">Satellite-only positioning</string>
+    <string name="settings_positions_come_from_the_satellite_receiver">Positions come from the satellite receiver alone, and Clairix asks for no Wi-Fi or cell position. Slower to a first fix, often none indoors, and more battery while the phone sits still.</string>
+    <string name="settings_positions_come_from_google_play_services">Positions come from Google Play services where the phone has it, otherwise from Android\'s own location service.</string>
+    <string name="settings_positions_come_from_androids_own_location">Positions come from Android\'s own location service: this edition has no Google Play services.</string>
+    <string name="settings_cross_check_gps_against_wi_fi">Cross-check GPS against Wi-Fi/cell position</string>
+    <string name="settings_off_while_satellite_only_positioning_is">Off while Satellite-only positioning is on, which asks for no Wi-Fi or cell position.</string>
+    <string name="settings_the_gps_check_compares_the_satellite">The GPS check compares the satellite position with one from Wi-Fi and cell towers, the check a careful spoofer cannot pass. Asking for it sends the identifiers of the networks and towers around you to the phone\'s location service: Google Play services on most phones.</string>
+    <string name="settings_the_satellite_position_is_not_compared">The satellite position is not compared with Wi-Fi and cell towers, and no such position is asked for. The other GPS checks still run.</string>
+    <string name="settings_app_passcode">App passcode</string>
+    <string name="settings_passcode_on">Passcode on</string>
+    <string name="settings_passcode_off">Passcode off</string>
+    <string name="settings_clairix_locks_when_you_leave_each">Clairix locks when you leave. Each run of wrong passcodes locks you out for longer.</string>
+    <string name="settings_set_a_6_to_12_digit">Set a 6 to 12 digit passcode. Then you choose what wrong passcodes do: lock you out for longer each time, or wipe Clairix.</string>
+    <string name="settings_keep_it_or_pick_another_under">%1$s Keep it, or pick another under Wrong passcode limit.</string>
+    <string name="settings_check_your_wipe_limit">Check your wipe limit</string>
+    <string name="settings_keep">Keep %1$s</string>
+    <string name="settings_change">Change</string>
+    <string name="settings_turn_off">Turn off</string>
+    <string name="settings_biometric_unlock">Biometric unlock</string>
+    <string name="settings_use_fingerprint_or_face_instead_of">Use fingerprint or face instead of typing your passcode.</string>
+    <string name="settings_wrong_passcode_limit">Wrong passcode limit</string>
+    <string name="settings_how_many_wrong_guesses_in_a">How many wrong guesses in a row wipe Clairix.</string>
+    <string name="settings_lock_after">Lock after</string>
+    <string name="settings_how_long_clairix_can_sit_in">How long Clairix can sit in the background before it asks again.</string>
+    <string name="settings_duress_code">Duress code</string>
+    <string name="settings_set">Set</string>
+    <string name="settings_not_set">Not set</string>
+    <string name="settings_a_second_code_that_quietly_wipes">A second code that quietly wipes Clairix. It looks like any wrong passcode, and Clairix stays on its lock screen; from then on this code is the passcode, and opens it empty. It works on the lock screen: where Clairix asks again inside the app, it is just a wrong passcode.</string>
+    <string name="settings_set_duress_code">Set duress code</string>
+    <string name="settings_set_passcode">Set passcode</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_show_alert_details_in_notifications">Show alert details in notifications</string>
+    <string name="settings_while_clairix_is_unlocked_an_alert">While Clairix is unlocked, an alert names what it found; locked, it says only \"Unlock to read\". Alerts never appear on the lock screen either way.</string>
+    <string name="settings_every_alert_says_only_unlock_to">Every alert says only \"Unlock to read\"; what was found waits in the app. Alerts never appear on the lock screen either way.</string>
+    <string name="settings_data">Data</string>
+    <string name="settings_detection_data_stays_on_this_phone">Detection data stays on this phone. Export it when you want a record to keep or hand over.</string>
+    <string name="settings_keep_history_for">Keep history for</string>
+    <string name="settings_the_location_log_the_timeline_vehicle">The location log, the timeline, vehicle trips, the unlock ledger, the radio scanner\'s recordings and the map\'s tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. Evidence you save about an app in Phone check, and photos you keep in the camera sweep, stay on the timeline until you clear all data. The cell-tower baseline is what normal is measured against, so it keeps which towers and areas are usual here and the last day each was seen (the exact time for two days), and forgets one not seen for three times this long (with Forever, never). An exported report is deleted after a day.</string>
+    <string name="settings_export_evidence">Export evidence</string>
+    <string name="settings_clear_all_data_2">Clear all data</string>
+    <string name="settings_wipe_and_delete">Wipe and delete</string>
+    <string name="settings_wipe_clairix">Wipe Clairix</string>
+    <string name="settings_erases_everything_clairix_holds_on_this">Erases everything Clairix holds on this phone and asks the relay to delete your account. The same page as Comms, menu, Wipe Clairix: type WIPE to confirm.</string>
+    <string name="settings_gives_up_your_clairix_number_the">Gives up your Clairix number: the relay deletes the account, and this phone its identity, contacts and messages. Everything else in Clairix stays.</string>
+    <string name="settings_this_phone_has_no_clairix_number">This phone has no Clairix number to give up.</string>
+    <string name="settings_about">About</string>
+    <string name="settings_nothing_hides">Nothing hides.</string>
+    <string name="settings_version">Version</string>
+    <string name="settings_build">%1$s (build %2$s)</string>
+    <string name="settings_package">Package</string>
+    <string name="settings_edition">Edition</string>
+    <string name="settings_full_scanner_tools_and_comms">Full: scanner, tools and Comms</string>
+    <string name="settings_comms_only">Comms only</string>
+    <string name="settings_take_the_tour">Take the tour</string>
+    <string name="settings_legal">Legal</string>
+    <string name="settings_clairix_is_a_counter_surveillance_research">Clairix is a counter-surveillance research tool for lawful personal and professional security use. Finding a device is not proof of surveillance: check findings more than one way before you act. You\'re responsible for following the laws on surveillance detection where you are.</string>
+    <string name="settings_license">License</string>
+    <string name="settings_copyright_2026_the_clairix_authors_clairix">Copyright © 2026 the Clairix authors. Clairix is free software under the GNU General Public License, version 3, with an additional permission to combine it with Google Play services. It comes with absolutely no warranty. Its source code, and the licence in full, are at github.com/jakes1345/Clairix. The Archivo and JetBrains Mono fonts are under the SIL Open Font License 1.1.</string>
+    <string name="settings_the_stalkerware_list_is_converted_from">The stalkerware list is converted from Stalkerware Indicators of Compromise by Julien Voisin and Tek for Echap (github.com/AssoEchap/stalkerware-indicators), used under the Creative Commons Attribution 4.0 licence (creativecommons.org/licenses/by/4.0). Clairix keeps only the app names, package names and certificate fingerprints from it.</string>
+    <string name="settings_privacy">Privacy</string>
+    <string name="settings_the_timeline_and_the_card_vault">, the timeline and the card vault</string>
+    <string name="settings_and_the_timeline">" and the timeline"</string>
+    <string name="settings_google_play_services_where_the_phone">"Google Play services where the phone has it, otherwise from "</string>
+    <string name="settings_what_should_happen_after_wrong_passcodes">What should happen after wrong passcodes?</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_enter_your_current_passcode">Enter your current passcode</string>
+    <string name="settings_choose_a_new_passcode">Choose a new passcode</string>
+    <string name="settings_confirm_the_new_passcode">Confirm the new passcode</string>
+    <string name="settings_6_to_12_digits">6 to 12 digits.</string>
+    <string name="settings_current_passcode">Current passcode</string>
+    <string name="settings_digits">Digits</string>
+    <string name="settings_next">Next</string>
+    <string name="settings_enter_your_passcode_to_turn_the">Enter your passcode to turn the lock off</string>
+    <string name="settings_confirm_your_passcode">Confirm your passcode</string>
+    <string name="settings_choose_a_duress_code">Choose a duress code</string>
+    <string name="settings_confirm_the_duress_code">Confirm the duress code</string>
+    <string name="settings_6_to_12_digits_different_from">6 to 12 digits, different from your passcode. Entering it quietly wipes Clairix.</string>
+    <string name="settings_enter_your_passcode_to_remove_the">Enter your passcode to remove the duress code</string>
+    <string name="settings_passcode">Passcode</string>
+    <!-- BatterySettings.kt -->
+    <string name="settings_battery">Battery</string>
+    <string name="settings_low_power">Low power</string>
+    <string name="settings_used_since_the_scan_started">Used since the scan started</string>
+    <string name="settings_bluetooth_scan">Bluetooth scan</string>
+    <string name="settings_position">Position</string>
+    <string name="settings_cell_and_wi_fi_checks">Cell and Wi-Fi checks</string>
+    <string name="settings_comms">Comms</string>
+    <string name="settings_offline_mesh">Offline mesh</string>
+    <string name="settings_drive_mode">Drive mode</string>
+    <string name="settings_navigation">Navigation</string>
+    <!-- DiscreetModeSettings.kt -->
+    <string name="settings_discreet_mode">Discreet mode</string>
+    <string name="settings_icon_and_name_on_the_home">Icon and name on the home screen</string>
+    <!-- CrashReportSection.kt -->
+    <string name="settings_clairix_crashed_last_time">Clairix crashed last time</string>
+    <string name="settings_on_what_is_kept_is_the">On %1$s. What is kept is the error\'s stack trace, the app version, the phone model and the Android version: no messages, no places, nothing that identifies you. It stays on this phone unless you send it.</string>
+    <string name="settings_copy">Copy</string>
+    <string name="settings_share">Share</string>
+    <string name="settings_delete">Delete</string>
+    <string name="settings_report_a_problem">Report a problem</string>
+    <string name="settings_opens_your_mail_app_on_a">Opens your mail app on a message to %1$s with the app version, phone model and Android version filled in. You write the rest and decide whether to send it. Clairix sends nothing by itself.</string>
+    <!-- ThirdPartyLicencesPage.kt -->
+    <string name="settings_third_party_licences">Third-party licences</string>
+    <string name="settings_the_list_could_not_be_read">The list could not be read</string>
+    <string name="settings_this_builds_licence_list_is_missing">This build\'s licence list is missing or damaged. The licences are also listed in THIRD-PARTY-NOTICES.md in Clairix\'s source code, at github.com/jakes1345/Clairix.</string>
+    <string name="settings_reading_the_licences">Reading the licences</string>
+    <string name="settings_clairix_is_built_on_the_open">Clairix is built on the open-source work below, each used under its own licence. Tap one to read its licence in full. This list was made when this copy of the app was built, from the licences the libraries publish and the licence files of the Rust crates.</string>
+    <string name="settings_map_data_openstreetmap_contributors_available_un">Map data © OpenStreetMap contributors, available under the Open Database Licence (ODbL) at openstreetmap.org/copyright. The map\'s tiles come from %1$s\'s tile server (%2$s), and an online place search from OpenStreetMap\'s Nominatim.</string>
+    <string name="settings_the_libraries_clairix_is_built_with">The libraries Clairix is built with keep their own licences: Android libraries, the code compiled into them, and the Rust crates of the encryption library.</string>
+    <string name="settings_read_the_licence">Read the licence</string>
+    <string name="settings_by">By %1$s</string>
+    <string name="settings_compiled_into">Compiled into %1$s</string>
+    <string name="settings_the_full_text_is_at_the">The full text is at the address above.</string>
+    <!-- UnblockDialog.kt -->
+    <string name="settings_unblock">Unblock %1$s?</string>
+    <string name="settings_unblock_2">Unblock</string>
+    <!-- SettingsScreen.kt -->
+    <string name="settings_one_worked_out_from_wi_fi">%1$s One worked out from Wi-Fi and cell towers sends their identifiers to that service: to Google, on most phones.</string>
+    <string name="settings_detection_data_stays_on_this_phone_2">Detection data stays on this phone. Location history, device identifiers, cell tower baselines%1$s are stored locally, sealed under a key in this phone\'s secure hardware, and never uploaded. The map downloads tiles from %2$s\'s tile server, which sees your IP address and the area you\'re looking at; a place search runs on the phone over the offline map\'s road names and goes to OpenStreetMap\'s Nominatim service only when you choose to search online. Offline maps, work zones, the stalkerware list and the setting that names the tile server come signed from GitHub, and so, once a day, do the relay list, the keys those files are signed with and a note of the newest Clairix version. Messages and calls go through the Clairix relay, which cannot read them and is not told who sent them; live traffic is sent to it as anonymous road-segment speeds it can read but cannot tie to you. With Share traffic data on (Drive\'s route options) the box around a route you navigate or look at also goes through the relay to HERE and TomTom for incidents; they see the relay, not you. With push wake-ups set up, the relay sends your push server a POST saying only \"wake\" when something arrives; with Connect through Tor on, everything Clairix says to relays goes through the Tor network. Evidence leaves the phone only when you export it. Positions for the scanner, navigation and SOS come from %3$sAndroid\'s own location service; one worked out from Wi-Fi and cell towers sends their identifiers to that service, which on most phones is Google\'s, and so does the GPS check\'s comparison. Satellite-only positioning, under Location above, asks the satellites alone. With Also text this number on, under SOS above, an SOS also goes as an ordinary, unencrypted text through your mobile carrier to that number.</string>
+    <string name="settings_messages_and_calls_are_end_to">Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who sent them. Your keys, contacts and history are stored on this phone only. Location is read at the moment you press SOS, to attach to that alert, and at no other time. That position comes from %1$sAndroid\'s own location service; one worked out from Wi-Fi and cell towers sends their identifiers to that service. Satellite-only positioning, under Location above, asks the satellites alone. Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the newest version from GitHub; nothing about you goes with the request. With push wake-ups set up, the relay sends your push server a POST saying only \"wake\" when something arrives, so it learns when, not what or from whom; with Connect through Tor on, everything Clairix says to relays goes through the Tor network. With Also text this number on, under SOS above, an SOS also goes as an ordinary, unencrypted text through your mobile carrier to that number.</string>
+    <!-- SettingsScreen.kt -->
+    <string name="settings_wrong_passcode">Wrong passcode</string>
+    <string name="settings_too_many_attempts_try_again_later">Too many attempts. Try again later.</string>
+    <string name="settings_keystore_unavailable">Keystore unavailable</string>
+    <string name="settings_those_passcodes_dont_match">Those passcodes don\'t match</string>
+    <string name="settings_couldnt_save_the_passcode">Couldn\'t save the passcode</string>
+    <string name="settings_those_codes_dont_match">Those codes don\'t match</string>
+    <string name="settings_couldnt_save_the_duress_code">Couldn\'t save the duress code</string>
+    <!-- CrashReportSection.kt -->
+    <string name="settings_clairix_crash">Clairix crash</string>
+    <string name="settings_share_crash">Share crash</string>
+    <string name="settings_no_mail_app_on_this_phone">No mail app on this phone. Write to %1$s.</string>
+    <!-- SettingsScreen.kt: choice labels -->
+    <string name="settings_forever">Forever</string>
+    <plurals name="settings_retention_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <string name="settings_never_lock_out_instead">Never, lock out instead</string>
+    <plurals name="settings_wipe_attempts">
+        <item quantity="one">%1$d attempt</item>
+        <item quantity="other">%1$d attempts</item>
+    </plurals>
+    <string name="settings_immediately">Immediately</string>
+    <string name="settings_30_seconds">30 seconds</string>
+    <plurals name="settings_relock_minutes">
+        <item quantity="one">%1$d minute</item>
+        <item quantity="other">%1$d minutes</item>
+    </plurals>
+    <!-- settings: text helpers -->
+    <string name="settings_discreet_icon_play">"The Clairix icon and name stay on the home screen: Google Play does not allow an app to disguise its icon, so this edition does the rest without it. "</string>
+    <string name="settings_discreet_icon_on">"The home screen shows \"%1$s\" instead of Clairix. "</string>
+    <string name="settings_discreet_icon_off">"The home screen can show a plain \"Compass\" or \"Notes\" instead of Clairix. "</string>
+    <string name="settings_discreet_rest_on">Alerts say only \"New notification\" and running services only \"Running\", never what was found, whatever the alert details setting says; messages and incoming and missed calls name no one and quote nothing; notification categories have plain names; the lock screen shows a plain prompt and the keypad, no logo; and Clairix\'s own explanation on the device-admin request does not name it. An SOS from your group still shows as an SOS.</string>
+    <string name="settings_discreet_rest_off">Alerts would say only \"New notification\" and running services only \"Running\", messages and incoming calls would name no one, notification categories would have plain names, the lock screen would show a plain prompt and the keypad, no logo, and Clairix\'s own explanation on the device-admin request would not name it.</string>
+    <string name="settings_discreet_limits">Android\'s own screens still name Clairix: Settings, Apps, the device-admin list, the device-admin request (its heading and icon, above Clairix\'s explanation) and the notification settings page all show the package\'s name, which no app can change. When the icon changes, the old one may disappear from the home screen: add the new one from the app list. Notifications already showing change when they next update.</string>
+    <string name="settings_quick_exit">Quick exit, on or off: hold the mark at the top left, or press Back on the first screen. Clairix goes to the background at once and, with a passcode set, locks.</string>
+    <string name="settings_unblock_kept">They become a contact again: their messages and calls reach you and ring, under their name. Their phone is sent this phone\'s pass for your mailbox in an encrypted message that Clairix does not show them.</string>
+    <string name="settings_unblock_not_kept">Anything they send next reaches this phone again, as a message request. They are not told.</string>
+    <plurals name="settings_paused_wipe_note">
+        <item quantity="one">Earlier versions set a wipe after %1$d wrong passcode in a row whenever a passcode was made, without asking. It is paused: until you choose, wrong passcodes lock you out for longer instead.</item>
+        <item quantity="other">Earlier versions set a wipe after %1$d wrong passcodes in a row whenever a passcode was made, without asking. It is paused: until you choose, wrong passcodes lock you out for longer instead.</item>
+    </plurals>
+    <string name="settings_clear_all_data_body">This removes every detection, the whole timeline with any photo kept on it, the location log, vehicle trips, the cell tower baseline, the camera sweep\'s findings, the spyware check\'s last findings, when each paired accessory was first seen, the radio scanner\'s recordings, older unencrypted ones included, and any copy of these set aside because it could not be read. Your settings, trusted devices, the apps and headsets you marked as yours, the unlock ledger and Comms stay. There\'s no undo.</string>
+    <string name="settings_wipe_warning_full">Wiping erases every message, contact, your Clairix number and the evidence timeline. There is no backup and no undo.</string>
+    <string name="settings_wipe_warning_comms">Wiping erases every message, contact and your Clairix number. There is no backup and no undo.</string>
+    <string name="settings_wipe_outcome_unpicked">Pick one to go on. You can change it later in Settings.</string>
+    <string name="settings_wipe_outcome_lockout">Nothing is wiped. After 5 wrong passcodes in a row Clairix waits 30 seconds before the next try, then twice as long after each further wrong one, up to an hour.</string>
+    <string name="settings_wipe_outcome_first">The first wrong passcode wipes Clairix. The lock screen never says that a limit exists.</string>
+    <plurals name="settings_wipe_outcome_after">
+        <item quantity="one">%1$d wrong passcode in a row wipes Clairix. The lock screen never says how many tries are left.</item>
+        <item quantity="other">%1$d wrong passcodes in a row wipe Clairix. The lock screen never says how many tries are left.</item>
+    </plurals>
+    <!-- settings: manual -->
+    <string name="settings_trusted_until">Changes its address; trusted until %1$s, then Clairix asks again</string>
+    <plurals name="settings_lock_on_wipe_after">
+        <item quantity="one">Clairix locks when you leave. %1$d wrong attempt in a row wipe everything.</item>
+        <item quantity="other">Clairix locks when you leave. %1$d wrong attempts in a row wipe everything.</item>
+    </plurals>
+    <string name="settings_android_libraries">Android libraries</string>
+    <string name="settings_compiled_into_those_libraries">Compiled into those libraries</string>
+    <string name="settings_rust_crates_in_the_encryption_library">Rust crates in the encryption library</string>
+    <!-- BatterySettings.kt: BatteryText -->
+    <string name="battery_scanner_off">Counted while the scanner runs.</string>
+    <string name="battery_drive">Only while drive mode is on: the radio stick streams and the OBD-II adapter is polled. The stick is powered from this phone\'s battery through the USB port. Below %1$d %% with no charger, both stop until the phone charges.</string>
+    <string name="battery_navigation">Only during a route: a position every second, spoken directions and the traffic checks. Below %1$d %% with no charger, traffic, speed reports and the check for a faster route slow to every 5 minutes.</string>
+    <string name="battery_footnote">These are Clairix\'s own counts of what it runs, not measured current: Android does not tell an app what it draws. Android\'s battery page shows Clairix\'s share. Measured figures per phone are pending.</string>
+    <string name="battery_low_power_does">The scanner counts the phone as settled after 2 minutes still instead of 4, scans Bluetooth at low power, reads the cell every 2 minutes and the Wi-Fi every 15; cover traffic pauses and the mesh stays at its quiet pace unless it has something to carry. SOS, the duress passcode and incoming calls are never slowed.</string>
+    <string name="battery_low_power_switch">On. %1$s</string>
+    <string name="battery_low_power_saver">On while Android\'s battery saver is on. %1$s</string>
+    <string name="battery_low_power_battery">On: the battery is below %1$d %% and not charging. It goes off when the phone charges or reaches %2$d %%. %3$s</string>
+    <string name="battery_low_power_off">Off. Comes on by itself below %1$d %% with no charger, and while Android\'s battery saver is on. %2$s</string>
+    <string name="battery_charging_now">Charging now. Counting starts again when the phone is unplugged.</string>
+    <string name="battery_waiting_for_reading">Waiting for a battery reading.</string>
+    <string name="battery_percent">%1$d %%</string>
+    <string name="battery_mah">%1$d mAh</string>
+    <string name="battery_no_level">The phone did not report its level</string>
+    <string name="battery_percent_and_mah">%1$s (%2$s)</string>
+    <string name="battery_rate">, about %1$s %% an hour</string>
+    <string name="battery_since_unplugged">" since the phone was unplugged at %1$s"</string>
+    <string name="battery_used">%1$s in %2$s%3$s%4$s. The whole phone\'s use, not Clairix\'s alone.</string>
+    <string name="battery_not_running">Not running.</string>
+    <string name="battery_ble_low_power">%1$s at low power (listening about a tenth of the time)</string>
+    <string name="battery_ble_balanced">%1$s balanced (about a quarter)</string>
+    <string name="battery_ble_low_latency">%1$s at low latency (all the time)</string>
+    <string name="battery_ble_batched">" Results handed over in batches for %1$s."</string>
+    <string name="battery_ble_running">Running %1$s: %2$s.%3$s</string>
+    <string name="battery_list_separator">", "</string>
+    <string name="battery_no_positions">No positions: location access is off.</string>
+    <string name="battery_position">Moving %1$s, with a precise fix every 15 seconds; settled %2$s, with a coarse fix every 3 minutes.</string>
+    <string name="battery_checks">%1$s from the modem, %2$s asked of Android.</string>
+    <plurals name="battery_cell_readings">
+        <item quantity="one">%1$d cell reading</item>
+        <item quantity="other">%1$d cell readings</item>
+    </plurals>
+    <plurals name="battery_wifi_scans">
+        <item quantity="one">%1$d Wi-Fi scan</item>
+        <item quantity="other">%1$d Wi-Fi scans</item>
+    </plurals>
+    <string name="battery_comms_offline">Offline: no connection is kept open.</string>
+    <string name="battery_cover_paused">" Cover traffic is paused while low power is on."</string>
+    <string name="battery_cover_on">" Cover traffic sends an envelope at random intervals."</string>
+    <plurals name="battery_comms_online">
+        <item quantity="one">Online: one connection to your relay, which sends a heartbeat about every minute when nothing is happening.%2$s</item>
+        <item quantity="other">Online: one connection to your relay, which sends a heartbeat about every %1$d minutes when nothing is happening.%2$s</item>
+    </plurals>
+    <string name="battery_mesh_off">Off.</string>
+    <string name="battery_mesh_full">On, at full pace: scanning and advertising over Bluetooth.</string>
+    <string name="battery_mesh_low">On, listening and advertising at low power.</string>
+    <string name="battery_under_a_minute">under a minute</string>
+    <string name="battery_minutes">%1$d min</string>
+    <string name="battery_hours">%1$d h</string>
+    <string name="battery_hours_minutes">%1$d h %2$d min</string>
 </resources>

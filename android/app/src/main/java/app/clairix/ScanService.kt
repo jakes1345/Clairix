@@ -1909,7 +1909,7 @@ class ScanService : LifecycleService() {
         private const val CELL_FILE = "imsi_baseline.json"
 
         /**
-         * The stores "Clear all data" empties ([CLEAR_ALL_DATA_TEXT]), whose set-aside
+         * The stores "Clear all data" empties (R.string.settings_clear_all_data_body), whose set-aside
          * copies go with them. Settings, the unlock ledger, the owner's marks kept in
          * other stores, and Comms stay, as the dialog says.
          */

@@ -1,6 +1,7 @@
 package app.clairix
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import app.clairix.ui.components.ClairixDialog
 import app.clairix.ui.components.Tone
 
@@ -13,20 +14,16 @@ import app.clairix.ui.components.Tone
 @Composable
 fun UnblockDialog(who: String, kept: Boolean, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     ClairixDialog(
-        title = "Unblock $who?",
+        title = stringResource(R.string.settings_unblock, who),
         text = unblockExplanation(kept),
         onDismiss = onDismiss,
-        confirmLabel = "Unblock",
+        confirmLabel = stringResource(R.string.settings_unblock_2),
         onConfirm = onConfirm,
         confirmTone = Tone.Caution,
     )
 }
 
 /** What unblocking does, said before it is done. */
-internal fun unblockExplanation(kept: Boolean): String =
-    if (kept) {
-        "They become a contact again: their messages and calls reach you and ring, under their name. " +
-            "Their phone is sent this phone's pass for your mailbox in an encrypted message that Clairix does not show them."
-    } else {
-        "Anything they send next reaches this phone again, as a message request. They are not told."
-    }
+@Composable
+private fun unblockExplanation(kept: Boolean): String =
+    stringResource(if (kept) R.string.settings_unblock_kept else R.string.settings_unblock_not_kept)

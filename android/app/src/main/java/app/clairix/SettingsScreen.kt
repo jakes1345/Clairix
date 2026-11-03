@@ -5,6 +5,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Resources
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -21,6 +22,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -29,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.comms.CommsRepository
 import app.clairix.security.AppLock
 import app.clairix.security.HistoryRetention
+import app.clairix.ui.appResources
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -323,13 +327,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             // Google Play's prominent disclosure for background location: what location is
             // used for while the app is closed, and that it stays on the phone. The same
             // sentence is the opening shot of docs/play/background-location.md's video.
-            title = "Allow location all the time?",
-            text = "Clairix uses your location when the app is closed to keep the tracker scan running and " +
-                "to tell whether a Bluetooth device is moving with you, including after the phone restarts. " +
-                "Your location history stays on this phone and is never uploaded.\n\n" +
-                "Android opens the location permission page for Clairix next: choose \"Allow all the time\" " +
-                "there, then come back.",
-            confirmLabel = "Continue",
+            title = stringResource(R.string.settings_allow_location_all_the_time),
+            text = stringResource(R.string.settings_clairix_uses_your_location_when_the),
+            confirmLabel = stringResource(R.string.settings_continue),
             onConfirm = {
                 showBackgroundDialog = false
                 if (has(Manifest.permission.ACCESS_FINE_LOCATION)) {
@@ -351,9 +351,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     if (showClearDialog) {
         ClairixDialog(
-            title = "Clear all data?",
-            text = CLEAR_ALL_DATA_TEXT,
-            confirmLabel = "Clear data",
+            title = stringResource(R.string.settings_clear_all_data),
+            text = stringResource(R.string.settings_clear_all_data_body),
+            confirmLabel = stringResource(R.string.settings_clear_data),
             confirmTone = Tone.Danger,
             onConfirm = {
                 // The scanner owns the baseline and the event log in memory, so it
@@ -387,11 +387,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     }
     if (confirmUnpair) {
         ClairixDialog(
-            title = "Give up this Clairix number?",
-            text = "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
-                "Registering again gives a different number; contacts will have to add you afresh. " +
-                "Everything else in Clairix stays.",
-            confirmLabel = "Delete identity and number",
+            title = stringResource(R.string.settings_give_up_this_clairix_number),
+            text = stringResource(R.string.settings_the_relay_deletes_your_mailbox_and),
+            confirmLabel = stringResource(R.string.settings_delete_identity_and_number),
             confirmTone = Tone.Danger,
             onConfirm = {
                 confirmUnpair = false
@@ -418,7 +416,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
     // This screen replaces the whole tab tree, so it does not inherit the insets
     // applied around the tabs and keeps clear of the system bars itself.
     Column(Modifier.fillMaxSize().background(c.base)) {
-        ClairixTopBar(title = "Settings", onBack = onBack)
+        ClairixTopBar(title = stringResource(R.string.settings_settings), onBack = onBack)
         ScreenList(Modifier.weight(1f).navigationBarsPadding(), bottomPadding = 32) {
 
             // ── Get help ─────────────────────────────────────────────────────
@@ -427,22 +425,22 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             item(key = "§help") {
                 ListGroup {
                     ListRow(
-                        title = "Get help",
-                        subtitle = "Helplines for abuse and stalking where you are, to call, text or chat",
+                        title = stringResource(R.string.settings_get_help),
+                        subtitle = stringResource(R.string.settings_helplines_for_abuse_and_stalking_where),
                         icon = Icons.Filled.Call,
                         iconTone = Tone.Accent,
                         onClick = onGetHelp,
-                        onClickLabel = "Open Get help"
+                        onClickLabel = stringResource(R.string.settings_open_get_help)
                     )
                 }
             }
 
             // ── Appearance ───────────────────────────────────────────────────
-            item(key = "§look-hdr") { SectionHeader("Appearance") }
+            item(key = "§look-hdr") { SectionHeader(stringResource(R.string.settings_appearance)) }
             item(key = "§look") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Pick the colours the app uses. The logo and icon stay Acid in every theme.",
+                        stringResource(R.string.settings_pick_the_colours_the_app_uses),
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle,
                         modifier = Modifier.padding(bottom = 4.dp)
@@ -470,14 +468,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
             // ── Scanning ─────────────────────────────────────────────────────
             if (BuildConfig.FULL_ACCESS) {
-                item(key = "§scan-hdr") { SectionHeader("Scanning") }
+                item(key = "§scan-hdr") { SectionHeader(stringResource(R.string.settings_scanning)) }
 
                 item(key = "§scan-toggles") {
                     ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
                         ToggleRow(
-                            title = "Aggressive scan",
-                            subtitle = if (aggressiveScan) "Faster detection, more battery. Low-latency Bluetooth scan."
-                            else "Balanced scan. Recommended for everyday use.",
+                            title = stringResource(R.string.settings_aggressive_scan),
+                            subtitle = if (aggressiveScan) stringResource(R.string.settings_faster_detection_more_battery_low_latency)
+                            else stringResource(R.string.settings_balanced_scan_recommended_for_everyday_use),
                             checked = aggressiveScan,
                             onCheckedChange = { v ->
                                 aggressiveScan = v
@@ -486,9 +484,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         )
                         Hairline()
                         ToggleRow(
-                            title = "Alert on surveillance hardware",
-                            subtitle = "A notification when a Flock Safety camera battery, Raven gunshot detector or " +
-                                "Flock hotspot is heard nearby. Off, it is still written to the timeline.",
+                            title = stringResource(R.string.settings_alert_on_surveillance_hardware),
+                            subtitle = stringResource(R.string.settings_a_notification_when_a_flock_safety),
                             checked = infrastructureAlerts,
                             onCheckedChange = { v ->
                                 infrastructureAlerts = v
@@ -498,8 +495,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         Hairline()
                         val active = resumeWanted && backgroundGranted
                         ToggleRow(
-                            title = "Resume after reboot",
-                            subtitle = "Restarts the scanner when the phone boots, if it was running before.",
+                            title = stringResource(R.string.settings_resume_after_reboot),
+                            subtitle = stringResource(R.string.settings_restarts_the_scanner_when_the_phone),
                             checked = active,
                             onCheckedChange = { v ->
                                 if (!v) {
@@ -515,8 +512,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         )
                         if (!backgroundGranted) {
                             Text(
-                                "Needs location set to \"Allow all the time\". Android asks for this separately: " +
-                                    "turning this on takes you to Clairix's location permission page.",
+                                stringResource(R.string.settings_needs_location_set_to_allow_all),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = c.textSubtle,
                                 modifier = Modifier.padding(bottom = 12.dp)
@@ -526,7 +522,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 // offer the app's own settings page as the way there. The
                                 // grant is picked up on return and only then stored as wanted.
                                 GhostButton(
-                                    "Open app settings",
+                                    stringResource(R.string.settings_open_app_settings),
                                     onClick = {
                                         context.startActivity(
                                             Intent(
@@ -539,8 +535,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             }
                         } else if (!resumeWanted) {
                             Text(
-                                "\"Allow all the time\" is granted but unused while this is off. You can set it back " +
-                                    "to \"Only while using the app\" in Android settings.",
+                                stringResource(R.string.settings_allow_all_the_time_is_granted),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = c.textSubtle,
                                 modifier = Modifier.padding(bottom = 12.dp)
@@ -551,9 +546,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
                 item(key = "§follow-thresh") {
                     ThresholdCard(
-                        title = "Following distance",
+                        title = stringResource(R.string.settings_following_distance),
                         value = "${followThreshold.toInt()} m",
-                        body = "How far a device has to move with you before it counts as following.",
+                        body = stringResource(R.string.settings_how_far_a_device_has_to),
                         slider = {
                             ClairixSlider(
                                 value = followThreshold,
@@ -563,18 +558,15 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 steps = 7
                             )
                         },
-                        scale = listOf("100 m", "Default 300 m", "500 m")
+                        scale = listOf("100 m", stringResource(R.string.settings_default_300_m), "500 m")
                     )
                 }
 
                 item(key = "§persist-thresh") {
                     ThresholdCard(
-                        title = "Persistence time",
+                        title = stringResource(R.string.settings_persistence_time),
                         value = "${persistenceThreshold.toInt()} min",
-                        body = "Minutes a device has to stay near you before it's flagged. Capped at " +
-                            "${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min: some trackers (Samsung SmartTag) " +
-                            "change their Bluetooth address about every 15 minutes, and a longer wait would let " +
-                            "one rotate before it could ever be flagged.",
+                        body = stringResource(R.string.settings_minutes_a_device_has_to_stay, AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()),
                         slider = {
                             ClairixSlider(
                                 value = persistenceThreshold,
@@ -589,7 +581,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         },
                         scale = listOf(
                             "${AppSettings.MIN_PERSISTENCE_THRESHOLD_MIN.toInt()} min",
-                            "Default ${AppSettings.DEFAULT_PERSISTENCE_THRESHOLD_MIN.toInt()} min",
+                            stringResource(R.string.settings_default_min, AppSettings.DEFAULT_PERSISTENCE_THRESHOLD_MIN.toInt()),
                             "${AppSettings.MAX_PERSISTENCE_THRESHOLD_MIN.toInt()} min"
                         )
                     )
@@ -597,13 +589,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
                 // ── Trusted devices ──────────────────────────────────────────────
                 item(key = "§trusted-hdr") {
-                    SectionHeader("Trusted devices", supporting = if (trusted.devices.isEmpty()) null else "${trusted.devices.size}")
+                    SectionHeader(stringResource(R.string.settings_trusted_devices), supporting = if (trusted.devices.isEmpty()) null else "${trusted.devices.size}")
                 }
                 if (trusted.devices.isEmpty()) {
                     item(key = "§trusted-empty") {
                         EmptyState(
-                            title = "No trusted devices yet",
-                            body = "Mark a flagged device as yours on the Trackers screen and its address lands here.",
+                            title = stringResource(R.string.settings_no_trusted_devices_yet),
+                            body = stringResource(R.string.settings_mark_a_flagged_device_as_yours),
                             icon = ClairixIcons.BluetoothSearching
                         )
                     }
@@ -622,15 +614,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                         // A device that changes its address is trusted a day at a time.
                                         if (device.until != 0L) {
                                             Text(
-                                                "Changes its address; trusted until " +
-                                                    java.text.SimpleDateFormat("MMM d HH:mm", java.util.Locale.US).format(java.util.Date(device.until)) +
-                                                    ", then Clairix asks again",
+                                                stringResource(
+                                                    R.string.settings_trusted_until,
+                                                    java.text.SimpleDateFormat("MMM d HH:mm", java.util.Locale.US).format(java.util.Date(device.until))
+                                                ),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = c.textSubtle
                                             )
                                         }
                                     }
-                                    GhostButton("Remove", onClick = { Registry.untrust(device.addresses.first()) }, tone = Tone.Danger)
+                                    GhostButton(stringResource(R.string.settings_remove), onClick = { Registry.untrust(device.addresses.first()) }, tone = Tone.Danger)
                                 }
                             }
                         }
@@ -647,21 +640,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             //
             // Where position fixes come from, in both editions: the Comms edition reads
             // a position for an SOS. See app.clairix.analysis.Positioning.
-            item(key = "§location-hdr") { SectionHeader("Location") }
+            item(key = "§location-hdr") { SectionHeader(stringResource(R.string.settings_location)) }
 
             item(key = "§location") {
                 ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
                     ToggleRow(
-                        title = "Satellite-only positioning",
+                        title = stringResource(R.string.settings_satellite_only_positioning),
                         subtitle = if (satelliteOnly)
-                            "Positions come from the satellite receiver alone, and Clairix asks for no Wi-Fi or cell " +
-                                "position. Slower to a first fix, often none indoors, and more battery while the phone sits still."
+                            stringResource(R.string.settings_positions_come_from_the_satellite_receiver)
                         else
-                            (if (BuildConfig.PLAY_SERVICES) "Positions come from Google Play services where the phone has it, otherwise from Android's " +
-                                "own location service." else "Positions come from Android's own location service: this edition " +
-                                "has no Google Play services.") +
-                                " One worked out from Wi-Fi and cell towers sends their identifiers " +
-                                "to that service: to Google, on most phones.",
+                            stringResource(R.string.settings_one_worked_out_from_wi_fi, (if (BuildConfig.PLAY_SERVICES) stringResource(R.string.settings_positions_come_from_google_play_services) else stringResource(R.string.settings_positions_come_from_androids_own_location))),
                         checked = satelliteOnly,
                         onCheckedChange = { v ->
                             satelliteOnly = v
@@ -671,18 +659,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     if (BuildConfig.FULL_ACCESS) {
                         Hairline()
                         ToggleRow(
-                            title = "Cross-check GPS against Wi-Fi/cell position",
+                            title = stringResource(R.string.settings_cross_check_gps_against_wi_fi),
                             subtitle = when {
                                 satelliteOnly ->
-                                    "Off while Satellite-only positioning is on, which asks for no Wi-Fi or cell position."
+                                    stringResource(R.string.settings_off_while_satellite_only_positioning_is)
                                 networkCrossCheck ->
-                                    "The GPS check compares the satellite position with one from Wi-Fi and cell towers, " +
-                                        "the check a careful spoofer cannot pass. Asking for it sends the identifiers of the " +
-                                        "networks and towers around you to the phone's location service: Google Play " +
-                                        "services on most phones."
+                                    stringResource(R.string.settings_the_gps_check_compares_the_satellite)
                                 else ->
-                                    "The satellite position is not compared with Wi-Fi and cell towers, and no such " +
-                                        "position is asked for. The other GPS checks still run."
+                                    stringResource(R.string.settings_the_satellite_position_is_not_compared)
                             },
                             checked = networkCrossCheck && !satelliteOnly,
                             enabled = !satelliteOnly,
@@ -703,7 +687,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             item(key = "§sos") { SosExtrasSettingsCard() }
 
             // ── Passcode lock ────────────────────────────────────────────────
-            item(key = "§lock-hdr") { SectionHeader("App passcode") }
+            item(key = "§lock-hdr") { SectionHeader(stringResource(R.string.settings_app_passcode)) }
 
             item(key = "§lock-controls") {
                 ClairixCard(spacing = 12.dp) {
@@ -711,19 +695,18 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         IconWell(Icons.Filled.Lock, if (lockEnabled) Tone.Safe else Tone.Neutral)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                if (lockEnabled) "Passcode on" else "Passcode off",
+                                if (lockEnabled) stringResource(R.string.settings_passcode_on) else stringResource(R.string.settings_passcode_off),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = c.text
                             )
                             Text(
                                 if (lockEnabled)
                                     if (wipeAfter > 0)
-                                        "Clairix locks when you leave. $wipeAfter wrong ${if (wipeAfter == 1) "attempt" else "attempts"} in a row wipe everything."
+                                        pluralStringResource(R.plurals.settings_lock_on_wipe_after, wipeAfter, wipeAfter)
                                     else
-                                        "Clairix locks when you leave. Each run of wrong passcodes locks you out for longer."
+                                        stringResource(R.string.settings_clairix_locks_when_you_leave_each)
                                 else
-                                    "Set a 6 to 12 digit passcode. Then you choose what wrong passcodes do: lock you " +
-                                        "out for longer each time, or wipe Clairix.",
+                                    stringResource(R.string.settings_set_a_6_to_12_digit),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
@@ -734,11 +717,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         // nothing; AppLock holds it back until she answers.
                         Notice(
                             Tone.Caution,
-                            pausedWipeNote(pausedWipe) + " Keep it, or pick another under Wrong passcode limit.",
-                            title = "Check your wipe limit",
+                            stringResource(R.string.settings_keep_it_or_pick_another_under, pausedWipeNote(appResources(), pausedWipe)),
+                            title = stringResource(R.string.settings_check_your_wipe_limit),
                             action = {
                                 GhostButton(
-                                    "Keep $pausedWipe",
+                                    stringResource(R.string.settings_keep, pausedWipe),
                                     onClick = {
                                         val keep = pausedWipe
                                         wipeAfter = keep
@@ -751,14 +734,14 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     }
                     if (lockEnabled) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SecondaryButton("Change", onClick = { showPasscodeSetup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
-                            SecondaryButton("Turn off", onClick = { showPasscodeDisable = true }, tone = Tone.Danger, modifier = Modifier.weight(1f))
+                            SecondaryButton(stringResource(R.string.settings_change), onClick = { showPasscodeSetup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
+                            SecondaryButton(stringResource(R.string.settings_turn_off), onClick = { showPasscodeDisable = true }, tone = Tone.Danger, modifier = Modifier.weight(1f))
                         }
                         if (canUseBiometric) {
                             Hairline()
                             ToggleRow(
-                                title = "Biometric unlock",
-                                subtitle = "Use fingerprint or face instead of typing your passcode.",
+                                title = stringResource(R.string.settings_biometric_unlock),
+                                subtitle = stringResource(R.string.settings_use_fingerprint_or_face_instead_of),
                                 checked = biometricEnabled,
                                 onCheckedChange = { on ->
                                     scope.launch(Dispatchers.IO) {
@@ -769,11 +752,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         }
                         Hairline()
                         SChoiceRow(
-                            title = "Wrong passcode limit",
-                            subtitle = "How many wrong guesses in a row wipe Clairix.",
+                            title = stringResource(R.string.settings_wrong_passcode_limit),
+                            subtitle = stringResource(R.string.settings_how_many_wrong_guesses_in_a),
                             choices = AppLock.WIPE_AFTER_CHOICES,
                             selected = wipeAfter,
-                            label = ::wipeAfterLabel,
+                            label = { wipeAfterLabel(it) },
                             onSelect = { choice ->
                                 wipeAfter = choice
                                 wipeChosen = true
@@ -781,11 +764,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             }
                         )
                         SChoiceRow(
-                            title = "Lock after",
-                            subtitle = "How long Clairix can sit in the background before it asks again.",
+                            title = stringResource(R.string.settings_lock_after),
+                            subtitle = stringResource(R.string.settings_how_long_clairix_can_sit_in),
                             choices = AppLock.RELOCK_CHOICES,
                             selected = relockAfterMs,
-                            label = ::relockLabel,
+                            label = { relockLabel(it) },
                             onSelect = { choice ->
                                 relockAfterMs = choice
                                 scope.launch(Dispatchers.IO) { AppLock.setRelockAfterMs(context, choice) }
@@ -794,27 +777,25 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         Hairline()
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Duress code", style = MaterialTheme.typography.titleSmall, color = c.text, modifier = Modifier.weight(1f))
-                                StatusPill(if (hasDuress) "Set" else "Not set", if (hasDuress) Tone.Safe else Tone.Neutral)
+                                Text(stringResource(R.string.settings_duress_code), style = MaterialTheme.typography.titleSmall, color = c.text, modifier = Modifier.weight(1f))
+                                StatusPill(if (hasDuress) stringResource(R.string.settings_set) else stringResource(R.string.settings_not_set), if (hasDuress) Tone.Safe else Tone.Neutral)
                             }
                             Text(
-                                "A second code that quietly wipes Clairix. It looks like any wrong passcode, and Clairix " +
-                                    "stays on its lock screen; from then on this code is the passcode, and opens it empty. " +
-                                    "It works on the lock screen: where Clairix asks again inside the app, it is just a wrong passcode.",
+                                stringResource(R.string.settings_a_second_code_that_quietly_wipes),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = c.textSubtle
                             )
                         }
                         if (hasDuress) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SecondaryButton("Change", onClick = { showDuressSetup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
-                                SecondaryButton("Remove", onClick = { showDuressRemove = true }, tone = Tone.Danger, modifier = Modifier.weight(1f))
+                                SecondaryButton(stringResource(R.string.settings_change), onClick = { showDuressSetup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
+                                SecondaryButton(stringResource(R.string.settings_remove), onClick = { showDuressRemove = true }, tone = Tone.Danger, modifier = Modifier.weight(1f))
                             }
                         } else {
-                            SecondaryButton("Set duress code", onClick = { showDuressSetup = true }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                            SecondaryButton(stringResource(R.string.settings_set_duress_code), onClick = { showDuressSetup = true }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                         }
                     } else {
-                        PrimaryButton("Set passcode", onClick = { showPasscodeSetup = true }, modifier = Modifier.fillMaxWidth())
+                        PrimaryButton(stringResource(R.string.settings_set_passcode), onClick = { showPasscodeSetup = true }, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -870,18 +851,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             // What an alert may say in the shade of the unlocked phone. The lock
             // screen is not up to this switch: the alert channels are secret there.
 
-            if (BuildConfig.FULL_ACCESS) item(key = "§notif-hdr") { SectionHeader("Notifications") }
+            if (BuildConfig.FULL_ACCESS) item(key = "§notif-hdr") { SectionHeader(stringResource(R.string.settings_notifications)) }
 
             if (BuildConfig.FULL_ACCESS) item(key = "§notif-toggles") {
                 ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
                     ToggleRow(
-                        title = "Show alert details in notifications",
+                        title = stringResource(R.string.settings_show_alert_details_in_notifications),
                         subtitle = if (showAlertDetails)
-                            "While Clairix is unlocked, an alert names what it found; locked, it says only " +
-                                "\"Unlock to read\". Alerts never appear on the lock screen either way."
+                            stringResource(R.string.settings_while_clairix_is_unlocked_an_alert)
                         else
-                            "Every alert says only \"Unlock to read\"; what was found waits in the app. " +
-                                "Alerts never appear on the lock screen either way.",
+                            stringResource(R.string.settings_every_alert_says_only_unlock_to),
                         checked = showAlertDetails,
                         onCheckedChange = { v ->
                             showAlertDetails = v
@@ -903,22 +882,22 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
             // Evidence export and the scanner's clear-all. Giving up the Clairix
             // number is under Wipe and delete below (and in Comms settings).
 
-            if (BuildConfig.FULL_ACCESS) item(key = "§data-hdr") { SectionHeader("Data") }
+            if (BuildConfig.FULL_ACCESS) item(key = "§data-hdr") { SectionHeader(stringResource(R.string.settings_data)) }
 
             if (BuildConfig.FULL_ACCESS) item(key = "§data-actions") {
                 ClairixCard(spacing = 8.dp) {
                     Text(
-                        "Detection data stays on this phone. Export it when you want a record to keep or hand over.",
+                        stringResource(R.string.settings_detection_data_stays_on_this_phone),
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
                     var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
                     SChoiceRow(
-                        title = "Keep history for",
-                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger, the radio scanner's recordings and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. Evidence you save about an app in Phone check, and photos you keep in the camera sweep, stay on the timeline until you clear all data. The cell-tower baseline is what normal is measured against, so it keeps which towers and areas are usual here and the last day each was seen (the exact time for two days), and forgets one not seen for three times this long (with Forever, never). An exported report is deleted after a day.",
+                        title = stringResource(R.string.settings_keep_history_for),
+                        subtitle = stringResource(R.string.settings_the_location_log_the_timeline_vehicle),
                         choices = HistoryRetention.CHOICES,
                         selected = retentionDays,
-                        label = ::retentionLabel,
+                        label = { retentionLabel(it) },
                         onSelect = { choice ->
                             retentionDays = choice
                             scope.launch(Dispatchers.IO) {
@@ -928,38 +907,36 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         }
                     )
                     // With a passcode set, each export asks for it (or a biometric) every time.
-                    EvidenceExportButtons("Export evidence", modifier = Modifier.fillMaxWidth(), primary = true)
-                    SecondaryButton("Clear all data", onClick = { showClearDialog = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                    EvidenceExportButtons(stringResource(R.string.settings_export_evidence), modifier = Modifier.fillMaxWidth(), primary = true)
+                    SecondaryButton(stringResource(R.string.settings_clear_all_data_2), onClick = { showClearDialog = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
 
             // ── Wipe and delete ──────────────────────────────────────────────
 
-            item(key = "§wipe-hdr") { SectionHeader("Wipe and delete") }
+            item(key = "§wipe-hdr") { SectionHeader(stringResource(R.string.settings_wipe_and_delete)) }
 
             item(key = "§wipe") {
                 ClairixCard(spacing = 8.dp) {
-                    Text("Wipe Clairix", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(stringResource(R.string.settings_wipe_clairix), style = MaterialTheme.typography.titleSmall, color = c.text)
                     Text(
-                        "Erases everything Clairix holds on this phone and asks the relay to delete your account. " +
-                            "The same page as Comms, menu, Wipe Clairix: type WIPE to confirm.",
+                        stringResource(R.string.settings_erases_everything_clairix_holds_on_this),
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
-                    SecondaryButton("Wipe Clairix", onClick = { showWipe = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton(stringResource(R.string.settings_wipe_clairix), onClick = { showWipe = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                     Hairline(Modifier.padding(vertical = 4.dp))
-                    Text("Delete identity and number", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(stringResource(R.string.settings_delete_identity_and_number), style = MaterialTheme.typography.titleSmall, color = c.text)
                     Text(
                         if (comms.registered)
-                            "Gives up your Clairix number: the relay deletes the account, and this phone its identity, " +
-                                "contacts and messages. Everything else in Clairix stays."
+                            stringResource(R.string.settings_gives_up_your_clairix_number_the)
                         else
-                            "This phone has no Clairix number to give up.",
+                            stringResource(R.string.settings_this_phone_has_no_clairix_number),
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
                     SecondaryButton(
-                        "Delete identity and number",
+                        stringResource(R.string.settings_delete_identity_and_number),
                         onClick = { confirmUnpair = true },
                         tone = Tone.Danger,
                         enabled = comms.registered && !comms.busy,
@@ -970,7 +947,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
             // ── About ────────────────────────────────────────────────────────
 
-            item(key = "§about-hdr") { SectionHeader("About") }
+            item(key = "§about-hdr") { SectionHeader(stringResource(R.string.settings_about)) }
 
             if (update.offer) item(key = "§update") { app.clairix.ui.UpdateOffer(update) }
 
@@ -980,44 +957,35 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                         LogoMark(size = 40.dp, contentDescription = null)
                         Column {
                             Text(context.getString(R.string.app_name), style = MaterialTheme.typography.titleLarge, color = c.text)
-                            Text("Nothing hides.", style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
+                            Text(stringResource(R.string.settings_nothing_hides), style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
                         }
                     }
-                    KeyValueRow("Version", "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
-                    KeyValueRow("Package", BuildConfig.APPLICATION_ID)
-                    KeyValueRow("Edition", if (BuildConfig.FULL_ACCESS) "Full: scanner, tools and Comms" else "Comms only", mono = false)
-                    SecondaryButton("Take the tour", onClick = onTour, tone = Tone.Accent)
+                    KeyValueRow(stringResource(R.string.settings_version), stringResource(R.string.settings_build, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))
+                    KeyValueRow(stringResource(R.string.settings_package), BuildConfig.APPLICATION_ID)
+                    KeyValueRow(stringResource(R.string.settings_edition), if (BuildConfig.FULL_ACCESS) stringResource(R.string.settings_full_scanner_tools_and_comms) else stringResource(R.string.settings_comms_only), mono = false)
+                    SecondaryButton(stringResource(R.string.settings_take_the_tour), onClick = onTour, tone = Tone.Accent)
                     CrashReportSection()
 
                     if (BuildConfig.FULL_ACCESS) {
                         Hairline(Modifier.padding(vertical = 4.dp))
-                        Text("Legal", style = MaterialTheme.typography.titleSmall, color = c.text)
+                        Text(stringResource(R.string.settings_legal), style = MaterialTheme.typography.titleSmall, color = c.text)
                         Text(
-                            "Clairix is a counter-surveillance research tool for lawful personal and professional " +
-                                "security use. Finding a device is not proof of surveillance: check findings more than " +
-                                "one way before you act. You're responsible for following the laws on surveillance " +
-                                "detection where you are.",
+                            stringResource(R.string.settings_clairix_is_a_counter_surveillance_research),
                             style = MaterialTheme.typography.bodyMedium,
                             color = c.textSubtle
                         )
                     }
 
                     Hairline(Modifier.padding(vertical = 4.dp))
-                    Text("License", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(stringResource(R.string.settings_license), style = MaterialTheme.typography.titleSmall, color = c.text)
                     Text(
-                        "Copyright © 2026 the Clairix authors. Clairix is free software under the GNU General Public " +
-                            "License, version 3, with an additional permission to combine it with Google Play services. " +
-                            "It comes with absolutely no warranty. Its source code, and the licence in full, are at " +
-                            "github.com/jakes1345/Clairix. The Archivo and JetBrains Mono fonts are under the SIL Open Font License 1.1.",
+                        stringResource(R.string.settings_copyright_2026_the_clairix_authors_clairix),
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
                     if (BuildConfig.FULL_ACCESS) {
                         Text(
-                            "The stalkerware list is converted from Stalkerware Indicators of Compromise by Julien Voisin and " +
-                                "Tek for Echap (github.com/AssoEchap/stalkerware-indicators), used under the Creative Commons " +
-                                "Attribution 4.0 licence (creativecommons.org/licenses/by/4.0). Clairix keeps only the app " +
-                                "names, package names and certificate fingerprints from it.",
+                            stringResource(R.string.settings_the_stalkerware_list_is_converted_from),
                             style = MaterialTheme.typography.bodyMedium,
                             color = c.textSubtle
                         )
@@ -1026,46 +994,12 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     AboutCredits(onOpenLicences = { showLicences = true })
 
                     Hairline(Modifier.padding(vertical = 4.dp))
-                    Text("Privacy", style = MaterialTheme.typography.titleSmall, color = c.text)
+                    Text(stringResource(R.string.settings_privacy), style = MaterialTheme.typography.titleSmall, color = c.text)
                     Text(
                         if (BuildConfig.FULL_ACCESS)
-                            "Detection data stays on this phone. Location history, device identifiers, cell tower " +
-                                "baselines" + (if (BuildConfig.CARD_VAULT) ", the timeline and the card vault" else " and the timeline") +
-                                " are stored locally, sealed under a key in this phone's secure hardware, and never " +
-                                "uploaded. The map downloads tiles from ${tileServer.name}'s tile server, which sees your IP address and the " +
-                                "area you're looking at; a place search runs on the phone over the offline map's road names " +
-                                "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
-                                "work zones, the stalkerware list and the setting that names the tile server come signed from GitHub, and so, once a day, do the relay list, " +
-                                "the keys those files are signed with and a note of the newest Clairix version. Messages and calls go through the " +
-                                "Clairix relay, which cannot read them and is not told who sent them; live traffic is sent to it as " +
-                                "anonymous road-segment speeds it can read but cannot tie to you. With Share traffic data on (Drive's " +
-                                "route options) the box around a route you navigate or look at also goes through the relay to HERE " +
-                                "and TomTom for incidents; they see the relay, not you. With push wake-ups set up, the relay sends " +
-                                "your push server a POST saying only \"wake\" when something arrives; with Connect through Tor on, " +
-                                "everything Clairix says to relays goes through the Tor network. Evidence leaves the " +
-                                "phone only when you export it. Positions for the scanner, navigation and SOS come from " +
-                                (if (BuildConfig.PLAY_SERVICES) "Google Play services where the phone has it, otherwise from " else "") +
-                                "Android's own location " +
-                                "service; one worked out from Wi-Fi and cell towers sends their identifiers to that " +
-                                "service, which on most phones is Google's, and so does the GPS check's comparison. " +
-                                "Satellite-only positioning, under Location above, asks the satellites alone. " +
-                                "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
-                                "unencrypted text through your mobile carrier to that number."
+                            stringResource(R.string.settings_detection_data_stays_on_this_phone_2, (if (BuildConfig.CARD_VAULT) stringResource(R.string.settings_the_timeline_and_the_card_vault) else stringResource(R.string.settings_and_the_timeline)), tileServer.name, (if (BuildConfig.PLAY_SERVICES) stringResource(R.string.settings_google_play_services_where_the_phone) else ""))
                         else
-                            "Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who " +
-                                "sent them. Your keys, contacts and history are stored on this phone only. Location is " +
-                                "read at the moment you press SOS, to attach to that alert, and at no other time. That " +
-                                "position comes from " +
-                                (if (BuildConfig.PLAY_SERVICES) "Google Play services where the phone has it, otherwise from " else "") +
-                                "Android's own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
-                                "to that service. Satellite-only positioning, under Location above, asks the satellites alone. " +
-                                "Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the " +
-                                "newest version from GitHub; nothing about you goes with the request. With push wake-ups set " +
-                                "up, the relay sends your push server a POST saying only \"wake\" when something arrives, so it " +
-                                "learns when, not what or from whom; with Connect through Tor on, everything Clairix says to " +
-                                "relays goes through the Tor network. " +
-                                "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
-                                "unencrypted text through your mobile carrier to that number.",
+                            stringResource(R.string.settings_messages_and_calls_are_end_to, (if (BuildConfig.PLAY_SERVICES) stringResource(R.string.settings_google_play_services_where_the_phone) else "")),
                         style = MaterialTheme.typography.bodyMedium,
                         color = c.textSubtle
                     )
@@ -1098,42 +1032,28 @@ private fun ThresholdCard(
     }
 }
 
+@Composable
 private fun retentionLabel(days: Int): String = when (days) {
-    HistoryRetention.FOREVER -> "Forever"
-    else -> "$days days"
+    HistoryRetention.FOREVER -> stringResource(R.string.settings_forever)
+    else -> pluralStringResource(R.plurals.settings_retention_days, days, days)
 }
 
+@Composable
 private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
-    0 -> "Never, lock out instead"
-    1 -> "1 attempt"
-    else -> "$attempts attempts"
+    0 -> stringResource(R.string.settings_never_lock_out_instead)
+    else -> pluralStringResource(R.plurals.settings_wipe_attempts, attempts, attempts)
 }
-
-/**
- * What Settings, Clear all data removes, as [ScanService]'s clearAllData does it: keep the
- * two in step. What stays is said too, since a wipe is the control that takes everything.
- */
-internal const val CLEAR_ALL_DATA_TEXT =
-    "This removes every detection, the whole timeline with any photo kept on it, the location log, vehicle trips, " +
-        "the cell tower baseline, the camera sweep's findings, the spyware check's last findings, when each paired " +
-        "accessory was first seen, the radio scanner's recordings, older unencrypted ones included, and any copy of these " +
-        "set aside because it could not be read. Your settings, " +
-        "trusted devices, the apps and headsets you marked as yours, the unlock ledger and Comms stay. There's no undo."
 
 /** What a wipe takes, in the words the dialog after a new passcode uses. */
-internal val WIPE_WARNING =
-    if (BuildConfig.FULL_ACCESS)
-        "Wiping erases every message, contact, your Clairix number and the evidence timeline. There is no backup and no undo."
-    else
-        "Wiping erases every message, contact and your Clairix number. There is no backup and no undo."
+internal fun wipeWarning(res: Resources): String =
+    res.getString(if (BuildConfig.FULL_ACCESS) R.string.settings_wipe_warning_full else R.string.settings_wipe_warning_comms)
 
 /** What a pick in [WipeChoiceDialog] means, in [AppLock]'s own numbers. */
-internal fun wipeAfterOutcome(choice: Int?): String = when (choice) {
-    null -> "Pick one to go on. You can change it later in Settings."
-    0 -> "Nothing is wiped. After 5 wrong passcodes in a row Clairix waits 30 seconds before the next try, " +
-        "then twice as long after each further wrong one, up to an hour."
-    1 -> "The first wrong passcode wipes Clairix. The lock screen never says that a limit exists."
-    else -> "$choice wrong passcodes in a row wipe Clairix. The lock screen never says how many tries are left."
+internal fun wipeAfterOutcome(res: Resources, choice: Int?): String = when (choice) {
+    null -> res.getString(R.string.settings_wipe_outcome_unpicked)
+    0 -> res.getString(R.string.settings_wipe_outcome_lockout)
+    1 -> res.getString(R.string.settings_wipe_outcome_first)
+    else -> res.getQuantityString(R.plurals.settings_wipe_outcome_after, choice, choice)
 }
 
 /**
@@ -1150,10 +1070,10 @@ internal fun wipeAfterOutcome(choice: Int?): String = when (choice) {
 internal fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, note: String? = null, onChosen: (Int) -> Unit) {
     var picked by remember { mutableStateOf<Int?>(null) }
     ClairixDialog(
-        title = "What should happen after wrong passcodes?",
+        title = stringResource(R.string.settings_what_should_happen_after_wrong_passcodes),
         // Back and a tap outside do nothing: this needs an answer.
         onDismiss = {},
-        confirmLabel = "Save",
+        confirmLabel = stringResource(R.string.settings_save),
         onConfirm = { picked?.let(onChosen) },
         confirmEnabled = picked != null,
         dismissLabel = null
@@ -1161,17 +1081,17 @@ internal fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, note: String? = n
         // Scrolls when large text makes it taller than the dialog.
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (note != null) Text(note, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
-            Text(WIPE_WARNING, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
+            Text(wipeWarning(appResources()), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
             ChoiceChips<Int?>(
                 choices = AppLock.WIPE_AFTER_CHOICES,
                 selected = picked,
                 label = { wipeAfterLabel(it ?: 0) },
                 onSelect = { picked = it }
             )
-            Text(wipeAfterOutcome(picked), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            Text(wipeAfterOutcome(appResources(), picked), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             if (onExportEvidence != null) {
                 SecondaryButton(
-                    "Export evidence",
+                    stringResource(R.string.settings_export_evidence),
                     onClick = onExportEvidence,
                     icon = Icons.Filled.Share,
                     modifier = Modifier.fillMaxWidth()
@@ -1181,11 +1101,11 @@ internal fun WipeChoiceDialog(onExportEvidence: (() -> Unit)?, note: String? = n
     }
 }
 
+@Composable
 private fun relockLabel(ms: Long): String = when (ms) {
-    0L -> "Immediately"
-    30_000L -> "30 seconds"
-    60_000L -> "1 minute"
-    else -> "${ms / 60_000L} minutes"
+    0L -> stringResource(R.string.settings_immediately)
+    30_000L -> stringResource(R.string.settings_30_seconds)
+    else -> (ms / 60_000L).toInt().let { pluralStringResource(R.plurals.settings_relock_minutes, it, it) }
 }
 
 /** A titled setting with its choices as chips underneath; the picked one is filled. */
@@ -1195,7 +1115,7 @@ private fun <T> SChoiceRow(
     subtitle: String,
     choices: List<T>,
     selected: T,
-    label: (T) -> String,
+    label: @Composable (T) -> String,
     onSelect: (T) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1243,7 +1163,7 @@ private fun CodePanel(
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            GhostButton("Cancel", onClick = onCancel, tone = Tone.Neutral)
+            GhostButton(stringResource(R.string.settings_cancel), onClick = onCancel, tone = Tone.Neutral)
             Spacer(Modifier.weight(1f))
             PrimaryButton(confirmLabel, onClick = onConfirm, tone = confirmTone)
         }
@@ -1297,19 +1217,19 @@ internal fun PasscodeSetupPanel(
 
     CodePanel(
         title = when {
-            isChanging && step == 0 -> "Enter your current passcode"
-            step == 1 -> "Choose a new passcode"
-            else -> "Confirm the new passcode"
+            isChanging && step == 0 -> stringResource(R.string.settings_enter_your_current_passcode)
+            step == 1 -> stringResource(R.string.settings_choose_a_new_passcode)
+            else -> stringResource(R.string.settings_confirm_the_new_passcode)
         },
-        note = if (step == 1) "6 to 12 digits." else null,
+        note = if (step == 1) stringResource(R.string.settings_6_to_12_digits) else null,
         error = error,
         value = when (step) { 0 -> currentCode; 1 -> code1; else -> code2 },
-        fieldLabel = if (step == 0) "Current passcode" else "Digits",
+        fieldLabel = if (step == 0) stringResource(R.string.settings_current_passcode) else stringResource(R.string.settings_digits),
         onValueChange = { digits ->
             when (step) { 0 -> currentCode = digits; 1 -> code1 = digits; else -> code2 = digits }
             error = ""
         },
-        confirmLabel = if (step < 2) "Next" else "Save",
+        confirmLabel = if (step < 2) stringResource(R.string.settings_next) else stringResource(R.string.settings_save),
         confirmTone = Tone.Accent,
         onConfirm = {
             scope.launch {
@@ -1321,10 +1241,10 @@ internal fun PasscodeSetupPanel(
                         }
                         when (v) {
                             AppLock.Verdict.Accepted -> step = 1
-                            is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                            is AppLock.Verdict.LockedOut -> error = "Too many attempts. Try again later."
+                            is AppLock.Verdict.Rejected -> error = context.getString(R.string.settings_wrong_passcode)
+                            is AppLock.Verdict.LockedOut -> error = context.getString(R.string.settings_too_many_attempts_try_again_later)
                             AppLock.Verdict.Wiping -> onCancel()
-                            is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                            is AppLock.Verdict.Unavailable -> error = context.getString(R.string.settings_keystore_unavailable)
                         }
                     }
                     1 -> {
@@ -1332,14 +1252,14 @@ internal fun PasscodeSetupPanel(
                         step = 2
                     }
                     2 -> {
-                        if (code1 != code2) { error = "Those passcodes don't match"; return@launch }
+                        if (code1 != code2) { error = context.getString(R.string.settings_those_passcodes_dont_match); return@launch }
                         val r = withContext(Dispatchers.IO) {
                             AppLock.setPasscode(context, code1)
                         }
                         r.onSuccess {
                             // A first passcode never arms a wipe by itself: the owner picks.
                             if (AppLock.wipeChoiceConfirmed(context)) onDone() else choosingWipe = true
-                        }.onFailure { error = it.message ?: "Couldn't save the passcode" }
+                        }.onFailure { error = it.message ?: context.getString(R.string.settings_couldnt_save_the_passcode) }
                     }
                 }
             }
@@ -1359,13 +1279,13 @@ private fun PasscodeDisablePanel(
     val scope = rememberCoroutineScope()
 
     CodePanel(
-        title = "Enter your passcode to turn the lock off",
+        title = stringResource(R.string.settings_enter_your_passcode_to_turn_the),
         note = null,
         error = error,
         value = code,
-        fieldLabel = "Current passcode",
+        fieldLabel = stringResource(R.string.settings_current_passcode),
         onValueChange = { code = it; error = "" },
-        confirmLabel = "Turn off",
+        confirmLabel = stringResource(R.string.settings_turn_off),
         confirmTone = Tone.Danger,
         onConfirm = {
             scope.launch {
@@ -1377,10 +1297,10 @@ private fun PasscodeDisablePanel(
                         withContext(Dispatchers.IO) { AppLock.disable(context) }
                         onDone()
                     }
-                    is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                    is AppLock.Verdict.LockedOut -> error = "Too many attempts. Try again later."
+                    is AppLock.Verdict.Rejected -> error = context.getString(R.string.settings_wrong_passcode)
+                    is AppLock.Verdict.LockedOut -> error = context.getString(R.string.settings_too_many_attempts_try_again_later)
                     AppLock.Verdict.Wiping -> onCancel()
-                    is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                    is AppLock.Verdict.Unavailable -> error = context.getString(R.string.settings_keystore_unavailable)
                 }
             }
         },
@@ -1404,19 +1324,19 @@ private fun DuressSetupPanel(
 
     CodePanel(
         title = when (step) {
-            0 -> "Confirm your passcode"
-            1 -> "Choose a duress code"
-            else -> "Confirm the duress code"
+            0 -> stringResource(R.string.settings_confirm_your_passcode)
+            1 -> stringResource(R.string.settings_choose_a_duress_code)
+            else -> stringResource(R.string.settings_confirm_the_duress_code)
         },
-        note = if (step != 0) "6 to 12 digits, different from your passcode. Entering it quietly wipes Clairix." else null,
+        note = if (step != 0) stringResource(R.string.settings_6_to_12_digits_different_from) else null,
         error = error,
         value = when (step) { 0 -> currentCode; 1 -> code1; else -> code2 },
-        fieldLabel = if (step == 0) "Current passcode" else "Digits",
+        fieldLabel = if (step == 0) stringResource(R.string.settings_current_passcode) else stringResource(R.string.settings_digits),
         onValueChange = { digits ->
             when (step) { 0 -> currentCode = digits; 1 -> code1 = digits; else -> code2 = digits }
             error = ""
         },
-        confirmLabel = if (step < 2) "Next" else "Save",
+        confirmLabel = if (step < 2) stringResource(R.string.settings_next) else stringResource(R.string.settings_save),
         confirmTone = Tone.Accent,
         onConfirm = {
             scope.launch {
@@ -1428,10 +1348,10 @@ private fun DuressSetupPanel(
                         }
                         when (v) {
                             AppLock.Verdict.Accepted -> step = 1
-                            is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                            is AppLock.Verdict.LockedOut -> error = "Too many attempts. Try again later."
+                            is AppLock.Verdict.Rejected -> error = context.getString(R.string.settings_wrong_passcode)
+                            is AppLock.Verdict.LockedOut -> error = context.getString(R.string.settings_too_many_attempts_try_again_later)
                             AppLock.Verdict.Wiping -> onCancel()
-                            is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                            is AppLock.Verdict.Unavailable -> error = context.getString(R.string.settings_keystore_unavailable)
                         }
                     }
                     1 -> {
@@ -1439,11 +1359,11 @@ private fun DuressSetupPanel(
                         step = 2
                     }
                     else -> {
-                        if (code1 != code2) { error = "Those codes don't match"; return@launch }
+                        if (code1 != code2) { error = context.getString(R.string.settings_those_codes_dont_match); return@launch }
                         val r = withContext(Dispatchers.IO) {
                             AppLock.setDuress(context, code1)
                         }
-                        r.onSuccess { onDone() }.onFailure { error = it.message ?: "Couldn't save the duress code" }
+                        r.onSuccess { onDone() }.onFailure { error = it.message ?: context.getString(R.string.settings_couldnt_save_the_duress_code) }
                     }
                 }
             }
@@ -1463,13 +1383,13 @@ private fun DuressRemovePanel(
     val scope = rememberCoroutineScope()
 
     CodePanel(
-        title = "Enter your passcode to remove the duress code",
+        title = stringResource(R.string.settings_enter_your_passcode_to_remove_the),
         note = null,
         error = error,
         value = code,
-        fieldLabel = "Passcode",
+        fieldLabel = stringResource(R.string.settings_passcode),
         onValueChange = { code = it; error = "" },
-        confirmLabel = "Remove",
+        confirmLabel = stringResource(R.string.settings_remove),
         confirmTone = Tone.Danger,
         onConfirm = {
             scope.launch {
@@ -1481,10 +1401,10 @@ private fun DuressRemovePanel(
                         withContext(Dispatchers.IO) { AppLock.setDuress(context, null) }
                         onDone()
                     }
-                    is AppLock.Verdict.Rejected -> error = "Wrong passcode"
-                    is AppLock.Verdict.LockedOut -> error = "Too many attempts. Try again later."
+                    is AppLock.Verdict.Rejected -> error = context.getString(R.string.settings_wrong_passcode)
+                    is AppLock.Verdict.LockedOut -> error = context.getString(R.string.settings_too_many_attempts_try_again_later)
                     AppLock.Verdict.Wiping -> onCancel()
-                    is AppLock.Verdict.Unavailable -> error = "Keystore unavailable"
+                    is AppLock.Verdict.Unavailable -> error = context.getString(R.string.settings_keystore_unavailable)
                 }
             }
         },

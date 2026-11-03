@@ -552,6 +552,9 @@ android {
     testOptions {
         // android.util.Log and friends return defaults on the JVM instead of throwing.
         unitTests.isReturnDefaultValues = true
+        // The app's merged resources, so the Robolectric tests of the text the screens
+        // show (BatteryTextTest and the like) read the real strings.xml.
+        unitTests.isIncludeAndroidResources = true
     }
 
     // Android Lint, run by .github/workflows/android.yml (lintFullSuiteDebug):

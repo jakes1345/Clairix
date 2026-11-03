@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.clairix.ui.components.GhostButton
 import app.clairix.ui.components.Hairline
@@ -51,11 +52,9 @@ internal fun CrashReportSection() {
 
     Hairline(Modifier.padding(vertical = 4.dp))
     crash?.let { last ->
-        Text("Clairix crashed last time", style = MaterialTheme.typography.titleSmall, color = c.text)
+        Text(stringResource(R.string.settings_clairix_crashed_last_time), style = MaterialTheme.typography.titleSmall, color = c.text)
         Text(
-            "On ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(last.ts))}. " +
-                "What is kept is the error's stack trace, the app version, the phone model and the Android version: " +
-                "no messages, no places, nothing that identifies you. It stays on this phone unless you send it.",
+            stringResource(R.string.settings_on_what_is_kept_is_the, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(last.ts))),
             style = MaterialTheme.typography.bodyMedium,
             color = c.textSubtle
         )
@@ -65,19 +64,19 @@ internal fun CrashReportSection() {
             color = c.textMuted
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GhostButton("Copy", onClick = { clipboard.setSensitiveText("Clairix crash", last.asText()) }, tone = Tone.Neutral)
+            GhostButton(stringResource(R.string.settings_copy), onClick = { clipboard.setSensitiveText(context.getString(R.string.settings_clairix_crash), last.asText()) }, tone = Tone.Neutral)
             GhostButton(
-                "Share",
+                stringResource(R.string.settings_share),
                 onClick = {
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain")
                         .putExtra(Intent.EXTRA_SUBJECT, CrashJournal.reportSubject(last.version, last.model, last.sdk))
                         .putExtra(Intent.EXTRA_TEXT, last.asText())
-                    runCatching { context.startActivity(Intent.createChooser(send, "Share crash").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    runCatching { context.startActivity(Intent.createChooser(send, context.getString(R.string.settings_share_crash)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 },
                 tone = Tone.Neutral
             )
             GhostButton(
-                "Delete",
+                stringResource(R.string.settings_delete),
                 onClick = {
                     crash = null
                     scope.launch(Dispatchers.IO) { CrashJournal.delete(context) }
@@ -86,19 +85,18 @@ internal fun CrashReportSection() {
             )
         }
     }
-    Text("Report a problem", style = MaterialTheme.typography.titleSmall, color = c.text)
+    Text(stringResource(R.string.settings_report_a_problem), style = MaterialTheme.typography.titleSmall, color = c.text)
     Text(
-        "Opens your mail app on a message to ${CrashJournal.SUPPORT_ADDRESS} with the app version, phone model and " +
-            "Android version filled in. You write the rest and decide whether to send it. Clairix sends nothing by itself.",
+        stringResource(R.string.settings_opens_your_mail_app_on_a, CrashJournal.SUPPORT_ADDRESS),
         style = MaterialTheme.typography.bodyMedium,
         color = c.textSubtle
     )
     SecondaryButton(
-        "Report a problem",
+        stringResource(R.string.settings_report_a_problem),
         onClick = {
             val opened = runCatching { context.startActivity(CrashJournal.reportIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             if (opened.isFailure) {
-                Toast.makeText(context, "No mail app on this phone. Write to ${CrashJournal.SUPPORT_ADDRESS}.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, context.getString(R.string.settings_no_mail_app_on_this_phone, CrashJournal.SUPPORT_ADDRESS), Toast.LENGTH_LONG).show()
             }
         },
         tone = Tone.Accent,
