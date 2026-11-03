@@ -567,6 +567,13 @@ android {
         abortOnError = true
         checkDependencies = true
         baseline = file("lint-baseline.xml")
+        // OldTargetApi compares targetSdk with the newest platform installed, not
+        // with what this toolchain can build. GitHub's runner image carries API 37,
+        // but Android Gradle plugin 8.x stops at 36 (37 needs 9.x, as does
+        // sqlcipher-android 4.18; see the dependency below). So the reminder is
+        // shown in every report without failing it; take this line out with the
+        // move to AGP 9 and targetSdk 37.
+        informational += "OldTargetApi"
     }
 
     sourceSets {
