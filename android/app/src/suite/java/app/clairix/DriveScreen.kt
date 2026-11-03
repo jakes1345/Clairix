@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -250,9 +251,8 @@ internal fun DriveContent(
             ) {
                 if (lowBattery) Notice(
                     Tone.Caution,
-                    "The battery is below ${DrivePower.CUTOFF_PCT} % and not charging, so the radio stick and the " +
-                        "OBD-II adapter are off. They start again once the phone charges. Navigation keeps going.",
-                    title = "Battery low"
+                    stringResource(R.string.drive_the_battery_is_below_and_not, DrivePower.CUTOFF_PCT),
+                    title = stringResource(R.string.drive_battery_low)
                 )
                 if (showRadio && driveModeActive) RadioStickNotice(radio = radio, sdrState = sdrState, onReconnect = onReconnect)
                 if (showRadio) ScannerCard(
@@ -299,15 +299,13 @@ internal fun DriveContent(
             // What drive mode costs, said where it is switched on.
             Text(
                 style = MaterialTheme.typography.bodySmall,
-                text = "Drive mode keeps the radio stick streaming and the OBD-II adapter polled, screen off or not. " +
-                    "The stick runs on the phone's battery through the USB port, so plug the phone in for long drives. " +
-                    "Below ${DrivePower.CUTOFF_PCT} % with no charger, both stop until it charges.",
+                text = stringResource(R.string.drive_drive_mode_keeps_the_radio_stick, DrivePower.CUTOFF_PCT),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 12.dp, end = 88.dp, top = 8.dp)
             )
             // Clear of the SOS button in the bottom end corner.
             ClairixButton(
-                if (driveModeActive) "Turn off drive mode" else "Turn on drive mode",
+                if (driveModeActive) stringResource(R.string.drive_turn_off_drive_mode) else stringResource(R.string.drive_turn_on_drive_mode),
                 onClick = { if (driveModeActive) onToggleDriveMode() else afterRadioNotice(onToggleDriveMode) },
                 kind = if (driveModeActive) ButtonKind.Secondary else ButtonKind.Primary,
                 tone = if (driveModeActive) Tone.Danger else Tone.Accent,
@@ -350,15 +348,14 @@ internal fun DriveContent(
 private fun RadioNoticeDialog(onAccept: () -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     ClairixDialog(
-        title = "Before you listen",
+        title = stringResource(R.string.drive_before_you_listen),
         onDismiss = onDismiss,
-        confirmLabel = "I understand",
+        confirmLabel = stringResource(R.string.drive_i_understand),
         onConfirm = onAccept,
-        text = "Receiving and recording radio traffic is restricted in some places and in some vehicles. " +
-            "Clairix cannot tell what is lawful where you are. Recording is off unless you turn it on."
+        text = stringResource(R.string.drive_receiving_and_recording_radio_traffic_is)
     ) {
         GhostButton(
-            "Read the terms",
+            stringResource(R.string.drive_read_the_terms),
             onClick = { openLink(context, Intent(Intent.ACTION_VIEW, Uri.parse(TERMS_URL)), "No app on this phone can open $TERMS_URL") }
         )
     }
@@ -367,24 +364,23 @@ private fun RadioNoticeDialog(onAccept: () -> Unit, onDismiss: () -> Unit) {
 /** What happened to the stick while drive mode is on, and the way back. */
 @Composable
 private fun RadioStickNotice(radio: DriveLink.Radio, sdrState: SdrState, onReconnect: () -> Unit) {
-    val reconnect: @Composable () -> Unit = { SecondaryButton("Reconnect", onClick = onReconnect, tone = Tone.Accent) }
+    val reconnect: @Composable () -> Unit = { SecondaryButton(stringResource(R.string.drive_reconnect), onClick = onReconnect, tone = Tone.Accent) }
     when {
         radio == DriveLink.Radio.UNPLUGGED -> Notice(
             Tone.Caution,
-            "The radio stick was unplugged, so the radio stopped and its aircraft were cleared. Plug it back in and " +
-                "it starts again on its own.",
-            title = "Radio stick unplugged"
+            stringResource(R.string.drive_the_radio_stick_was_unplugged_so),
+            title = stringResource(R.string.drive_radio_stick_unplugged)
         )
         radio == DriveLink.Radio.NEEDS_PERMISSION -> Notice(
             Tone.Caution,
-            "The radio stick is plugged in, but Android has not yet allowed Clairix to use it. Reconnect asks for that.",
-            title = "Radio stick plugged in",
+            stringResource(R.string.drive_the_radio_stick_is_plugged_in),
+            title = stringResource(R.string.drive_radio_stick_plugged_in),
             action = reconnect
         )
         radio == DriveLink.Radio.ON && sdrState is SdrState.Error -> Notice(
             Tone.Caution,
-            "The radio stopped: ${sdrState.msg}. Check the stick and its cable, then reconnect.",
-            title = "Radio stopped",
+            stringResource(R.string.drive_the_radio_stopped_check_the_stick, sdrState.msg),
+            title = stringResource(R.string.drive_radio_stopped),
             action = reconnect
         )
         else -> Unit
@@ -418,7 +414,7 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState, radio: DriveLink.Radi
             val mph = obd.speedKph?.let { (it * KPH_TO_MPH).roundToInt() }
             Text(
                 style = MaterialTheme.typography.bodyMedium,
-                text = if (mph != null) "$mph mph" else "-- mph",
+                text = if (mph != null) "$mph mph" else stringResource(R.string.drive_mph),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -438,7 +434,7 @@ private fun StatusBarRow(obd: ObdData, sdrState: SdrState, radio: DriveLink.Radi
             Spacer(Modifier.width(6.dp))
             Text(
                 style = MaterialTheme.typography.bodyMedium,
-                text = if (obd.connected) obd.deviceName ?: "OBD" else "No OBD",
+                text = if (obd.connected) obd.deviceName ?: "OBD" else stringResource(R.string.drive_no_obd),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onBackground
@@ -465,27 +461,27 @@ private fun SdrIndicator(state: SdrState, radio: DriveLink.Radio) {
         radio == DriveLink.Radio.LOW_BATTERY -> {
             dotColor = caution
             dotAlpha = 1f
-            label = "Paused: battery low"
+            label = stringResource(R.string.drive_paused_battery_low)
         }
         radio == DriveLink.Radio.UNPLUGGED -> {
             dotColor = bad
             dotAlpha = 1f
-            label = "Stick unplugged"
+            label = stringResource(R.string.drive_stick_unplugged)
         }
         radio == DriveLink.Radio.NEEDS_PERMISSION -> {
             dotColor = caution
             dotAlpha = 1f
-            label = "Stick needs permission"
+            label = stringResource(R.string.drive_stick_needs_permission)
         }
         state is SdrState.Ready -> {
             dotColor = ok
             dotAlpha = 1f
-            label = "SDR Ready"
+            label = stringResource(R.string.drive_sdr_ready)
         }
         state is SdrState.Opening -> {
             dotColor = caution
             dotAlpha = pulse.value
-            label = "Opening…"
+            label = stringResource(R.string.scan_opening)
         }
         state is SdrState.Error -> {
             dotColor = bad
@@ -495,7 +491,7 @@ private fun SdrIndicator(state: SdrState, radio: DriveLink.Radio) {
         else -> {
             dotColor = bad
             dotAlpha = 1f
-            label = "SDR Closed"
+            label = stringResource(R.string.drive_sdr_closed)
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -580,7 +576,7 @@ private fun ScannerCard(
     onDeleteAllLegacy: () -> Unit
 ) {
     ClairixCard(contentPadding = PaddingValues(0.dp), spacing = 0.dp) {
-        CardHeader(title = "Scanner", expanded = expanded, onToggle = onToggle) {
+        CardHeader(title = stringResource(R.string.drive_scanner), expanded = expanded, onToggle = onToggle) {
             if (isRecording) {
                 val pulse = rememberInfiniteTransition(label = "recPulse").animateFloat(
                     initialValue = 0.25f,
@@ -633,7 +629,7 @@ private fun ScannerCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         style = MaterialTheme.typography.bodyMedium,
-                        text = "Squelch",
+                        text = stringResource(R.string.drive_squelch),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Slider(
@@ -650,12 +646,10 @@ private fun ScannerCard(
                     )
                 }
                 ToggleRow(
-                    title = "Record transmissions",
+                    title = stringResource(R.string.drive_record_transmissions),
                     checked = recordingEnabled,
                     onCheckedChange = onSetRecording,
-                    subtitle = "Turns itself off when drive mode ends. Each transmission that opens the squelch is " +
-                        "saved encrypted on this phone: at most 10 minutes each and 256 MB in all, the oldest deleted " +
-                        "first, and deleted with your history (Settings, Keep history for)."
+                    subtitle = stringResource(R.string.drive_turns_itself_off_when_drive_mode)
                 )
                 RecordingList(
                     recordings = recordings,
@@ -695,21 +689,21 @@ private fun RecordingList(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 style = MaterialTheme.typography.titleSmall,
-                text = "Recordings (${recordings.size}, ${formatMegabytes(recordings.sumOf { it.bytes })})",
+                text = stringResource(R.string.drive_recordings, recordings.size, formatMegabytes(recordings.sumOf { it.bytes })),
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
             )
-            GhostButton("Delete all", onClick = { confirmAll = true }, tone = Tone.Danger)
+            GhostButton(stringResource(R.string.drive_delete_all), onClick = { confirmAll = true }, tone = Tone.Danger)
         }
         recordings.forEach { r ->
             RecordingRow(
-                title = if (r.readable) "${formatWhen(r.startedAt)} · ${formatMhz(r.freqHz)}" else "A recording that will not open",
+                title = if (r.readable) "${formatWhen(r.startedAt)} · ${formatMhz(r.freqHz)}" else stringResource(R.string.drive_a_recording_that_will_not_open),
                 detail = when {
-                    !r.readable -> "Damaged; it can only be deleted"
+                    !r.readable -> stringResource(R.string.drive_damaged_it_can_only_be_deleted)
                     else -> listOfNotNull(
                         r.channel.takeIf { it.isNotBlank() },
                         formatDuration(r.durationMs),
-                        if (r.complete) null else "cut short"
+                        if (r.complete) null else stringResource(R.string.drive_cut_short)
                     ).joinToString(" · ")
                 },
                 playing = playing == r.id,
@@ -722,15 +716,15 @@ private fun RecordingList(
     }
     if (confirmAll) {
         ClairixDialog(
-            title = "Delete every recording?",
+            title = stringResource(R.string.drive_delete_every_recording),
             onDismiss = { confirmAll = false },
-            confirmLabel = "Delete all",
+            confirmLabel = stringResource(R.string.drive_delete_all),
             confirmTone = Tone.Danger,
             onConfirm = {
                 confirmAll = false
                 onDeleteAll()
             },
-            text = "${recordings.size} recordings are deleted from this phone. There is no undo."
+            text = stringResource(R.string.drive_recordings_are_deleted_from_this_phone, recordings.size)
         )
     }
 }
@@ -753,15 +747,12 @@ private fun LegacyRecordings(
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Notice(
             Tone.Caution,
-            "${legacy.size} recordings from an earlier version (${formatMegabytes(legacy.sumOf { it.bytes })}) are " +
-                "stored unencrypted in the app's storage, where anyone with a copy of the phone's files can play them. " +
-                "Encrypt moves them into the list above, as many as fit in the 256 MB kept for recordings, and from " +
-                "then on they are kept like new ones. Nothing happens to them until you choose.",
-            title = "Unencrypted recordings",
+            stringResource(R.string.drive_recordings_from_an_earlier_version_are, legacy.size, formatMegabytes(legacy.sumOf { it.bytes })),
+            title = stringResource(R.string.drive_unencrypted_recordings),
             action = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SecondaryButton("Encrypt", onClick = onImport, tone = Tone.Accent)
-                    GhostButton("Delete them", onClick = { confirmAll = true }, tone = Tone.Danger)
+                    SecondaryButton(stringResource(R.string.drive_encrypt), onClick = onImport, tone = Tone.Accent)
+                    GhostButton(stringResource(R.string.drive_delete_them), onClick = { confirmAll = true }, tone = Tone.Danger)
                 }
             }
         )
@@ -769,7 +760,7 @@ private fun LegacyRecordings(
             val key = r.file.absolutePath
             RecordingRow(
                 title = "${formatWhen(r.startedAt)} · ${formatMhz(r.freqHz)}",
-                detail = "${formatDuration(r.bytes * 1000 / (ScannerRecordings.LEGACY_SAMPLE_RATE * 2L))} · unencrypted",
+                detail = stringResource(R.string.drive_unencrypted, formatDuration(r.bytes * 1000 / (ScannerRecordings.LEGACY_SAMPLE_RATE * 2L))),
                 playing = playing == key,
                 canPlay = true,
                 onPlay = { onPlay(key) },
@@ -780,15 +771,15 @@ private fun LegacyRecordings(
     }
     if (confirmAll) {
         ClairixDialog(
-            title = "Delete the unencrypted recordings?",
+            title = stringResource(R.string.drive_delete_the_unencrypted_recordings),
             onDismiss = { confirmAll = false },
-            confirmLabel = "Delete them",
+            confirmLabel = stringResource(R.string.drive_delete_them),
             confirmTone = Tone.Danger,
             onConfirm = {
                 confirmAll = false
                 onDeleteAll()
             },
-            text = "${legacy.size} recordings from an earlier version are deleted from this phone. There is no undo."
+            text = stringResource(R.string.drive_recordings_from_an_earlier_version_are_2, legacy.size)
         )
     }
 }
@@ -820,8 +811,8 @@ private fun RecordingRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        if (canPlay) GhostButton(if (playing) "Stop" else "Play", onClick = if (playing) onStop else onPlay)
-        GhostButton("Delete", onClick = onDelete, tone = Tone.Danger)
+        if (canPlay) GhostButton(if (playing) stringResource(R.string.comms_stop) else stringResource(R.string.comms_play), onClick = if (playing) onStop else onPlay)
+        GhostButton(stringResource(R.string.settings_delete), onClick = onDelete, tone = Tone.Danger)
     }
 }
 
@@ -830,7 +821,7 @@ private fun ActiveChannelDisplay(channel: ScannerChannel?) {
     if (channel == null) {
         Text(
             style = MaterialTheme.typography.bodyLarge,
-            text = "No active channel",
+            text = stringResource(R.string.drive_no_active_channel),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         return
@@ -907,7 +898,7 @@ private fun ChannelList(
     if (channels.isEmpty()) {
         Text(
             style = MaterialTheme.typography.bodyMedium,
-            text = "No channels saved",
+            text = stringResource(R.string.drive_no_channels_saved),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         return
@@ -940,7 +931,7 @@ private fun ChannelList(
                     ) {
                         Text(
                             style = MaterialTheme.typography.titleSmall,
-                            text = "Delete",
+                            text = stringResource(R.string.settings_delete),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
                     }
@@ -986,7 +977,7 @@ private fun AdsbCard(
 ) {
     val anyEmergency = aircraft.any { it.isEmergency }
     ClairixCard(contentPadding = PaddingValues(0.dp), spacing = 0.dp) {
-        CardHeader(title = "Aircraft", expanded = expanded, onToggle = onToggle) {
+        CardHeader(title = stringResource(R.string.drive_aircraft), expanded = expanded, onToggle = onToggle) {
             Box(
                 modifier = Modifier
                     .clip(CircleShape)
@@ -1020,12 +1011,12 @@ private fun AdsbCard(
                     ) {
                         Text(
                             style = MaterialTheme.typography.bodyLarge,
-                            text = "No aircraft detected",
+                            text = stringResource(R.string.drive_no_aircraft_detected),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             style = MaterialTheme.typography.bodyMedium,
-                            text = "SDR must be on 1090 MHz",
+                            text = stringResource(R.string.drive_sdr_must_be_on_1090_mhz),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -1098,13 +1089,13 @@ private fun AircraftRow(plane: Aircraft) {
         }
         Text(
             style = MaterialTheme.typography.monoSmall,
-            text = plane.altitudeFt?.let { "$it ft" } ?: "-- ft",
+            text = plane.altitudeFt?.let { "$it ft" } ?: stringResource(R.string.drive_ft),
             color = dimColor,
             modifier = Modifier.padding(horizontal = 6.dp)
         )
         Text(
             style = MaterialTheme.typography.monoSmall,
-            text = plane.speedKts?.let { "$it kts" } ?: "-- kts",
+            text = plane.speedKts?.let { "$it kts" } ?: stringResource(R.string.drive_kts),
             color = dimColor,
             modifier = Modifier.padding(horizontal = 6.dp)
         )
@@ -1135,9 +1126,9 @@ private fun ObdCard(
             Text(
                 style = MaterialTheme.typography.bodyMedium,
                 text = when {
-                    obd.connected -> obd.deviceName ?: "Connected"
-                    paused -> "Paused: battery low"
-                    else -> "Not connected"
+                    obd.connected -> obd.deviceName ?: stringResource(R.string.scan_connected)
+                    paused -> stringResource(R.string.drive_paused_battery_low)
+                    else -> stringResource(R.string.scan_not_connected)
                 },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1159,7 +1150,7 @@ private fun ObdCard(
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             style = MaterialTheme.typography.bodyMedium,
-                            text = "Throttle",
+                            text = stringResource(R.string.drive_throttle),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.weight(1f))
@@ -1197,9 +1188,9 @@ private fun ObdCard(
                 }
 
                 if (obd.connected) {
-                    GhostButton("Disconnect", onClick = onDisconnect)
+                    GhostButton(stringResource(R.string.drive_disconnect), onClick = onDisconnect)
                 } else {
-                    SecondaryButton("Connect OBD", onClick = onConnect)
+                    SecondaryButton(stringResource(R.string.drive_connect_obd), onClick = onConnect)
                 }
             }
         }
@@ -1247,7 +1238,7 @@ private fun CoolantRow(tempC: Int?) {
         Spacer(Modifier.width(10.dp))
         Text(
             style = MaterialTheme.typography.bodyMedium,
-            text = "Coolant",
+            text = stringResource(R.string.drive_coolant),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.weight(1f))
@@ -1275,13 +1266,13 @@ private fun AddChannelDialog(
         onDismissRequest = onDismiss,
         shape = ClairixShapes.Sheet,
         containerColor = ClairixTheme.colors.surfaceRaised,
-        title = { Text("Add channel") },
+        title = { Text(stringResource(R.string.drive_add_channel)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Channel name") },
+                    label = { Text(stringResource(R.string.drive_channel_name)) },
                     singleLine = true
                 )
                 OutlinedTextField(
@@ -1306,7 +1297,7 @@ private fun AddChannelDialog(
             )
         },
         dismissButton = {
-            GhostButton("Cancel", onClick = onDismiss)
+            GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss)
         }
     )
 }

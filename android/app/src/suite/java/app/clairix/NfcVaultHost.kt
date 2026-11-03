@@ -548,7 +548,7 @@ internal class NfcVaultHost(private val activity: AppCompatActivity) : NfcHost {
             .setAllowedAuthenticators(VAULT_AUTHENTICATORS)
             .build()
         runCatching { prompt.authenticate(info) }
-            .onFailure { fail("Could not show the ${title.lowercase(Locale.US)} prompt: ${it.message}") }
+            .onFailure { fail("Could not show the ${title.lowercase(Locale.US)} prompt: ${it.message.toString()}") }
     }
 
     private fun toast(message: String) {

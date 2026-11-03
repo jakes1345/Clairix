@@ -1,5 +1,6 @@
 package app.clairix.nav
 
+import androidx.compose.ui.res.stringResource
 import app.clairix.ui.theme.MapPalette
 import app.clairix.ui.components.*
 import app.clairix.ui.theme.ClairixTheme
@@ -341,20 +342,20 @@ private fun NavMapLayer(
             when (gnss.verdict) {
                 app.clairix.analysis.GnssVerdict.SPOOFED -> app.clairix.ui.components.Notice(
                     app.clairix.ui.components.Tone.Danger,
-                    "The satellite signals are not coming from satellites. The position on this map, and the directions, may be false. Navigate by road signs until this clears.",
-                    title = "GPS looks spoofed"
+                    stringResource(R.string.drive_the_satellite_signals_are_not_coming),
+                    title = stringResource(R.string.drive_gps_looks_spoofed)
                 )
                 app.clairix.analysis.GnssVerdict.JAMMED -> app.clairix.ui.components.Notice(
                     app.clairix.ui.components.Tone.Danger,
-                    "Something is drowning out the satellites here. The position will not update until you are clear of it.",
-                    title = "GPS looks jammed"
+                    stringResource(R.string.drive_something_is_drowning_out_the_satellites),
+                    title = stringResource(R.string.drive_gps_looks_jammed)
                 )
                 else -> {}
             }
-            TilesUnavailableNotice("Routes and directions come from the downloaded map and still work.")
+            TilesUnavailableNotice(stringResource(R.string.drive_routes_and_directions_come_from_the))
             when {
                 nav != null -> ManeuverBanner(nav)
-                navState is NavState.Routing -> StatusCard("Finding your route…", busy = true, onCancel = vm::stopNavigation)
+                navState is NavState.Routing -> StatusCard(stringResource(R.string.drive_finding_your_route), busy = true, onCancel = vm::stopNavigation)
                 else -> {
                     // A newer build of the map in use: one line, and the way to it.
                     updates[graph.region]?.let { newer -> MapUpdateBanner(regionName, newer, onShowRegions) }
@@ -384,7 +385,7 @@ private fun NavMapLayer(
                 FilledTonalButton(
                     onClick = { following = true },
                     modifier = Modifier.padding(start = 8.dp),
-                ) { Text("Re-center") }
+                ) { Text(stringResource(R.string.drive_re_center)) }
             }
             // The data credit the licence asks for: on the map, above whatever
             // panel is open, clear of the SOS button.
@@ -749,7 +750,7 @@ private fun MapUpdateBanner(regionName: String, newer: PublishedGraph, onShowReg
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            GhostButton("Update", onClick = onShowRegions)
+            GhostButton(stringResource(R.string.drive_update), onClick = onShowRegions)
         }
     }
 }
@@ -774,15 +775,15 @@ private fun SearchBar(
                 onValueChange = onQuery,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                placeholder = { Text("Search for a place or address") },
+                placeholder = { Text(stringResource(R.string.drive_search_for_a_place_or_address)) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focus.clearFocus(); onSubmit() }),
                 trailingIcon = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (state.query.isNotEmpty()) {
-                            GhostButton("Clear", onClick = { focus.clearFocus(); onClear() })
+                            GhostButton(stringResource(R.string.comms_clear), onClick = { focus.clearFocus(); onClear() })
                         }
-                        GhostButton("Go", onClick = { focus.clearFocus(); onSubmit() }, enabled = state.query.isNotBlank())
+                        GhostButton(stringResource(R.string.drive_go), onClick = { focus.clearFocus(); onSubmit() }, enabled = state.query.isNotBlank())
                     }
                 },
             )
@@ -792,12 +793,12 @@ private fun SearchBar(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "Long-press the map to drop a pin",
+                    stringResource(R.string.drive_long_press_the_map_to_drop),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 // A newer build of this map has been published: say so where the maps are picked.
-                GhostButton(if (updateAvailable) "$regionName map · update" else "$regionName map", onClick = onShowRegions)
+                GhostButton(if (updateAvailable) stringResource(R.string.drive_map_update, regionName) else "$regionName map", onClick = onShowRegions)
             }
         }
     }
@@ -818,9 +819,9 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Search online instead", style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.drive_search_online_instead), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Sends what you typed, and your IP address, to OpenStreetMap. Finds addresses and places, not only roads.",
+                            stringResource(R.string.drive_sends_what_you_typed_and_your),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -856,10 +857,10 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
                 // Nominatim's usage policy asks for the data credit wherever its results are shown.
                 val context = LocalContext.current
                 Text(
-                    "Results © OpenStreetMap contributors (Nominatim)",
+                    stringResource(R.string.drive_results_openstreetmap_contributors_nominatim),
                     Modifier
                         .fillMaxWidth()
-                        .clickable(onClickLabel = "Open the map data licence") { openLink(context, TileConfig.OSM_COPYRIGHT_URL) }
+                        .clickable(onClickLabel = stringResource(R.string.drive_open_the_map_data_licence)) { openLink(context, TileConfig.OSM_COPYRIGHT_URL) }
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -873,8 +874,8 @@ private fun SearchResults(state: SearchState, here: Location?, onPick: (Place) -
 private fun PermissionCard(onRequest: () -> Unit) {
     Notice(
         Tone.Caution,
-        "Navigation needs your precise location to plan routes and follow your drive.",
-        action = { PrimaryButton("Allow location", onClick = onRequest) }
+        stringResource(R.string.drive_navigation_needs_your_precise_location_to),
+        action = { PrimaryButton(stringResource(R.string.drive_allow_location), onClick = onRequest) }
     )
 }
 
@@ -887,7 +888,7 @@ private fun StatusCard(text: String, busy: Boolean, onCancel: (() -> Unit)?) {
                 Spacer(Modifier.width(12.dp))
             }
             Text(text, Modifier.weight(1f))
-            if (onCancel != null) GhostButton("Cancel", onClick = onCancel)
+            if (onCancel != null) GhostButton(stringResource(R.string.settings_cancel), onClick = onCancel)
         }
     }
 }
@@ -937,7 +938,7 @@ private fun RouteOptionsSheet(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                GhostButton("Close", onClick = onClose)
+                GhostButton(stringResource(R.string.comms_close), onClick = onClose)
             }
             if (options.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 4.dp))
             options.error?.let {
@@ -979,27 +980,27 @@ private fun RouteOptionsSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    String.format(Locale.US, "Fuel at $%.2f/gal", fuelPricePerGal),
+                    String.format(Locale.US, stringResource(R.string.drive_fuel_at_2f_gal), fuelPricePerGal),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                GhostButton("Change", onClick = onEditFuel)
+                GhostButton(stringResource(R.string.settings_change), onClick = onEditFuel)
             }
             CameraToggleRow(
-                title = "Route around known plate readers",
+                title = stringResource(R.string.drive_route_around_known_plate_readers),
                 checked = avoidCameras,
                 onChange = onAvoidCameras,
             )
             CameraToggleRow(
-                title = "Say when one is ahead",
+                title = stringResource(R.string.drive_say_when_one_is_ahead),
                 checked = warnCameras,
                 onChange = onWarnCameras,
             )
             Text(
                 when (val st = cameraStatus) {
-                    is CameraFeed.Status.Loaded -> "${st.count} plate readers known in this map, from OpenStreetMap. Only what has been mapped: an unmapped camera is not avoided."
-                    CameraFeed.Status.NotPublished -> "No plate-reader list has been published for this map yet."
-                    CameraFeed.Status.Unknown -> "The plate-reader list for this map has not been fetched yet."
+                    is CameraFeed.Status.Loaded -> stringResource(R.string.drive_plate_readers_known_in_this_map, st.count)
+                    CameraFeed.Status.NotPublished -> stringResource(R.string.drive_no_plate_reader_list_has_been)
+                    CameraFeed.Status.Unknown -> stringResource(R.string.drive_the_plate_reader_list_for_this)
                 },
                 Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
                 style = MaterialTheme.typography.bodySmall,
@@ -1015,7 +1016,7 @@ private fun RouteOptionsSheet(
             )
             // What leaves the phone for traffic, said where a drive is started (gap audit item 8).
             CameraToggleRow(
-                title = "Share traffic data",
+                title = stringResource(R.string.drive_share_traffic_data),
                 checked = shareTraffic,
                 onChange = onShareTraffic,
             )
@@ -1027,8 +1028,7 @@ private fun RouteOptionsSheet(
             )
             // What a drive costs, said where it is started.
             Text(
-                "Navigating keeps the GPS on once a second until you arrive. Below ${DrivePower.CUTOFF_PCT} % with " +
-                    "no charger, live traffic, speed reports and the check for a faster route slow to every 5 minutes.",
+                stringResource(R.string.drive_navigating_keeps_the_gps_on_once, DrivePower.CUTOFF_PCT),
                 Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1036,14 +1036,11 @@ private fun RouteOptionsSheet(
             if (voice == VoiceSource.NETWORK) {
                 Notice(
                     Tone.Caution,
-                    "This phone has no offline voice for its language. Clairix asks the speech engine not to use the " +
-                        "network, but whether it does is up to the engine: it may send what it reads out, street names " +
-                        "included, to its maker, or stay silent. Add an offline voice in Android's text-to-speech " +
-                        "settings, or mute directions while driving.",
+                    stringResource(R.string.drive_this_phone_has_no_offline_voice),
                     Modifier.padding(top = 8.dp, end = SOS_CLEARANCE),
-                    title = "Spoken directions may leave the phone",
+                    title = stringResource(R.string.drive_spoken_directions_may_leave_the_phone),
                     action = {
-                        GhostButton("Speech settings", onClick = {
+                        GhostButton(stringResource(R.string.drive_speech_settings), onClick = {
                             runCatching {
                                 context.startActivity(Intent(TTS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
@@ -1137,7 +1134,7 @@ private fun RouteCard(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    if (delayMin >= 1) "+$delayMin min traffic" else "No traffic delay",
+                    if (delayMin >= 1) stringResource(R.string.drive_min_traffic, delayMin) else stringResource(R.string.drive_no_traffic_delay),
                     style = MaterialTheme.typography.bodyMedium,
                     color = when {
                         delayMin >= 10 -> TRAFFIC_HEAVY
@@ -1147,9 +1144,9 @@ private fun RouteCard(
                 )
                 Text(
                     buildString {
-                        if (route.tollM >= 50) append("Tolls for ").append(fmtDistance(route.tollM)) else append("No tolls")
+                        if (route.tollM >= 50) append(stringResource(R.string.drive_tolls_for)).append(fmtDistance(route.tollM)) else append(stringResource(R.string.drive_no_tolls))
                         append(" · ")
-                        append(String.format(Locale.US, "%.2f gal (%.1f L) · $%.2f fuel", gallons, route.fuelLiters, cost))
+                        append(String.format(Locale.US, stringResource(R.string.drive_2f_gal_1f_l_2f_fuel), gallons, route.fuelLiters, cost))
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1157,10 +1154,10 @@ private fun RouteCard(
                 if (cameraStatus is CameraFeed.Status.Loaded) {
                     Text(
                         when {
-                            cameras == null -> "Plate readers not counted yet"
-                            cameras == 0 -> "Passes no known plate reader"
-                            cameras == 1 -> "Passes 1 known plate reader"
-                            else -> "Passes $cameras known plate readers"
+                            cameras == null -> stringResource(R.string.drive_plate_readers_not_counted_yet)
+                            cameras == 0 -> stringResource(R.string.drive_passes_no_known_plate_reader)
+                            cameras == 1 -> stringResource(R.string.drive_passes_1_known_plate_reader)
+                            else -> stringResource(R.string.drive_passes_known_plate_readers, cameras)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (cameras != null && cameras > 0) ClairixTheme.colors.danger else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1168,7 +1165,7 @@ private fun RouteCard(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            PrimaryButton("Go", onClick = onGo, tone = Tone.Safe, modifier = Modifier.heightIn(min = 56.dp))
+            PrimaryButton(stringResource(R.string.drive_go), onClick = onGo, tone = Tone.Safe, modifier = Modifier.heightIn(min = 56.dp))
         }
     }
 }
@@ -1182,19 +1179,19 @@ private fun FuelPriceDialog(current: Double, onSave: (Double) -> Unit, onDismiss
         onDismissRequest = onDismiss,
         shape = ClairixShapes.Sheet,
         containerColor = ClairixTheme.colors.surfaceRaised,
-        title = { Text("Fuel price") },
+        title = { Text(stringResource(R.string.drive_fuel_price)) },
         text = {
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                label = { Text("Dollars per gallon") },
+                label = { Text(stringResource(R.string.drive_dollars_per_gallon)) },
                 isError = !valid,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
         },
-        confirmButton = { GhostButton("Save", onClick = { if (valid) onSave(value!!) }, enabled = valid) },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss) },
+        confirmButton = { GhostButton(stringResource(R.string.settings_save), onClick = { if (valid) onSave(value!!) }, enabled = valid) },
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss) },
     )
 }
 
@@ -1220,7 +1217,7 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
                         style = MaterialTheme.typography.headlineLarge
                     )
                     Text(
-                        m?.instruction ?: "Continue to your destination",
+                        m?.instruction ?: stringResource(R.string.drive_continue_to_your_destination),
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
@@ -1229,10 +1226,10 @@ private fun ManeuverBanner(nav: NavState.Navigating) {
             }
             val camera = nav.camerasAhead.firstOrNull()?.takeIf { it.distanceM <= CAMERA_BANNER_M }
             when {
-                nav.rerouting -> BannerNote("Rerouting…")
-                nav.offRoute -> BannerNote("Off route")
-                camera != null -> BannerNote("Plate reader in ${fmtDistance(camera.distanceM)}")
-                nav.currentStreet != null -> BannerNote("On ${nav.currentStreet}")
+                nav.rerouting -> BannerNote(stringResource(R.string.drive_rerouting))
+                nav.offRoute -> BannerNote(stringResource(R.string.drive_off_route))
+                camera != null -> BannerNote(stringResource(R.string.drive_plate_reader_in, fmtDistance(camera.distanceM)))
+                nav.currentStreet != null -> BannerNote(stringResource(R.string.drive_on, nav.currentStreet))
             }
         }
     }
@@ -1272,7 +1269,7 @@ private fun NavBottomBar(
             }
             if (lowBattery) {
                 Text(
-                    "Battery low: traffic and reports every 5 minutes until the phone charges",
+                    stringResource(R.string.drive_battery_low_traffic_and_reports_every),
                     Modifier.padding(top = 4.dp, end = SOS_CLEARANCE),
                     style = MaterialTheme.typography.bodySmall,
                     color = ClairixTheme.colors.caution,
@@ -1283,9 +1280,9 @@ private fun NavBottomBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PrimaryButton("End", onClick = onEnd, tone = Tone.Danger)
-                SecondaryButton(if (muted) "Unmute" else "Mute", onClick = onMute)
-                SecondaryButton("Report", onClick = onReport, tone = Tone.Accent)
+                PrimaryButton(stringResource(R.string.safety_end), onClick = onEnd, tone = Tone.Danger)
+                SecondaryButton(if (muted) stringResource(R.string.comms_unmute) else stringResource(R.string.comms_mute), onClick = onMute)
+                SecondaryButton(stringResource(R.string.comms_report), onClick = onReport, tone = Tone.Accent)
             }
         }
     }
@@ -1347,11 +1344,11 @@ private fun IncidentPrompt(ahead: IncidentAhead, onVote: (Boolean) -> Unit, onDi
                     "${incidentLabel(ahead.incident.type)} in ${fmtDistance(ahead.distanceM)}",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Text("Still there?", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.drive_still_there), style = MaterialTheme.typography.bodyMedium)
             }
-            GhostButton("Yes", onClick = { onVote(true) })
-            GhostButton("No", onClick = { onVote(false) })
-            GhostButton("Skip", onClick = onDismiss)
+            GhostButton(stringResource(R.string.scan_yes), onClick = { onVote(true) })
+            GhostButton(stringResource(R.string.drive_no), onClick = { onVote(false) })
+            GhostButton(stringResource(R.string.shell_skip), onClick = onDismiss)
         }
     }
 }
@@ -1362,7 +1359,7 @@ private fun ReportDialog(onReport: (String) -> Unit, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         shape = ClairixShapes.Sheet,
         containerColor = ClairixTheme.colors.surfaceRaised,
-        title = { Text("Report") },
+        title = { Text(stringResource(R.string.comms_report)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 for (row in Incident.TYPES.chunked(3)) {
@@ -1386,14 +1383,14 @@ private fun ReportDialog(onReport: (String) -> Unit, onDismiss: () -> Unit) {
                     }
                 }
                 Text(
-                    "Reports go to your relay with your current position and are shared with other drivers.",
+                    stringResource(R.string.drive_reports_go_to_your_relay_with),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {},
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss) },
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss) },
     )
 }
 
@@ -1539,22 +1536,16 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
     ) {
         item {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Offline road map", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                if (onClose != null) GhostButton("Done", onClick = onClose)
+                Text(stringResource(R.string.drive_offline_road_map), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                if (onClose != null) GhostButton(stringResource(R.string.comms_done), onClick = onClose)
             }
             Text(
-                "Maps cover the United States only for now: the 50 states, DC and Puerto Rico. " +
-                    "Routes are planned on your phone from a road map of one state. Download your state once; " +
-                    "routing then works without a connection, and so does searching the map's road names; searching online " +
-                    "for an address or a place is a separate tap that sends the text to OpenStreetMap. Live traffic and reports use the network. " +
-                    "Large states are big downloads, so Wi-Fi is best; the size is shown before anything is downloaded.",
+                stringResource(R.string.drive_maps_cover_the_united_states_only),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "The map behind the route is not part of the download: it comes from OpenStreetMap's servers while you " +
-                    "are online, and only areas you looked at then are kept on the phone (up to 64 MB). Offline, anywhere " +
-                    "else shows the route line on a blank background; directions still work.",
+                stringResource(R.string.drive_the_map_behind_the_route_is),
                 Modifier.padding(top = 4.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1562,14 +1553,14 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         }
 
         when (val g = graphState) {
-            is GraphState.Loading -> item { StatusCard("Opening the ${g.name} map…", busy = true, onCancel = null) }
+            is GraphState.Loading -> item { StatusCard(stringResource(R.string.drive_opening_the_map, g.name), busy = true, onCancel = null) }
             is GraphState.Failed -> item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("The ${g.name} map could not be opened", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Text(stringResource(R.string.drive_the_map_could_not_be_opened, g.name), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(g.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(
-                            "Delete it and download it again.",
+                            stringResource(R.string.drive_delete_it_and_download_it_again),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
@@ -1582,7 +1573,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
         item { DownloadStatus(download, vm.regions, onCancel = vm::cancelDownload) }
 
         if (installed.isNotEmpty()) {
-            item { Text("On this phone", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp)) }
+            item { Text(stringResource(R.string.drive_on_this_phone), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp)) }
             items(installed, key = { "installed-${it.slug}" }) { r ->
                 val newer = updates[r.slug]
                 Card {
@@ -1590,7 +1581,7 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                         Column(Modifier.weight(1f)) {
                             Text(r.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                String.format(Locale.US, "%.0f MB · built %s", r.sizeBytes / 1_048_576.0, fmtDate(r.builtAtEpochSec)),
+                                String.format(Locale.US, stringResource(R.string.drive_0f_mb_built_s), r.sizeBytes / 1_048_576.0, fmtDate(r.builtAtEpochSec)),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1603,37 +1594,37 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
                             }
                         }
                         if (r.slug == currentSlug && graphState is GraphState.Ready) {
-                            Text("In use", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(R.string.drive_in_use), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                         } else {
-                            GhostButton("Use", onClick = { vm.selectRegion(r.slug); onClose?.invoke() })
+                            GhostButton(stringResource(R.string.drive_use), onClick = { vm.selectRegion(r.slug); onClose?.invoke() })
                         }
                         if (newer != null) {
                             val region = vm.regions.firstOrNull { it.slug == r.slug }
-                            if (region != null) GhostButton("Update", onClick = { vm.prepareDownload(region) }, enabled = !busy)
+                            if (region != null) GhostButton(stringResource(R.string.drive_update), onClick = { vm.prepareDownload(region) }, enabled = !busy)
                         }
-                        GhostButton("Delete", onClick = { confirmDelete = r }, enabled = !busy)
+                        GhostButton(stringResource(R.string.settings_delete), onClick = { confirmDelete = r }, enabled = !busy)
                     }
                 }
             }
         }
 
         item {
-            Text("Download a state", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Text(stringResource(R.string.drive_download_a_state), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             OutlinedTextField(
                 value = filter,
                 onValueChange = { filter = it },
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 singleLine = true,
-                placeholder = { Text("Filter states") },
+                placeholder = { Text(stringResource(R.string.drive_filter_states)) },
             )
         }
         items(shown, key = { "region-${it.slug}" }) { region ->
             val have = installed.any { it.slug == region.slug }
             val label = when {
-                !have -> "Download"
-                region.slug in updates -> "Update"
+                !have -> stringResource(R.string.drive_download)
+                region.slug in updates -> stringResource(R.string.drive_update)
                 // Up to date as far as is known; it can still be downloaded again.
-                else -> "On this phone"
+                else -> stringResource(R.string.drive_on_this_phone)
             }
             Row(
                 Modifier
@@ -1667,16 +1658,16 @@ private fun RegionSetup(vm: NavViewModel, onClose: (() -> Unit)?) {
             onDismissRequest = { confirmDelete = null },
             shape = ClairixShapes.Sheet,
             containerColor = ClairixTheme.colors.surfaceRaised,
-            title = { Text("Delete ${r.name}?") },
+            title = { Text(stringResource(R.string.drive_delete, r.name)) },
             text = {
                 Text(
-                    String.format(Locale.US, "Frees %.0f MB. You can download it again later.", r.sizeBytes / 1_048_576.0),
+                    String.format(Locale.US, stringResource(R.string.drive_frees_0f_mb_you_can_download), r.sizeBytes / 1_048_576.0),
                 )
             },
             confirmButton = {
-                GhostButton("Delete", onClick = { vm.deleteRegion(r.slug); confirmDelete = null }, tone = Tone.Danger)
+                GhostButton(stringResource(R.string.settings_delete), onClick = { vm.deleteRegion(r.slug); confirmDelete = null }, tone = Tone.Danger)
             },
-            dismissButton = { GhostButton("Cancel", onClick = { confirmDelete = null }) },
+            dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = { confirmDelete = null }) },
         )
     }
 }
@@ -1705,10 +1696,10 @@ private fun DownloadPromptDialog(prompt: DownloadPrompt, onConfirm: () -> Unit, 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(12.dp))
-                    Text("Checking the map's size…")
+                    Text(stringResource(R.string.drive_checking_the_maps_size))
                 }
             },
-            confirmButton = { GhostButton("Cancel", onClick = onDismiss) },
+            confirmButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss) },
         )
         is DownloadPrompt.Ready -> {
             val plan = prompt.plan
@@ -1716,38 +1707,34 @@ private fun DownloadPromptDialog(prompt: DownloadPrompt, onConfirm: () -> Unit, 
             val installedAt = prompt.installedBuiltAtSec
             val newer = installedAt != null && MapDownloads.isNewer(installedAt, published?.builtAtEpochSec) == true
             val title = when {
-                installedAt == null -> "Download $name?"
-                newer -> "Update $name?"
-                else -> "Download $name again?"
+                installedAt == null -> stringResource(R.string.drive_download_2, name)
+                newer -> stringResource(R.string.drive_update_2, name)
+                else -> stringResource(R.string.drive_download_again, name)
             }
             val lines = buildList {
                 if (published != null) {
-                    val onPhone = plan.installedBytes?.let { (if (plan.estimated) " · about " else " · ") + "${fmtBytes(it)} on this phone" }.orEmpty()
-                    add("${fmtBytes(published.compressedBytes)} download$onPhone.")
-                    published.builtAtEpochSec?.let { add("Built ${fmtDate(it)}.") }
+                    val onPhone = plan.installedBytes?.let { (if (plan.estimated) stringResource(R.string.drive_about) else " · ") + "${fmtBytes(it)} on this phone" }.orEmpty()
+                    add(stringResource(R.string.drive_download_3, fmtBytes(published.compressedBytes), onPhone))
+                    published.builtAtEpochSec?.let { add(stringResource(R.string.drive_built, fmtDate(it))) }
                 } else {
                     add(
-                        "The map's size could not be read (no connection, or GitHub did not answer). A large state is " +
-                            "a download of up to about 200 MB and takes up to about 500 MB on the phone."
+                        stringResource(R.string.drive_the_maps_size_could_not_be)
                     )
                 }
                 if (installedAt != null) {
-                    add("The one on this phone was built ${fmtDate(installedAt)}; it stays in use until the new one is ready.")
+                    add(stringResource(R.string.drive_the_one_on_this_phone_was, fmtDate(installedAt)))
                 }
                 val need = plan.requiredFreeBytes
                 when {
-                    need == null -> add("This phone has ${fmtBytes(plan.freeBytes)} free.")
-                    plan.enoughSpace -> add("Needs ${fmtBytes(need)} free while it installs; this phone has ${fmtBytes(plan.freeBytes)}.")
+                    need == null -> add(stringResource(R.string.drive_this_phone_has_free, fmtBytes(plan.freeBytes)))
+                    plan.enoughSpace -> add(stringResource(R.string.drive_needs_free_while_it_installs_this, fmtBytes(need), fmtBytes(plan.freeBytes)))
                     else -> add(
-                        "Not enough space: it needs ${fmtBytes(need)} free while it installs and this phone has " +
-                            "${fmtBytes(plan.freeBytes)}. Free ${fmtBytes(plan.missingBytes)} and try again."
+                        stringResource(R.string.drive_not_enough_space_it_needs_free, fmtBytes(need), fmtBytes(plan.freeBytes), fmtBytes(plan.missingBytes))
                     )
                 }
                 if (plan.metered) {
                     add(
-                        "This connection is metered (mobile data, a hotspot, or a network marked as metered): the " +
-                            "download uses " + (published?.let { fmtBytes(it.compressedBytes) } ?: "up to about 200 MB") +
-                            " of your allowance. On unmetered Wi-Fi it uses none."
+                        stringResource(R.string.drive_this_connection_is_metered_mobile_data, (published?.let { fmtBytes(it.compressedBytes) } ?: stringResource(R.string.drive_up_to_about_200_mb)))
                     )
                 }
             }
@@ -1764,15 +1751,15 @@ private fun DownloadPromptDialog(prompt: DownloadPrompt, onConfirm: () -> Unit, 
                 confirmButton = {
                     GhostButton(
                         when {
-                            plan.metered -> "Download anyway"
-                            newer -> "Update"
-                            else -> "Download"
+                            plan.metered -> stringResource(R.string.drive_download_anyway)
+                            newer -> stringResource(R.string.drive_update)
+                            else -> stringResource(R.string.drive_download)
                         },
                         onClick = onConfirm,
                         enabled = plan.enoughSpace,
                     )
                 },
-                dismissButton = { GhostButton("Not now", onClick = onDismiss) },
+                dismissButton = { GhostButton(stringResource(R.string.comms_not_now), onClick = onDismiss) },
             )
         }
     }
@@ -1785,23 +1772,23 @@ private fun DownloadStatus(download: GraphDownload, regions: List<MapRegion>, on
         is GraphDownload.Downloading -> Card {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Downloading ${name(download.slug)}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                    GhostButton("Cancel", onClick = onCancel)
+                    Text(stringResource(R.string.drive_downloading, name(download.slug)), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    GhostButton(stringResource(R.string.settings_cancel), onClick = onCancel)
                 }
                 val f = download.fraction
                 if (f != null) LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth())
                 else LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(
                     buildString {
-                        append(String.format(Locale.US, "%.1f MB", download.bytes / 1_048_576.0))
-                        download.totalBytes?.let { append(String.format(Locale.US, " of %.1f MB", it / 1_048_576.0)) }
+                        append(String.format(Locale.US, stringResource(R.string.drive_1f_mb), download.bytes / 1_048_576.0))
+                        download.totalBytes?.let { append(String.format(Locale.US, stringResource(R.string.drive_of_1f_mb), it / 1_048_576.0)) }
                     },
                     Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
-        is GraphDownload.Installing -> StatusCard("Installing ${name(download.slug)}…", busy = true, onCancel = null)
+        is GraphDownload.Installing -> StatusCard(stringResource(R.string.drive_installing, name(download.slug)), busy = true, onCancel = null)
         is GraphDownload.Failed -> Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
             Text(
                 "${name(download.slug)}: ${download.message}",

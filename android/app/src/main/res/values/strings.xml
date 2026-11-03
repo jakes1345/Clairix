@@ -1842,4 +1842,91 @@
     <!-- EvidenceExport.kt -->
     <string name="safety_share_evidence_report">Share evidence report</string>
     <string name="safety_could_not_export_the_evidence_report">Could not export the evidence report</string>
+    <!-- NavScreen.kt -->
+    <string name="drive_the_satellite_signals_are_not_coming">The satellite signals are not coming from satellites. The position on this map, and the directions, may be false. Navigate by road signs until this clears.</string>
+    <string name="drive_gps_looks_spoofed">GPS looks spoofed</string>
+    <string name="drive_something_is_drowning_out_the_satellites">Something is drowning out the satellites here. The position will not update until you are clear of it.</string>
+    <string name="drive_gps_looks_jammed">GPS looks jammed</string>
+    <string name="drive_routes_and_directions_come_from_the">Routes and directions come from the downloaded map and still work.</string>
+    <string name="drive_finding_your_route">Finding your route…</string>
+    <string name="drive_re_center">Re-center</string>
+    <string name="drive_update">Update</string>
+    <string name="drive_search_for_a_place_or_address">Search for a place or address</string>
+    <string name="drive_go">Go</string>
+    <string name="drive_long_press_the_map_to_drop">Long-press the map to drop a pin</string>
+    <string name="drive_map_update">%1$s map · update</string>
+    <string name="drive_search_online_instead">Search online instead</string>
+    <string name="drive_sends_what_you_typed_and_your">Sends what you typed, and your IP address, to OpenStreetMap. Finds addresses and places, not only roads.</string>
+    <string name="drive_results_openstreetmap_contributors_nominatim">Results © OpenStreetMap contributors (Nominatim)</string>
+    <string name="drive_open_the_map_data_licence">Open the map data licence</string>
+    <string name="drive_navigation_needs_your_precise_location_to">Navigation needs your precise location to plan routes and follow your drive.</string>
+    <string name="drive_allow_location">Allow location</string>
+    <string name="drive_fuel_at_2f_gal" formatted="false">Fuel at $%.2f/gal</string>
+    <string name="drive_route_around_known_plate_readers">Route around known plate readers</string>
+    <string name="drive_say_when_one_is_ahead">Say when one is ahead</string>
+    <string name="drive_plate_readers_known_in_this_map">%1$s plate readers known in this map, from OpenStreetMap. Only what has been mapped: an unmapped camera is not avoided.</string>
+    <string name="drive_no_plate_reader_list_has_been">No plate-reader list has been published for this map yet.</string>
+    <string name="drive_the_plate_reader_list_for_this">The plate-reader list for this map has not been fetched yet.</string>
+    <string name="drive_share_traffic_data">Share traffic data</string>
+    <string name="drive_navigating_keeps_the_gps_on_once">Navigating keeps the GPS on once a second until you arrive. Below %1$s %% with no charger, live traffic, speed reports and the check for a faster route slow to every 5 minutes.</string>
+    <string name="drive_this_phone_has_no_offline_voice">This phone has no offline voice for its language. Clairix asks the speech engine not to use the network, but whether it does is up to the engine: it may send what it reads out, street names included, to its maker, or stay silent. Add an offline voice in Android\'s text-to-speech settings, or mute directions while driving.</string>
+    <string name="drive_spoken_directions_may_leave_the_phone">Spoken directions may leave the phone</string>
+    <string name="drive_speech_settings">Speech settings</string>
+    <string name="drive_min_traffic">+%1$s min traffic</string>
+    <string name="drive_no_traffic_delay">No traffic delay</string>
+    <string name="drive_tolls_for">"Tolls for "</string>
+    <string name="drive_no_tolls">No tolls</string>
+    <string name="drive_2f_gal_1f_l_2f_fuel" formatted="false">%.2f gal (%.1f L) · $%.2f fuel</string>
+    <string name="drive_plate_readers_not_counted_yet">Plate readers not counted yet</string>
+    <string name="drive_passes_no_known_plate_reader">Passes no known plate reader</string>
+    <string name="drive_passes_1_known_plate_reader">Passes 1 known plate reader</string>
+    <string name="drive_passes_known_plate_readers">Passes %1$s known plate readers</string>
+    <string name="drive_fuel_price">Fuel price</string>
+    <string name="drive_dollars_per_gallon">Dollars per gallon</string>
+    <string name="drive_continue_to_your_destination">Continue to your destination</string>
+    <string name="drive_rerouting">Rerouting…</string>
+    <string name="drive_off_route">Off route</string>
+    <string name="drive_plate_reader_in">Plate reader in %1$s</string>
+    <string name="drive_on">On %1$s</string>
+    <string name="drive_battery_low_traffic_and_reports_every">Battery low: traffic and reports every 5 minutes until the phone charges</string>
+    <string name="drive_still_there">Still there?</string>
+    <string name="drive_no">No</string>
+    <string name="drive_reports_go_to_your_relay_with">Reports go to your relay with your current position and are shared with other drivers.</string>
+    <string name="drive_offline_road_map">Offline road map</string>
+    <string name="drive_maps_cover_the_united_states_only">Maps cover the United States only for now: the 50 states, DC and Puerto Rico. Routes are planned on your phone from a road map of one state. Download your state once; routing then works without a connection, and so does searching the map\'s road names; searching online for an address or a place is a separate tap that sends the text to OpenStreetMap. Live traffic and reports use the network. Large states are big downloads, so Wi-Fi is best; the size is shown before anything is downloaded.</string>
+    <string name="drive_the_map_behind_the_route_is">The map behind the route is not part of the download: it comes from OpenStreetMap\'s servers while you are online, and only areas you looked at then are kept on the phone (up to 64 MB). Offline, anywhere else shows the route line on a blank background; directions still work.</string>
+    <string name="drive_opening_the_map">Opening the %1$s map…</string>
+    <string name="drive_the_map_could_not_be_opened">The %1$s map could not be opened</string>
+    <string name="drive_delete_it_and_download_it_again">Delete it and download it again.</string>
+    <string name="drive_on_this_phone">On this phone</string>
+    <string name="drive_0f_mb_built_s" formatted="false">%.0f MB · built %s</string>
+    <string name="drive_in_use">In use</string>
+    <string name="drive_use">Use</string>
+    <string name="drive_download_a_state">Download a state</string>
+    <string name="drive_filter_states">Filter states</string>
+    <string name="drive_download">Download</string>
+    <string name="drive_delete">Delete %1$s?</string>
+    <string name="drive_frees_0f_mb_you_can_download" formatted="false">Frees %.0f MB. You can download it again later.</string>
+    <string name="drive_checking_the_maps_size">Checking the map\'s size…</string>
+    <string name="drive_download_2">Download %1$s?</string>
+    <string name="drive_update_2">Update %1$s?</string>
+    <string name="drive_download_again">Download %1$s again?</string>
+    <string name="drive_about">" · about "</string>
+    <string name="drive_download_3">%1$s download%2$s.</string>
+    <string name="drive_built">Built %1$s.</string>
+    <string name="drive_the_maps_size_could_not_be">The map\'s size could not be read (no connection, or GitHub did not answer). A large state is a download of up to about 200 MB and takes up to about 500 MB on the phone.</string>
+    <string name="drive_the_one_on_this_phone_was">The one on this phone was built %1$s; it stays in use until the new one is ready.</string>
+    <string name="drive_this_phone_has_free">This phone has %1$s free.</string>
+    <string name="drive_needs_free_while_it_installs_this">Needs %1$s free while it installs; this phone has %2$s.</string>
+    <string name="drive_not_enough_space_it_needs_free">Not enough space: it needs %1$s free while it installs and this phone has %2$s. Free %3$s and try again.</string>
+    <string name="drive_up_to_about_200_mb">up to about 200 MB</string>
+    <string name="drive_download_anyway">Download anyway</string>
+    <string name="drive_downloading">Downloading %1$s</string>
+    <string name="drive_1f_mb" formatted="false">%.1f MB</string>
+    <string name="drive_of_1f_mb" formatted="false">" of %.1f MB"</string>
+    <string name="drive_installing">Installing %1$s…</string>
+    <!-- MapChrome.kt -->
+    <string name="drive_map_tiles_unavailable">Map tiles unavailable</string>
+    <!-- NavScreen.kt -->
+    <string name="drive_this_connection_is_metered_mobile_data">This connection is metered (mobile data, a hotspot, or a network marked as metered): the download uses %1$s of your allowance. On unmetered Wi-Fi it uses none.</string>
 </resources>

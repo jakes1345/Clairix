@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -100,12 +101,12 @@ internal fun NfcScreen(
     val pendingAck = ackAction
     if (vaultEnabled && pendingAck != null) {
         ClairixDialog(
-            title = "Only cards issued to you",
+            title = stringResource(R.string.drive_only_cards_issued_to_you),
             text = VAULT_OWNERSHIP_NOTICE,
-            confirmLabel = "I understand",
+            confirmLabel = stringResource(R.string.drive_i_understand),
             confirmTone = Tone.Caution,
             onConfirm = { ackAction = null; onAcknowledgeOwnership(); pendingAck() },
-            dismissLabel = "Cancel",
+            dismissLabel = stringResource(R.string.settings_cancel),
             onDismiss = { ackAction = null }
         )
     }
@@ -119,24 +120,21 @@ internal fun NfcScreen(
     val pendingReplace = replace
     if (vaultEnabled && pendingReplace != null) {
         ClairixDialog(
-            title = "Replace the stored card?",
-            text = "\"${pendingReplace.existing.label}\" is already in the vault with UID " +
-                "${pendingReplace.existing.uid}. Replace it with this scan, saved as " +
-                "\"${pendingReplace.label}\"? The stored copy is overwritten.",
-            confirmLabel = "Replace",
+            title = stringResource(R.string.drive_replace_the_stored_card),
+            text = stringResource(R.string.drive_is_already_in_the_vault_with, pendingReplace.existing.label, pendingReplace.existing.uid, pendingReplace.label),
+            confirmLabel = stringResource(R.string.drive_replace),
             confirmTone = Tone.Caution,
             onConfirm = { onAddToVault(pendingReplace.tag, pendingReplace.label, true) },
-            dismissLabel = "Keep existing",
+            dismissLabel = stringResource(R.string.drive_keep_existing),
             onDismiss = { Registry.setReplacePrompt(null) }
         )
     }
 
     if (vaultEnabled && confirmErase) {
         ClairixDialog(
-            title = "Erase the vault?",
-            text = "The stored cards can't be read, and erasing deletes them and the vault key for good. " +
-                "Cards you still have can be scanned and saved again.",
-            confirmLabel = "Erase vault",
+            title = stringResource(R.string.drive_erase_the_vault),
+            text = stringResource(R.string.drive_the_stored_cards_cant_be_read),
+            confirmLabel = stringResource(R.string.drive_erase_vault),
             confirmTone = Tone.Danger,
             onConfirm = { confirmErase = false; onEraseVault() },
             onDismiss = { confirmErase = false }
@@ -151,14 +149,14 @@ internal fun NfcScreen(
             StatusHero(
                 eyebrow = "NFC",
                 headline = when {
-                    suspicious > 0 -> if (suspicious == 1) "Suspicious tag" else "$suspicious suspicious tags"
-                    tags.isNotEmpty() -> "Tags clean"
-                    else -> "Tap to check"
+                    suspicious > 0 -> if (suspicious == 1) stringResource(R.string.drive_suspicious_tag) else stringResource(R.string.drive_suspicious_tags, suspicious)
+                    tags.isNotEmpty() -> stringResource(R.string.drive_tags_clean)
+                    else -> stringResource(R.string.drive_tap_to_check)
                 },
                 body = when {
-                    suspicious > 0 -> "A tag below doesn't behave like an ordinary card or sticker. See what was flagged."
+                    suspicious > 0 -> stringResource(R.string.drive_a_tag_below_doesnt_behave_like)
                     tags.isNotEmpty() -> "${plural(tags.size, "tag")} read this session. None look like a skimmer or tracker tag."
-                    else -> "Hold the back of the phone to desk undersides, bag linings, door frames and car seats."
+                    else -> stringResource(R.string.drive_hold_the_back_of_the_phone)
                 },
                 tone = when {
                     suspicious > 0 -> Tone.Danger
@@ -175,10 +173,9 @@ internal fun NfcScreen(
             item(key = "emul_banner") {
                 Notice(
                     Tone.Info,
-                    "${armedCard.label}. Tag reading is paused while emulating. Unlock the phone and hold its back " +
-                        "to the reader; Clairix can stay open or sit in the background.",
-                    title = "Emulating a card",
-                    action = { GhostButton("Stop emulating", onClick = { onEmulate(null) }, tone = Tone.Danger) }
+                    stringResource(R.string.drive_tag_reading_is_paused_while_emulating, armedCard.label),
+                    title = stringResource(R.string.drive_emulating_a_card),
+                    action = { GhostButton(stringResource(R.string.drive_stop_emulating), onClick = { onEmulate(null) }, tone = Tone.Danger) }
                 )
             }
         }
@@ -186,17 +183,17 @@ internal fun NfcScreen(
         // ── Findings: what was read ──
         item(key = "divider") {
             SectionHeader(
-                "Scanned tags",
+                stringResource(R.string.drive_scanned_tags),
                 action = if (tags.isNotEmpty()) {
-                    { GhostButton("Clear", onClick = { Registry.clearNfc() }, tone = Tone.Neutral) }
+                    { GhostButton(stringResource(R.string.comms_clear), onClick = { Registry.clearNfc() }, tone = Tone.Neutral) }
                 } else null
             )
         }
         if (tags.isEmpty()) {
             item(key = "scan_empty") {
                 EmptyState(
-                    title = "No tags read yet",
-                    body = "Any NFC tag or card the phone touches shows up here with what it is.",
+                    title = stringResource(R.string.drive_no_tags_read_yet),
+                    body = stringResource(R.string.drive_any_nfc_tag_or_card_the),
                     icon = ClairixIcons.Nfc
                 )
             }
@@ -241,10 +238,10 @@ private fun LazyListScope.vaultSection(
 ) {
     item(key = "vault_hdr") {
         SectionHeader(
-            "Card vault",
-            supporting = if (vaultState is VaultState.Unlocked) null else "Hardware-encrypted",
+            stringResource(R.string.drive_card_vault),
+            supporting = if (vaultState is VaultState.Unlocked) null else stringResource(R.string.drive_hardware_encrypted),
             action = if (vaultState is VaultState.Unlocked) {
-                { GhostButton("Lock", onClick = onLockVault, tone = Tone.Neutral) }
+                { GhostButton(stringResource(R.string.drive_lock), onClick = onLockVault, tone = Tone.Neutral) }
             } else null
         )
     }
@@ -254,16 +251,15 @@ private fun LazyListScope.vaultSection(
             ClairixCard {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Filled.Lock, contentDescription = null, tint = c.accent)
-                    Text("Vault locked", style = MaterialTheme.typography.titleMedium, color = c.text)
+                    Text(stringResource(R.string.drive_vault_locked), style = MaterialTheme.typography.titleMedium, color = c.text)
                 }
                 Text(
-                    "Stored cards are encrypted with a hardware key that only works after you confirm it's you " +
-                        "with your fingerprint, face or screen-lock PIN. AES-256-GCM in the Android Keystore.",
+                    stringResource(R.string.drive_stored_cards_are_encrypted_with_a),
                     style = MaterialTheme.typography.bodyMedium,
                     color = c.textSubtle
                 )
                 PrimaryButton(
-                    if (state == VaultState.Unlocking) "Waiting for you to confirm…" else "Unlock vault",
+                    if (state == VaultState.Unlocking) stringResource(R.string.drive_waiting_for_you_to_confirm) else stringResource(R.string.drive_unlock_vault),
                     onClick = onUnlockVault,
                     enabled = state == VaultState.Locked,
                     loading = state == VaultState.Unlocking,
@@ -275,11 +271,11 @@ private fun LazyListScope.vaultSection(
             Notice(
                 Tone.Danger,
                 state.message,
-                title = "Vault unavailable",
+                title = stringResource(R.string.drive_vault_unavailable),
                 action = {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.retryable) GhostButton("Try again", onClick = onUnlockVault)
-                        if (state.erasable) GhostButton("Erase vault", onClick = onConfirmErase, tone = Tone.Danger)
+                        if (state.retryable) GhostButton(stringResource(R.string.drive_try_again), onClick = onUnlockVault)
+                        if (state.erasable) GhostButton(stringResource(R.string.drive_erase_vault), onClick = onConfirmErase, tone = Tone.Danger)
                     }
                 }
             )
@@ -287,8 +283,8 @@ private fun LazyListScope.vaultSection(
         is VaultState.Unlocked -> if (state.cards.isEmpty()) {
             item(key = "vault_empty") {
                 EmptyState(
-                    title = "No cards stored",
-                    body = "Scan a card and tap Save to vault to keep it here.",
+                    title = stringResource(R.string.drive_no_cards_stored),
+                    body = stringResource(R.string.drive_scan_a_card_and_tap_save),
                     icon = Icons.Filled.Lock
                 )
             }
@@ -316,33 +312,33 @@ private fun VaultCardRow(
                 modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             when {
-                isEmulating -> StatusPill("Active", Tone.Info)
-                card.profile.hceLimited -> StatusPill("Replay only", Tone.Caution)
-                card.profile.hceCapable -> StatusPill("Can emulate", Tone.Safe)
-                else -> StatusPill("Stored", Tone.Neutral)
+                isEmulating -> StatusPill(stringResource(R.string.safety_active), Tone.Info)
+                card.profile.hceLimited -> StatusPill(stringResource(R.string.drive_replay_only), Tone.Caution)
+                card.profile.hceCapable -> StatusPill(stringResource(R.string.drive_can_emulate), Tone.Safe)
+                else -> StatusPill(stringResource(R.string.drive_stored), Tone.Neutral)
             }
         }
-        Text("${card.profile.label} · UID ${card.uid}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
+        Text(stringResource(R.string.drive_uid, card.profile.label, card.uid), style = MaterialTheme.typography.monoSmall, color = c.textMuted)
         if (!card.profile.hceCapable) {
             Text(
-                "This card type uses its own radio protocol, so the phone can't stand in for it. The UID and type are kept for identification.",
+                stringResource(R.string.drive_this_card_type_uses_its_own),
                 style = MaterialTheme.typography.bodySmall,
                 color = c.textSubtle
             )
         } else if (card.profile.hceLimited) {
             Text(HCE_LIMITED_CAVEAT, style = MaterialTheme.typography.bodySmall, color = c.caution)
         }
-        Text("Saved ${fmtTime(card.addedTs)}", style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
+        Text(stringResource(R.string.drive_saved, fmtTime(card.addedTs)), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (card.profile.hceCapable) {
                 SecondaryButton(
-                    if (isEmulating) "Stop" else "Emulate",
+                    if (isEmulating) stringResource(R.string.comms_stop) else stringResource(R.string.drive_emulate),
                     onClick = { onEmulate(if (isEmulating) null else card) },
                     tone = if (isEmulating) Tone.Danger else Tone.Info,
                     modifier = Modifier.weight(1f)
                 )
             }
-            GhostButton("Remove", onClick = onRemove, tone = Tone.Neutral)
+            GhostButton(stringResource(R.string.settings_remove), onClick = onRemove, tone = Tone.Neutral)
         }
     }
 }
@@ -388,9 +384,9 @@ private fun NfcTagRow(
             )
             StatusPill(
                 when {
-                    t.suspicious -> "Suspect"
-                    isPayment    -> "Payment"
-                    else         -> "Clean"
+                    t.suspicious -> stringResource(R.string.drive_suspect)
+                    isPayment    -> stringResource(R.string.drive_payment)
+                    else         -> stringResource(R.string.drive_clean)
                 },
                 tone
             )
@@ -399,7 +395,7 @@ private fun NfcTagRow(
         // Profile + ATQA/SAK
         val techLine = buildString {
             append(t.type)
-            if (t.atqa != null && t.sak != null) append(" · ATQA ${t.atqa} SAK ${t.sak}")
+            if (t.atqa != null && t.sak != null) append(stringResource(R.string.drive_atqa_sak, t.atqa, t.sak))
             if (t.paymentNetwork != null) append(" · ${t.paymentNetwork}")
         }
         Text(techLine, style = MaterialTheme.typography.titleSmall, color = c.text)
@@ -409,22 +405,22 @@ private fun NfcTagRow(
         t.skimmerFlags.forEach { flag -> WarningLine(flag, Tone.Danger) }
         if (isPayment) {
             Text(
-                "Public card details only. Nothing secret can be read, and it isn't a tracker.",
+                stringResource(R.string.drive_public_card_details_only_nothing_secret),
                 style = MaterialTheme.typography.bodyMedium,
                 color = c.textMuted
             )
         }
         if (t.payload != null) {
-            Text("Data: ${t.payload.take(80)}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
+            Text(stringResource(R.string.drive_data, t.payload.take(80)), style = MaterialTheme.typography.monoSmall, color = c.textMuted)
         }
 
         // HCE capability hint, only where there is a vault to emulate from: the
         // Play edition reads and checks tags but does not store or emulate them.
         if (vaultEnabled && !isPayment) {
             if (t.profile.hceLimited) {
-                Text("Replay only: $HCE_LIMITED_CAVEAT. Record it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
+                Text(stringResource(R.string.drive_replay_only_record_it_to_the, HCE_LIMITED_CAVEAT), style = MaterialTheme.typography.bodySmall, color = c.caution)
             } else if (t.profile.hceCapable) {
-                Text("Your phone can stand in for this card. Record it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
+                Text(stringResource(R.string.drive_your_phone_can_stand_in_for), style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
             }
         }
 
@@ -437,9 +433,9 @@ private fun NfcTagRow(
         if (vaultEnabled && armedForCapture && !captureReady) {
             Notice(
                 Tone.Info,
-                "Hold the card to the back of the phone again to record it for the vault.",
-                title = "Ready to record",
-                action = { GhostButton("Cancel", onClick = { Registry.cancelVaultCapture() }, tone = Tone.Neutral) }
+                stringResource(R.string.drive_hold_the_card_to_the_back),
+                title = stringResource(R.string.drive_ready_to_record),
+                action = { GhostButton(stringResource(R.string.settings_cancel), onClick = { Registry.cancelVaultCapture() }, tone = Tone.Neutral) }
             )
         }
 
@@ -448,12 +444,12 @@ private fun NfcTagRow(
             ClairixTextField(
                 value = labelText,
                 onValueChange = { labelText = it },
-                label = "Card label",
+                label = stringResource(R.string.drive_card_label),
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PrimaryButton(
-                    "Save",
+                    stringResource(R.string.settings_save),
                     onClick = {
                         if (labelText.isNotBlank()) {
                             onAddToVault(labelText.trim())
@@ -464,7 +460,7 @@ private fun NfcTagRow(
                     modifier = Modifier.weight(1f)
                 )
                 GhostButton(
-                    "Cancel",
+                    stringResource(R.string.settings_cancel),
                     onClick = {
                         if (captureReady) Registry.setPendingVaultCapture(null)
                         addingLabel = false; labelText = ""
@@ -487,17 +483,17 @@ private fun NfcTagRow(
             // one-time ownership acknowledgement first.
             if (vaultEnabled) {
                 when {
-                    !vaultOpen && !isPayment -> GhostButton("Unlock to save", onClick = onUnlockVault)
-                    isPayment || inVault || namingCard || armedForCapture -> if (inVault) StatusPill("In vault", Tone.Safe)
+                    !vaultOpen && !isPayment -> GhostButton(stringResource(R.string.drive_unlock_to_save), onClick = onUnlockVault)
+                    isPayment || inVault || namingCard || armedForCapture -> if (inVault) StatusPill(stringResource(R.string.drive_in_vault), Tone.Safe)
                     t.profile.hceCapable ->
-                        GhostButton("Record for vault", onClick = { guardOwnership { Registry.armVaultCapture(t.uid) } })
+                        GhostButton(stringResource(R.string.drive_record_for_vault), onClick = { guardOwnership { Registry.armVaultCapture(t.uid) } })
                     else ->
-                        GhostButton("Save to vault", onClick = { guardOwnership { addingLabel = true; labelText = t.profile.label } })
+                        GhostButton(stringResource(R.string.drive_save_to_vault), onClick = { guardOwnership { addingLabel = true; labelText = t.profile.label } })
                 }
             }
             Spacer(Modifier.weight(1f))
             GhostButton(
-                if (copied) "Copied" else "Copy UID",
+                if (copied) stringResource(R.string.scan_copied) else stringResource(R.string.drive_copy_uid),
                 onClick = { clipboard.setSensitiveText("Card UID", t.uid); copied = true },
                 tone = if (copied) Tone.Safe else Tone.Neutral
             )
