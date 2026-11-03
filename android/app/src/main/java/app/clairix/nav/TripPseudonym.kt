@@ -11,8 +11,12 @@ import java.util.Base64
  * take one vote per vehicle is this: 16 random bytes made up when the drive
  * begins and replaced every [rotateAfterMs]. Within one pseudonym's life the
  * relay can tell this vehicle's samples from another's, which stoppage
- * detection needs; across pseudonyms, and ever back to a phone, it cannot.
- * The value never touches the disk.
+ * detection needs. The pseudonym names no account and no phone, but it does
+ * not make consecutive pseudonyms unlinkable: the relay holds every sample
+ * with its time and road position, so on an empty road it could join the
+ * next pseudonym to the last by where and when it picks up. What it never
+ * receives is an account, a number or the GPS track, and it deletes samples
+ * after two hours. The value never touches the disk.
  */
 class TripPseudonym(
     private val rotateAfterMs: Long = ROTATE_MS,

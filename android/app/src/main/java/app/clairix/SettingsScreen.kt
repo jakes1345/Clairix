@@ -1034,8 +1034,13 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "area you're looking at; a place search runs on the phone over the offline map's road names " +
                                 "and goes to OpenStreetMap's Nominatim service only when you choose to search online. Offline maps, " +
                                 "work zones, the stalkerware list and the setting that names the tile server come signed from GitHub, and so, once a day, do the relay list, " +
-                                "the keys those files are signed with and a note of the newest Clairix version. Messages, calls and live traffic go through the " +
-                                "Clairix relay, which cannot read them and is not told who sent them. Evidence leaves the " +
+                                "the keys those files are signed with and a note of the newest Clairix version. Messages and calls go through the " +
+                                "Clairix relay, which cannot read them and is not told who sent them; live traffic is sent to it as " +
+                                "anonymous road-segment speeds it can read but cannot tie to you. With Share traffic data on (Drive's " +
+                                "route options) the box around a route you navigate or look at also goes through the relay to HERE " +
+                                "and TomTom for incidents; they see the relay, not you. With push wake-ups set up, the relay sends " +
+                                "your push server a POST saying only \"wake\" when something arrives; with Connect through Tor on, " +
+                                "everything Clairix says to relays goes through the Tor network. Evidence leaves the " +
                                 "phone only when you export it. Positions for the scanner, navigation and SOS come from " +
                                 "Google Play services where the phone has it, otherwise from Android's own location " +
                                 "service; one worked out from Wi-Fi and cell towers sends their identifiers to that " +
@@ -1051,7 +1056,10 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
                                 "to that service. Satellite-only positioning, under Location above, asks the satellites alone. " +
                                 "Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the " +
-                                "newest version from GitHub; nothing about you goes with the request. " +
+                                "newest version from GitHub; nothing about you goes with the request. With push wake-ups set " +
+                                "up, the relay sends your push server a POST saying only \"wake\" when something arrives, so it " +
+                                "learns when, not what or from whom; with Connect through Tor on, everything Clairix says to " +
+                                "relays goes through the Tor network. " +
                                 "With Also text this number on, under SOS above, an SOS also goes as an ordinary, " +
                                 "unencrypted text through your mobile carrier to that number.",
                         style = MaterialTheme.typography.bodyMedium,

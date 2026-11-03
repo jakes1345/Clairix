@@ -429,6 +429,13 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
 
     // ── Live speeds and incidents ───────────────────────────────────────
 
+    /**
+     * "Share traffic data" (Drive's route options). Off, the box around the route or the
+     * map is never sent for HERE/TomTom incidents and the ones already shown are dropped;
+     * live speeds for the region (which name only the region) are still fetched.
+     */
+    @Volatile var providersAllowed = true
+
     /** Set by the navigator while the battery is low: the live loop then runs every 5 minutes ([DrivePower.navTimerMs]). */
     @Volatile var lowPower = false
 
@@ -568,6 +575,14 @@ class TrafficClient(context: Context, val region: String, private val trip: Trip
      */
     suspend fun refreshProviders(maxAgeMs: Long): Boolean = withContext(Dispatchers.IO) {
         providerMutex.withLock {
+            if (!providersAllowed) {
+                synchronized(incidentLock) {
+                    _providerIncidents.value = emptyList()
+                    providerFetchedAtMs = 0L
+                }
+                publishIncidents()
+                return@withLock false
+            }
             if (System.currentTimeMillis() - providerAttemptMs < maxAgeMs) return@withLock true
             val points = try { focus?.invoke() } catch (e: RuntimeException) { null }
             val box = points?.let { incidentBox(it) } ?: return@withLock false

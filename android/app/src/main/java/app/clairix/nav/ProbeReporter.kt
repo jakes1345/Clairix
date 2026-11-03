@@ -21,9 +21,11 @@ import java.security.SecureRandom
  *
  * Only a segment key, the segment's own map position, a median speed and a time leave the
  * phone, one sample per segment traversed (or per minute spent on one); GPS positions never do.
- * Nothing is collected or sent unless Drive navigation is active, and stopping navigation
+ * Nothing is collected or sent unless Drive navigation is active and "Share traffic data" is on
+ * (Drive's route options; the navigator never calls [start] otherwise), and stopping navigation
  * discards whatever had not been sent. The first stretch of a trip and the last before the
- * destination are never reported, so the relay cannot learn where trips begin or end. Each
+ * destination are never reported, so the samples do not start at the door or end at the
+ * destination; the relay can still see roughly where a reported stretch begins and ends. Each
  * stretch is between [ZONE_MIN_M] and [ZONE_MAX_M] long, drawn afresh for every trip in
  * [start], so the first and last reported points of a repeated trip are not a fixed distance
  * from home either. A road the car was already on inside the start zone is never reported,
@@ -31,8 +33,10 @@ import java.security.SecureRandom
  * (see [finish]); entering the end zone drops the road being driven (see [nearDestination]).
  *
  * Each batch is posted anonymously (a traffic token, no identity) under [trip], the pseudonym
- * this drive is known by on the relay, which changes every few minutes: the relay can tell
- * this vehicle's samples from another's for long enough to detect a stoppage, and no longer.
+ * this drive is known by on the relay, which changes every ten minutes: the relay can tell
+ * this vehicle's samples from another's for long enough to detect a stoppage. It reads every
+ * sample (segment, position, speed, time), and on an empty road it could join one pseudonym
+ * to the next by where and when they meet; nothing it receives names the phone or its owner.
  */
 class ProbeReporter(
     context: Context,

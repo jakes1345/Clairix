@@ -190,3 +190,39 @@ test("voting a report away costs report tokens, needs as many votes as it had co
   assert.notEqual((await gone(reports[2])).json.incident, null);
   assert.equal((await gone(reports[3])).json.incident, null);
 });
+
+test("typical speeds are asked for in a POST body, and GET still works for one release", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [t1, t2, t3, t4] = await alice.tokens(4, "traffic");
+  const post = await alice.traffic(t1, "POST", "/v1/traffic/typical", { region: REGION, segs: [SEG, "987654:1"] });
+  assert.equal(post.status, 200);
+  assert.deepEqual(Object.keys(post.json), ["segments"]);
+  const bad = await alice.traffic(t2, "POST", "/v1/traffic/typical", { region: REGION, segs: "123456:0,987654:1" });
+  assert.equal(bad.status, 400, "segs must be a JSON array, not a comma list");
+  const tooMany = await alice.traffic(t3, "POST", "/v1/traffic/typical", {
+    region: REGION,
+    segs: Array.from({ length: 501 }, (_, i) => `${i + 1}:0`),
+  });
+  assert.equal(tooMany.status, 400);
+  const legacy = await alice.traffic(t4, "GET", `/v1/traffic/typical?region=${REGION}&segs=${encodeURIComponent(SEG)}`);
+  assert.equal(legacy.status, 200);
+  assert.deepEqual(Object.keys(legacy.json), ["segments"]);
+});
+
+test("an area cell nobody has used for 30 days is forgotten", async () => {
+  const relay = makeRelay();
+  const alice = await makePhone(relay);
+  const [t1] = await alice.tokens(1, "traffic");
+  await alice.traffic(t1, "POST", "/v1/traffic/probe", { region: REGION, trip: trip(), samples: samples(2, 50, 41.5, -81.7) });
+  const areaCells = () => {
+    const out = [];
+    for (const [, entry] of relay.env.TRAFFIC.objects) out.push(...entry.state.storage.sql.db.prepare("SELECT cell FROM area").all());
+    return out.length;
+  };
+  assert.equal(areaCells(), 1);
+  advance(31 * 24 * 60 * 60 * 1000);
+  const [t2] = await alice.tokens(1, "traffic");
+  await alice.traffic(t2, "POST", "/v1/traffic/probe", { region: REGION, trip: trip(), samples: samples(2, 50, 39.96, -83.0) });
+  assert.equal(areaCells(), 1, "the cell from 31 days ago went; only today's is left");
+});

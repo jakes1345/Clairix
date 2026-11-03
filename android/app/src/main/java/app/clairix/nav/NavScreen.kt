@@ -302,6 +302,7 @@ private fun NavMapLayer(
     val knownCameras by vm.knownCameras.collectAsStateWithLifecycle()
     val avoidCameras by vm.avoidCameras.collectAsStateWithLifecycle()
     val warnCameras by vm.warnCameras.collectAsStateWithLifecycle()
+    val shareTraffic by vm.shareTraffic.collectAsStateWithLifecycle()
     val cameraStatus by vm.cameraStatus.collectAsStateWithLifecycle()
     val workZoneStatus by vm.workZoneStatus.collectAsStateWithLifecycle()
     val voice by vm.voice.collectAsStateWithLifecycle()
@@ -414,11 +415,13 @@ private fun NavMapLayer(
                         fuelPricePerGal = fuelPrice,
                         avoidCameras = avoidCameras,
                         warnCameras = warnCameras,
+                        shareTraffic = shareTraffic,
                         cameraStatus = cameraStatus,
                         workZoneStatus = workZoneStatus,
                         voice = voice,
                         onAvoidCameras = vm::setAvoidCameras,
                         onWarnCameras = vm::setWarnCameras,
+                        onShareTraffic = vm::setShareTraffic,
                         onProfile = vm::selectProfile,
                         onSelect = vm::selectRoute,
                         onGo = { idx -> vm.selectRoute(idx); vm.startNavigation() },
@@ -902,11 +905,13 @@ private fun RouteOptionsSheet(
     fuelPricePerGal: Double,
     avoidCameras: Boolean,
     warnCameras: Boolean,
+    shareTraffic: Boolean,
     cameraStatus: CameraFeed.Status,
     workZoneStatus: WorkZoneFeed.Status,
     voice: VoiceSource,
     onAvoidCameras: (Boolean) -> Unit,
     onWarnCameras: (Boolean) -> Unit,
+    onShareTraffic: (Boolean) -> Unit,
     onProfile: (RouteProfile) -> Unit,
     onSelect: (Int) -> Unit,
     onGo: (Int) -> Unit,
@@ -1008,6 +1013,18 @@ private fun RouteOptionsSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // What leaves the phone for traffic, said where a drive is started (gap audit item 8).
+            CameraToggleRow(
+                title = "Share traffic data",
+                checked = shareTraffic,
+                onChange = onShareTraffic,
+            )
+            Text(
+                if (shareTraffic) SHARE_TRAFFIC_ON else SHARE_TRAFFIC_OFF,
+                Modifier.padding(top = 2.dp, end = SOS_CLEARANCE),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // What a drive costs, said where it is started.
             Text(
                 "Navigating keeps the GPS on once a second until you arrive. Below ${DrivePower.CUTOFF_PCT} % with " +
@@ -1037,6 +1054,18 @@ private fun RouteOptionsSheet(
         }
     }
 }
+
+/** What "Share traffic data" sends, with Comms set up; the website's egress table says the same. */
+internal const val SHARE_TRAFFIC_ON =
+    "While you navigate, anonymous speed samples (a road segment, its map position, a speed and a time; never " +
+        "your GPS track) go to the Clairix relay, which can read them but is not told who sent them. While you " +
+        "navigate or look at routes, the box around the route, at most about 55 km across, goes through the relay " +
+        "to HERE and TomTom for incidents; they see the relay, never your phone."
+
+/** What still goes with "Share traffic data" off. */
+internal const val SHARE_TRAFFIC_OFF =
+    "Off: no speed samples and no route box for HERE and TomTom are sent. Live speeds for this map region, " +
+        "typical speeds for the roads of a route, and incidents you report yourself still go through the relay."
 
 /** Android's text-to-speech settings, where an offline voice is installed. */
 private const val TTS_SETTINGS = "com.android.settings.TTS_SETTINGS"

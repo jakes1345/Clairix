@@ -1,0 +1,139 @@
+{
+  "about": "Every host the Clairix app or relay names in its source, and where it is accounted for. Checked in CI by .github/scripts/egress_check.py, which fails when the code names a host missing here, when a host here is no longer in the code, or when 'destinations' and the egress table on the security page (website/src/content/docs/security.md, #egress) list different rows. A destination's 'row' is the first cell of its table row, bold markers removed; 'hosts' are the host names the code names for it (none when the address comes from a signed file, from the user or from another relay at run time).",
+  "destinations": [
+    {
+      "row": "Clairix relay (our server, run on Cloudflare)",
+      "from": "app",
+      "hosts": [],
+      "note": "The relay's address comes from the signed relay list or from the user."
+    },
+    {
+      "row": "Your contact's relay, if they use another one",
+      "from": "relay",
+      "hosts": [],
+      "note": "Federation: the other relay's address comes from the contact's number and the signed relay list."
+    },
+    {
+      "row": "Nearby Clairix phones, over Bluetooth",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Clairix relay, SOS or duress",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Your mobile carrier, SOS text",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Clairix relay, traffic",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Clairix relay, live and typical speeds",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Clairix relay, incident reports",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "HERE and TomTom, via the relay",
+      "from": "relay",
+      "hosts": [
+        "data.traffic.hereapi.com",
+        "api.tomtom.com"
+      ]
+    },
+    {
+      "row": "Your push server (ntfy.sh, up.conversations.im, or the one your UnifiedPush distributor uses), via the relay",
+      "from": "relay",
+      "hosts": [
+        "ntfy.sh",
+        "up.conversations.im"
+      ]
+    },
+    {
+      "row": "Cloudflare TURN/STUN",
+      "from": "both",
+      "hosts": [
+        "rtc.live.cloudflare.com"
+      ],
+      "note": "The relay asks rtc.live.cloudflare.com for TURN credentials; the phone connects to the TURN servers those name."
+    },
+    {
+      "row": "OpenStreetMap Nominatim",
+      "from": "app",
+      "hosts": [
+        "nominatim.openstreetmap.org"
+      ]
+    },
+    {
+      "row": "Map tile server: OpenStreetMap's, unless the signed tile setting names another",
+      "from": "app",
+      "hosts": [
+        "tile.openstreetmap.org"
+      ]
+    },
+    {
+      "row": "GitHub Releases",
+      "from": "app",
+      "hosts": [
+        "github.com"
+      ]
+    },
+    {
+      "row": "The Tor network, when \"Connect through Tor\" is on in Comms",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Devices on the Wi-Fi network you are on",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Bluetooth trackers and your OBD-II adapter, over Bluetooth",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Google Play services, on your phone, where it is installed",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "Your phone's text-to-speech engine",
+      "from": "app",
+      "hosts": []
+    },
+    {
+      "row": "An app you pick (Android share sheet), or your mail app",
+      "from": "app",
+      "hosts": []
+    }
+  ],
+  "links": {
+    "account.samsung.com": "Account checklist: opened in the browser when the user taps it.",
+    "clairix.app": "The project's website: invite links the user shares (opened by the recipient), the terms and download pages opened when tapped, and the contact address in the tile requests' User-Agent.",
+    "myaccount.google.com": "Account checklist: opened in the browser when the user taps it.",
+    "play.google.com": "The update notice's store link, opened when tapped.",
+    "relay.clairix.app": "Example text in the relay address field; never fetched unless the user enters it.",
+    "smartthingsfind.samsung.com": "Account checklist: opened in the browser when the user taps it.",
+    "support.google.com": "Account checklist: opened in the browser when the user taps it.",
+    "wa.me": "A hotline's WhatsApp chat, opened in WhatsApp when tapped.",
+    "www.google.com": "Account checklist (Find My Device on the web): opened in the browser when tapped.",
+    "www.openstreetmap.org": "The map's copyright link, opened when tapped, and the position link in an SOS text, opened by its recipient."
+  },
+  "not_fetched": {
+    "schemas.xmlsoap.org": "XML namespace in the ONVIF discovery message the network sweep sends on the local Wi-Fi.",
+    "www.onvif.org": "XML namespace in the ONVIF discovery message.",
+    "www.w3.org": "XML namespace (SOAP envelope) in the ONVIF discovery message."
+  }
+}

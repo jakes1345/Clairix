@@ -234,6 +234,20 @@ class Navigator(
     @Volatile var cameras: List<KnownCamera> = emptyList()
     /** Whether a reader ahead is spoken; it is always shown. */
     @Volatile var cameraWarnings = true
+
+    /**
+     * "Share traffic data" in Drive's route options: anonymous speed samples
+     * ([ProbeReporter]) and the HERE/TomTom incident box ([TrafficClient.refreshProviders])
+     * go to the relay only while it is on. Switched mid-drive, sampling stops at once
+     * (unsent samples are dropped) or starts afresh with a new start zone.
+     */
+    var shareTraffic: Boolean
+        get() = traffic.providersAllowed
+        set(on) {
+            traffic.providersAllowed = on
+            val s = synchronized(sessionLock) { scope }
+            if (!on) probe.stop() else if (s != null && _state.value is NavState.Navigating) probe.start(s)
+        }
     private val alertedCameras = HashSet<String>()
     private var camerasSeen: List<KnownCamera>? = null
     private var cameraPos: Map<String, Double> = emptyMap()
@@ -382,7 +396,7 @@ class Navigator(
                 publish(fix, null, 0.0, route.geometry.first().lat, route.geometry.first().lon)
             }
             traffic.startLive(s)
-            probe.start(s)
+            if (shareTraffic) probe.start(s)
             // Below the cut-off with no charger, the drive goes on with its timers at 5 minutes.
             s.launch {
                 DrivePower.lowBatteryStates(BatteryWatch.readings(appContext)).collect { low ->

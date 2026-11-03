@@ -122,6 +122,7 @@ export class Traffic extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS seg_pos (seg TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, updated INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS seg_pos_updated ON seg_pos (updated);
       CREATE TABLE IF NOT EXISTS area (cell TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, updated INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS area_updated ON area (updated);
       CREATE TABLE IF NOT EXISTS incidents (
         id TEXT PRIMARY KEY, type TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, seg TEXT,
         source TEXT NOT NULL, confirmations INTEGER NOT NULL,
@@ -413,6 +414,9 @@ export class Traffic extends DurableObject<Env> {
     for (const e of expired) this.deleteIncident(e.id);
     this.sql.exec("DELETE FROM wzdx_dismissed WHERE until <= ?", now);
     this.sql.exec("DELETE FROM seg_pos WHERE updated < ?", now - SEG_POS_RETENTION_SEC);
+    // A 0.1° cell nobody has driven or reported in for 30 days is forgotten,
+    // like a segment position: the area table says where Clairix was used.
+    this.sql.exec("DELETE FROM area WHERE updated < ?", now - SEG_POS_RETENTION_SEC);
   }
 
   private detect(seg: string, now: number): void {

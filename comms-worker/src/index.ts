@@ -117,7 +117,8 @@ export { IncidentCache, Mailbox, Traffic };
  *   reports and votes carry a "trip" pseudonym the phone makes up for the drive and rotates):
  *   POST   /v1/traffic/probe   {region, trip, samples:[{seg, kph, t, lat?, lon?}]} → {ok, accepted}
  *   GET    /v1/traffic/live?region=                        → {now, segments: {seg: {kph, n, t}}, incidents}
- *   GET    /v1/traffic/typical?region=&segs=a,b            → {segments: {seg: {h: [168]}}}
+ *   POST   /v1/traffic/typical {region, segs: [a, b]}       → {segments: {seg: {h: [168]}}}
+ *          (GET ?region=&segs=a,b still answered for one release)
  *   POST   /v1/traffic/report  {region, trip, type, lat, lon, seg|null} → {incident}   ("report" token)
  *   POST   /v1/traffic/report/vote {region, trip, id, still} → {incident|null}
  *   GET    /v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon (≤ 1°×1°)
@@ -933,10 +934,24 @@ async function trafficRoute(env: Env, request: Request, url: URL, path: string, 
     return json(await regionStub(region).live(now));
   }
 
-  if (path === "/v1/traffic/typical" && request.method === "GET") {
+  // The segment ids of a route say where it goes, so the app sends them in a
+  // POST body, which no request log keeps. GET with ?segs= is still answered
+  // for one release, for apps from before the change.
+  if (path === "/v1/traffic/typical" && (request.method === "POST" || request.method === "GET")) {
     await spendToken(env, request, "traffic");
-    const region = trafficRegion(url.searchParams.get("region"));
-    const segs = (url.searchParams.get("segs") ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+    let regionRaw: unknown;
+    let segsRaw: unknown;
+    if (request.method === "POST") {
+      const body = parseJson<{ region?: unknown; segs?: unknown }>(bodyText);
+      regionRaw = body.region;
+      segsRaw = body.segs;
+      if (!Array.isArray(segsRaw) || segsRaw.some((s) => typeof s !== "string")) throw new HttpError(400, "segs must be an array of strings");
+    } else {
+      regionRaw = url.searchParams.get("region");
+      segsRaw = (url.searchParams.get("segs") ?? "").split(",");
+    }
+    const region = trafficRegion(regionRaw);
+    const segs = (segsRaw as string[]).map((s) => s.trim()).filter((s) => s.length > 0);
     if (segs.length > MAX_TYPICAL_SEGS) throw new HttpError(400, `at most ${MAX_TYPICAL_SEGS} segments per request`);
     for (const seg of segs) if (!SEGMENT_RE.test(seg)) throw new HttpError(400, `bad segment ${seg.slice(0, 40)}`);
     if (segs.length === 0) return json({ segments: {} });
