@@ -187,7 +187,15 @@ APK of it exists outside a local or CI build.
 
 1. **A release tag that has the foss flavour.** The draft has no `commit:`
    line until one exists (3.0.0 Beta 8 predates it).
-2. **A build on F-Droid's own tooling.** Run `fdroid build app.clairix` with
+2. **Listing text for the foss build.** F-Droid takes the description from
+   `fastlane/metadata/android/` in the repository. `full_description.txt`
+   there is the Full edition's text: it says "This is the Full edition" and
+   that Clairix includes Google's Play services location library, which is
+   false of the foss build. The F-Droid listing needs its own description
+   (where fdroidserver looks for flavour-specific text is to be checked
+   against its documentation), without changing what the GitHub and
+   IzzyOnDroid listings, which carry the full edition, say.
+3. **A build on F-Droid's own tooling.** Run `fdroid build app.clairix` with
    the draft in a local fdroiddata checkout (or let the merge request's CI do
    it). The recipe has to install Rust (`comms-crypto/rust-toolchain.toml`
    pins 1.97.0 and the three Android targets), cargo-ndk 4.1.2 and NDK r27c
@@ -195,20 +203,20 @@ APK of it exists outside a local or CI build.
    (`tools/reproducible`). Whether the draft's `prebuild`/`build` lines get
    `cargo` onto the Gradle task's `PATH` on F-Droid's builder has not been
    tried.
-3. **Prebuilt native code in Maven libraries.** Three FOSS dependencies ship
+4. **Prebuilt native code in Maven libraries.** Three FOSS dependencies ship
    compiled `.so` files in their AARs: `io.getstream:stream-webrtc-android`
    (libwebrtc, for calls), `net.zetetic:sqlcipher-android` (SQLCipher) and
    `net.java.dev.jna:jna` (libjnidispatch). F-Droid's reviewers may ask for
    them to be built from source; that is theirs to decide and has not been
    asked.
-4. **Anti-features.** The likely one is NonFreeNet: with Share traffic data
+5. **Anti-features.** The likely one is NonFreeNet: with Share traffic data
    on, the box around a route goes through the relay to HERE and TomTom for
    incidents. The project relay runs on Cloudflare Workers (its code,
    `comms-worker/`, is free; anyone can run a relay). F-Droid decides.
-5. **One build per listing.** `fossSuite` and `fossComms` share the package
+6. **One build per listing.** `fossSuite` and `fossComms` share the package
    name `app.clairix` and the versionCode, so a listing carries one of them;
    the draft lists `fossSuite`.
-6. **Signing.** F-Droid signs what it builds with its own key, so an F-Droid
+7. **Signing.** F-Droid signs what it builds with its own key, so an F-Droid
    install cannot be updated with the GitHub APK or the other way round (the
    app's update notice sends a foss install to its F-Droid page for this
    reason). F-Droid can instead publish the developer's own signed APK if its

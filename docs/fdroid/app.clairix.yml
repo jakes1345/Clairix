@@ -23,8 +23,11 @@ AutoName: Clairix
 RepoType: git
 Repo: https://github.com/jakes1345/Clairix.git
 
-# The listing text, icon and screenshots come from fastlane/metadata/android/en-US/
-# in the repository, which F-Droid reads on its own.
+# F-Droid reads the listing text, icon and screenshots from fastlane/metadata/android/
+# in the repository on its own. The text there now is the Full edition's: its
+# full_description.txt says "This is the Full edition" and that Clairix includes Google's
+# Play services location library, which is false of this build. The foss listing needs
+# its own text before submission (docs/DISTRIBUTION.md, "F-Droid", item 2).
 
 Builds:
   # versionName and versionCode must be those of android/app/build.gradle.kts at the
