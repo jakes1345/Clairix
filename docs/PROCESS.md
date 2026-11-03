@@ -81,7 +81,7 @@ Every workflow and its jobs, under the names GitHub shows as checks:
 | Workflow | Jobs | Runs |
 |---|---|---|
 | Android APK (`android.yml`) | `build` (crypto crate and Tor tests, debug APKs, 16 KB pages, Kotlin unit tests, screenshots compared, Android Lint, detekt), `reproducible-build (first)`, `reproducible-build (second)`, `compare-builds` | Pull requests, and pushes to any branch but `release/v*`, touching `android/`, `comms-crypto/`, `relays/`, `tools/android/`, `tools/reproducible/`; by hand; called by Release |
-| Emulator smoke test (`emulator.yml`) | `build`, then `smoke (<API level>)` for each level in its matrix (31, 33, 34 and 35 today) | Pull requests and pushes to main touching `android/`, `comms-crypto/`, `comms-worker/`; by hand |
+| Emulator smoke test (`emulator.yml`) | `build`, then `smoke (<API level>)` for each level in its matrix (31, 33, 34, 35 and 36 today) | Pull requests and pushes to main touching `android/`, `comms-crypto/`, `comms-worker/`; by hand |
 | Relay (`relay.yml`) | `test` | Pull requests and pushes to main touching `comms-worker/` |
 | Relay container (`relay-container.yml`) | `image` | The same, and every Monday |
 | Relay list (`relays.yml`) | `check`, `publish` (main only) | Pull requests and pushes to main touching `relays/`, `tools/relays/` |

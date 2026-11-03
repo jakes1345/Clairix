@@ -227,9 +227,9 @@ jobs:
 
       # The NDK and cargo-ndk versions android/app/build.gradle.kts pins; the
       # build refuses any other, so a release can be rebuilt with the same tools.
-      - name: Install the pinned NDK and cargo-ndk
+      - name: Install the pinned NDK, the API 36 platform and cargo-ndk
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" > /dev/null
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" "platforms;android-36" > /dev/null
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           cargo install cargo-ndk --version 4.1.2 --locked
 

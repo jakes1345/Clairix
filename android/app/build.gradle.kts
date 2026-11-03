@@ -378,7 +378,7 @@ val assetPublicKey: String = rootProject.file("asset-signing.pub").takeIf { it.i
 
 android {
     namespace = "app.clairix"
-    compileSdk = 35
+    compileSdk = 36
 
     // The NDK cargo-ndk builds with, so the Android Gradle plugin has a strip
     // tool. Without one it packages every native library as it is, debug info
@@ -407,7 +407,7 @@ android {
     defaultConfig {
         applicationId = "app.clairix"
         minSdk = 31
-        targetSdk = 35
+        targetSdk = 36
         // The asset signing public key (tools/signing): what the app checks
         // downloaded maps, work zones and release checksums against. Empty in
         // a checkout that has not run keygen; a release build refuses that below.
@@ -564,12 +564,6 @@ android {
         abortOnError = true
         checkDependencies = true
         baseline = file("lint-baseline.xml")
-        // CI's SDK knows API 36, so "targetSdk = 35" reads as out of date there
-        // (not on an SDK without 36). Moving to 36 is its own change: compileSdk,
-        // AGP and an API 36 emulator together, with the behaviour changes tested.
-        // Until it lands, the reminder stays in every report without failing it;
-        // take this line out with that change.
-        informational += "OldTargetApi"
     }
 
     sourceSets {
@@ -649,9 +643,11 @@ dependencies {
     // a distributor of the owner's choosing (for example the ntfy app). No Google
     // service is involved anywhere.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18 and
-    // later demand compileSdk 36 and so a newer Android Gradle plugin; 4.17 is
-    // the newest that builds against 35.
+    // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18.0 and
+    // later declare minCompileSdk 37 in their AAR metadata (checked against 4.18.0:
+    // "requires ... to compile against version 37 or later"), which needs an
+    // Android Gradle plugin of the 9.x line; the 8.x line stops at compileSdk 36.
+    // 4.17 is the newest release this toolchain can build.
     implementation("net.zetetic:sqlcipher-android:4.17.0")
     // SQLCipher's database and open-helper classes implement androidx.sqlite's
     // support interfaces, which its POM lists at runtime scope only; the Kotlin
@@ -689,15 +685,16 @@ dependencies {
 // which made every run depend on Maven Central answering at that moment (it
 // rate-limits). The tests then run Robolectric offline against this copy. The
 // versions are the ones robolectric 4.14.1 pairs with SDK 34, which the tests
-// run on (src/test/resources/robolectric.properties), and SDK 35, the target.
+// run on (src/test/resources/robolectric.properties), and SDK 35, the newest it
+// knows: the app targets 36, past it, and the offline runs need no other jar.
 // Two configurations: one module in two versions in one configuration resolves to
 // the newer alone.
 val robolectricRuntime: Configuration by configurations.creating
 val robolectricTarget: Configuration by configurations.creating
 dependencies {
     robolectricRuntime("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
-    // The SDK the app targets: Robolectric reads the app's resources against it,
-    // whichever SDK the tests run on.
+    // The SDK Robolectric reads the app's resources against, whichever SDK the
+    // tests run on: the target, or the newest it knows when the target is newer.
     robolectricTarget("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7")
 }
 val robolectricJars = layout.buildDirectory.dir("robolectric-jars")

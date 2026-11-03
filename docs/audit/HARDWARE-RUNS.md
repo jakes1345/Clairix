@@ -28,7 +28,7 @@ The USB transfer in `SdrUsbDriver`, the tuner bring-up, the sample stream, the
 scanner's squelch and tuning in `ScannerMonitor`, the live decode in
 `DriveViewModel`, and the Bluetooth RFCOMM connection in `ObdBluetoothManager`
 (including its reflective `createRfcommSocket(int)` fallback, whose status under
-targetSdk 35 is not verifiable from the repository) are **not** exercised by any
+targetSdk 36 is not verifiable from the repository) are **not** exercised by any
 test.
 
 ## What the public copy now says

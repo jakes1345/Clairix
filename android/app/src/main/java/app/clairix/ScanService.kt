@@ -1624,7 +1624,7 @@ class ScanService : LifecycleService() {
 
     /**
      * A filter on one device's address. The public SDK takes the address alone (the
-     * overload that also takes its type is not public at compileSdk 35), so whether a
+     * overload that also takes its type is not public at compileSdk 36), so whether a
      * controller filtering in hardware matches a device with a random address this
      * way is for a device to show; the type filters still catch every recognised
      * tracker family whatever its address.
