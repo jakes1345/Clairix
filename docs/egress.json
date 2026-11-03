@@ -122,6 +122,7 @@
   "links": {
     "account.samsung.com": "Account checklist: opened in the browser when the user taps it.",
     "clairix.app": "The project's website: invite links the user shares (opened by the recipient), the terms and download pages opened when tapped, and the contact address in the tile requests' User-Agent.",
+    "f-droid.org": "The foss edition's update notice: its F-Droid page, opened in the browser or F-Droid when tapped.",
     "myaccount.google.com": "Account checklist: opened in the browser when the user taps it.",
     "play.google.com": "The update notice's store link, opened when tapped.",
     "relay.clairix.app": "Example text in the relay address field; never fetched unless the user enters it.",
