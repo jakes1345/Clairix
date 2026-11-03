@@ -1929,4 +1929,9 @@
     <string name="drive_map_tiles_unavailable">Map tiles unavailable</string>
     <!-- NavScreen.kt -->
     <string name="drive_this_connection_is_metered_mobile_data">This connection is metered (mobile data, a hotspot, or a network marked as metered): the download uses %1$s of your allowance. On unmetered Wi-Fi it uses none.</string>
+    <!-- services: notifications -->
+    <string name="drive_navigating">Navigating</string>
+    <string name="drive_turn_by_turn_running">Turn-by-turn guidance is running</string>
+    <string name="safety_fake_incoming_call">Incoming call</string>
+    <string name="comms_name_unverified">%1$s (unverified)</string>
 </resources>

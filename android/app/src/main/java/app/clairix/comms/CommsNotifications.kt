@@ -526,7 +526,7 @@ object CommsNotifications {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(if (contact.verified) title else "$title (unverified)")
+            .setContentTitle(if (contact.verified) title else context.getString(R.string.comms_name_unverified, title))
             .setContentText(newest.preview())
             .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)

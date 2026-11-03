@@ -14,6 +14,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.clairix.BuildConfig
 import app.clairix.MainActivity
+import app.clairix.R
 import app.clairix.security.ChannelNames
 import app.clairix.security.DiscreetMode
 import app.clairix.security.NotificationPresentation
@@ -68,7 +69,7 @@ class NavigationService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val shown = NotificationPresentation.service(
-            NotificationText("Navigating", "Turn-by-turn guidance is running"), DiscreetMode.on(this)
+            NotificationText(getString(R.string.drive_navigating), getString(R.string.drive_turn_by_turn_running)), DiscreetMode.on(this)
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(DiscreetMode.smallIcon(this))

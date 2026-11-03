@@ -111,4 +111,6 @@
     <string name="drive_record_for_vault">Record for vault</string>
     <string name="drive_save_to_vault">Save to vault</string>
     <string name="drive_copy_uid">Copy UID</string>
+    <!-- DriveService.kt -->
+    <string name="drive_stop">Stop</string>
 </resources>
