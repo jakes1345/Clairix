@@ -43,6 +43,8 @@ def make_repo(tmp_path, egress=None, security=SECURITY, kotlin=None, ts=None):
     ))
     write(tmp_path, "android/app/src/test/java/app/ATest.kt", 'val x = "https://only-in-a-test.example.org"\n')
     write(tmp_path, "android/app/src/androidTest/java/app/B.kt", 'val x = "https://only-in-a-device-test.example.org"\n')
+    write(tmp_path, "android/app/src/testSuite/java/app/CTest.kt", 'val x = "https://only-in-a-tier-test.example.org"\n')
+    write(tmp_path, "android/app/src/androidTestFullSuite/java/app/D.kt", 'val x = "https://only-in-a-variant-device-test.example.org"\n')
     write(tmp_path, "comms-worker/src/x.ts", ts or (
         "export const DEFAULT_PUSH_HOSTS: readonly string[] = [\"push.example.org\", 'push2.example.org'];\n"
         "const u = `https://api.here.example.org/v7?${q}`;\n"
@@ -89,6 +91,8 @@ def test_a_clean_repository_passes(tmp_path):
     found = ec.scan(root).hosts
     assert "only-in-a-test.example.org" not in found
     assert "only-in-a-device-test.example.org" not in found
+    assert "only-in-a-tier-test.example.org" not in found
+    assert "only-in-a-variant-device-test.example.org" not in found
     assert "commented.example.org" not in found and "block.example.org" not in found
     assert found["tile.example.org"] == ["android/app/src/main/java/app/A.kt:4"]
 

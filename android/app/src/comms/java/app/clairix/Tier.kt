@@ -27,10 +27,13 @@ internal object Tier : TierShell {
      * This build records nothing. It shares the application id with the whole app,
      * though, so a phone that had the suite installed before it can still hold the
      * suite's sealed recordings, in the same folder the suite writes them to
-     * (ScannerRecordings.dir in src/suite); every file there is one, and they go.
+     * (ScannerRecordings.dir in src/suite), and the plain ones a version from before
+     * they were sealed left where it wrote them (ScannerRecordings.legacyDirs). Both
+     * go, as they do in the whole app; nothing else in those folders is touched.
      */
     override fun deleteScannerRecordings(context: Context) {
         leftRecordings(context).forEach { it.delete() }
+        leftPlainRecordings(context).forEach { it.delete() }
     }
 
     /** The same left-behind recordings, by when each was last written. */
@@ -48,4 +51,14 @@ internal object Tier : TierShell {
         File(context.applicationContext.noBackupFilesDir, "scanner")
             .listFiles { f -> f.isFile && (f.name.endsWith(".rec") || f.name.endsWith(".rec.tmp")) }
             ?.toList().orEmpty()
+
+    /** The suite's plain recordings from before they were sealed: `<epoch ms>_<hz>.raw`. */
+    private fun leftPlainRecordings(context: Context): List<File> {
+        val app = context.applicationContext
+        val dirs = listOfNotNull(app.getExternalFilesDir(null)?.let { File(it, "scanner") }, app.filesDir)
+        return dirs.flatMap { d -> d.listFiles { f -> f.isFile && LEGACY_NAME.matches(f.name) }?.toList().orEmpty() }
+    }
+
+    /** ScannerRecordings.LEGACY_NAME in src/suite. */
+    private val LEGACY_NAME = Regex("^(\\d{10,})_(\\d+)\\.raw$")
 }

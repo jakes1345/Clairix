@@ -172,7 +172,9 @@ def source_files(root: pathlib.Path) -> list[tuple[pathlib.Path, bool]]:
     app_src = root / "android" / "app" / "src"
     if app_src.is_dir():
         for source_set in sorted(p for p in app_src.iterdir() if p.is_dir()):
-            if source_set.name in TEST_SOURCE_SETS or source_set.name.lower().startswith("test") or "AndroidTest" in source_set.name:
+            name = source_set.name
+            # test, androidTest and their per-variant sets (testSuite, androidTestFullSuite, testFullDebug...).
+            if name in TEST_SOURCE_SETS or name.lower().startswith(("test", "androidtest")) or "AndroidTest" in name:
                 continue
             for p in sorted(source_set.rglob("*")):
                 if p.is_file() and p.suffix in APP_SUFFIXES:
