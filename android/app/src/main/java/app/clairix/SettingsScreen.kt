@@ -913,7 +913,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     var retentionDays by remember { mutableStateOf(HistoryRetention.days(context)) }
                     SChoiceRow(
                         title = "Keep history for",
-                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger, the radio scanner's recordings and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. Evidence you save about an app in Phone check stays on the timeline until you clear all data. The cell-tower baseline is what normal is measured against, so it keeps which towers and areas are usual here and the last day each was seen (the exact time for two days), and forgets one not seen for three times this long (with Forever, never). An exported report is deleted after a day.",
+                        subtitle = "The location log, the timeline, vehicle trips, the unlock ledger, the radio scanner's recordings and the map's tile and traffic caches older than this are deleted: now, at each start, every hour while scanning, and once a day otherwise. What is gone cannot be taken from the phone. Evidence you save about an app in Phone check, and photos you keep in the camera sweep, stay on the timeline until you clear all data. The cell-tower baseline is what normal is measured against, so it keeps which towers and areas are usual here and the last day each was seen (the exact time for two days), and forgets one not seen for three times this long (with Forever, never). An exported report is deleted after a day.",
                         choices = HistoryRetention.CHOICES,
                         selected = retentionDays,
                         label = ::retentionLabel,
@@ -1104,7 +1104,8 @@ private fun wipeAfterLabel(attempts: Int): String = when (attempts) {
 internal const val CLEAR_ALL_DATA_TEXT =
     "This removes every detection, the whole timeline with any photo kept on it, the location log, vehicle trips, " +
         "the cell tower baseline, the camera sweep's findings, the spyware check's last findings, when each paired " +
-        "accessory was first seen, and the radio scanner's recordings, older unencrypted ones included. Your settings, " +
+        "accessory was first seen, the radio scanner's recordings, older unencrypted ones included, and any copy of these " +
+        "set aside because it could not be read. Your settings, " +
         "trusted devices, the apps and headsets you marked as yours, the unlock ledger and Comms stay. There's no undo."
 
 /** What a wipe takes, in the words the dialog after a new passcode uses. */

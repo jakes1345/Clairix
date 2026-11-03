@@ -39,7 +39,7 @@ import java.util.Locale
  */
 object CellularExposure {
 
-    private const val FILE = "cellular_exposure.json"
+    internal const val FILE = "cellular_exposure.json"
 
     /** A 2G connection this recent, with nothing from the owner since, reads as the switch still on. */
     const val RECENT_MS = 7L * 24 * 3_600_000L

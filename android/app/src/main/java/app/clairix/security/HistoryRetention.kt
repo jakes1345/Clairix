@@ -24,8 +24,8 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
- * How long the scanner's history is kept: the location log, the timeline (with
- * any photo kept on it), the vehicle trips, the unlock ledger, the hidden-camera
+ * How long the scanner's history is kept: the location log, the timeline (but
+ * not what the owner saved on purpose, below), the vehicle trips, the unlock ledger, the hidden-camera
  * sweep's findings, the radio scanner's recordings, the map's tile cache and the
  * navigation's cache of typical road speeds; and what the cell-tower baseline
  * keeps of when.
@@ -42,8 +42,9 @@ import java.util.concurrent.TimeUnit
  * [app.clairix.analysis.IMSICatcher.applyRetention]). An exported evidence
  * report is kept a day for the app it was shared to, whatever the retention.
  * Evidence the owner saved about an app ([app.clairix.analysis.EventLog.KEPT])
- * stays on the timeline whatever the retention, until "Clear all data" or a
- * wipe: the app may be gone by the time it is needed.
+ * and a photo kept from the camera sweep stay on the timeline whatever the
+ * retention, until "Clear all data" or a wipe ([app.clairix.analysis.EventLog.isKept]):
+ * the app may be gone, and the room not visited again, by the time they are needed.
  *
  * It runs when the setting changes, at each start of the app, every hour while
  * the scanner runs ([app.clairix.analysis.ScanPacing.RETENTION_EVERY_MS]), and once a day on an alarm the system keeps

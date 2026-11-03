@@ -100,17 +100,39 @@ class EventLogTest {
         log.record(event("e2", 2_000L))
         log.record(event("e3", 3_000L))
         log.record(event("e4", 4_000L))
-        // Over the cap: the oldest goes.
-        assertEquals(listOf("p1"), dropped)
-        // The retention: everything before the cutoff, newest first as the log holds it.
-        assertEquals(2, log.pruneOlderThan(3_500L))
-        assertEquals(listOf("p1", "e3", "e2"), dropped)
-        // "Clear all data": the rest.
+        // Over the cap: the oldest ordinary event goes; the kept photo stays.
+        assertEquals(listOf("e2"), dropped)
+        // The retention: everything ordinary before the cutoff.
+        assertEquals(1, log.pruneOlderThan(3_500L))
+        assertEquals(listOf("e2", "e3"), dropped)
+        // "Clear all data": the rest, the photo with it, newest first as the log holds it.
         log.clear()
-        assertEquals(listOf("p1", "e3", "e2", "e4"), dropped)
+        assertEquals(listOf("e2", "e3", "e4", "p1"), dropped)
         // Nothing to prune: nothing handed over.
         assertEquals(0, log.pruneOlderThan(10_000L))
         assertEquals(4, dropped.size)
+    }
+
+    @Test
+    fun aKeptPhotoOutlivesTheRetentionAndIsTheLastToGoAtTheCap() {
+        val dropped = ArrayList<String>()
+        val log = EventLog(store(), cap = 2) { gone -> gone.forEach { dropped += it.id } }
+        log.record(event("photo", 1_000L, EventKind.CAMERA, "sweep/a.clxp"))
+        log.record(event("finding", 1_500L, EventKind.CAMERA))
+        // A camera finding without a photo ages out; the photo does not.
+        assertEquals(1, log.pruneOlderThan(5_000L))
+        assertEquals(listOf("finding"), dropped)
+        assertTrue(EventLog.isKept(log.snapshot().single()))
+        // Ordinary events come and go past the cap around it.
+        log.record(event("a", 2_000L))
+        log.record(event("b", 3_000L))
+        assertEquals(listOf("finding", "a"), dropped)
+        assertEquals(listOf("b", "photo"), log.snapshot().map { it.id })
+        // Once only kept events are left, the oldest of them goes at the cap.
+        log.record(event("photo2", 4_000L, EventKind.CAMERA, "sweep/b.clxp"))
+        log.record(event("photo3", 5_000L, EventKind.CAMERA, "sweep/c.clxp"))
+        assertEquals(listOf("photo3", "photo2"), log.snapshot().map { it.id })
+        assertEquals(listOf("finding", "a", "b", "photo"), dropped)
     }
 
     @Test

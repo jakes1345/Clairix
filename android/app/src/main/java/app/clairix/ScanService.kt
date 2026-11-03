@@ -1524,6 +1524,9 @@ class ScanService : LifecycleService() {
         // The radio scanner's recordings, and any plain ones an earlier version left.
         runCatching { ScannerRecordings.deleteEverything(this) }
         LocationHistory.clear(this)
+        // Copies of these stores set aside when they could not be read: the same
+        // history, kept 30 days for nobody's benefit once the owner has cleared it.
+        runCatching { Store.deleteSetAside(filesDir, CLEARED_STORE_FILES) }
         alerted.clear()
         followAlerts.clear()
         synchronized(gpsTrail) { gpsTrail.clear() }
@@ -1904,6 +1907,21 @@ class ScanService : LifecycleService() {
             (liveTrips ?: VehicleTrips(Store(context.applicationContext, TRIPS_FILE))).pruneOlderThan(cutoff)
 
         private const val CELL_FILE = "imsi_baseline.json"
+
+        /**
+         * The stores "Clear all data" empties ([CLEAR_ALL_DATA_TEXT]), whose set-aside
+         * copies go with them. Settings, the unlock ledger, the owner's marks kept in
+         * other stores, and Comms stay, as the dialog says.
+         */
+        internal val CLEARED_STORE_FILES = listOf(
+            TimelineLog.FILE, CELL_FILE, TRIPS_FILE,
+            app.clairix.analysis.LocationHistory.FILE,
+            app.clairix.analysis.HiddenCameraScanner.STORE_FILE,
+            app.clairix.analysis.AccountChecklist.FILE,
+            app.clairix.analysis.CellularExposure.FILE,
+            app.clairix.analysis.StalkwareWatch.FILE,
+            app.clairix.analysis.AudioRouteMonitor.FILE,
+        )
 
         /** The live service's cell baseline, for [applyCellRetention] to work on in place; null while no service is alive. */
         @Volatile private var liveImsi: IMSICatcher? = null

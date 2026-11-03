@@ -30,7 +30,7 @@ import kotlin.math.sqrt
  */
 object LocationHistory {
 
-    private const val FILE = "location_log.json"
+    internal const val FILE = "location_log.json"
     private const val KEY = "fixes"
     const val CAP = 30_000
     private const val MIN_INTERVAL_MS = 30_000L

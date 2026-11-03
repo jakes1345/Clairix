@@ -16,20 +16,24 @@ import app.clairix.analysis.SweepPhotos
  */
 object TimelineLog {
 
+    /** The timeline's store, in filesDir. */
+    const val FILE = "timeline.json"
+
     @Volatile
     private var log: EventLog? = null
 
     /**
      * The shared log, loading it from disk on first use. Does file I/O on first call.
      * A photo kept with an event ([TimelineEvent.attachment]) is deleted when the
-     * event leaves the log: "Clear all data", the retention, or the cap.
+     * event leaves the log: "Clear all data", or the cap once only kept events are left
+     * (the retention never takes a kept photo; see [EventLog.isKept]).
      */
     fun get(context: Context): EventLog {
         log?.let { return it }
         synchronized(this) {
             log?.let { return it }
             val app = context.applicationContext
-            val l = EventLog(Store(app, "timeline.json")) { dropped ->
+            val l = EventLog(Store(app, FILE)) { dropped ->
                 SweepPhotos.delete(app.filesDir, dropped.mapNotNull { it.attachment })
             }
             log = l

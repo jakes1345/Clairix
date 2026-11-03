@@ -48,7 +48,7 @@ import org.json.JSONObject
 object StalkwareWatch {
 
     private const val TAG = "StalkwareWatch"
-    private const val FILE = "stalkerware.json"
+    internal const val FILE = "stalkerware.json"
     /** A check older than this is done again; see [checkIfDue]. */
     const val CHECK_EVERY_MS = 24 * 3600_000L
     /** Installs come in bursts (an update of several apps, a restore); one check after the last. */
