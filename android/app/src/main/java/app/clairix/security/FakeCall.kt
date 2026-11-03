@@ -59,6 +59,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import app.clairix.R
 import app.clairix.ui.theme.DecoyCallPalette
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -805,20 +807,20 @@ private fun Ringing(who: FakeCall.Caller, onDecline: () -> Unit, onAnswer: () ->
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
-        Text("Incoming call", style = MaterialTheme.typography.bodyLarge, color = FcDim)
+        Text(stringResource(R.string.comms_incoming_call), style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.height(28.dp))
         Avatar(who.name)
         Spacer(Modifier.height(20.dp))
         Text(who.name, style = MaterialTheme.typography.headlineLarge, color = FcInk, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
-        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", style = MaterialTheme.typography.bodyLarge, color = FcDim)
+        Text(who.number?.let { formatClairixNumber(it) } ?: stringResource(R.string.safety_mobile), style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Button(onClick = onDecline, colors = ButtonDefaults.buttonColors(containerColor = FcDecline), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-                Text("End", style = MaterialTheme.typography.labelLarge, color = FcInk)
+                Text(stringResource(R.string.safety_end), style = MaterialTheme.typography.labelLarge, color = FcInk)
             }
             Button(onClick = onAnswer, colors = ButtonDefaults.buttonColors(containerColor = FcAnswer), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-                Text("Answer", style = MaterialTheme.typography.labelLarge, color = FcInk)
+                Text(stringResource(R.string.comms_answer), style = MaterialTheme.typography.labelLarge, color = FcInk)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -846,10 +848,10 @@ private fun InCall(who: FakeCall.Caller, onEnd: () -> Unit) {
         Spacer(Modifier.height(20.dp))
         Text(who.name, style = MaterialTheme.typography.headlineLarge, color = FcInk, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
-        Text(who.number?.let { formatClairixNumber(it) } ?: "Mobile", style = MaterialTheme.typography.bodyLarge, color = FcDim)
+        Text(who.number?.let { formatClairixNumber(it) } ?: stringResource(R.string.safety_mobile), style = MaterialTheme.typography.bodyLarge, color = FcDim)
         Spacer(Modifier.weight(1f))
         Button(onClick = onEnd, colors = ButtonDefaults.buttonColors(containerColor = FcDecline), shape = CircleShape, modifier = Modifier.size(80.dp)) {
-            Text("End", style = MaterialTheme.typography.labelLarge, color = FcInk)
+            Text(stringResource(R.string.safety_end), style = MaterialTheme.typography.labelLarge, color = FcInk)
         }
         Spacer(Modifier.height(24.dp))
     }

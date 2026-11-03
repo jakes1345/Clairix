@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -145,7 +146,7 @@ internal fun SosExtrasSheet(
             when {
                 outcome != null -> Text(SosExtras.textLine(outcome), style = MaterialTheme.typography.bodyMedium, color = c.text)
                 offerText -> SecondaryButton(
-                    "Text $to",
+                    stringResource(R.string.safety_text, to),
                     onClick = { SosExtrasRun.sendText(context, to) },
                     tone = Tone.Danger,
                     modifier = Modifier.fillMaxWidth()
@@ -158,7 +159,7 @@ internal fun SosExtrasSheet(
         }
         if (config.callOn) {
             SecondaryButton(
-                "Call ${emergency.number}",
+                stringResource(R.string.safety_call, emergency.number),
                 onClick = { SosExtrasRun.dial(context, emergency.number) },
                 tone = Tone.Danger,
                 icon = Icons.Filled.Call,
@@ -185,16 +186,16 @@ internal fun SosExtrasResultDialog(config: SosExtras.Config, emergency: Emergenc
     val text by SosExtrasRun.text.collectAsStateWithLifecycle()
     val call by SosExtrasRun.call.collectAsStateWithLifecycle()
     ClairixDialog(
-        title = "SOS text and call",
+        title = stringResource(R.string.safety_sos_text_and_call),
         text = SosExtras.resultLines(text, call, if (config.callOn) emergency.number else null).joinToString("\n\n"),
-        confirmLabel = "Close",
+        confirmLabel = stringResource(R.string.comms_close),
         onConfirm = onDismiss,
         onDismiss = onDismiss,
         dismissLabel = null,
         content = if (config.callOn) {
             {
                 SecondaryButton(
-                    "Call ${emergency.number}",
+                    stringResource(R.string.safety_call, emergency.number),
                     onClick = { SosExtrasRun.dial(context, emergency.number) },
                     tone = Tone.Danger,
                     icon = Icons.Filled.Call,
@@ -227,19 +228,17 @@ internal fun SosExtrasSettingsCard(modifier: Modifier = Modifier) {
 
     ClairixCard(modifier, spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
         Text(
-            "An SOS goes to the members of your Clairix groups. Before you have a group, or as well, it can text one " +
-                "number and offer a button for the emergency number. Both are off until you turn them on here. " +
-                "The duress phrase never texts or calls.",
+            stringResource(R.string.safety_an_sos_goes_to_the_members),
             style = MaterialTheme.typography.bodyMedium,
             color = c.textSubtle,
             modifier = Modifier.padding(vertical = 8.dp)
         )
         ToggleRow(
-            title = "Also text this number",
+            title = stringResource(R.string.safety_also_text_this_number),
             subtitle = if (config.textOn) {
-                "Sending an SOS also texts this number your position as an OpenStreetMap link, or says that there is none."
+                stringResource(R.string.safety_sending_an_sos_also_texts_this)
             } else {
-                "Off: an SOS goes only to your Clairix groups."
+                stringResource(R.string.safety_off_an_sos_goes_only_to)
             },
             checked = config.textOn,
             onCheckedChange = { v ->
@@ -257,20 +256,18 @@ internal fun SosExtrasSettingsCard(modifier: Modifier = Modifier) {
                     config = config.copy(number = v)
                     SosExtras.setNumber(context, v)
                 },
-                label = "Number to text",
+                label = stringResource(R.string.safety_number_to_text),
                 keyboardType = KeyboardType.Phone,
                 isError = bad,
                 supportingText = when {
-                    bad -> "Not a phone number: digits, with + and the country code if it is abroad."
-                    typed.isBlank() -> "Nothing is texted until a number is here."
+                    bad -> stringResource(R.string.safety_not_a_phone_number_digits_with)
+                    typed.isBlank() -> stringResource(R.string.safety_nothing_is_texted_until_a_number)
                     else -> null
                 },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             )
             Text(
-                "A text is not encrypted: it goes through your mobile carrier, who can read it, and stays in your " +
-                    "messaging app's sent texts, where anyone holding the phone can see it, until you delete it there. " +
-                    "A Clairix SOS is end to end encrypted and leaves nothing in the messaging app.",
+                stringResource(R.string.safety_a_text_is_not_encrypted_it),
                 style = MaterialTheme.typography.bodySmall,
                 color = c.textSubtle,
                 modifier = Modifier.padding(vertical = 4.dp)
@@ -284,13 +281,11 @@ internal fun SosExtrasSettingsCard(modifier: Modifier = Modifier) {
         }
         Hairline()
         ToggleRow(
-            title = "Emergency call button",
+            title = stringResource(R.string.safety_emergency_call_button),
             subtitle = if (config.callOn) {
-                "The SOS sheet shows Call ${emergency.number}. It opens the phone app with the number entered and the " +
-                    "call starts when you press call there; Clairix places no call and needs no phone permission. " +
-                    EmergencyNumbers.explain(emergency)
+                stringResource(R.string.safety_the_sos_sheet_shows_call_it, emergency.number, EmergencyNumbers.explain(emergency))
             } else {
-                "Off: the SOS sheet shows no call button."
+                stringResource(R.string.safety_off_the_sos_sheet_shows_no)
             },
             checked = config.callOn,
             onCheckedChange = { v ->

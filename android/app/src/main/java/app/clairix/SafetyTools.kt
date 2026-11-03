@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -119,12 +120,10 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
         FakeCall.lockNow(context)
     }
 
-    ToolPageList(title = "Fake call", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.safety_fake_call), onBack = onBack) {
         item(key = "§intro") {
             Text(
-                "A way out of a conversation or a situation that is going wrong. The phone rings with " +
-                "its own ringtone and vibration, honouring silent mode, and shows an incoming call from " +
-                "whoever you name here.",
+                stringResource(R.string.safety_a_way_out_of_a_conversation),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -139,42 +138,39 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                         Column(Modifier.weight(1f)) {
                             Text("Rings in ${secs / 60}:${"%02d".format(Locale.US, secs % 60)}", style = MaterialTheme.typography.mono, color = ClairixTheme.colors.text)
                             Text(
-                                "Lock the phone and put it away; it rings on its own." +
-                                    (connectTo?.let { " Answering calls ${it.name} for real." } ?: ""),
+                                stringResource(R.string.safety_lock_the_phone_and_put_it, (connectTo?.let { stringResource(R.string.safety_answering_calls_for_real, it.name) } ?: "")),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClairixTheme.colors.textSubtle
                             )
                         }
-                        StatusPill("Scheduled", Tone.Accent)
+                        StatusPill(stringResource(R.string.safety_scheduled), Tone.Accent)
                     }
-                    SecondaryButton("Cancel", onClick = { FakeCall.cancel(context); pendingAt = null }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton(stringResource(R.string.settings_cancel), onClick = { FakeCall.cancel(context); pendingAt = null }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
-        item(key = "§caller-hdr") { SectionHeader("Caller") }
+        item(key = "§caller-hdr") { SectionHeader(stringResource(R.string.safety_caller)) }
         item(key = "§caller") {
             ClairixCard {
-                ClairixTextField(value = name, onValueChange = { name = it.take(40) }, label = "Name shown", placeholder = "Mum", modifier = Modifier.fillMaxWidth())
-                ClairixTextField(value = number, onValueChange = { number = it.take(24) }, label = "Number shown (optional)", keyboardType = KeyboardType.Phone, modifier = Modifier.fillMaxWidth())
+                ClairixTextField(value = name, onValueChange = { name = it.take(40) }, label = stringResource(R.string.safety_name_shown), placeholder = stringResource(R.string.safety_mum), modifier = Modifier.fillMaxWidth())
+                ClairixTextField(value = number, onValueChange = { number = it.take(24) }, label = stringResource(R.string.safety_number_shown_optional), keyboardType = KeyboardType.Phone, modifier = Modifier.fillMaxWidth())
                 Text(
-                    "Saved when a call is scheduled. The name and number are only what appears on the " +
-                    "screen; no real call is made unless you pick a contact below.",
+                    stringResource(R.string.safety_saved_when_a_call_is_scheduled),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
             }
         }
 
-        item(key = "§connect-hdr") { SectionHeader("On answer") }
+        item(key = "§connect-hdr") { SectionHeader(stringResource(R.string.safety_on_answer)) }
         item(key = "§connect") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Connect to a real contact", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                        Text(stringResource(R.string.safety_connect_to_a_real_contact), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
-                            "Answering places an encrypted Clairix call to this contact instead of a pretend " +
-                            "one. Leave empty to talk to nobody.",
+                            stringResource(R.string.safety_answering_places_an_encrypted_clairix_call),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )
@@ -186,11 +182,11 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                             colors = ButtonDefaults.textButtonColors(contentColor = ClairixTheme.colors.accent),
                             shape = ClairixShapes.Card
                         ) {
-                            Text(connectTo?.name ?: "Nobody", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(connectTo?.name ?: stringResource(R.string.safety_nobody), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }, containerColor = ClairixTheme.colors.surfaceRaised, shape = ClairixShapes.Card) {
                             DropdownMenuItem(
-                                text = { Text("Nobody", style = if (connectTo == null) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyLarge) },
+                                text = { Text(stringResource(R.string.safety_nobody), style = if (connectTo == null) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyLarge) },
                                 onClick = { pickerOpen = false; connectTo = null }
                             )
                             for (c in contacts) {
@@ -208,77 +204,71 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                     }
                 }
                 if (contacts.isEmpty()) {
-                    Text("No Clairix contacts yet — add one on the Comms tab.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.safety_no_clairix_contacts_yet_add_one), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 }
             }
         }
 
-        item(key = "§when-hdr") { SectionHeader("Ring in") }
+        item(key = "§when-hdr") { SectionHeader(stringResource(R.string.safety_ring_in)) }
         item(key = "§when") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PrimaryButton("30 s", onClick = { schedule(FakeCall.DELAY_30S) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
-                    PrimaryButton("2 min", onClick = { schedule(FakeCall.DELAY_2MIN) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
-                    PrimaryButton("5 min", onClick = { schedule(FakeCall.DELAY_5MIN) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
+                    PrimaryButton(stringResource(R.string.safety_2_min), onClick = { schedule(FakeCall.DELAY_2MIN) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
+                    PrimaryButton(stringResource(R.string.safety_5_min), onClick = { schedule(FakeCall.DELAY_5MIN) }, enabled = readiness.canSchedule, modifier = Modifier.weight(1f))
                 }
                 if (FakeCall.Missing.NOTIFICATIONS in readiness.missing) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Notifications are off for Clairix, so the call could not show at all. Allow them to schedule one.",
+                            stringResource(R.string.safety_notifications_are_off_for_clairix_so),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClairixTheme.colors.caution,
                             modifier = Modifier.weight(1f)
                         )
-                        GhostButton("Allow", onClick = allowNotifications)
+                        GhostButton(stringResource(R.string.comms_allow), onClick = allowNotifications)
                     }
                 } else if (FakeCall.Missing.CALL_CHANNEL in readiness.missing) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Clairix's call notifications are switched off or set to silent, so the call may not take " +
-                            "the screen, or may ring without a sound. Set them to alert.",
+                            stringResource(R.string.safety_clairixs_call_notifications_are_switched_off),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClairixTheme.colors.caution,
                             modifier = Modifier.weight(1f)
                         )
-                        GhostButton("Fix", onClick = { FakeCall.openChannelSettings(context) })
+                        GhostButton(stringResource(R.string.comms_fix), onClick = { FakeCall.openChannelSettings(context) })
                     }
                 }
                 if (FakeCall.Missing.FULL_SCREEN in readiness.missing) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Full-screen calls: off. On a locked phone the call would show only as a notification. " +
-                            "Allow them to schedule a call.",
+                            stringResource(R.string.safety_full_screen_calls_off_on_a),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClairixTheme.colors.caution,
                             modifier = Modifier.weight(1f)
                         )
-                        GhostButton("Allow", onClick = { CommsNotifications.openFullScreenSettings(context) })
+                        GhostButton(stringResource(R.string.comms_allow), onClick = { CommsNotifications.openFullScreenSettings(context) })
                     }
                 }
                 if (!readiness.ringsOnTime) {
                     Text(
-                        "Exact alarms are not allowed for Clairix, so Android may ring the call late while the " +
-                        "phone is idle. Allow them for the call to land on the second.",
+                        stringResource(R.string.safety_exact_alarms_are_not_allowed_for),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.caution
                     )
-                    SecondaryButton("Allow exact alarms", onClick = { FakeCall.requestExactAlarms(context) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton(stringResource(R.string.safety_allow_exact_alarms), onClick = { FakeCall.requestExactAlarms(context) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 } else if (readiness.missing.isEmpty()) {
-                    Text("Ready: the call rings on time, with the screen off or another app open.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.safety_ready_the_call_rings_on_time), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 }
             }
         }
 
-        item(key = "§lock-hdr") { SectionHeader("Put the phone away") }
+        item(key = "§lock-hdr") { SectionHeader(stringResource(R.string.safety_put_the_phone_away)) }
         // The comms-only build declares no device admin (the unlock ledger's is the
         // full app's), so there is nothing to lock the phone with, nor to enable.
         if (!BuildConfig.FULL_ACCESS) item(key = "§lock") {
             ClairixCard {
                 Text(
-                    "Schedule the call, then lock the phone with its power button and put it away. Locked, the phone " +
-                    "shows the call screen over the lock screen like any call; unlocked and in another app, it shows a " +
-                    "call banner that carries Clairix's name instead. Clairix Comms cannot lock the phone for you: that " +
-                    "needs the full app's device admin.",
+                    stringResource(R.string.safety_schedule_the_call_then_lock_the),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -288,14 +278,14 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
             ClairixCard {
                 Box(Modifier.fillMaxWidth()) {
                     SecondaryButton(
-                        "Schedule and lock",
+                        stringResource(R.string.safety_schedule_and_lock),
                         onClick = { lockMenuOpen = true },
                         tone = Tone.Accent,
                         enabled = readiness.canSchedule && canLock,
                         modifier = Modifier.fillMaxWidth()
                     )
                     DropdownMenu(expanded = lockMenuOpen, onDismissRequest = { lockMenuOpen = false }, containerColor = ClairixTheme.colors.surfaceRaised, shape = ClairixShapes.Card) {
-                        for ((label, delayMs) in listOf("In 30 s" to FakeCall.DELAY_30S, "In 2 min" to FakeCall.DELAY_2MIN, "In 5 min" to FakeCall.DELAY_5MIN)) {
+                        for ((label, delayMs) in listOf(stringResource(R.string.safety_in_30_s) to FakeCall.DELAY_30S, stringResource(R.string.safety_in_2_min) to FakeCall.DELAY_2MIN, stringResource(R.string.safety_in_5_min) to FakeCall.DELAY_5MIN)) {
                             DropdownMenuItem(
                                 text = { Text(label, style = MaterialTheme.typography.bodyLarge) },
                                 onClick = { lockMenuOpen = false; scheduleAndLock(delayMs) }
@@ -304,9 +294,7 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                     }
                 }
                 Text(
-                    "Schedules the call, hides Clairix and locks the phone. Locked, the phone shows the call " +
-                    "screen over the lock screen like any call; unlocked and in another app, it shows a call " +
-                    "banner that carries Clairix's name instead.",
+                    stringResource(R.string.safety_schedules_the_call_hides_clairix_and),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -314,17 +302,15 @@ internal fun FakeCallPage(onBack: (() -> Unit)? = null) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             if (adminActive) {
-                                "Clairix's device admin was approved before it could lock the screen. Approve it " +
-                                "again to let this button lock the phone."
+                                stringResource(R.string.safety_clairixs_device_admin_was_approved_before)
                             } else {
-                                "Locking needs Clairix's device admin, the one the Unlock ledger uses. It can lock " +
-                                "the screen and record unlock attempts; it cannot wipe the phone or change its PIN."
+                                stringResource(R.string.safety_locking_needs_clairixs_device_admin_the)
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = ClairixTheme.colors.caution,
                             modifier = Modifier.weight(1f)
                         )
-                        GhostButton(if (adminActive) "Approve" else "Enable", onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) })
+                        GhostButton(if (adminActive) stringResource(R.string.safety_approve) else stringResource(R.string.safety_enable), onClick = { openExternal(context, UnlockLedger.requestAdminIntent(context)) })
                     }
                 }
             }
@@ -367,66 +353,61 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
             onDismissRequest = { showClear = false },
             shape = ClairixShapes.Sheet,
             containerColor = ClairixTheme.colors.surfaceRaised,
-            title = { Text("Remove the duress phrase?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            title = { Text(stringResource(R.string.safety_remove_the_duress_phrase), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(
-                    "Typing the phrase into a conversation will no longer send an SOS.",
+                    stringResource(R.string.safety_typing_the_phrase_into_a_conversation),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
                 GhostButton(
-                    "Remove",
+                    stringResource(R.string.settings_remove),
                     onClick = {
                         showClear = false
                         DuressPhrase.clear(context)
                         configured = false
-                        message = "Duress phrase removed"
+                        message = context.getString(R.string.safety_duress_phrase_removed)
                         messageIsError = false
                     },
                     tone = Tone.Danger
                 )
             },
             dismissButton = {
-                GhostButton("Cancel", onClick = { showClear = false }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.settings_cancel), onClick = { showClear = false }, tone = Tone.Neutral)
             }
         )
     }
 
-    ToolPageList(title = "Duress phrase", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.safety_duress_phrase), onBack = onBack) {
         item(key = "§status") {
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
                         Text(
-                            if (configured) "Duress phrase is set" else "No duress phrase",
+                            if (configured) stringResource(R.string.safety_duress_phrase_is_set) else stringResource(R.string.safety_no_duress_phrase),
                             style = MaterialTheme.typography.titleSmall,
                             color = ClairixTheme.colors.text
                         )
                         Text(
-                            "An ordinary-looking sentence you can type into any Clairix conversation. The " +
-                            "message goes out as written, so anyone watching the screen sees a normal chat; " +
-                            "underneath, the SOS fires to your groups with your position: the last known one, " +
-                            "or a fresh fix when the phone can read one within a few seconds.",
+                            stringResource(R.string.safety_an_ordinary_looking_sentence_you_can),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    StatusPill(if (configured) "Configured" else "Not set", if (configured) Tone.Safe else Tone.Neutral)
+                    StatusPill(if (configured) stringResource(R.string.safety_configured) else stringResource(R.string.settings_not_set), if (configured) Tone.Safe else Tone.Neutral)
                 }
                 if (tooShortStored) {
                     Text(
-                        "The saved phrase is shorter than the current minimum and will not send an SOS. " +
-                        "Replace it below.",
+                        stringResource(R.string.safety_the_saved_phrase_is_shorter_than),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.danger
                     )
                 }
                 if (groupCount == 0) {
                     Text(
-                        "You are in no group, so the phrase would send nothing. The SOS goes to your groups: " +
-                        "make one in COMMS, or accept an invitation to one, before relying on this.",
+                        stringResource(R.string.safety_you_are_in_no_group_so),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.danger
                     )
@@ -434,28 +415,24 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§set-hdr") { SectionHeader(if (configured) "Replace phrase" else "Set phrase") }
+        item(key = "§set-hdr") { SectionHeader(if (configured) stringResource(R.string.safety_replace_phrase) else stringResource(R.string.safety_set_phrase)) }
         item(key = "§set") {
             ClairixCard {
                 ClairixTextField(
                     value = phrase,
                     onValueChange = { phrase = it.take(120); message = null },
-                    label = "New phrase",
-                    placeholder = "e.g. did you remember to feed the cat",
+                    label = stringResource(R.string.safety_new_phrase),
+                    placeholder = stringResource(R.string.safety_e_g_did_you_remember_to),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "Pick something you would plausibly say but never would by accident — at least " +
-                    "${DuressPhrase.MIN_WORDS} words and ${DuressPhrase.MIN_CHARS} letters, not counting spaces. " +
-                    "Matching ignores " +
-                    "case and extra spaces. The phrase is stored encrypted and is never shown again — " +
-                    "not here, not in the timeline, not in a notification.",
+                    stringResource(R.string.safety_pick_something_you_would_plausibly_say, DuressPhrase.MIN_WORDS, DuressPhrase.MIN_CHARS),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 message?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (messageIsError) ClairixTheme.colors.danger else ClairixTheme.colors.safe) }
                 PrimaryButton(
-                    if (configured) "Replace phrase" else "Save phrase",
+                    if (configured) stringResource(R.string.safety_replace_phrase) else stringResource(R.string.safety_save_phrase),
                     onClick = {
                             val value = phrase
                             val problem = DuressPhrase.validate(value)
@@ -470,7 +447,7 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                                     phrase = ""
                                     configured = DuressPhrase.isConfigured(context)
                                     tooShortStored = false
-                                    message = if (configured) "Saved" else "A blank phrase clears the setting"
+                                    message = if (configured) context.getString(R.string.safety_saved) else context.getString(R.string.safety_a_blank_phrase_clears_the_setting)
                                     messageIsError = false
                                 }.onFailure {
                                     message = if (it is IllegalArgumentException) it.message ?: DuressPhrase.TOO_SHORT_MESSAGE
@@ -483,27 +460,16 @@ internal fun DuressPage(onBack: (() -> Unit)? = null) {
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (configured) {
-                    SecondaryButton("Clear phrase", onClick = { showClear = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton(stringResource(R.string.safety_clear_phrase), onClick = { showClear = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
         item(key = "§how") {
             ClairixCard(spacing = 6.dp) {
-                Text("How it works", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.shell_how_it_works), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "• Type the phrase as a message to any contact or group and send it as usual.\n" +
-                    "• The message is delivered normally, so the conversation looks unremarkable.\n" +
-                    "• At the same time an SOS goes to all your groups with your position: the last known one, " +
-                    "or a fresh fix when the phone can read one within a few seconds.\n" +
-                    "• Anyone the relay cannot take right away is tried again for about thirty minutes, from " +
-                    "Clairix's memory only. If Android closes Clairix in that time, the tries stop.\n" +
-                    "• Nothing is written on this phone: no timeline entry, no log line, no notification, and " +
-                    "never the phrase itself. Only the visible SOS button writes a timeline entry, with how many " +
-                    "people it reached.\n" +
-                    "• It never texts or calls anyone, even with Also text this number on in Settings: a text " +
-                    "would stay in the messaging app for whoever is holding the phone to read.\n" +
-                    "• Nothing on screen changes. Carry on as if nothing happened.",
+                    stringResource(R.string.safety_type_the_phrase_as_a_message),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -529,69 +495,52 @@ internal fun WipePage(onBack: (() -> Unit)? = null) {
     var started by remember { mutableStateOf(false) }
     val ready = typed.trim().equals(WIPE_WORD, ignoreCase = false)
 
-    ToolPageList(title = "Wipe Clairix", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.settings_wipe_clairix), onBack = onBack) {
         // A wipe takes the evidence with it, and a phone that changes can tell whoever
         // watches it: the safety card comes before anything else on this page.
         item(key = "§safety-first") { SafetyFirstCard(title = SafetyFirst.TITLE_WIPE) }
         item(key = "§what") {
             ClairixCard(spacing = 6.dp) {
-                Text("What is erased", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.safety_what_is_erased), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "• Every conversation, contact, group and call record, and the keys behind them\n" +
-                    "• Your Clairix number: the relay is asked to delete the account\n" +
-                    "• The scanner's timeline, location history, cell-tower baseline and trips\n" +
-                    "• The card vault, the passcode, the duress phrase and every setting\n" +
-                    "• Downloaded maps and map tiles, voicemails, attachments and the comms log\n" +
-                    "• Every notification and Clairix's notification categories, the clipboard, the push " +
-                    "registration and the device-admin role",
+                    stringResource(R.string.safety_every_conversation_contact_group_and_call),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
-                    "In this order: every key in the phone's secure hardware, then every file, setting and " +
-                    "database; then the relay is asked, for a few seconds, to delete the account, and Clairix " +
-                    "closes. It opens next as a new install. There is no undo and no backup to restore from.",
+                    stringResource(R.string.safety_in_this_order_every_key_in),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
-                    "If the relay cannot be reached, the request to delete the account waits on this phone, in a " +
-                    "file that holds your Clairix number, the relay's address and copies of the request signed " +
-                    "with your identity key, and is tried again about every ten minutes, whether or not Clairix " +
-                    "is open, for up to a day; after that, write to support@clairix.app. Uninstalling Clairix " +
-                    "deletes that file, so a request still waiting then is never sent. With Tor on, it is sent " +
-                    "only through Tor, before Clairix closes, and is not kept or tried again.",
+                    stringResource(R.string.safety_if_the_relay_cannot_be_reached),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
-                    "Android keeps what is its own: Clairix stays installed, and Settings still lists the access " +
-                    "you gave it, its battery and location use, and how many notification categories it has " +
-                    "deleted. When having the app at all is the risk, uninstall it afterwards.",
+                    stringResource(R.string.safety_android_keeps_what_is_its_own),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Text(
-                    "The wrong-passcode limit runs the same wipe. So does the duress passcode at the lock screen, " +
-                    "with one difference: Clairix does not close. It stays on its lock screen, and from then on " +
-                    "that code opens it, empty.",
+                    stringResource(R.string.safety_the_wrong_passcode_limit_runs_the),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
             }
         }
-        item(key = "§do-hdr") { SectionHeader("Wipe now") }
+        item(key = "§do-hdr") { SectionHeader(stringResource(R.string.safety_wipe_now)) }
         item(key = "§do") {
             ClairixCard {
                 ClairixTextField(
                     value = typed,
                     onValueChange = { typed = it.take(8) },
-                    label = "Type $WIPE_WORD to confirm",
+                    label = stringResource(R.string.safety_type_to_confirm, WIPE_WORD),
                     placeholder = WIPE_WORD,
                     modifier = Modifier.fillMaxWidth()
                 )
                 PrimaryButton(
-                    if (started) "Wiping…" else "Wipe everything now",
+                    if (started) stringResource(R.string.safety_wiping) else stringResource(R.string.safety_wipe_everything_now),
                     onClick = {
                         if (!ready || started) return@PrimaryButton
                         started = true
