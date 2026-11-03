@@ -57,6 +57,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -116,7 +117,7 @@ class CallActivity : ComponentActivity() {
             val blocked = !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO)
             Toast.makeText(
                 this,
-                if (blocked) "The microphone is blocked for Clairix. Allow it under Permissions to take calls." else "Answering needs the microphone.",
+                getString(if (blocked) R.string.comms_microphone_blocked_calls else R.string.comms_answering_needs_microphone),
                 Toast.LENGTH_LONG
             ).show()
             if (blocked) openAppDetails(this)
@@ -140,7 +141,7 @@ class CallActivity : ComponentActivity() {
             // The process that rang was killed, or the call ended while the
             // notification was being tapped: there is nothing to show.
             CommsNotifications.cancelIncomingCall(this)
-            Toast.makeText(this, "That call has ended", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.comms_that_call_has_ended), Toast.LENGTH_SHORT).show()
             finish()
             return
         }
@@ -276,12 +277,12 @@ internal fun VoicemailScreen(contact: Contact, call: ActiveCall?, modifier: Modi
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Call ended", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
+        Text(stringResource(R.string.comms_call_ended), style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
         Spacer(Modifier.height(12.dp))
         Text(contact.name.ifBlank { formatClairixNumber(contact.number) }, style = MaterialTheme.typography.headlineLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
         Spacer(Modifier.height(4.dp))
         Text(
-            call?.endReason?.replaceFirstChar { it.uppercase() } ?: "Not answered",
+            call?.endReason?.replaceFirstChar { it.uppercase() } ?: stringResource(R.string.comms_not_answered),
             style = MaterialTheme.typography.mono,
             color = ClairixTheme.colors.caution
         )
@@ -319,7 +320,7 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
     fun finishRecording() {
         val result = recorder.stop()
         step = if (result == null) {
-            error = "Nothing was recorded; hold the button a little longer."
+            error = context.getString(R.string.comms_nothing_was_recorded_hold_the_button)
             VoicemailStep.Idle
         } else {
             error = null
@@ -334,13 +335,13 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
             elapsed = 0L
             step = VoicemailStep.Recording
         } catch (e: IllegalStateException) {
-            error = "Could not start recording: ${e.message}"
+            error = context.getString(R.string.comms_could_not_start_recording, e.message.toString())
         }
     }
 
     val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) beginRecording()
-        else error = "Recording a voicemail needs the microphone."
+        else error = context.getString(R.string.comms_recording_a_voicemail_needs_the_microphone)
     }
 
     // The counter while recording; the recording stops itself at the limit.
@@ -360,41 +361,41 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         when (val s = step) {
             VoicemailStep.Idle -> {
-                Text("Leave a voicemail for $label?", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
+                Text(stringResource(R.string.comms_leave_a_voicemail_for, label), style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
                 RecordButton(recording = false) {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) beginRecording()
                     else askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
                 }
-                Text("Tap to record · up to ${durationLabel(VoicemailRecorder.MAX_DURATION_MS)}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
-                GhostButton("Not now", onClick = onDone, tone = Tone.Neutral)
+                Text(stringResource(R.string.comms_tap_to_record_up_to, durationLabel(VoicemailRecorder.MAX_DURATION_MS)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                GhostButton(stringResource(R.string.comms_not_now), onClick = onDone, tone = Tone.Neutral)
             }
             VoicemailStep.Recording -> {
-                Text("Recording…", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.danger)
+                Text(stringResource(R.string.comms_recording), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.danger)
                 RecordButton(recording = true) { finishRecording() }
                 Text(
                     "${durationLabel(elapsed)} / ${durationLabel(VoicemailRecorder.MAX_DURATION_MS)}",
                     style = MaterialTheme.typography.monoLarge,
                     color = ClairixTheme.colors.text
                 )
-                Text("Tap to stop", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                Text(stringResource(R.string.comms_tap_to_stop), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
             is VoicemailStep.Recorded -> {
-                Text("Voicemail recorded · ${durationLabel(s.durationMs)}", style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_voicemail_recorded, durationLabel(s.durationMs)), style = MaterialTheme.typography.bodyLarge, color = ClairixTheme.colors.text)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    VoicemailButton("Discard", Tone.Danger) {
+                    VoicemailButton(stringResource(R.string.comms_discard), Tone.Danger) {
                         step = VoicemailStep.Idle
                         error = null
                     }
-                    VoicemailButton("Send voicemail", Tone.Safe) {
+                    VoicemailButton(stringResource(R.string.comms_send_voicemail), Tone.Safe) {
                         step = VoicemailStep.Sending(s.audioB64, s.durationMs)
                         scope.launch {
                             CommsRepository.sendVoicemail(contact, s.audioB64, s.durationMs)
                                 .onSuccess {
-                                    Toast.makeText(context, "Voicemail sent", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.comms_voicemail_sent), Toast.LENGTH_SHORT).show()
                                     onDone()
                                 }
                                 .onFailure {
-                                    error = "Not sent: ${it.message ?: "the relay could not be reached"}"
+                                    error = context.getString(R.string.comms_not_sent_because, it.message ?: context.getString(R.string.comms_relay_could_not_be_reached))
                                     step = VoicemailStep.Recorded(s.audioB64, s.durationMs)
                                 }
                         }
@@ -403,12 +404,12 @@ internal fun VoicemailSection(contact: Contact, onDone: () -> Unit) {
             }
             is VoicemailStep.Sending -> {
                 CircularProgressIndicator(color = ClairixTheme.colors.safe, modifier = Modifier.size(36.dp))
-                Text("Sending encrypted voicemail…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+                Text(stringResource(R.string.comms_sending_encrypted_voicemail), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
         }
         error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 300.dp)) }
         Text(
-            "The recording is encrypted to $label's keys like a message; the relay only carries it.",
+            stringResource(R.string.comms_the_recording_is_encrypted_to_s, label),
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle,
             textAlign = TextAlign.Center,
@@ -440,7 +441,7 @@ private fun RecordButton(recording: Boolean, onClick: () -> Unit) {
                 .size(96.dp)
                 .scale(if (recording) scale else 1f)
                 .background(if (recording) ClairixTheme.colors.danger else ClairixTheme.colors.surfaceRaised, CircleShape)
-                .clickable(onClickLabel = if (recording) "Stop recording" else "Record a voicemail", role = Role.Button, onClick = onClick),
+                .clickable(onClickLabel = if (recording) stringResource(R.string.comms_stop_recording) else stringResource(R.string.comms_record_a_voicemail), role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             if (recording) {

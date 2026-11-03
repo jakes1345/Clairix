@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.comms.mesh.Mesh
 import app.clairix.comms.mesh.MeshPacing
@@ -36,78 +37,67 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
         if (grants.values.all { it }) { Mesh.setEnabled(context, true); on = true; denied = false } else denied = true
     }
 
-    ToolPageList(title = "Offline mesh", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.settings_offline_mesh), onBack = onBack) {
         item(key = "§hero") {
             StatusHero(
-                eyebrow = "Phone to phone",
-                headline = if (on) "On" else "Off",
-                body = if (on) "Texts, group texts and SOS that cannot reach the relay are carried phone to phone over Bluetooth until they reach the person they are for."
-                    else "Turn it on when the network is down or not to be trusted. Every phone on the way needs it on too.",
+                eyebrow = stringResource(R.string.comms_phone_to_phone),
+                headline = if (on) stringResource(R.string.comms_on) else stringResource(R.string.comms_off),
+                body = if (on) stringResource(R.string.comms_texts_group_texts_and_sos_that)
+                    else stringResource(R.string.comms_turn_it_on_when_the_network),
                 tone = if (on) Tone.Info else Tone.Neutral
             )
         }
         item(key = "§warn") {
             Notice(
-                Tone.Caution, title = "What turning it on shows",
-                text = "While it is on, this phone advertises a Bluetooth service that anyone scanning nearby can see: it says a " +
-                    "Clairix phone is here, never whose, and the address it advertises from changes. What it carries is sealed end " +
-                    "to end, exactly as the relay carries it; a phone carrying someone else's message cannot read it or tell who it " +
-                    "is for. Leave it off when being seen to run Clairix is the bigger risk."
+                Tone.Caution, title = stringResource(R.string.comms_what_turning_it_on_shows),
+                text = stringResource(R.string.comms_while_it_is_on_this_phone)
             )
         }
         item(key = "§toggle") {
-            if (on) PrimaryButton("Turn off", onClick = { Mesh.setEnabled(context, false); on = false }, tone = Tone.Neutral)
-            else PrimaryButton("Turn on", onClick = {
+            if (on) PrimaryButton(stringResource(R.string.settings_turn_off), onClick = { Mesh.setEnabled(context, false); on = false }, tone = Tone.Neutral)
+            else PrimaryButton(stringResource(R.string.comms_turn_on), onClick = {
                 if (Mesh.permitted(context)) { Mesh.setEnabled(context, true); on = true } else ask.launch(Mesh.PERMISSIONS)
             })
         }
         if (denied) item(key = "§denied") {
-            Notice(Tone.Caution, "The mesh needs the Nearby devices permission to find and talk to other phones.", title = "Permission needed")
+            Notice(Tone.Caution, stringResource(R.string.comms_the_mesh_needs_the_nearby_devices), title = stringResource(R.string.comms_permission_needed))
         }
-        item(key = "§status-hdr") { SectionHeader("Status") }
+        item(key = "§status-hdr") { SectionHeader(stringResource(R.string.comms_status)) }
         item(key = "§status") {
             ClairixCard {
-                KeyValueRow("Radio", when {
-                    !on -> "Off"
-                    status.advertising && status.scanning -> "Advertising and listening"
-                    status.scanning -> "Listening"
-                    status.running -> "Starting"
-                    else -> "Not running"
+                KeyValueRow(stringResource(R.string.comms_radio), when {
+                    !on -> stringResource(R.string.comms_off)
+                    status.advertising && status.scanning -> stringResource(R.string.comms_advertising_and_listening)
+                    status.scanning -> stringResource(R.string.comms_listening)
+                    status.running -> stringResource(R.string.comms_starting)
+                    else -> stringResource(R.string.comms_not_running)
                 })
-                if (on && status.running) KeyValueRow("Pace", if (status.fullPace) "Full" else "Low power: nothing to carry")
-                KeyValueRow("Long range", when {
-                    !on || !status.running -> "Off"
-                    status.longRange -> "On"
-                    !status.longRangeSupported -> "This phone's Bluetooth does not have it"
-                    status.still -> "Paused while the phone is still"
-                    else -> "Not running"
+                if (on && status.running) KeyValueRow(stringResource(R.string.comms_pace), if (status.fullPace) stringResource(R.string.comms_full) else stringResource(R.string.comms_low_power_nothing_to_carry))
+                KeyValueRow(stringResource(R.string.comms_long_range), when {
+                    !on || !status.running -> stringResource(R.string.comms_off)
+                    status.longRange -> stringResource(R.string.comms_on)
+                    !status.longRangeSupported -> stringResource(R.string.comms_this_phones_bluetooth_does_not_have)
+                    status.still -> stringResource(R.string.comms_paused_while_the_phone_is_still)
+                    else -> stringResource(R.string.comms_not_running)
                 })
-                KeyValueRow("Meetings", "${status.meetings}")
-                KeyValueRow("Last meeting", if (status.lastMeetingAt == 0L) "None yet" else "${(now - status.lastMeetingAt) / 60_000} min ago")
-                KeyValueRow("Carrying", "${status.carrying} message${if (status.carrying == 1) "" else "s"}")
-                KeyValueRow("Received for you", "${status.receivedForYou}")
-                KeyValueRow("Handed on", "${status.handedOn}")
+                KeyValueRow(stringResource(R.string.comms_meetings), "${status.meetings}")
+                KeyValueRow(stringResource(R.string.comms_last_meeting), if (status.lastMeetingAt == 0L) stringResource(R.string.comms_none_yet) else stringResource(R.string.comms_min_ago, (now - status.lastMeetingAt) / 60_000))
+                KeyValueRow(stringResource(R.string.comms_carrying), "${status.carrying} message${if (status.carrying == 1) "" else "s"}")
+                KeyValueRow(stringResource(R.string.comms_received_for_you), "${status.receivedForYou}")
+                KeyValueRow(stringResource(R.string.comms_handed_on), "${status.handedOn}")
                 status.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution) }
             }
         }
         item(key = "§battery") {
             Notice(
-                Tone.Info, title = "Battery",
-                text = "While it is on, the mesh uses Bluetooth all day, and Android shows that it runs. With nothing to carry, " +
-                    "no conversation open and no phone met in the last ${MeshPacing.AFTER_MEETING_MS / 60_000} minutes, it listens " +
-                    "and advertises at low power, and other phones still find it, a little more slowly; otherwise it runs at full pace. " +
-                    "The long-range advertisement, the costliest part, pauses while the phone is still. With Low power on " +
-                    "(Settings > Battery) only something to carry brings the full pace. Turn the mesh off when you no longer need it."
+                Tone.Info, title = stringResource(R.string.settings_battery),
+                text = stringResource(R.string.comms_while_it_is_on_the_mesh, MeshPacing.AFTER_MEETING_MS / 60_000)
             )
         }
         item(key = "§limits") {
             Notice(
-                Tone.Info, title = "Limits",
-                text = "Bluetooth reaches a few tens of metres; phones with Bluetooth's long-range mode (shown above) reach several " +
-                    "times farther between each other, out in the open. A message moves when phones pass each other. Photos, videos and " +
-                    "calls stay for the relay. A contact can be reached only after one message has gone through the relay, which is " +
-                    "how the two phones' sessions start. Messages are carried for ${MeshProtocol.TTL_MS / 3_600_000} hours and at most " +
-                    "${MeshProtocol.MAX_HOPS} hops. The relay keeps trying as well; whichever copy arrives second is dropped."
+                Tone.Info, title = stringResource(R.string.comms_limits),
+                text = stringResource(R.string.comms_bluetooth_reaches_a_few_tens_of, MeshProtocol.TTL_MS / 3_600_000, MeshProtocol.MAX_HOPS)
             )
         }
     }

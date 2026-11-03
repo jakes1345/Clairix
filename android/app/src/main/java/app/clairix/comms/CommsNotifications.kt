@@ -18,6 +18,7 @@ import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import app.clairix.CallActivity
 import app.clairix.MainActivity
+import app.clairix.R
 import app.clairix.security.AppLock
 import app.clairix.security.ChannelNames
 import app.clairix.security.DiscreetMode
@@ -181,12 +182,12 @@ object CommsNotifications {
         // The ringing card shows on the lock screen so the call can be answered;
         // with previews hidden it does not say who is calling until unlocked.
         val hidden = previewsHidden(context)
-        val callName = NotificationPresentation.unbranded("Clairix call", DiscreetMode.on(context))
+        val callName = NotificationPresentation.unbranded(context.getString(R.string.comms_clairix_call), DiscreetMode.on(context))
         val caller = if (hidden) Person.Builder().setName(callName).setImportant(true).build() else person(call.peer)
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentTitle("Incoming encrypted call")
-            .setContentText(if (hidden) "Unlock to see who is calling" else call.peer.name.ifBlank { formatClairixNumber(call.peer.number) } + if (call.peer.verified) "" else " (unverified)")
+            .setContentTitle(context.getString(R.string.comms_incoming_encrypted_call))
+            .setContentText(if (hidden) context.getString(R.string.comms_unlock_to_see_who_is_calling) else call.peer.name.ifBlank { formatClairixNumber(call.peer.number) } + if (call.peer.verified) "" else " (unverified)")
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -227,12 +228,12 @@ object CommsNotifications {
         // Person is the title: it names no one. The full-screen ring
         // (LockedRingActivity) says "Incoming Clairix call", or "Incoming call" in discreet mode.
         val caller = Person.Builder()
-            .setName(NotificationPresentation.unbranded("Clairix call", DiscreetMode.on(context)))
+            .setName(NotificationPresentation.unbranded(context.getString(R.string.comms_clairix_call), DiscreetMode.on(context)))
             .setImportant(true)
             .build()
         val notification = NotificationCompat.Builder(context, CHANNEL_RINGING)
             .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentText("Unlock to answer")
+            .setContentText(context.getString(R.string.comms_unlock_to_answer))
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -253,8 +254,8 @@ object CommsNotifications {
         ensureChannels(context)
         val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("SOS from a group member")
-            .setContentText(NotificationPresentation.unbranded("Unlock Clairix to see who and where", DiscreetMode.on(context)))
+            .setContentTitle(context.getString(R.string.comms_sos_from_a_group_member))
+            .setContentText(NotificationPresentation.unbranded(context.getString(R.string.comms_unlock_clairix_to_see_who_and), DiscreetMode.on(context)))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setAutoCancel(true)
@@ -268,9 +269,9 @@ object CommsNotifications {
     fun lockedMessages(context: Context, count: Int) {
         if (!canPost(context) || count <= 0) return
         ensureChannels(context)
-        val text = if (count == 1) "Unlock to read it" else "$count waiting · unlock to read"
+        val text = context.resources.getQuantityString(R.plurals.comms_locked_messages, count, count)
         context.getSystemService(NotificationManager::class.java)
-            ?.notify(LOCKED_MESSAGES_NOTIFICATION_ID, unlockToRead(context, "New Clairix message", text, LOCKED_MESSAGES_NOTIFICATION_ID))
+            ?.notify(LOCKED_MESSAGES_NOTIFICATION_ID, unlockToRead(context, context.getString(R.string.comms_new_clairix_message), text, LOCKED_MESSAGES_NOTIFICATION_ID))
     }
 
     /** The phone was unlocked: what stood in for the sealed envelopes goes, and the real notifications follow. */
@@ -301,12 +302,12 @@ object CommsNotifications {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val text = when (call.phase) {
-            CallPhase.DIALING -> if (call.ringing) "Ringing…" else "Calling…"
-            CallPhase.CONNECTING -> "Connecting…"
-            CallPhase.CONNECTED -> "Encrypted call in progress"
-            CallPhase.RECONNECTING -> "Reconnecting…"
-            CallPhase.INCOMING -> "Ringing"
-            CallPhase.ENDED -> "Call ended"
+            CallPhase.DIALING -> if (call.ringing) context.getString(R.string.comms_ringing_2) else context.getString(R.string.comms_calling_2)
+            CallPhase.CONNECTING -> context.getString(R.string.comms_connecting_2)
+            CallPhase.CONNECTED -> context.getString(R.string.comms_encrypted_call_in_progress)
+            CallPhase.RECONNECTING -> context.getString(R.string.comms_reconnecting_2)
+            CallPhase.INCOMING -> context.getString(R.string.comms_ringing)
+            CallPhase.ENDED -> context.getString(R.string.comms_call_ended)
         }
         return NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(android.R.drawable.sym_action_call)
@@ -327,7 +328,7 @@ object CommsNotifications {
         ensureChannels(context)
         if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
-                ?.notify(missedCallId(contact.number), unlockToRead(context, "Missed call", "Open Clairix to see who", contact.number.hashCode() xor 0x4D))
+                ?.notify(missedCallId(contact.number), unlockToRead(context, context.getString(R.string.comms_missed_call), context.getString(R.string.comms_open_clairix_to_see_who), contact.number.hashCode() xor 0x4D))
             return
         }
         val open = Intent(context, MainActivity::class.java)
@@ -341,7 +342,7 @@ object CommsNotifications {
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(android.R.drawable.sym_call_missed)
-            .setContentTitle("Missed call")
+            .setContentTitle(context.getString(R.string.comms_missed_call))
             .setContentText(contact.name.ifBlank { formatClairixNumber(contact.number) })
             .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -415,7 +416,7 @@ object CommsNotifications {
         ensureChannels(context)
         return NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentTitle("Call ended")
+            .setContentTitle(context.getString(R.string.comms_call_ended))
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .build()
@@ -493,7 +494,7 @@ object CommsNotifications {
         }
         if (any && canPost(context)) {
             ensureChannels(context)
-            manager.notify(SUMMARY_NOTIFICATION_ID, unlockToRead(context, "Clairix", "Unlock to read", SUMMARY_NOTIFICATION_ID))
+            manager.notify(SUMMARY_NOTIFICATION_ID, unlockToRead(context, context.getString(R.string.app_name), context.getString(R.string.comms_unlock_to_read), SUMMARY_NOTIFICATION_ID))
         }
     }
 
@@ -504,7 +505,7 @@ object CommsNotifications {
         ensureChannels(context)
         if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
-                ?.notify(notificationId(contact.number), unlockToRead(context, "New message", "Open Clairix to read", contact.number.hashCode()))
+                ?.notify(notificationId(contact.number), unlockToRead(context, context.getString(R.string.comms_new_message), context.getString(R.string.comms_open_clairix_to_read), contact.number.hashCode()))
             return
         }
 
@@ -538,8 +539,8 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_MESSAGES)
                     .setSmallIcon(android.R.drawable.stat_notify_chat)
-                    .setContentTitle("New message")
-                    .setContentText("Unlock to read")
+                    .setContentTitle(context.getString(R.string.comms_new_message))
+                    .setContentText(context.getString(R.string.comms_unlock_to_read))
                     .build()
             )
             .build()
@@ -560,13 +561,13 @@ object CommsNotifications {
         // does: someone holding the phone must not learn that a new person wrote.
         if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
-                ?.notify(REQUEST_NOTIFICATION_ID, unlockToRead(context, "New message", "Open Clairix to read", REQUEST_NOTIFICATION_ID))
+                ?.notify(REQUEST_NOTIFICATION_ID, unlockToRead(context, context.getString(R.string.comms_new_message), context.getString(R.string.comms_open_clairix_to_read), REQUEST_NOTIFICATION_ID))
             return
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle("Someone new wrote to you")
-            .setContentText(NotificationPresentation.unbranded("Open Clairix to see the request", DiscreetMode.on(context)))
+            .setContentTitle(context.getString(R.string.comms_someone_new_wrote_to_you))
+            .setContentText(NotificationPresentation.unbranded(context.getString(R.string.comms_open_clairix_to_see_the_request), DiscreetMode.on(context)))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setOnlyAlertOnce(true)
@@ -576,8 +577,8 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_MESSAGES)
                     .setSmallIcon(android.R.drawable.stat_notify_chat)
-                    .setContentTitle(NotificationPresentation.unbranded("New Clairix message", DiscreetMode.on(context)))
-                    .setContentText("Unlock to read")
+                    .setContentTitle(NotificationPresentation.unbranded(context.getString(R.string.comms_new_clairix_message), DiscreetMode.on(context)))
+                    .setContentText(context.getString(R.string.comms_unlock_to_read))
                     .build()
             )
             .build()
@@ -602,7 +603,7 @@ object CommsNotifications {
         if (!alert && runCatching { manager.activeNotifications.none { it.id == id } }.getOrDefault(true)) return
         ensureChannels(context)
         if (previewsHidden(context)) {
-            manager.notify(id, unlockToRead(context, "Safety number changed", "Open Clairix to review", contact.number.hashCode()))
+            manager.notify(id, unlockToRead(context, context.getString(R.string.comms_safety_number_changed), context.getString(R.string.comms_open_clairix_to_review), contact.number.hashCode()))
             return
         }
         val open = Intent(context, MainActivity::class.java)
@@ -618,7 +619,7 @@ object CommsNotifications {
         val text = KeyChangeGuard.heldNotice(label, held)
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("Safety number changed")
+            .setContentTitle(context.getString(R.string.comms_safety_number_changed))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -631,8 +632,8 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_MESSAGES)
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle("Safety number changed")
-                    .setContentText("Unlock to review")
+                    .setContentTitle(context.getString(R.string.comms_safety_number_changed))
+                    .setContentText(context.getString(R.string.comms_unlock_to_review))
                     .build()
             )
             .build()
@@ -660,7 +661,7 @@ object CommsNotifications {
         ensureChannels(context)
         if (previewsHidden(context)) {
             context.getSystemService(NotificationManager::class.java)
-                ?.notify(notificationId(group.id), unlockToRead(context, "New group message", "Open Clairix to read", group.id.hashCode()))
+                ?.notify(notificationId(group.id), unlockToRead(context, context.getString(R.string.comms_new_group_message), context.getString(R.string.comms_open_clairix_to_read), group.id.hashCode()))
             return
         }
         val newest = messages.maxBy { it.ts }
@@ -682,8 +683,8 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_MESSAGES)
                     .setSmallIcon(android.R.drawable.stat_notify_chat)
-                    .setContentTitle("New group message")
-                    .setContentText("Unlock to read")
+                    .setContentTitle(context.getString(R.string.comms_new_group_message))
+                    .setContentText(context.getString(R.string.comms_unlock_to_read))
                     .build()
             )
             .build()
@@ -697,14 +698,14 @@ object CommsNotifications {
     fun notifyPanic(context: Context, group: Group, panicId: String, fromName: String, lat: Double?, lon: Double?, note: String, ts: Long) {
         if (!canPost(context)) return
         ensureChannels(context)
-        val where = if (lat != null && lon != null) String.format(java.util.Locale.US, "at %.5f, %.5f", lat, lon) else "no position attached"
+        val where = if (lat != null && lon != null) context.getString(R.string.comms_at_position, String.format(java.util.Locale.US, "%.5f", lat), String.format(java.util.Locale.US, "%.5f", lon)) else context.getString(R.string.comms_no_position_attached)
         val text = buildString {
             append(group.name).append(" · ").append(where)
             if (note.isNotBlank()) append("\n").append(note)
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("SOS from $fromName")
+            .setContentTitle(context.getString(R.string.comms_sos_from, fromName))
             .setContentText(text.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -719,8 +720,8 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_SOS)
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle("SOS from a group member")
-                    .setContentText("Unlock to see who and where")
+                    .setContentTitle(context.getString(R.string.comms_sos_from_a_group_member))
+                    .setContentText(context.getString(R.string.comms_unlock_to_see_who_and_where))
                     .setCategory(NotificationCompat.CATEGORY_ALARM)
                     .build()
             )
@@ -743,7 +744,7 @@ object CommsNotifications {
         ensureChannels(context)
         val notification = NotificationCompat.Builder(context, CHANNEL_SOS)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("Your SOS")
+            .setContentTitle(context.getString(R.string.comms_your_sos))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setCategory(NotificationCompat.CATEGORY_STATUS)
@@ -758,8 +759,8 @@ object CommsNotifications {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_SOS)
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle("Your SOS")
-                    .setContentText("Unlock to see who it reached")
+                    .setContentTitle(context.getString(R.string.comms_your_sos))
+                    .setContentText(context.getString(R.string.comms_unlock_to_see_who_it_reached))
                     .setCategory(NotificationCompat.CATEGORY_STATUS)
                     .build()
             )
@@ -825,7 +826,7 @@ object CommsNotifications {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(contentIntent)
-            .addAction(0, "Go offline", stop)
+            .addAction(0, context.getString(R.string.comms_go_offline), stop)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_LINK)
