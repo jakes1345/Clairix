@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.clairix.security.AppLock
 import app.clairix.ui.components.GhostButton
@@ -81,80 +82,43 @@ internal data class TourStop(
 
 internal fun categoryTour(c: ScanCategory): Pair<String, String> = when (c) {
     ScanCategory.TRACKERS -> "Bluetooth trackers travelling with you: AirTags, Tiles, SmartTags and the GPS boxes hidden on cars." to
-        "Nearby lists the devices around you. One is marked FOLLOWING only after it has been heard at places far apart while you " +
-        "moved, about 10 minutes and 300 m by default. Map shows where each was heard. Tap a device to see what it is, " +
-        "\"Mark as mine\" for your own headphones, watch and car, or \"I found it\" once you have found and removed one. " +
-        "The buttons above the list open Find a tracker, the Self-test beacon and Bluetooth exposure."
+        "Nearby lists the devices around you. One is marked FOLLOWING only after it has been heard at places far apart while you moved, about 10 minutes and 300 m by default. Map shows where each was heard. Tap a device to see what it is, \"Mark as mine\" for your own headphones, watch and car, or \"I found it\" once you have found and removed one. The buttons above the list open Find a tracker, the Self-test beacon and Bluetooth exposure."
     ScanCategory.CAMERAS -> "A sweep for hidden cameras in a room." to
-        "Six methods: lens glint with the torch, infrared with the front camera in the dark, a network scan for camera ports, " +
-        "camera setup hotspots, Bluetooth setup beacons and a magnetic gauge. The checklist walks you round the room."
+        "Six methods: lens glint with the torch, infrared with the front camera in the dark, a network scan for camera ports, camera setup hotspots, Bluetooth setup beacons and a magnetic gauge. The checklist walks you round the room."
     ScanCategory.CELL -> "Fake cell towers (IMSI catchers) and forced downgrades." to
-        "It learns the towers you normally use, then flags a forced drop to 2G or 3G, unknown towers where known ones stood, " +
-        "impossible signal strengths and other catcher signs. It needs a few days of ordinary use to learn what normal is. " +
-        "Tap a finding for what it means."
+        "It learns the towers you normally use, then flags a forced drop to 2G or 3G, unknown towers where known ones stood, impossible signal strengths and other catcher signs. It needs a few days of ordinary use to learn what normal is. Tap a finding for what it means."
     ScanCategory.GPS -> "Whether the GPS position comes from satellites at all." to
-        "It checks satellite strengths, satellite time against network time, the GPS position against Wi-Fi and cell " +
-        "towers, impossible jumps, mock-location apps and jamming. While the page is open the GPS runs; with the scanner on, " +
-        "the checks run whenever anything uses the GPS, such as navigation, which warns you on the map."
+        "It checks satellite strengths, satellite time against network time, the GPS position against Wi-Fi and cell towers, impossible jumps, mock-location apps and jamming. While the page is open the GPS runs; with the scanner on, the checks run whenever anything uses the GPS, such as navigation, which warns you on the map."
     ScanCategory.ULTRASOUND -> "Inaudible beacon tones that tie your phone to a TV, a shop or another device." to
-        "Run the self-test first: the phone plays a 19 kHz tone and listens for it, to prove it can hear the band. Then Listen " +
-        "near the TV or speaker you are wondering about. Only the spectrum is read; no audio is kept."
+        "Run the self-test first: the phone plays a 19 kHz tone and listens for it, to prove it can hear the band. Then Listen near the TV or speaker you are wondering about. Only the spectrum is read; no audio is kept."
     ScanCategory.WIFI -> "The network you are on, and every hotspot in range." to
-        "Flags open networks, evil twins of networks you use and the default names of Wi-Fi interception kit, notes " +
-        "open carrier hotspots such as xfinitywifi for what they are (captive portals: use a VPN), and checks the " +
-        "network you are on: encryption, captive portals, where DNS goes, and whether the VPN carries Clairix. While " +
-        "the scanner runs it also sets a trap: a made-up network name only this phone knows, new every six hours, " +
-        "which the phone asks for when it scans. A box that answers to any name (a Karma or Pineapple interception " +
-        "kit) answers that one too, and is caught. Adding the name is why Android may ask, the first time you start " +
-        "scanning, whether Clairix can suggest Wi-Fi networks; the tab says whether the trap is armed. The name is " +
-        "added untrusted, with auto-join off and a password nobody knows, so the phone does not join what answers, " +
-        "and it is withdrawn when scanning stops. Say no and the trap stays off; everything else still works."
+        "Flags open networks, evil twins of networks you use and the default names of Wi-Fi interception kit, notes open carrier hotspots such as xfinitywifi for what they are (captive portals: use a VPN), and checks the network you are on: encryption, captive portals, where DNS goes, and whether the VPN carries Clairix. While the scanner runs it also sets a trap: a made-up network name only this phone knows, new every six hours, which the phone asks for when it scans. A box that answers to any name (a Karma or Pineapple interception kit) answers that one too, and is caught. Adding the name is why Android may ask, the first time you start scanning, whether Clairix can suggest Wi-Fi networks; the tab says whether the trap is armed. The name is added untrusted, with auto-join off and a password nobody knows, so the phone does not join what answers, and it is withdrawn when scanning stops. Say no and the trap stays off; everything else still works."
     ScanCategory.NFC -> "NFC tags and cards, and skimmers." to
-        "Hold a card or tag to the back of the phone to read what it carries and flag tags that look planted. In the full " +
-        "edition a card can be kept in the vault, locked by your screen lock, and presented from the phone."
+        "Hold a card or tag to the back of the phone to read what it carries and flag tags that look planted. In the full edition a card can be kept in the vault, locked by your screen lock, and presented from the phone."
     ScanCategory.PHONE -> "This phone's own security, and spyware on it." to
-        "Health is a checklist: patch level, USB debugging, screen lock, Advanced Protection, the Bluetooth name, 2G, VPN " +
-        "leaks and more, each with a tap to the setting that fixes it. Stalkerware checks every app for what spyware needs. " +
-        "Certificates lists the ones that could read your encrypted traffic, and the relay's key pin. Accounts is a " +
-        "checklist of who else can see this phone without any app: Google accounts and their devices, recovery options, " +
-        "2-Step Verification and passkeys, Find My Device, Maps location sharing, Family Link, Play Protect, Quick Share, " +
-        "Samsung's own on a Samsung, and call forwarding at the carrier, each with a tap to the page that shows it."
+        "Health is a checklist: patch level, USB debugging, screen lock, Advanced Protection, the Bluetooth name, 2G, VPN leaks and more, each with a tap to the setting that fixes it. Stalkerware checks every app for what spyware needs. Certificates lists the ones that could read your encrypted traffic, and the relay's key pin. Accounts is a checklist of who else can see this phone without any app: Google accounts and their devices, recovery options, 2-Step Verification and passkeys, Find My Device, Maps location sharing, Family Link, Play Protect, Quick Share, Samsung's own on a Samsung, and call forwarding at the carrier, each with a tap to the page that shows it."
 }
 
 internal fun trackerToolTour(a: TrackerAction): Pair<String, String> = when (a) {
     TrackerAction.LOCATE -> "Walk to a tracker by its signal." to
-        "Pick a device, hold the phone out and turn slowly: the compass marks the direction the signal is strongest, and the " +
-        "warmer-and-colder line shows whether you are getting closer. The phone pulses faster as you near it, and TalkBack " +
-        "reads the distance out. \"Ask it who it is\" asks a tracker for its maker and serial; one that answers can be made " +
-        "to beep, which anyone nearby will hear."
+        "Pick a device, hold the phone out and turn slowly: the compass marks the direction the signal is strongest, and the warmer-and-colder line shows whether you are getting closer. The phone pulses faster as you near it, and TalkBack reads the distance out. \"Ask it who it is\" asks a tracker for its maker and serial; one that answers can be made to beep, which anyone nearby will hear."
     TrackerAction.SELF_TEST -> "Proves the scanner can hear and recognise a tracker." to
-        "The phone briefly pretends to be an AirTag and checks the scanner picks it up and recognises it as one. Some " +
-        "phones cannot hear themselves; the test says so instead of passing."
+        "The phone briefly pretends to be an AirTag and checks the scanner picks it up and recognises it as one. Some phones cannot hear themselves; the test says so instead of passing."
     TrackerAction.BLUETOOTH -> "What your Bluetooth gives a roadside or in-store sensor." to
-        "Your phone's name (one tap to swap a personal one for the model name), whether it is discoverable, every paired " +
-        "accessory with whether its address is fixed for life, which rode along on your drives, and any Flock camera battery, " +
-        "gunshot detector or Flock hotspot the radios have heard."
+        "Your phone's name (one tap to swap a personal one for the model name), whether it is discoverable, every paired accessory with whether its address is fixed for life, which rode along on your drives, and any Flock camera battery, gunshot detector or Flock hotspot the radios have heard."
 }
 
 internal fun commsPageTour(a: CommsAction): Pair<String, String> = when (a) {
     CommsAction.GET_HELP -> "Helplines for abuse and stalking, where you are." to
-        "The country comes from your SIM card, or the phone's region, and you can pick another. Each line has a call " +
-        "button and, where the service offers one, a text or chat for when calling is not safe. The page says what a " +
-        "call, a text and a chat leave on the phone. It is in Settings too."
+        "The country comes from your SIM card, or the phone's region, and you can pick another. Each line has a call button and, where the service offers one, a text or chat for when calling is not safe. The page says what a call, a text and a chat leave on the phone. It is in Settings too."
     CommsAction.FAKE_CALL -> "A pretend incoming call, as a reason to leave." to
-        "Set a time and a caller name. With notifications and full-screen calls allowed, the phone rings with its own " +
-        "ringtone and shows a call screen over the lock screen; unlocked in another app, it shows a call banner instead."
+        "Set a time and a caller name. With notifications and full-screen calls allowed, the phone rings with its own ringtone and shows a call screen over the lock screen; unlocked in another app, it shows a call banner instead."
     CommsAction.DURESS -> "A sentence that quietly calls for help." to
-        "Type it into any chat: it is sent as written, and underneath an SOS with your last position goes to every group you " +
-        "are in. In no group it sends nothing, and the page says so."
+        "Type it into any chat: it is sent as written, and underneath an SOS with your last position goes to every group you are in. In no group it sends nothing, and the page says so."
     CommsAction.MESH -> "Messages with no network: phone to phone over Bluetooth." to
-        "Turn it on when the network is down or not to be trusted. Texts, group texts and SOS that cannot reach the relay " +
-        "travel from phone to phone, sealed, until one reaches the person they are for. Every phone on the way needs the mesh " +
-        "on. Off by default, because a phone running it can be seen to be running Clairix."
+        "Turn it on when the network is down or not to be trusted. Texts, group texts and SOS that cannot reach the relay travel from phone to phone, sealed, until one reaches the person they are for. Every phone on the way needs the mesh on. Off by default, because a phone running it can be seen to be running Clairix."
     CommsAction.WIPE -> "Erase everything Clairix holds, now." to
-        "Type WIPE and press the button: the keys in the secure hardware, every file, setting and notification go, the relay " +
-        "is asked to delete the account, and Clairix closes. Settings has the same page. The wrong-passcode limit runs the " +
-        "same wipe; the duress passcode does too, but leaves Clairix on its lock screen, opening from then on to that code, empty."
+        "Type WIPE and press the button: the keys in the secure hardware, every file, setting and notification go, the relay is asked to delete the account, and Clairix closes. Settings has the same page. The wrong-passcode limit runs the same wipe; the duress passcode does too, but leaves Clairix on its lock screen, opening from then on to that code, empty."
 }
 
 /** "a, b and c". */
@@ -169,11 +133,9 @@ internal val ACTIVITY_TOUR: Map<String, Pair<String, String>> = mapOf(
     "Timeline" to ("Everything Clairix has noticed, newest first." to
         "Every alert, finding and scan start or stop, with where it happened when a position was known. Tap a row for details."),
     "Patterns" to ("How predictable your routine is." to
-        "From your own location history: the places you stay, which is home and which is work, how regular your departures " +
-        "are and how often you take the same route. Worked out on the phone; nothing is sent."),
+        "From your own location history: the places you stay, which is home and which is work, how regular your departures are and how often you take the same route. Worked out on the phone; nothing is sent."),
     "Unlocks" to ("Every time the phone was unlocked." to
-        "Flags unlocks while you sleep and wrong passcodes. Turn on the unlock ledger here (it asks for usage access and a " +
-        "device-admin permission that only watches logins).")
+        "Flags unlocks while you sleep and wrong passcodes. Turn on the unlock ledger here (it asks for usage access and a device-admin permission that only watches logins).")
 )
 
 /**
@@ -183,10 +145,8 @@ internal val ACTIVITY_TOUR: Map<String, Pair<String, String>> = mapOf(
  */
 internal fun passcodeFollowUp(passcodeSet: Boolean, lockOffered: Boolean): String = when {
     passcodeSet -> ""
-    lockOffered -> "You started without a passcode for Clairix. Until one is set, anyone who opens Clairix on this " +
-        "phone can read it: set one under App passcode. "
-    else -> "Clairix has no passcode yet. Until one is set, anyone who opens Clairix on this phone can read it: set " +
-        "one under App passcode. "
+    lockOffered -> "You started without a passcode for Clairix. Until one is set, anyone who opens Clairix on this phone can read it: set one under App passcode. "
+    else -> "Clairix has no passcode yet. Until one is set, anyone who opens Clairix on this phone can read it: set one under App passcode. "
 }
 
 internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOffered: Boolean = false): List<TourStop> {
@@ -208,8 +168,7 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
         out += TourStop(
             "scan", "Scan", "The Scan hub",
             "Every check Clairix runs, as cards. Each card's line says what it last found.",
-            "Start scanning from Trackers to keep the background checks running: trackers, towers, Wi-Fi, the phone itself and " +
-                "the GPS. Hidden cameras, NFC and ultrasound run when you open them.",
+            "Start scanning from Trackers to keep the background checks running: trackers, towers, Wi-Fi, the phone itself and the GPS. Hidden cameras, NFC and ultrasound run when you open them.",
             ClairixIcons.TrackChanges, TourTarget.Tab(HomeTab.SCAN)
         )
         for (c in ScanCategory.entries) {
@@ -225,11 +184,7 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     out += TourStop(
         "comms", "Comms", "Messages and calls",
         "End-to-end encrypted messages, calls, voicemail and groups. The relay that carries them cannot read them and is not told who sent them.",
-        "Add someone with an invite link or by scanning their QR code. If a contact's security key changes, their messages wait " +
-            "in a review box until you check. In any conversation or group, Disappearing sets how long after they are read " +
-            "messages are deleted, on both phones. Screenshots are blocked on these screens. " + NO_CLOUD_BACKUP +
-            " Comms settings → Save a recovery file. The menu (⋮) at the top holds " +
-            menuList(commsActionsFor(fullAccess).map { it.title }) + ".",
+        "Add someone with an invite link or by scanning their QR code. If a contact's security key changes, their messages wait in a review box until you check. In any conversation or group, Disappearing sets how long after they are read messages are deleted, on both phones. Screenshots are blocked on these screens. $NO_CLOUD_BACKUP Comms settings → Save a recovery file. The menu (⋮) at the top holds ${menuList(commsActionsFor(fullAccess).map { it.title })}.",
         ClairixIcons.Forum, TourTarget.Tab(HomeTab.COMMS)
     )
     for (a in commsActionsFor(fullAccess)) {
@@ -239,14 +194,8 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     if (fullAccess) {
         out += TourStop(
             "drive", "Drive", "Navigate, Radio, Vehicle",
-            "Navigate: turn-by-turn on offline maps you download per US state, routed around known plate readers and spoken " +
-                "before one. Radio: with an RTL-SDR stick in the USB port, a narrowband voice scanner and nearby aircraft listed " +
-                "from their ADS-B broadcasts. Vehicle: live engine data from a Bluetooth OBD-II adapter.",
-            "Pick the state to download from the map's search bar; its size is shown first. Long-press the map to route to a " +
-                "point. Report a hazard from the bar at the bottom while navigating; reports are anonymous. Receiving and " +
-                "recording radio traffic is restricted in some places: the scanner records only when you turn recording on, " +
-                "and keeps recordings encrypted on the phone. The stick runs on the phone's battery; below 15 % with no " +
-                "charger, drive mode stops it and the OBD-II adapter until the phone charges.",
+            "Navigate: turn-by-turn on offline maps you download per US state, routed around known plate readers and spoken before one. Radio: with an RTL-SDR stick in the USB port, a narrowband voice scanner and nearby aircraft listed from their ADS-B broadcasts. Vehicle: live engine data from a Bluetooth OBD-II adapter.",
+            "Pick the state to download from the map's search bar; its size is shown first. Long-press the map to route to a point. Report a hazard from the bar at the bottom while navigating; reports are anonymous. Receiving and recording radio traffic is restricted in some places: the scanner records only when you turn recording on, and keeps recordings encrypted on the phone. The stick runs on the phone's battery; below 15 % with no charger, drive mode stops it and the OBD-II adapter until the phone charges.",
             ClairixIcons.DirectionsCar, TourTarget.Tab(HomeTab.DRIVE)
         )
         ACTIVITY_SUB_TABS.forEachIndexed { i, name ->
@@ -256,10 +205,7 @@ internal fun tourStops(fullAccess: Boolean, passcodeSet: Boolean = true, lockOff
     }
     out += TourStop(
         "settings", "Gear, top right", "Settings",
-        "Get help (helplines where you are), the app passcode (with biometrics, wipe after wrong passcodes and a " +
-            "duress passcode), Discreet mode (plain notifications and lock screen, and quick exit), how long history is kept, theme, where positions come from (Satellite-only positioning)" +
-            (if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.") +
-            " Wipe Clairix and Delete identity and number are near the bottom.",
+        "Get help (helplines where you are), the app passcode (with biometrics, wipe after wrong passcodes and a duress passcode), Discreet mode (plain notifications and lock screen, and quick exit), how long history is kept, theme, where positions come from (Satellite-only positioning)${(if (fullAccess) ", scanning options, trusted devices, and Export and Clear for your data." else ", and your data.")} Wipe Clairix and Delete identity and number are near the bottom.",
         passcodeFollowUp(passcodeSet, lockOffered) +
             (if (fullAccess) "With a passcode set, Patterns, Unlocks, the tracker map and Export ask for it each time they open. " else "") +
             "This tour is in Settings too, under About, whenever you want it again.",
@@ -289,8 +235,8 @@ internal fun TourScreen(onClose: () -> Unit, onGo: (TourTarget) -> Unit) {
             Modifier.fillMaxWidth().statusBarsPadding().padding(start = 24.dp, end = 8.dp, top = 8.dp).height(56.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Tour · ${pager.currentPage + 1} of $pages", style = MaterialTheme.typography.labelLarge, color = c.textMuted, modifier = Modifier.weight(1f))
-            GhostButton(if (last) "Close" else "Skip", onClick = onClose, tone = Tone.Neutral)
+            Text(stringResource(R.string.shell_tour_of, pager.currentPage + 1, pages), style = MaterialTheme.typography.labelLarge, color = c.textMuted, modifier = Modifier.weight(1f))
+            GhostButton(if (last) stringResource(R.string.comms_close) else stringResource(R.string.shell_skip), onClick = onClose, tone = Tone.Neutral)
         }
         HorizontalPager(state = pager, modifier = Modifier.weight(1f)) { page ->
             Column(
@@ -298,10 +244,9 @@ internal fun TourScreen(onClose: () -> Unit, onGo: (TourTarget) -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (page == 0) {
-                    Text("Where everything is", style = MaterialTheme.typography.headlineLarge, color = c.text)
+                    Text(stringResource(R.string.shell_where_everything_is), style = MaterialTheme.typography.headlineLarge, color = c.text)
                     Text(
-                        "${stops.size} stops, one for each place in Clairix. Swipe, or use Next. \"Show me\" takes you there; " +
-                            "you can come back to the tour from Settings → About.",
+                        stringResource(R.string.shell_stops_one_for_each_place_in, stops.size),
                         style = MaterialTheme.typography.bodyLarge, color = c.textMuted
                     )
                     stops.forEach { s ->
@@ -319,14 +264,14 @@ internal fun TourScreen(onClose: () -> Unit, onGo: (TourTarget) -> Unit) {
                     Text(s.how, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
                     s.target?.let { t ->
                         Spacer(Modifier.height(4.dp))
-                        SecondaryButton("Show me", onClick = { onGo(t) }, tone = Tone.Accent)
+                        SecondaryButton(stringResource(R.string.shell_show_me), onClick = { onGo(t) }, tone = Tone.Accent)
                     }
                 }
             }
         }
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 16.dp)) {
-            if (last) PrimaryButton("Done", onClick = onClose, modifier = Modifier.fillMaxWidth())
-            else PrimaryButton("Next", onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }, modifier = Modifier.fillMaxWidth())
+            if (last) PrimaryButton(stringResource(R.string.comms_done), onClick = onClose, modifier = Modifier.fillMaxWidth())
+            else PrimaryButton(stringResource(R.string.settings_next), onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }, modifier = Modifier.fillMaxWidth())
         }
     }
 }

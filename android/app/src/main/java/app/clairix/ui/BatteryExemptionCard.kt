@@ -13,9 +13,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import app.clairix.R
 import app.clairix.ui.components.GhostButton
 import app.clairix.ui.components.Notice
 import app.clairix.ui.components.Tone
@@ -63,12 +65,9 @@ private fun isBatteryUnrestricted(context: Context, power: PowerManager?): Boole
 internal fun makerBackgroundHint(manufacturer: String?): String? =
     when (manufacturer?.trim()?.lowercase(Locale.US)) {
         "samsung" ->
-            "On this Samsung phone also open Settings > Battery > Background usage limits and add Clairix to " +
-                "Never sleeping apps (older One UI versions put Battery under Battery and device care, and the names " +
-                "vary a little between versions)."
+            "On this Samsung phone also open Settings > Battery > Background usage limits and add Clairix to Never sleeping apps (older One UI versions put Battery under Battery and device care, and the names vary a little between versions)."
         "xiaomi", "redmi", "poco" ->
-            "On this Xiaomi phone also turn on Autostart for Clairix under Settings > Apps > Manage apps > Clairix, " +
-                "and set its Battery saver to No restrictions."
+            "On this Xiaomi phone also turn on Autostart for Clairix under Settings > Apps > Manage apps > Clairix, and set its Battery saver to No restrictions."
         else -> null
     }
 
@@ -80,9 +79,7 @@ internal fun makerBackgroundHint(manufacturer: String?): String? =
  */
 internal fun makerBackgroundSteps(manufacturer: String?): String =
     makerBackgroundHint(manufacturer)
-        ?: ("Some phone makers add a battery manager of their own on top of Android's, with menus of their own: " +
-            "look on Clairix's App info page and in the phone's battery settings for anything about background " +
-            "activity, starting automatically or sleeping apps, and allow it for Clairix.")
+        ?: ("Some phone makers add a battery manager of their own on top of Android's, with menus of their own: look on Clairix's App info page and in the phone's battery settings for anything about background activity, starting automatically or sleeping apps, and allow it for Clairix.")
 
 /**
  * Asks the owner to let Clairix run unrestricted: Android's one-tap dialog, and
@@ -97,8 +94,8 @@ fun BatteryExemptionCard(reason: String, modifier: Modifier = Modifier) {
         Tone.Caution,
         text = if (hint == null) reason else "$reason $hint",
         modifier = modifier,
-        title = "Let Clairix run in the background",
-        action = { GhostButton("Allow", onClick = { openBatterySettings(context) }) }
+        title = stringResource(R.string.shell_let_clairix_run_in_the_background),
+        action = { GhostButton(stringResource(R.string.comms_allow), onClick = { openBatterySettings(context) }) }
     )
 }
 

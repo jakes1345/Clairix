@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -323,7 +324,7 @@ internal fun rememberCategoryStatuses(): Map<ScanCategory, CategoryStatus> {
         ScanCategory.CAMERAS to cameraStatus(cameras, camerasRun, cameraNetwork.inconclusiveReason != null),
         ScanCategory.CELL to cellStatus(cell),
         ScanCategory.GPS to gnssStatus(gnss, status.scanning),
-        ScanCategory.ULTRASOUND to CategoryStatus("Listen on demand", StatusTone.NEUTRAL),
+        ScanCategory.ULTRASOUND to CategoryStatus(stringResource(R.string.shell_listen_on_demand), StatusTone.NEUTRAL),
         ScanCategory.WIFI to wifiStatus(wifi, wifiNow, status.scanning),
         ScanCategory.NFC to nfcStatus(nfc),
         ScanCategory.PHONE to phoneStatus(health)
@@ -363,7 +364,7 @@ internal fun ShellTopBar(
         if (menu.isNotEmpty()) {
             Box {
                 IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = c.textMuted)
+                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.shell_more_options), tint = c.textMuted)
                 }
                 DropdownMenu(
                     expanded = menuOpen,
@@ -385,7 +386,7 @@ internal fun ShellTopBar(
             }
         }
         IconButton(onClick = onSettings) {
-            Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = c.textMuted)
+            Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings_settings), tint = c.textMuted)
         }
     }
 }
@@ -533,7 +534,7 @@ internal fun ScanHub(
     ScreenList {
         item(key = "§hero") {
             StatusHero(
-                eyebrow = if (scanning) "Scanner live" else "Scanner off",
+                eyebrow = if (scanning) stringResource(R.string.shell_scanner_live) else stringResource(R.string.scan_scanner_off),
                 headline = verdict.headline,
                 body = verdict.body,
                 tone = verdict.tone,
@@ -543,7 +544,7 @@ internal fun ScanHub(
                     !scanning && stoppedBySystemAt != null -> {
                         {
                             PrimaryButton(
-                                "Resume scanning",
+                                stringResource(R.string.scan_resume_scanning),
                                 onClick = onResumeScan,
                                 icon = ClairixIcons.TrackChanges,
                                 modifier = Modifier.fillMaxWidth()
@@ -553,7 +554,7 @@ internal fun ScanHub(
                     !scanning -> {
                         {
                             SecondaryButton(
-                                "Open the scanner",
+                                stringResource(R.string.shell_open_the_scanner),
                                 onClick = { onOpen(ScanCategory.TRACKERS) },
                                 tone = Tone.Accent,
                                 icon = ClairixIcons.TrackChanges,
@@ -564,7 +565,7 @@ internal fun ScanHub(
                     error == ScannerHealth.LOCATION_OFF -> {
                         {
                             SecondaryButton(
-                                "Open Location settings",
+                                stringResource(R.string.scan_open_location_settings),
                                 onClick = { openExternal(context, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
                                 tone = Tone.Accent,
                                 modifier = Modifier.fillMaxWidth()
@@ -581,13 +582,12 @@ internal fun ScanHub(
         if (scanEnabled && !batteryFree) {
             item(key = "§battery") {
                 BatteryExemptionCard(
-                    reason = "Battery saving can stop the scanner while the phone sleeps, and then nothing is watched. " +
-                        "Let Clairix run unrestricted.",
+                    reason = stringResource(R.string.shell_battery_saving_can_stop_the_scanner),
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
         }
-        item(key = "§checks") { SectionHeader("Checks", supporting = "${ScanCategory.entries.size} areas") }
+        item(key = "§checks") { SectionHeader(stringResource(R.string.scan_checks), supporting = "${ScanCategory.entries.size} areas") }
         ScanCategory.entries.chunked(2).forEach { pair ->
             item(key = "row-" + pair.joinToString("-") { it.name }) {
                 Row(
@@ -621,7 +621,7 @@ private fun HubTile(category: ScanCategory, status: CategoryStatus, onClick: () 
             .clip(shape)
             .background(c.surface, shape)
             .border(1.dp, if (flagged) tone.color().copy(alpha = 0.6f) else c.border, shape)
-            .clickable(onClickLabel = "Open ${category.title}", role = Role.Button, onClick = onClick)
+            .clickable(onClickLabel = stringResource(R.string.shell_open, category.title), role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) {
                 contentDescription = "${category.title}. ${category.description}. ${status.text}"
             }

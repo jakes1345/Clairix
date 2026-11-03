@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -50,6 +51,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.clairix.R
 import app.clairix.ui.theme.ClairixTheme
 import java.util.Locale
 
@@ -78,7 +80,7 @@ fun ClairixTopBar(
         ) {
             if (onBack != null) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = c.text)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.comms_back), tint = c.text)
                 }
             } else {
                 val longPress = if (onMarkLongClick == null) Modifier else Modifier
@@ -343,7 +345,7 @@ fun ClairixDialog(
     modifier: Modifier = Modifier,
     text: String? = null,
     confirmTone: Tone = Tone.Accent,
-    dismissLabel: String? = "Cancel",
+    dismissLabel: String? = stringResource(R.string.settings_cancel),
     confirmEnabled: Boolean = true,
     content: (@Composable ColumnScope.() -> Unit)? = null
 ) {

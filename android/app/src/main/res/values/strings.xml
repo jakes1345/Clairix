@@ -1559,4 +1559,68 @@
         <item quantity="one">%1$d network in range, none flagged. Checked %2$s.</item>
         <item quantity="other">%1$d networks in range, none flagged. Checked %2$s.</item>
     </plurals>
+    <!-- AppShell.kt -->
+    <string name="shell_listen_on_demand">Listen on demand</string>
+    <string name="shell_more_options">More options</string>
+    <string name="shell_scanner_live">Scanner live</string>
+    <string name="shell_open_the_scanner">Open the scanner</string>
+    <string name="shell_battery_saving_can_stop_the_scanner">Battery saving can stop the scanner while the phone sleeps, and then nothing is watched. Let Clairix run unrestricted.</string>
+    <string name="shell_open">Open %1$s</string>
+    <!-- OnboardingScreen.kt -->
+    <string name="shell_skip">Skip</string>
+    <string name="shell_counter_surveillance">Counter-surveillance</string>
+    <string name="shell_clairix_finds_hidden_cameras_trackers_following">Clairix finds hidden cameras, trackers following you, fake cell towers, rogue Wi-Fi and spyware, and keeps your calls and messages private.</string>
+    <string name="shell_detection_data_stays_on_this_phone">Detection data stays on this phone. The map downloads tiles from OpenStreetMap, which sees your IP address and the area you\'re viewing.</string>
+    <string name="shell_permissions">Permissions</string>
+    <string name="shell_what_it_needs">What it needs</string>
+    <string name="shell_three_permissions_asked_for_when_you">Three permissions, asked for when you start scanning.</string>
+    <string name="shell_nearby_devices">Nearby devices</string>
+    <string name="shell_listens_for_bluetooth_trackers_such_as">Listens for Bluetooth trackers such as AirTags, Tile and SmartTags.</string>
+    <string name="shell_precise_location">Precise location</string>
+    <string name="shell_proves_a_tracker_is_moving_with">Proves a tracker is moving with you, not just nearby, by checking it shows up in different places.</string>
+    <string name="shell_tells_you_the_moment_something_is">Tells you the moment something is confirmed on you, even with the app closed.</string>
+    <string name="shell_how_it_works">How it works</string>
+    <string name="shell_watch_the_watchers">Watch the watchers</string>
+    <string name="shell_clairix_learns_whats_normal_around_you">Clairix learns what\'s normal around you, then flags what isn\'t.</string>
+    <string name="shell_matches_known_tracker_signals_and_checks">Matches known tracker signals and checks whether one keeps turning up as you move.</string>
+    <string name="shell_fake_cell_towers">Fake cell towers</string>
+    <string name="shell_learns_your_usual_towers_then_watches">Learns your usual towers, then watches for forced downgrades, unknown cells and signals that are too strong.</string>
+    <string name="shell_wi_fi_and_nfc">Wi-Fi and NFC</string>
+    <string name="shell_flags_bait_hotspots_that_copy_real">Flags bait hotspots that copy real networks, and NFC tags hidden where they shouldn\'t be.</string>
+    <string name="shell_if_someone_else_can_pick_up">If someone else can pick up this phone, give Clairix a passcode of its own. Without one, anyone who opens Clairix can read everything in it: the timeline, your usual places and times, when the phone was unlocked, and your messages.</string>
+    <string name="shell_a_passcode_keeps_what_is_in">A passcode keeps what is in Clairix to you. It does not hide the app: Clairix appears by name in the app list and shows a notification while it scans, and while Comms stays online.</string>
+    <string name="shell_messaging_calls_sos_and_the_duress">Messaging, calls, SOS and the duress phrase need a Clairix number: an invite from someone already on Clairix, or a relay you run. Everything else here works without one.</string>
+    <string name="shell_ready_when_you_are">Ready when you are</string>
+    <string name="shell_start_scanning_now_and_keep_the">Start scanning now and keep the app running while you move, or look around first and start it later from Scan → Trackers.</string>
+    <string name="shell_confirming_a_tracker_is_on_you">Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together. Android may ask whether Clairix can suggest Wi-Fi networks: that is the Wi-Fi trap, a made-up network name only interception kit answers to. It is added with auto-join off and a password nobody knows, so the phone does not join what answers. The tour explains it.</string>
+    <string name="shell_clairix_comms">Clairix Comms</string>
+    <string name="shell_yours_only">Yours only.</string>
+    <string name="shell_messages_and_calls_for_your_circle">Messages and calls for your circle, encrypted on this phone. Only the person you send to can read them. No phone number, no Google account, no carrier.</string>
+    <string name="shell_your_keys_contacts_and_message_history">Your keys, contacts and message history stay on this phone.</string>
+    <string name="shell_each_one_is_asked_for_the">Each one is asked for the first time it\'s needed.</string>
+    <string name="shell_so_a_new_message_shows_and">So a new message shows and a call rings while the app is closed.</string>
+    <string name="shell_microphone">Microphone</string>
+    <string name="shell_for_calls_asked_once_you_have">For calls. Asked once you have a number, so the first call isn\'t also the first question.</string>
+    <string name="shell_camera">Camera</string>
+    <string name="shell_to_scan_a_contacts_pairing_code">To scan a contact\'s pairing code. Nothing is recorded.</string>
+    <string name="shell_attached_to_an_sos_so_your">Attached to an SOS so your group knows where you are. Read only for an SOS: the button, or the duress phrase.</string>
+    <string name="shell_if_someone_else_can_pick_up_2">If someone else can pick up this phone, give Clairix a passcode of its own. Without one, anyone who opens Clairix can read your messages and see who you talk to.</string>
+    <string name="shell_a_passcode_keeps_what_is_in_2">A passcode keeps what is in Clairix to you. It does not hide the app: Clairix appears by name in the app list and shows a notification while Comms stays online.</string>
+    <string name="shell_you_need_an_invite">You need an invite</string>
+    <string name="shell_the_person_who_gave_you_this">The person who gave you this app sends an invite link or shows a QR code. Opening it gives you a Clairix number and adds them as your first contact.</string>
+    <string name="shell_a_clairix_number_isnt_a_phone">A Clairix number isn\'t a phone number. It only reaches other Clairix apps on the same relay. Keep Comms online so calls ring while the app is closed.</string>
+    <string name="shell_get_started">Get started</string>
+    <string name="shell_before_you_start">Before you start</string>
+    <string name="shell_does_anyone_else_use_this_phone">Does anyone else use this phone?</string>
+    <string name="shell_clairix_asks_for_it_whenever_the">Clairix asks for it whenever the screen has been off, or after 30 seconds away. Settings → App passcode changes that, and adds biometrics or a duress passcode.</string>
+    <string name="shell_passcode_set">Passcode set</string>
+    <string name="shell_set_a_passcode_for_clairix">Set a passcode for Clairix</string>
+    <string name="shell_last_step">Last step</string>
+    <!-- Tour.kt -->
+    <string name="shell_tour_of">Tour · %1$s of %2$s</string>
+    <string name="shell_where_everything_is">Where everything is</string>
+    <string name="shell_stops_one_for_each_place_in">%1$s stops, one for each place in Clairix. Swipe, or use Next. \"Show me\" takes you there; you can come back to the tour from Settings → About.</string>
+    <string name="shell_show_me">Show me</string>
+    <!-- BatteryExemptionCard.kt -->
+    <string name="shell_let_clairix_run_in_the_background">Let Clairix run in the background</string>
 </resources>

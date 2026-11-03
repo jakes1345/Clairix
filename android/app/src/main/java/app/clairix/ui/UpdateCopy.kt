@@ -39,8 +39,7 @@ internal object UpdateCopy {
 
     /** The banner: what is wrong, what the app does about it until the update, and what the update brings. */
     fun unsafeBody(current: String, newer: LatestRelease) =
-        "Clairix $current has a security flaw that ${newer.versionName} fixes. Until it is updated, Clairix sends " +
-            "nothing but SOS alerts, no messages and no calls: what this version sends may not be safe. ${newer.notes}"
+        "Clairix $current has a security flaw that ${newer.versionName} fixes. Until it is updated, Clairix sends nothing but SOS alerts, no messages and no calls: what this version sends may not be safe. ${newer.notes}"
 
     /** The offer in Settings > About; below the oldest safe version it says what the banner says. */
     fun offerBody(notice: UpdateNotice, newer: LatestRelease, fromPlay: Boolean, fromFdroid: Boolean = false): String {
