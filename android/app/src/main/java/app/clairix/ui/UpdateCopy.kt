@@ -43,8 +43,12 @@ internal object UpdateCopy {
             "nothing but SOS alerts, no messages and no calls: what this version sends may not be safe. ${newer.notes}"
 
     /** The offer in Settings > About; below the oldest safe version it says what the banner says. */
-    fun offerBody(notice: UpdateNotice, newer: LatestRelease, fromPlay: Boolean): String {
-        val how = if (fromPlay) "Google Play has it." else "Clairix Full does not update itself: the download page has it, with its checksum."
+    fun offerBody(notice: UpdateNotice, newer: LatestRelease, fromPlay: Boolean, fromFdroid: Boolean = false): String {
+        val how = when {
+            fromPlay -> "Google Play has it."
+            fromFdroid -> "This edition is built by F-Droid and does not update itself: the F-Droid app offers it once F-Droid has built it."
+            else -> "Clairix Full does not update itself: the download page has it, with its checksum."
+        }
         val unsafe = if (notice.unsafe) " This version has a known security flaw: until it is updated, Clairix sends nothing but SOS alerts." else ""
         return "${newer.notes}$unsafe $how"
     }
@@ -53,8 +57,18 @@ internal object UpdateCopy {
 /** The Play edition is updated through Google Play; every other edition from the download page. */
 internal fun updatesFromPlay(flavor: String = BuildConfig.FLAVOR): Boolean = flavor.startsWith("play")
 
-internal fun updateUrl(fromPlay: Boolean = updatesFromPlay()): String =
-    if (fromPlay) "https://play.google.com/store/apps/details?id=${BuildConfig.APPLICATION_ID}" else "https://clairix.app/download"
+/** The foss edition is the one F-Droid builds, and is updated through F-Droid. */
+internal fun updatesFromFdroid(flavor: String = BuildConfig.FLAVOR): Boolean = flavor.startsWith("foss")
+
+/**
+ * Where the update is got. The foss edition goes to its F-Droid page: F-Droid signs what it
+ * builds with its own key, so the download page's APK would not install over it.
+ */
+internal fun updateUrl(fromPlay: Boolean = updatesFromPlay(), fromFdroid: Boolean = updatesFromFdroid()): String = when {
+    fromPlay -> "https://play.google.com/store/apps/details?id=${BuildConfig.APPLICATION_ID}"
+    fromFdroid -> "https://f-droid.org/packages/${BuildConfig.APPLICATION_ID}/"
+    else -> "https://clairix.app/download"
+}
 
 /** Opens where this build is updated from. */
 fun openUpdate(context: Context) {
@@ -94,7 +108,7 @@ fun UpdateOffer(notice: UpdateNotice, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     Notice(
         if (notice.unsafe) Tone.Caution else Tone.Accent,
-        text = UpdateCopy.offerBody(notice, newer, updatesFromPlay()),
+        text = UpdateCopy.offerBody(notice, newer, updatesFromPlay(), updatesFromFdroid()),
         modifier = modifier,
         title = UpdateCopy.offerTitle(newer),
         action = {

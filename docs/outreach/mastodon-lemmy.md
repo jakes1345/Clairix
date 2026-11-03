@@ -61,9 +61,9 @@ Things you should know:
 - Not independently audited. Detection is best-effort; a finding is a reason
   to look, not proof. The camera sweep hasn't been validated on real hardware
   yet.
-- Every edition includes Google's play-services-location (used only where Play
-  services exists; otherwise Android's own location service). That's why it
-  isn't on F-Droid.
+- The editions we publish include Google's play-services-location (used only
+  where Play services exists; otherwise Android's own location service). A
+  build without it exists in the source for F-Droid but isn't on F-Droid yet.
 - A large part of the code was written with an AI coding assistant; the git
   history says so.
 - No analytics, ads or crash reporting.

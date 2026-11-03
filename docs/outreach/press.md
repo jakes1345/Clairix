@@ -116,7 +116,7 @@ Paste the fact sheet below the signature, or attach it.
   remove malware.
 - It cannot hide a phone's location from the mobile carrier.
 - Someone who handles the unlocked phone can see Clairix is installed.
-- Every edition includes Google's Play services location library; on phones
+- Every published edition includes Google's Play services location library; on phones
   with Google Play services, position fixes go through Google unless
   "Satellite-only positioning" is on.
 - The project relay runs on Cloudflare; Cloudflare's own logging is under its

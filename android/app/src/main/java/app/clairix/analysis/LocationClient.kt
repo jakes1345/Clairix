@@ -6,20 +6,11 @@ import android.content.SharedPreferences
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.clairix.Registry
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import java.util.Collections
 import java.util.WeakHashMap
-import com.google.android.gms.location.LocationRequest as GoogleLocationRequest
 
 /**
  * The phone's side of [LocationPolicy]: what it offers, what the owner chose, whether
@@ -66,17 +57,16 @@ object Positioning {
     }
 
     /**
-     * What this phone offers now. Google Play services counts only when it answers as
-     * usable ([ConnectionResult.SUCCESS]): missing, disabled, too old to serve this
-     * library or updating all send the request to Android's own service instead.
+     * What this phone offers now. Google Play services counts only in an edition that
+     * carries it ([EditionLocation.fused]; the F-Droid edition does not) and only when it
+     * answers as usable: missing, disabled, too old to serve the library or updating all
+     * send the request to Android's own service instead.
      */
     fun platform(context: Context): LocationPolicy.Platform {
         val app = context.applicationContext
         val lm = app.getSystemService(LocationManager::class.java)
         fun has(provider: String) = lm != null && runCatching { lm.hasProvider(provider) }.getOrDefault(false)
-        val play = runCatching {
-            GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(app) == ConnectionResult.SUCCESS
-        }.getOrDefault(false)
+        val play = EditionLocation.fused?.usable(app) == true
         return LocationPolicy.Platform(
             playServices = play,
             fusedProvider = has(LocationManager.FUSED_PROVIDER),
@@ -144,13 +134,14 @@ class LocationClient(context: Context, private val onFixes: (List<Location>) -> 
     private val manager: LocationManager? = app.getSystemService(LocationManager::class.java)
     private val mainExecutor = ContextCompat.getMainExecutor(app)
 
-    /** Made only once Google's client is chosen: on a phone without Play services it is never touched. */
-    private var google: FusedLocationProviderClient? = null
-    private val googleCallback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) {
-            onFixes(result.locations)
-        }
-    }
+    /**
+     * Made only once Google's client is chosen: on a phone without Play services it is
+     * never touched, and in the F-Droid edition there is none ([EditionLocation.fused]).
+     */
+    private var google: FusedLocation.Client? = null
+
+    private fun googleClient(): FusedLocation.Client? =
+        google ?: EditionLocation.fused?.client(app, onFixes)?.also { google = it }
 
     /** One listener per platform provider asked, so each can be dropped on its own. */
     private val platformListeners = HashMap<String, LocationListener>()
@@ -211,33 +202,31 @@ class LocationClient(context: Context, private val onFixes: (List<Location>) -> 
             onResult(Positioning.lastKnown(app, chosen, platform))
             return
         }
-        val client = synchronized(this) { google ?: LocationServices.getFusedLocationProviderClient(app).also { google = it } }
+        val client = synchronized(this) { googleClient() }
+        if (client == null) {
+            onResult(Positioning.lastKnown(app, LocationSource.PHONE_FALLBACK, platform))
+            return
+        }
         try {
-            client.lastLocation
-                .addOnSuccessListener { l -> onResult(l ?: Positioning.lastKnown(app, chosen, platform)) }
-                .addOnFailureListener { e ->
+            client.lastLocation(
+                onResult = { l -> onResult(l ?: Positioning.lastKnown(app, chosen, platform)) },
+                onFailure = { e ->
                     Positioning.noteGoogleFailed(e)
                     onResult(Positioning.lastKnown(app, LocationSource.PHONE_FALLBACK, platform))
                 }
+            )
         } catch (e: SecurityException) {
             onResult(null)
         }
     }
 
-    @SuppressLint("MissingPermission") // the caller holds the permission; SecurityException otherwise
+    /** Throws [SecurityException] without permission, as Google's client does. */
     private fun requestGoogle(fixes: FixRequest, gen: Int) {
-        val client = google ?: LocationServices.getFusedLocationProviderClient(app).also { google = it }
-        val builder = GoogleLocationRequest.Builder(
-            if (fixes.highAccuracy) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-            fixes.intervalMs
-        )
-            .setMinUpdateIntervalMillis(fixes.minIntervalMs)
-            .setMinUpdateDistanceMeters(fixes.minDistanceM)
-        fixes.waitForAccurate?.let { builder.setWaitForAccurateLocation(it) }
-        // The same callback again replaces the earlier request. A refusal arrives later,
-        // on the main thread, as the task's failure.
-        client.requestLocationUpdates(builder.build(), googleCallback, Looper.getMainLooper())
-            .addOnFailureListener { e -> googleFailed(gen, e) }
+        // GOOGLE is chosen only where an edition supplies the client, so this is always
+        // there; were it not, the request goes to Android's own service like any refusal.
+        val client = googleClient()
+            ?: return googleFailed(gen, IllegalStateException("This edition has no Google Play services client"))
+        client.request(fixes) { e -> googleFailed(gen, e) }
     }
 
     /** Google's client failed the request [gen]: the same request goes to Android's own service. */
@@ -275,7 +264,7 @@ class LocationClient(context: Context, private val onFixes: (List<Location>) -> 
     }
 
     private fun dropRegistrations() {
-        google?.let { client -> runCatching { client.removeLocationUpdates(googleCallback) } }
+        google?.remove()
         manager?.let { lm -> for (listener in platformListeners.values) runCatching { lm.removeUpdates(listener) } }
         platformListeners.clear()
     }

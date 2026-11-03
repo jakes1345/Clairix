@@ -20,7 +20,7 @@ not travelled far enough yet, or there is no position fix to judge by.
 
 ## Editions and variants
 
-Clairix is built in two editions from one codebase, along two flavour
+Clairix is built in three editions from one codebase, along two flavour
 dimensions (`edition` first, then `tier`, so a variant reads `<edition><Tier>`):
 
 | Variant | Edition | What it is | Where it goes |
@@ -28,6 +28,8 @@ dimensions (`edition` first, then `tier`, so a variant reads `<edition><Tier>`):
 | `fullSuite` | Full | The whole app, including the Card Vault with NFC card emulation and ClairixCoin | `clairix-<tag>.apk` on GitHub Releases and clairix.app |
 | `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS, with the duress phrase, fake call and Wipe Clairix; no scanner | `clairix-comms-<tag>.apk` on GitHub Releases |
 | `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, for the Play Console (the listing is not public yet) |
+| `fossSuite` | Foss | The full edition's whole app **without** Google Play services or Firebase | Nowhere yet: meant for F-Droid, not submitted (`docs/DISTRIBUTION.md`, "F-Droid") |
+| `fossComms` | Foss | Clairix Comms, the same without Google Play services | Nowhere yet |
 
 There is no `playComms`: the comms-only build is never published on Play.
 
@@ -47,6 +49,17 @@ How the Play edition leaves those features out:
   `"coin": false` (its operator set `COIN=off`) or a coin request answers 404.
 
 Everything else (scanner, tools, map, navigation, COMMS) is identical.
+
+How the foss edition leaves Google Play services out: `play-services-location`
+is a dependency of the `full` and `play` flavours only, and the code that uses
+it (`EditionLocation`, Google's implementation of `analysis/FusedLocation.kt`)
+is in `src/gms`, a source directory of those two. The foss edition's own
+`src/foss` supplies no fused client, so `LocationClient` and `SosLocation` use
+Android's `LocationManager` alone. Otherwise it is the full edition, built from
+the same `src/full` and `src/fullSuite` files (`sourceSets` in
+`app/build.gradle.kts`). `.github/workflows/android.yml` fails if a
+`com.google.android.gms` or `com.google.firebase` artifact, class or file
+reaches it.
 
 How the comms-only build leaves the toolkit out: its manifest (`src/main`)
 declares none of the scanner's components or permissions, which

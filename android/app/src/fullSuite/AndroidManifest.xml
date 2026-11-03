@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Full edition with the whole app (the fullSuite variant) only. The card vault's
+    Full and foss editions with the whole app (fullSuite, and fossSuite, which
+    app/build.gradle.kts points at this file) only. The card vault's
     Host Card Emulation service lives here rather than in src/suite so that the
     Play edition, which ships without card emulation, never declares it, and the
     comms-only build, which has no NFC tab, never did.

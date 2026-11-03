@@ -426,15 +426,25 @@ android {
     //          this build at all) and no ClairixCoin. Everything else is the same.
     //   full   Sideloaded from clairix.app and GitHub Releases: everything,
     //          including the card vault with card emulation and ClairixCoin.
+    //   foss   For F-Droid: the full edition without Google Play services or
+    //          Firebase. It takes the full edition's code and manifests (src/full,
+    //          and src/fullSuite for its suite; see sourceSets below) and leaves out
+    //          src/gms, the one place that uses Google's fused location client:
+    //          its own src/foss supplies no such client, so every position comes
+    //          from Android's own location service, the path the other editions
+    //          take on a phone without Play services. play-services-location is a
+    //          dependency of full and play only, and .github/workflows/android.yml
+    //          fails the build if a com.google.android.gms or com.google.firebase
+    //          artifact reaches this edition's runtime classpath or classes.
     //
     // tier — how much of the app a build carries:
     //   suite  the whole app: scanner, map, cell/NFC/Wi-Fi/device tabs, tools, COMMS
     //   comms  COMMS only: encrypted messages, calls, groups and SOS, with the safety
     //          pages (duress phrase, fake call, Wipe Clairix); no scanner or tools
     //
-    // Variants built: playSuite (the Play upload), fullSuite and fullComms. The
-    // comms-only build is handed out directly, never through Play, so playComms
-    // is switched off below.
+    // Variants built: playSuite (the Play upload), fullSuite, fullComms, and
+    // fossSuite and fossComms for F-Droid. The comms-only build is handed out
+    // directly, never through Play, so playComms is switched off below.
     //
     // A comms install upgrades to the full edition's suite in place (the same
     // applicationId and signing key) and keeps its Clairix number, contacts and
@@ -456,12 +466,23 @@ android {
     productFlavors {
         create("play") {
             dimension = "edition"
+            buildConfigField("boolean", "PLAY_SERVICES", "true")
             buildConfigField("boolean", "CARD_VAULT", "false")
             buildConfigField("boolean", "CLAIRIX_COIN", "false")
             buildConfigField("boolean", "LAUNCHER_DISGUISE", "false")
         }
         create("full") {
             dimension = "edition"
+            buildConfigField("boolean", "PLAY_SERVICES", "true")
+            buildConfigField("boolean", "CARD_VAULT", "true")
+            buildConfigField("boolean", "CLAIRIX_COIN", "true")
+            buildConfigField("boolean", "LAUNCHER_DISGUISE", "true")
+        }
+        create("foss") {
+            dimension = "edition"
+            // PLAY_SERVICES false: no Google Play services library in this build, so
+            // the screens say positions come from Android's own location service.
+            buildConfigField("boolean", "PLAY_SERVICES", "false")
             buildConfigField("boolean", "CARD_VAULT", "true")
             buildConfigField("boolean", "CLAIRIX_COIN", "true")
             buildConfigField("boolean", "LAUNCHER_DISGUISE", "true")
@@ -557,6 +578,22 @@ android {
             kotlin.srcDir(rustBindings)
             assets.srcDir(relayListAssets)
         }
+        // Google's fused location client (EditionLocation), in the two editions
+        // that carry Google Play services. The foss edition has its own EditionLocation.
+        getByName("full") { kotlin.srcDir("src/gms/java") }
+        getByName("play") { kotlin.srcDir("src/gms/java") }
+        // The foss edition is the full edition without Google Play services: the
+        // same direct SOS text (src/full) and, for its suite, the same card vault
+        // with card emulation (src/fullSuite), from the same files.
+        getByName("foss") {
+            kotlin.srcDir("src/full/java")
+            manifest.srcFile("src/full/AndroidManifest.xml")
+        }
+        maybeCreate("fossSuite").apply {
+            kotlin.srcDir("src/fullSuite/java")
+            res.srcDir("src/fullSuite/res")
+            manifest.srcFile("src/fullSuite/AndroidManifest.xml")
+        }
     }
 
     // The three ABIs the Rust crate is built for; anything else has no crypto library.
@@ -583,7 +620,10 @@ dependencies {
     // the handful of others the app draws are carried in ClairixIcons.kt.
     implementation("androidx.compose.material:material-icons-core")
 
-    implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Google's fused location client, in the full and Play editions only (src/gms).
+    // The foss edition, for F-Droid, is built without it; see productFlavors.
+    "fullImplementation"("com.google.android.gms:play-services-location:21.3.0")
+    "playImplementation"("com.google.android.gms:play-services-location:21.3.0")
 
     // Hidden-camera sweep — CameraX drives the torch-on lens-glint analyser and the
     // front-camera IR-illuminator view. Frames are read from the Y plane in process
@@ -709,8 +749,10 @@ configurations.matching { it.name == "detekt" }.configureEach {
 
 // A CycloneDX bill of materials of the libraries in the release builds, which
 // .github/workflows/release.yml attaches to every release: each library in the
-// runtime classpath, with its version. The three release variants have the
-// same dependencies, so the full edition's classpath stands for all of them.
+// runtime classpath, with its version. The three variants release.yml publishes
+// have the same dependencies, so the full edition's classpath stands for all of
+// them. (The foss edition, which release.yml does not build, has the same less
+// play-services-location and what it pulls in.)
 // The Rust crates inside the crypto library get a bill of their own from
 // cargo-cyclonedx in the same workflow.
 tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
@@ -725,7 +767,8 @@ tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
 }
 
 // The comms-only build is never published on Google Play, so the Play edition
-// has no comms variant: playSuite, fullSuite and fullComms are the three built.
+// has no comms variant: playSuite, fullSuite, fullComms, fossSuite and fossComms
+// are the five built.
 androidComponents {
     beforeVariants(selector().withFlavor("edition" to "play").withFlavor("tier" to "comms")) { variant ->
         variant.enable = false

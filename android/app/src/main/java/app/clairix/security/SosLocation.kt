@@ -11,15 +11,12 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import app.clairix.LatLon
 import app.clairix.Registry
+import app.clairix.analysis.EditionLocation
+import app.clairix.analysis.FusedAnswer
 import app.clairix.analysis.LocationPolicy
 import app.clairix.analysis.LocationSource
 import app.clairix.analysis.Positioning
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
-import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -31,8 +28,9 @@ import java.util.concurrent.atomic.AtomicReference
  * scanner at all.
  *
  * The source is the scanner's ([Positioning.choose]): Google Play services where the
- * phone has it, Android's own location service where it does not or where Google's
- * fails the request, the satellite receiver alone with Satellite-only positioning on.
+ * phone and the edition have it, Android's own location service where they do not (the
+ * F-Droid edition never does) or where Google's fails the request, the satellite
+ * receiver alone with Satellite-only positioning on.
  * A position Android marks as mock is an app's invention and never goes in an SOS: it
  * would send the people coming to help wherever that app says. Nor does a last known
  * position older than [LAST_KNOWN_MAX_AGE_MS]: an SOS does not say how old its position
@@ -64,7 +62,7 @@ object SosLocation {
      * ([Registry.status]). Null when location is not granted or nothing usable could
      * be found in time; the broadcast then goes with whatever the status already holds,
      * or without a position. Blocks for up to eight seconds: call off the main thread
-     * (the Tasks API refuses to wait on it).
+     * (Google's client refuses to be waited for on it).
      */
     fun find(context: Context): LatLon? = (locate(context) as? Lookup.Found)?.at
 
@@ -87,26 +85,20 @@ object SosLocation {
             return loc.takeIf { usable(it.isMock, ageMs(it), maxAgeMs) }
         }
 
-        if (source == LocationSource.GOOGLE) {
-            val client = LocationServices.getFusedLocationProviderClient(app)
-            val last = runCatching { Tasks.await(client.lastLocation, LAST_KNOWN_BUDGET_MS, TimeUnit.MILLISECONDS) }
-            take(last.getOrNull(), LAST_KNOWN_MAX_AGE_MS)?.let { return found(it) }
-            // A task that failed ([ExecutionException]) is Google Play services refusing,
-            // not an answer: Android's own service then, in the time left. No fix in time,
-            // or none but an app's, is the answer.
-            var failed = last.exceptionOrNull() as? ExecutionException
-            if (failed == null) {
-                val fresh = runCatching {
-                    Tasks.await(
-                        client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token),
-                        remaining(deadline), TimeUnit.MILLISECONDS
-                    )
-                }
-                take(fresh.getOrNull(), Long.MAX_VALUE)?.let { return found(it) }
-                failed = fresh.exceptionOrNull() as? ExecutionException
+        val fused = EditionLocation.fused
+        if (source == LocationSource.GOOGLE && fused != null) {
+            val last = fused.awaitLast(app, LAST_KNOWN_BUDGET_MS)
+            take((last as? FusedAnswer.Answered)?.location, LAST_KNOWN_MAX_AGE_MS)?.let { return found(it) }
+            // A refusal is Google Play services saying no, not an answer: Android's own
+            // service then, in the time left. No fix in time, or none but an app's, is the answer.
+            var refused = (last as? FusedAnswer.Refused)?.error
+            if (refused == null) {
+                val fresh = fused.awaitCurrent(app, remaining(deadline))
+                take((fresh as? FusedAnswer.Answered)?.location, Long.MAX_VALUE)?.let { return found(it) }
+                refused = (fresh as? FusedAnswer.Refused)?.error
             }
-            if (failed == null) return if (faked) Lookup.OnlyFaked else Lookup.NoFix
-            Positioning.noteGoogleFailed(failed)
+            if (refused == null) return if (faked) Lookup.OnlyFaked else Lookup.NoFix
+            Positioning.noteGoogleFailed(refused)
             source = Positioning.choose(app, platform)
         }
 

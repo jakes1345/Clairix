@@ -657,8 +657,10 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             "Positions come from the satellite receiver alone, and Clairix asks for no Wi-Fi or cell " +
                                 "position. Slower to a first fix, often none indoors, and more battery while the phone sits still."
                         else
-                            "Positions come from Google Play services where the phone has it, otherwise from Android's " +
-                                "own location service. One worked out from Wi-Fi and cell towers sends their identifiers " +
+                            (if (BuildConfig.PLAY_SERVICES) "Positions come from Google Play services where the phone has it, otherwise from Android's " +
+                                "own location service." else "Positions come from Android's own location service: this edition " +
+                                "has no Google Play services.") +
+                                " One worked out from Wi-Fi and cell towers sends their identifiers " +
                                 "to that service: to Google, on most phones.",
                         checked = satelliteOnly,
                         onCheckedChange = { v ->
@@ -1042,7 +1044,8 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                                 "your push server a POST saying only \"wake\" when something arrives; with Connect through Tor on, " +
                                 "everything Clairix says to relays goes through the Tor network. Evidence leaves the " +
                                 "phone only when you export it. Positions for the scanner, navigation and SOS come from " +
-                                "Google Play services where the phone has it, otherwise from Android's own location " +
+                                (if (BuildConfig.PLAY_SERVICES) "Google Play services where the phone has it, otherwise from " else "") +
+                                "Android's own location " +
                                 "service; one worked out from Wi-Fi and cell towers sends their identifiers to that " +
                                 "service, which on most phones is Google's, and so does the GPS check's comparison. " +
                                 "Satellite-only positioning, under Location above, asks the satellites alone. " +
@@ -1052,8 +1055,9 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             "Messages and calls are end-to-end encrypted; the relay sees neither what they say nor who " +
                                 "sent them. Your keys, contacts and history are stored on this phone only. Location is " +
                                 "read at the moment you press SOS, to attach to that alert, and at no other time. That " +
-                                "position comes from Google Play services where the phone has it, otherwise from Android's " +
-                                "own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
+                                "position comes from " +
+                                (if (BuildConfig.PLAY_SERVICES) "Google Play services where the phone has it, otherwise from " else "") +
+                                "Android's own location service; one worked out from Wi-Fi and cell towers sends their identifiers " +
                                 "to that service. Satellite-only positioning, under Location above, asks the satellites alone. " +
                                 "Once a day Clairix fetches the signed relay list, the keys it is signed with and a note of the " +
                                 "newest version from GitHub; nothing about you goes with the request. With push wake-ups set " +

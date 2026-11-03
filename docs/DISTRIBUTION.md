@@ -1,7 +1,7 @@
 # Distribution
 
 Where Clairix can be installed from, what each channel needs, and where each
-one stands. Written 1 November 2026; correct this file whenever a channel
+one stands. Written 1 November 2026, F-Droid section updated 3 November 2026; correct this file whenever a channel
 changes. It claims no listing that does not exist.
 
 ## Where it stands
@@ -12,7 +12,7 @@ changes. It claims no listing that does not exist.
 | clairix.app/download | **Live.** Links to the Full APK on GitHub Releases with its SHA-256 (`website/src/config/release.ts`). |
 | Obtainium | **Works now, needs no listing.** Obtainium reads GitHub Releases directly; /download has the link and the two settings it needs. |
 | IzzyOnDroid | **Not listed.** The inclusion request below has not been sent yet. |
-| F-Droid (main repository) | **Not possible yet.** See "F-Droid" below. |
+| F-Droid (main repository) | **Not submitted.** A `foss` flavour without Google Play services or Firebase now builds, and CI checks it stays that way; the rest of what a submission needs is under "F-Droid" below. |
 | Google Play | **Not public.** The Play edition is built with every release (`clairix-play-<tag>.aab`), but `PLAY_LIVE` is `false` in `website/src/config/site.ts` and no store page exists. |
 
 GitHub is the single host of every APK. The README's adversary can compel
@@ -90,7 +90,8 @@ What the request has to raise:
   calls. IzzyOnDroid limits the size per
   app; if 68.8 MB is over the current limit, the request asks for an exception
   and gives those reasons.
-- **Google's location library.** `play-services-location` is in every edition.
+- **Google's location library.** `play-services-location` is in every published
+  edition (the foss flavour, not published, is the only one without it).
   It is used only when Google Play services is on the phone; without it the app
   uses Android's `LocationManager` (`analysis/LocationClient.kt`,
   `security/SosLocation.kt`). Expect IzzyOnDroid to mark it with an
@@ -144,15 +145,77 @@ Maintainer: the repository owner, reachable at support@clairix.app.
 ## F-Droid
 
 F-Droid's main repository builds every app from source on its own servers and
-accepts no proprietary dependency. `android/app/build.gradle.kts` declares
-`implementation("com.google.android.gms:play-services-location:21.3.0")` for
-every edition, so no Clairix build can go there today.
+accepts no proprietary dependency. The published editions (Full, Comms, Play)
+all declare `com.google.android.gms:play-services-location`, so none of them
+can go there.
 
-An edition without Google Play services is planned work, with no date: a
-flavour that leaves out the library and keeps the `LocationManager` path the
-app already uses on phones without Google Play services. With it, the next
-questions are F-Droid's build of the Rust library (the NDK and cargo-ndk are
-pinned, `tools/reproducible`) and whether F-Droid publishes the developer's
-signed APK through its reproducible-builds track, which the existing rebuild
-checks would support. Until that edition exists, IzzyOnDroid and Obtainium are
-the routes for people who use F-Droid-style clients.
+**What exists now (3 November 2026).** A third edition flavour, `foss`, next to
+`full` and `play` in `android/app/build.gradle.kts`, gives two variants:
+`fossSuite` (the whole app) and `fossComms` (messaging only). It is the full
+edition without Google Play services or Firebase:
+
+- `play-services-location` is a dependency of the `full` and `play` flavours
+  only (`fullImplementation`, `playImplementation`). The foss runtime
+  classpath holds no `com.google.android.gms` or `com.google.firebase`
+  artifact.
+- The one piece of code that used Google's fused location client is behind an
+  interface, `analysis/FusedLocation.kt`. Its only implementation is in
+  `src/gms` (a source directory of `full` and `play`); the foss edition's
+  `src/foss/.../EditionLocation.kt` supplies none, so every position (scanner,
+  Drive map, navigation, SOS) comes from Android's own `LocationManager`: its
+  fused provider where the phone has one, otherwise the satellite and
+  Wi-Fi/cell providers, the satellite receiver alone with Satellite-only
+  positioning on. That is the same path the other editions already take on a
+  phone without Google Play services. Settings says so in this edition.
+- Everything else is the full edition's: the direct SOS text (`src/full`),
+  the card vault with card emulation (`src/fullSuite`), ClairixCoin and the
+  disguised launcher entries.
+- `.github/workflows/android.yml` (the "Check the foss edition has no Google
+  Play services or Firebase" step) fails the build if a `com.google.android.gms`
+  or `com.google.firebase` artifact reaches `fossSuiteReleaseRuntimeClasspath`
+  or `fossCommsReleaseRuntimeClasspath`, or if such a class or file is in the
+  foss debug APKs (`tools/android/check-no-google-services.sh`, with its own
+  tests). The foss unit tests (`src/testFoss`) check that no Play services
+  class can be loaded.
+- A metadata draft for fdroiddata is in `docs/fdroid/app.clairix.yml`. It has
+  not been submitted, linted or built with `fdroid build`.
+
+The foss edition is not built by `release.yml` and not published anywhere: no
+APK of it exists outside a local or CI build.
+
+**What a submission still needs**, all of it the maintainer's:
+
+1. **A release tag that has the foss flavour.** The draft has no `commit:`
+   line until one exists (3.0.0 Beta 8 predates it).
+2. **A build on F-Droid's own tooling.** Run `fdroid build app.clairix` with
+   the draft in a local fdroiddata checkout (or let the merge request's CI do
+   it). The recipe has to install Rust (`comms-crypto/rust-toolchain.toml`
+   pins 1.97.0 and the three Android targets), cargo-ndk 4.1.2 and NDK r27c
+   (27.2.12479018); the Gradle build refuses any other cargo-ndk or NDK
+   (`tools/reproducible`). Whether the draft's `prebuild`/`build` lines get
+   `cargo` onto the Gradle task's `PATH` on F-Droid's builder has not been
+   tried.
+3. **Prebuilt native code in Maven libraries.** Three FOSS dependencies ship
+   compiled `.so` files in their AARs: `io.getstream:stream-webrtc-android`
+   (libwebrtc, for calls), `net.zetetic:sqlcipher-android` (SQLCipher) and
+   `net.java.dev.jna:jna` (libjnidispatch). F-Droid's reviewers may ask for
+   them to be built from source; that is theirs to decide and has not been
+   asked.
+4. **Anti-features.** The likely one is NonFreeNet: with Share traffic data
+   on, the box around a route goes through the relay to HERE and TomTom for
+   incidents. The project relay runs on Cloudflare Workers (its code,
+   `comms-worker/`, is free; anyone can run a relay). F-Droid decides.
+5. **One build per listing.** `fossSuite` and `fossComms` share the package
+   name `app.clairix` and the versionCode, so a listing carries one of them;
+   the draft lists `fossSuite`.
+6. **Signing.** F-Droid signs what it builds with its own key, so an F-Droid
+   install cannot be updated with the GitHub APK or the other way round (the
+   app's update notice sends a foss install to its F-Droid page for this
+   reason). F-Droid can instead publish the developer's own signed APK if its
+   build reproduces it; that needs `release.yml` to build and publish the
+   foss APK as well, which it does not, and the existing rebuild checks
+   (`tools/reproducible`, `verify-release.yml`) extended to it.
+
+Until a listing exists, Obtainium (and IzzyOnDroid, once it lists Clairix) is
+the route for people who use F-Droid-style clients; both take the full edition
+from GitHub Releases, with Google's location library.

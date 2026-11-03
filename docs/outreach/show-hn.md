@@ -64,8 +64,9 @@ What it does NOT do:
 - It can't hide you from your carrier.
 - It has not been independently audited. vodozemac has; Clairix hasn't. Our
   own findings, open ones included, are in docs/SECURITY-FINDINGS.md.
-- Every edition includes Google's play-services-location (used only if Play
-  services is on the phone), so it isn't on F-Droid.
+- Every published edition includes Google's play-services-location (used only
+  if Play services is on the phone). A build without it exists in the source
+  for F-Droid but isn't on F-Droid yet.
 
 On AI: a large part of the code was written with Claude as a coding assistant,
 and the git history says so on most commits. I've reviewed it, and CI drives

@@ -101,7 +101,7 @@ internal object EvidenceExport {
     /** "Full, play flavour (playSuite)": the tier, then the flavour the build came from. */
     private fun edition(): String {
         val tier = if (BuildConfig.FULL_ACCESS) "Full" else "Comms"
-        val flavour = if (BuildConfig.FLAVOR.startsWith("play")) "play" else "full"
+        val flavour = listOf("play", "foss", "full").firstOrNull { BuildConfig.FLAVOR.startsWith(it) } ?: BuildConfig.FLAVOR
         return "$tier, $flavour flavour (${BuildConfig.FLAVOR})"
     }
 

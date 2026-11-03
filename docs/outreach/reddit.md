@@ -27,10 +27,11 @@ Never:
 - delete and repost to get another shot at the front page;
 - leave out that you are the developer.
 
-For r/degoogle specifically: every edition includes Google's
+For r/degoogle specifically: every published edition includes Google's
 `play-services-location`. That audience will notice. Say it first, and say
-what happens without Play services (Android's own `LocationManager`). There is
-no build without the library yet.
+what happens without Play services (Android's own `LocationManager`). A build
+without the library (the `foss` flavour, for F-Droid) exists in the source but
+is not published anywhere yet.
 
 ## Message to the moderators
 

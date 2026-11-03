@@ -153,6 +153,23 @@ jobs:
         run: |
           ./gradlew testFullSuiteDebugUnitTest --no-daemon --stacktrace
 
+      # The foss edition is the one F-Droid would build, and F-Droid's main repository
+      # takes no proprietary dependency: no Google Play services or Firebase artifact
+      # may reach its runtime classpath, and no such class or file its APKs (built by
+      # assembleDebug above). The script's own tests ran with the other tools/android
+      # tests. The edition's unit tests include src/testFoss (no fused client, no
+      # Play services class loadable).
+      - name: Check the foss edition has no Google Play services or Firebase
+        working-directory: android
+        run: |
+          for c in fossSuiteReleaseRuntimeClasspath fossCommsReleaseRuntimeClasspath; do
+            ./gradlew -q :app:dependencies --configuration "$c" --no-daemon > "$RUNNER_TEMP/$c.txt"
+          done
+          ../tools/android/check-no-google-services.sh \
+            --deps "$RUNNER_TEMP"/foss*RuntimeClasspath.txt \
+            --apk app/build/outputs/apk/fossSuite/debug/*.apk app/build/outputs/apk/fossComms/debug/*.apk
+          ./gradlew testFossSuiteDebugUnitTest --tests 'app.clairix.analysis.FossEditionTest' --no-daemon --stacktrace
+
       - name: Upload unit test report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -162,8 +179,9 @@ jobs:
           if-no-files-found: ignore
 
       # Every debug variant: the full edition's whole app (app-full-suite-debug.apk)
-      # and comms-only build (app-full-comms-debug.apk), and the Play edition
-      # (app-play-suite-debug.apk).
+      # and comms-only build (app-full-comms-debug.apk), the Play edition
+      # (app-play-suite-debug.apk), and the foss edition's two
+      # (app-foss-suite-debug.apk, app-foss-comms-debug.apk).
       - name: Upload APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

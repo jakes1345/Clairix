@@ -730,12 +730,23 @@
     <issue
         id="GradleDependency"
         message="A newer version of com.google.android.gms:play-services-location than 21.3.0 is available: 21.4.0"
-        errorLine1="    implementation(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine1="    &quot;fullImplementation&quot;(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="365"
-            column="20"/>
+            line="625"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.gms:play-services-location than 21.3.0 is available: 21.4.0"
+        errorLine1="    &quot;playImplementation&quot;(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="626"
+            column="25"/>
     </issue>
 
     <issue

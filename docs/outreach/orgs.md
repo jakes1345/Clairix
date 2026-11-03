@@ -135,7 +135,7 @@ optional Tor.
 
 Limits: it has not been independently audited (vodozemac, its Olm library,
 has been); detection is best-effort; it cannot see past a compromised OS;
-and every edition includes Google's location library.
+and every published edition includes Google's location library.
 
 Threat model and limits: https://github.com/jakes1345/Clairix#who-it-is-built-against
 Advocates' page: https://clairix.app/advocates
