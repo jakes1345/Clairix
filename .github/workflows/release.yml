@@ -338,32 +338,38 @@ jobs:
           done
           echo "No card emulation in the Play edition."
 
-      # The Comms edition's manifest declares none of the scanner/tool components or
-      # permissions, so the toolkit is unreachable — but the dex still carries the
-      # code (MainActivity references the Drive/NFC/vault entry points unconditionally,
-      # so R8 keeps them). Until that is fixed by moving the entry points into
-      # edition/tier source sets behind a TierShell interface (so R8 drops them),
-      # count the classes that must not be reachable and warn. This is informational,
-      # not a gate: it does not fail the release.
-      - name: Count unreachable toolkit classes in the Comms APK (warning)
+      # The comms-only build must not carry the toolkit's code, not merely leave it
+      # unreachable. Drive mode (the RTL-SDR driver, radio scanner, ADS-B, OBD-II),
+      # the NFC reader, the card vault and card emulation live in src/suite and
+      # src/fullSuite behind TierShell (src/main/java/app/clairix/TierShell.kt), so
+      # fullCommsRelease is compiled without them. R8 renames every class it keeps
+      # (proguard-rules.pro keeps none of these and renames the source-file
+      # attribute), so their names are never in the dex whether the code is there or
+      # not, and grepping the dex would always pass. The mapping file R8 writes for
+      # the variant lists every class it kept under its original name; this fails the
+      # release if any of these classes, or a class nested in one, is listed. The
+      # mapping must exist and list MainActivity, so a moved or empty mapping cannot
+      # make the check pass by finding nothing.
+      - name: Check the Comms edition carries no scanner, NFC or vault code
         run: |
-          # R8 renames these classes (proguard-rules.pro keeps none of them and renames
-          # the source-file attribute), so their names are not in the dex whether or not
-          # the code is: grepping the dex would always say "none". The mapping file R8
-          # writes for the variant lists every class it kept, under its original name.
           MAP=android/app/build/outputs/mapping/fullCommsRelease/mapping.txt
-          if [ ! -f "$MAP" ]; then echo "::warning::R8 mapping for the Comms APK not found at $MAP; cannot tell which toolkit classes it carries"; exit 0; fi
-          total=0
-          for cls in app.clairix.SdrUsbDriver app.clairix.ScannerMonitor app.clairix.AdsbDecoder app.clairix.ObdBluetoothManager app.clairix.analysis.NfcScanner app.clairix.analysis.CardVault app.clairix.CardEmulationService; do
-            n=$(grep -c "^${cls//./\\.} -> " "$MAP" || true)
-            echo "  $cls: $n"
-            total=$((total + n))
-          done
-          if [ "$total" -gt 0 ]; then
-            echo "::warning::The Comms APK still carries $total of the scanner/NFC/vault classes (R8 kept them; see mapping.txt). They are unreachable (no components, no permissions) but not yet removed; move the entry points into edition/tier source sets behind TierShell so R8 drops them, then make this a gate (the count must be 0)."
-          else
-            echo "R8 kept none of the listed scanner/NFC/vault classes in the Comms APK."
+          if [ ! -s "$MAP" ]; then echo "::error::R8 mapping for the Comms APK not found at $MAP"; exit 1; fi
+          if ! grep -q '^app\.clairix\.MainActivity -> ' "$MAP"; then
+            echo "::error::$MAP does not list MainActivity; the check below would prove nothing"; exit 1
           fi
+          found=0
+          for cls in app.clairix.SdrUsbDriver app.clairix.ScannerMonitor app.clairix.AdsbDecoder \
+                     app.clairix.ObdBluetoothManager app.clairix.DriveService \
+                     app.clairix.analysis.NfcScanner app.clairix.analysis.CardVault \
+                     app.clairix.CardEmulationService; do
+            pattern="^${cls//./\\.}(\\\$[^ ]*)? -> "
+            if grep -Eq "$pattern" "$MAP"; then
+              echo "::error::The Comms APK carries $cls (listed in $MAP)"
+              found=1
+            fi
+          done
+          if [ "$found" -ne 0 ]; then exit 1; fi
+          echo "No SDR, radio scanner, ADS-B, OBD-II, NFC, card vault or card-emulation classes in the Comms APK."
 
       # The bills of materials the sbom job made from this commit.
       - name: Fetch the bills of materials
@@ -664,7 +670,7 @@ jobs:
             echo "| File | What it is |"
             echo "|---|---|"
             echo "| \`clairix-${TAG}.apk\` | **The Full edition.** The whole app, including the Card Vault and ClairixCoin. Most people want this one. |"
-            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: the scanner and tools are not reachable and none of their permissions are requested. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
+            echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: the scanner and tools are not reachable and none of their permissions are requested, and the Drive radio scanner, NFC reader, card vault and card emulation are not in the file at all. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
             echo "| \`clairix-play-${TAG}.aab\` | The bundle for the Play Console, signed with the same key as the APKs. Phones can't install this file directly. |"
             echo "| \`sbom-android-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Java and Kotlin library in the three files above, with its version. |"
             echo "| \`sbom-comms-crypto-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Rust crate in the encryption library the three files carry, with its version. |"

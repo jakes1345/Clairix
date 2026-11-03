@@ -138,9 +138,9 @@ of a tier rather than skimming all of them. Line counts are for 3.0.0 Beta 7
   - `Wiper.kt`: completeness and order.
   - `DuressPhrase.kt`
   - What accessibility services can see behind the lock.
-- **Card Vault and card emulation** (`analysis/CardVault.kt`,
-  `analysis/NfcScanner.kt`'s `capture`/`runIsoDep` path, `CardEmulationService.kt`,
-  full edition only): the auth-bound Keystore key and what is stored at rest; that
+- **Card Vault and card emulation** (`src/suite`: `analysis/CardVault.kt`,
+  `analysis/NfcScanner.kt`'s `capture`/`runIsoDep` path, `NfcVaultHost.kt`,
+  `EmulationGuard.kt`; `src/fullSuite`: `CardEmulationService.kt`; full edition only): the auth-bound Keystore key and what is stored at rest; that
   an ordinary scan records no APDU pairs and only the explicit re-tap does; that a
   payment card is never recorded or emulable; and that emulation disarms on lock,
   wipe, screen-off and timeout. See the "Card Vault and card emulation" section of

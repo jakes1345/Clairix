@@ -51,7 +51,7 @@
         errorLine1="        val bonded = adapter.bondedDevices ?: return null"
         errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            file="src/suite/java/app/clairix/ObdBluetoothManager.kt"
             line="218"
             column="22"/>
     </issue>
@@ -62,7 +62,7 @@
         errorLine1="            device.createRfcommSocketToServiceRecord(SPP_UUID)"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            file="src/suite/java/app/clairix/ObdBluetoothManager.kt"
             line="232"
             column="13"/>
     </issue>
@@ -73,7 +73,7 @@
         errorLine1="                primary.connect()"
         errorLine2="                ~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            file="src/suite/java/app/clairix/ObdBluetoothManager.kt"
             line="239"
             column="17"/>
     </issue>
@@ -84,7 +84,7 @@
         errorLine1="            fallback.connect()"
         errorLine2="            ~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            file="src/suite/java/app/clairix/ObdBluetoothManager.kt"
             line="263"
             column="13"/>
     </issue>
@@ -216,7 +216,7 @@
         errorLine1="        prefs().edit().remove(PREFS_KEY_V1).commit()"
         errorLine2="                                            ~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/analysis/CardVault.kt"
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
             line="165"
             column="45"/>
     </issue>
@@ -227,7 +227,7 @@
         errorLine1="            prefs().edit().remove(PREFS_KEY_V1).remove(PREFS_KEY_V2).commit()"
         errorLine2="                                                                     ~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/analysis/CardVault.kt"
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
             line="224"
             column="70"/>
     </issue>

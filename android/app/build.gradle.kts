@@ -441,7 +441,12 @@ android {
     // message history. The comms manifest (src/main) declares only what COMMS
     // needs; the scanner's permissions and components are added by
     // src/suite/AndroidManifest.xml, and the card-emulation service only by
-    // src/fullSuite/AndroidManifest.xml. The code reads FULL_ACCESS to decide
+    // src/fullSuite/AndroidManifest.xml. The code follows the same lines: Drive
+    // mode (SDR, radio scanner, ADS-B, OBD-II), the NFC tab and the card vault
+    // are in src/suite and card emulation in src/fullSuite, reached from the
+    // shared code only through TierShell (src/main), which src/suite and
+    // src/comms each implement as `object Tier`, so the comms build is compiled
+    // without them (release.yml checks its R8 mapping). The code reads FULL_ACCESS to decide
     // which screens exist, CARD_VAULT for the vault and card emulation,
     // CLAIRIX_COIN for the coin balance, payments and their relay requests, and
     // LAUNCHER_DISGUISE for discreet mode's neutral launcher entries ("Compass",

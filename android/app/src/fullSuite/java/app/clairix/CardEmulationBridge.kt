@@ -8,10 +8,11 @@ import android.nfc.cardemulation.CardEmulation
 /**
  * The full edition's link between the NFC tab and [CardEmulationService].
  *
- * MainActivity only ever talks to the service through this object, so the Play
- * edition can swap in its own (src/play), which has no service behind it, and
- * the service class, its manifest entry and its AID resource stay out of that
- * build entirely.
+ * The NFC tab (src/suite) only ever talks to the service through this object, so
+ * the Play edition can swap in its own (src/play), which has no service behind
+ * it. The service class, its manifest entry and its AID resource live in
+ * src/fullSuite, so neither the Play edition nor the comms-only build carries
+ * them; the comms-only build has no NFC code to call this at all.
  */
 internal object CardEmulationBridge {
 

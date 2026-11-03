@@ -8,8 +8,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.SystemClock
 import app.clairix.Registry
+import app.clairix.Tier
 import app.clairix.ScanService
-import app.clairix.ScannerRecordings
 import app.clairix.Store
 import app.clairix.TimelineLog
 import app.clairix.analysis.HiddenCameraScanner
@@ -189,7 +189,7 @@ object HistoryRetention {
 
         // The radio scanner's recordings, by when each was last written.
         override fun recordings(cutoff: Long) {
-            ScannerRecordings.pruneOlderThan(app, cutoff)
+            Tier.pruneScannerRecordings(app, cutoff)
         }
 
         override fun cameraSweep(cutoff: Long) = HiddenCameraScanner.pruneOlderThan(app, cutoff)

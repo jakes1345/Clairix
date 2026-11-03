@@ -1183,7 +1183,7 @@ class ScanService : LifecycleService() {
         val detection = observation.detection
         if (vehicleTrips.inTrip) {
             // Drive mode on is one of the signs the journey is in the owner's car.
-            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now, driveMode = DriveService.active)
+            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now, driveMode = Tier.driveActive)
                 ?.let(::publishVehicleFinding)
         }
         maybeInterrogate(key, device, detection)
@@ -1522,7 +1522,7 @@ class ScanService : LifecycleService() {
         // When each paired accessory was first seen connected (the owner's marks stay).
         runCatching { app.clairix.analysis.AudioRouteMonitor.forget(this) }
         // The radio scanner's recordings, and any plain ones an earlier version left.
-        runCatching { ScannerRecordings.deleteEverything(this) }
+        runCatching { Tier.deleteScannerRecordings(this) }
         LocationHistory.clear(this)
         // Copies of these stores set aside when they could not be read: the same
         // history, kept 30 days for nobody's benefit once the owner has cleared it.

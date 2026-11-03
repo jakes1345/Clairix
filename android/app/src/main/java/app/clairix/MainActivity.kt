@@ -8,16 +8,12 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.nfc.NfcAdapter
-import android.nfc.Tag
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -30,7 +26,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -51,14 +46,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.content.IntentCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -71,10 +64,8 @@ import android.graphics.Paint as AndroidPaint
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.ui.viewinterop.AndroidView
 import app.clairix.CatcherFinding
-import app.clairix.analysis.CardVault
 import app.clairix.analysis.CellMonitor
 import app.clairix.analysis.CellularExposure
-import app.clairix.analysis.NfcScanner
 import app.clairix.analysis.Report
 import app.clairix.analysis.ScanPacing
 import app.clairix.analysis.ScanRecord
@@ -105,7 +96,6 @@ import app.clairix.comms.KeepOffScreen
 import app.clairix.comms.PairingCode
 import app.clairix.comms.PanicResult
 import app.clairix.comms.SosGate
-import android.nfc.cardemulation.CardEmulation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -116,12 +106,10 @@ import org.osmdroid.config.Configuration as OsmConfig
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
-import android.content.ComponentName
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import java.util.UUID
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -196,26 +184,18 @@ private val COMMS_ESSENTIAL = arrayOf(
  * [CommsNotifications.COMMS_TAB_INDEX]; MainApp maps each onto a destination of
  * the tabbed shell, and ignores one the flavour does not have.
  */
-private const val ROUTE_NFC = 4
+internal const val ROUTE_NFC = 4
 private const val ROUTE_COMMS = CommsNotifications.COMMS_TAB_INDEX
 
 // ── Activity ───────────────────────────────────────────────────────────
 
 class MainActivity : AppCompatActivity() {
 
-    private var nfcAdapter: NfcAdapter? = null
-    private var cardEmulation: CardEmulation? = null
-
-    // Constructing the vault touches nothing; the Keystore is only reached inside
-    // its methods, which never throw — so no keystore state can take down launch.
-    private val cardVault by lazy { CardVault(applicationContext) }
     /**
-     * The card-emulation service, or null in an edition built without the card
-     * vault (the Play edition), where there is no service to route readers to.
+     * The NFC reader, card vault and card emulation, from the tier's source set
+     * (src/suite); null in the comms-only build, which has none of them.
      */
-    private val hceComponent: ComponentName? by lazy {
-        if (BuildConfig.CARD_VAULT) CardEmulationBridge.component(this) else null
-    }
+    private val nfc: NfcHost? by lazy { Tier.nfcHost(this) }
 
     /**
      * The static device-health scan (accessibility services, device admins, debug
@@ -231,17 +211,6 @@ class MainActivity : AppCompatActivity() {
      * judgement needs the service, because that owns the baseline on disk.
      */
     private val cellMonitor by lazy { CellMonitor(applicationContext) }
-
-    /** Whether reader mode is currently enabled on the adapter by this activity. */
-    private var readerModeOn = false
-
-    /**
-     * True between onResume and onPause. The lifecycle's own state cannot be used
-     * for this from inside onResume: androidx only marks the Activity RESUMED after
-     * onResume returns, so a guard on it there always failed and reader mode was
-     * never switched on.
-     */
-    private var resumed = false
 
     // focusProperties.enter, so focus cannot move into the app while it is locked.
     @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
@@ -272,51 +241,17 @@ class MainActivity : AppCompatActivity() {
             UnlockLedger.init(this)
             // The offline mesh comes back on if the owner left it on.
             app.clairix.comms.mesh.Mesh.resume(this)
-            lifecycleScope.launch {
-                // A card the guard disarmed (screen off, time up) while this screen
-                // is up: back to reader mode, as STOP would have done.
-                Registry.emulating.collect { if (it == null) applyNfcMode() }
-            }
             ScreenRecordingMonitor.start(this, windowManager)
             lifecycleScope.launch(Dispatchers.IO) { runCatching { BiometricTripwire.check(applicationContext) } }
             // History past the owner's retention goes at each start too, scanning or not.
             lifecycleScope.launch(Dispatchers.IO) { runCatching { HistoryRetention.apply(applicationContext) } }
 
-            // The comms-only build declares no NFC permission or HCE service, so its
-            // adapter stays null and every NFC path below is a no-op. The Play
-            // edition reads tags but has no card emulation, so it never asks for it.
-            nfcAdapter = runCatching { NfcAdapter.getDefaultAdapter(this) }.getOrNull()
-            if (hceComponent != null) {
-                cardEmulation = nfcAdapter?.let { runCatching { CardEmulation.getInstance(it) }.getOrNull() }
-            }
-
-            // Emulation state lives only in this process, so if nothing is armed now,
-            // any AIDs still registered belong to a previous process — they survive
-            // reboots — and would keep routing readers to the service. Drop them.
-            if (Registry.emulating.value == null) clearHceAids()
-
-            // Seed whether the vault-ownership notice has been acknowledged, so the
-            // NFC tab can gate the first save without reading preferences on the main
-            // thread. Only the editions with the vault (CARD_VAULT) ever ask.
-            if (BuildConfig.CARD_VAULT) Registry.setOwnershipAck(cardVault.hasOwnershipAck())
+            // The NFC reader and the card vault (the comms-only build has neither).
+            nfc?.onCreate()
 
             // Show the stored timeline even before the scanner has run this session.
             lifecycleScope.launch(Dispatchers.IO) { runCatching { TimelineLog.publish(applicationContext) } }
         }
-
-        // Results of BiometricPrompt arrive through the Registry, so that whichever
-        // Activity instance is on screen when they land carries the operation out.
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                Registry.vaultAuth.collect { pending ->
-                    if (pending != null) Registry.takeVaultAuth()?.let { handleAuthResult(it) }
-                }
-            }
-        }
-
-        // A tag tapped while Clairix was not in reader mode (backgrounded, or picked
-        // from the system's NFC chooser) arrives as the launching intent.
-        handleNfcIntent(intent)
 
         CommsRepository.init(applicationContext)
         CommsNotifications.ensureChannels(this)
@@ -423,16 +358,7 @@ class MainActivity : AppCompatActivity() {
                                     onStop = { sendToService(ScanService.ACTION_STOP) },
                                     onClearData = { sendToService(ScanService.ACTION_CLEAR) },
                                     hasPermissions = { ESSENTIAL.all { granted(it) } },
-                                    onAddToVault = { tag, label, replace -> addToVault(tag, label, replace) },
-                                    onRemoveVault = { id -> removeFromVault(id) },
-                                    onEmulate = { card -> if (card == null) stopEmulation() else armEmulation(card) },
-                                    onUnlockVault = { unlockVault() },
-                                    onLockVault = { Registry.lockVault() },
-                                    onEraseVault = { eraseVault() },
-                                    onAcknowledgeOwnership = {
-                                        cardVault.setOwnershipAck()
-                                        Registry.setOwnershipAck(true)
-                                    },
+                                    nfc = nfc,
                                     onRefreshDeviceHealth = { refreshDeviceHealth() },
                                     onRefreshCell = { refreshCell() },
                                     onRefreshWifi = { refreshWifi() }
@@ -515,11 +441,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        resumed = true
         AppLock.onForeground(this)
         // Back from Settings, perhaps having set or removed the lock screen.
         app.clairix.comms.Vault.check()
-        applyNfcMode()
+        nfc?.onResume()
         if (BuildConfig.FULL_ACCESS) refreshDeviceHealth()
         reconcileScanner()
         // Envelopes that arrived while the app was closed are pulled on every
@@ -536,22 +461,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
-        resumed = false
         super.onPause()
         AppLock.onBackground(this)
         CommsRepository.onAppVisible(false)
-        nfcAdapter?.let { adapter ->
-            if (readerModeOn) runCatching { adapter.disableReaderMode(this) }
-        }
-        readerModeOn = false
-        runCatching { cardEmulation?.unsetPreferredService(this) }
+        nfc?.onPause()
     }
 
     /** The activity is singleTop, so a tag delivered while it is up lands here. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleNfcIntent(intent)
+        nfc?.onIntent(intent)
         handleOpenThreadIntent(intent)
     }
 
@@ -594,51 +514,6 @@ class MainActivity : AppCompatActivity() {
         Registry.requestTab(tab)
         if (peer != null) Registry.requestThread(peer)
         if (group != null) Registry.requestGroup(group)
-    }
-
-    /**
-     * The manifest registers for NDEF, TECH and TAG discovery, which puts Clairix in
-     * the system's NFC chooser and delivers tags tapped while it is backgrounded.
-     * Those intents were never read, so choosing Clairix dropped the tag on the floor.
-     */
-    private fun handleNfcIntent(intent: Intent?) {
-        val action = intent?.action ?: return
-        if (action != NfcAdapter.ACTION_NDEF_DISCOVERED &&
-            action != NfcAdapter.ACTION_TECH_DISCOVERED &&
-            action != NfcAdapter.ACTION_TAG_DISCOVERED
-        ) return
-        val tag = IntentCompat.getParcelableExtra(intent, NfcAdapter.EXTRA_TAG, Tag::class.java) ?: return
-        // Consumed: a later onCreate (recreation) must not scan the same tag again.
-        intent.action = null
-        Registry.requestTab(ROUTE_NFC)
-        // Parsing talks to the tag over the air and must not block the main thread.
-        lifecycleScope.launch(Dispatchers.IO) { scanTag(tag) }
-    }
-
-    /**
-     * Reads a tapped tag. An ordinary scan only identifies the card and keeps no APDU
-     * pairs; a tap while a "Record for vault" re-tap is armed (full edition only)
-     * records the ISO 14443-4 conversation and stages it as a pending vault capture,
-     * whose pairs never enter the scanned-tag list.
-     */
-    private fun scanTag(tag: Tag) {
-        val mifare = NfcScanner.readsMifareClassic(this@MainActivity)
-        if (BuildConfig.CARD_VAULT && Registry.vaultCaptureArm.value != null) {
-            val capture = try {
-                NfcScanner.capture(tag, mifare)
-            } catch (_: Exception) { Registry.cancelVaultCapture(); return }
-            Registry.cancelVaultCapture()
-            Registry.addNfc(capture.tag)
-            runCatching { recordNfc(capture.tag) }
-            // A payment card held to the phone instead stages nothing: it is never savable.
-            Registry.setPendingVaultCapture(NfcScanner.stagedCapture(capture))
-        } else {
-            val parsed = try {
-                NfcScanner.parse(tag, mifare)
-            } catch (_: Exception) { return }
-            Registry.addNfc(parsed)
-            runCatching { recordNfc(parsed) }
-        }
     }
 
     /**
@@ -726,404 +601,8 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    // ── NFC: reader mode versus card emulation ───────────────────────────────
-
-    /**
-     * Reader mode and card emulation are mutually exclusive: while reader mode is on,
-     * the controller polls for tags and never answers a reader as a card. It used to
-     * be switched on unconditionally in onResume, so emulation could not work at all
-     * while Clairix was on screen. Now, while a card is armed, reader mode stays off
-     * and Clairix is made the preferred HCE service for as long as it is in front.
-     */
-    private fun applyNfcMode() {
-        // Reader mode is only valid on a resumed, live activity; the flag is kept by
-        // hand because the lifecycle is still STARTED while onResume runs.
-        if (!resumed || isFinishing) return
-        val adapter = nfcAdapter ?: return
-        if (Registry.emulating.value != null) {
-            if (readerModeOn) runCatching { adapter.disableReaderMode(this) }
-            readerModeOn = false
-            hceComponent?.let { component -> runCatching { cardEmulation?.setPreferredService(this, component) } }
-        } else {
-            runCatching { cardEmulation?.unsetPreferredService(this) }
-            if (!readerModeOn) {
-                readerModeOn = runCatching {
-                    adapter.enableReaderMode(
-                        this, readerCallback,
-                        NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or
-                            NfcAdapter.FLAG_READER_NFC_F or NfcAdapter.FLAG_READER_NFC_V,
-                        null
-                    )
-                }.isSuccess
-            }
-        }
-    }
-
-    /** Runs on an NFC binder thread, so the timeline's disk write is fine here. */
-    private val readerCallback = NfcAdapter.ReaderCallback { tag -> scanTag(tag) }
-
-    private fun recordNfc(t: NfcTag) {
-        val now = System.currentTimeMillis()
-        val status = Registry.status.value
-        val detail = buildString {
-            append("UID ").append(t.uid)
-            if (t.atqa != null && t.sak != null) append(" · ATQA ${t.atqa} SAK ${t.sak}")
-            if (t.skimmerFlags.isNotEmpty()) append(" — flags: ").append(t.skimmerFlags.joinToString("; "))
-            else if (t.suspicious) append(" — ").append(t.note)
-        }
-        TimelineLog.record(
-            applicationContext,
-            TimelineEvent(
-                id = "nfc@${t.uid}@$now",
-                kind = EventKind.NFC_TAG,
-                ts = now,
-                title = if (t.suspicious) "Suspicious NFC tag: ${t.type}" else "NFC tag scanned: ${t.type}",
-                detail = detail,
-                severity = if (t.suspicious) Severity.HIGH else Severity.LOW,
-                lat = status.lat, lon = status.lon
-            ),
-            dedupeKey = "nfc@${t.uid}"
-        )
-    }
-
-    // ── Card emulation ───────────────────────────────────────────────────────
-
-    private fun armEmulation(card: VaultCard) {
-        if (!BuildConfig.CARD_VAULT) return
-        // Emulating replays the card's stored credential, so it needs the vault open
-        // — the card has to come from an unlocked vault, not a stale UI row.
-        val state = Registry.vault.value
-        if (state !is VaultState.Unlocked || state.cards.none { it.id == card.id }) {
-            unlockVault()
-            return
-        }
-        val emulation = cardEmulation
-        val component = hceComponent
-        if (emulation == null || component == null) {
-            toast("This phone does not support NFC card emulation")
-            return
-        }
-        val aids = card.apduPairs.mapNotNull { (cmd, _) ->
-            val bytes = cmd.replace(" ", "")
-            if (bytes.length >= 10 && (
-                bytes.startsWith("00A40400", ignoreCase = true) ||
-                bytes.startsWith("00A40404", ignoreCase = true))) {
-                val len = bytes.substring(8, 10).toIntOrNull(16) ?: 0
-                bytes.substring(10, minOf(10 + len * 2, bytes.length))
-            } else null
-        }.distinct().ifEmpty { listOf("F000000000") }
-
-        val loaded = CardEmulationBridge.load(card.apduPairs)
-        val registered = loaded && runCatching {
-            emulation.registerAidsForService(component, CardEmulation.CATEGORY_OTHER, aids)
-        }.getOrDefault(false)
-        if (!registered) {
-            CardEmulationBridge.clear()
-            clearHceAids()
-            // The pairs and AIDs are gone, so whatever was armed before — switching
-            // from card A to card B that then failed — is gone with them. Say so,
-            // or the banner keeps announcing A with nothing behind it.
-            Registry.setEmulating(null)
-            applyNfcMode()
-            toast("Android refused this card's application IDs — it cannot be emulated")
-            return
-        }
-        Registry.setEmulating(ArmedCard(card.id, card.label))
-        EmulationGuard.watch(this)
-        applyNfcMode()
-    }
-
-    private fun stopEmulation() {
-        EmulationGuard.unwatch(this)
-        CardEmulationBridge.clear()
-        clearHceAids()
-        Registry.setEmulating(null)
-        applyNfcMode()
-    }
-
-    /** Removes the dynamically registered AIDs, which otherwise persist across reboots. */
-    private fun clearHceAids() {
-        val component = hceComponent ?: return
-        runCatching { cardEmulation?.removeAidsForService(component, CardEmulation.CATEGORY_OTHER) }
-    }
-
-    // ── Vault ────────────────────────────────────────────────────────────────
-
-    /**
-     * Decrypted cards are only ever shown to an Activity that is on screen. onStop
-     * re-locks the vault, and a decryption or save still in flight at that moment
-     * used to publish Unlocked(cards) straight after it, leaving the cards readable
-     * from the background. Anything that would publish Unlocked goes through here.
-     */
-    private fun publishUnlocked(cards: List<VaultCard>) {
-        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-            Registry.publishVault(VaultState.Unlocked(cards))
-        }
-        // Otherwise onStop has locked it; the cards are discarded with the coroutine.
-    }
-
-    /** Authenticates, then decrypts and publishes the vault. */
-    private fun unlockVault(attempt: Int = 0) {
-        if (!BuildConfig.CARD_VAULT) return
-        Registry.publishVault(VaultState.Unlocking)
-        authenticate(VaultAuthPurpose.Unlock(attempt))
-    }
-
-    private fun loadVault(attempt: Int) {
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { cardVault.load() }
-            when (result) {
-                is CardVault.LoadResult.Loaded -> publishUnlocked(result.cards)
-                is CardVault.LoadResult.Failed ->
-                    if (result.failure is CardVault.Failure.AuthRequired && attempt == 0) {
-                        // The auth did not reach the key (it can lapse between the prompt
-                        // and the decrypt). One re-prompt — but only while the Activity
-                        // is in front to show it; otherwise "Unlocking" would sit there
-                        // forever with no prompt behind it.
-                        if (resumed) unlockVault(attempt + 1) else Registry.publishVault(VaultState.Locked)
-                    } else {
-                        Registry.publishVault(failedState(result.failure))
-                    }
-            }
-        }
-    }
-
-    private fun addToVault(tag: NfcTag, label: String, replace: Boolean) {
-        if (!BuildConfig.CARD_VAULT) return
-        // A payment card is never stored or emulated, however the save was reached.
-        if (NfcScanner.isPaymentProfile(tag.profile)) return
-        // Emulation pairs come only from a matching "Record for vault" re-tap, held in
-        // the pending capture; a card saved without one (e.g. MIFARE Classic, kept for
-        // identification) stores none.
-        val pending = Registry.pendingVaultCapture.value?.takeIf { it.uid == tag.uid }
-        val card = VaultCard(
-            id        = UUID.randomUUID().toString(),
-            uid       = tag.uid,
-            label     = label,
-            profile   = tag.profile,
-            addedTs   = System.currentTimeMillis(),
-            apduPairs = pending?.apduPairs ?: emptyList()
-        )
-        Registry.setReplacePrompt(null)
-        writeVault(VaultOp.Add(card, replace))
-    }
-
-    private fun removeFromVault(id: String) {
-        if (!BuildConfig.CARD_VAULT) return
-        writeVault(VaultOp.Remove(id))
-    }
-
-    /**
-     * Runs a vault write. The key's authentication lasts 30 seconds, so a write some
-     * time after unlocking needs the user again: on AuthRequired this prompts and
-     * retries once. Any other failure leaves the stored vault untouched and says why.
-     *
-     * The operation is data ([VaultOp]) rather than a closure so the retry can be
-     * carried out by whichever Activity instance receives the prompt's result.
-     */
-    private fun writeVault(op: VaultOp, attempt: Int = 0) {
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                when (op) {
-                    is VaultOp.Add -> cardVault.add(op.card, op.replace)
-                    is VaultOp.Remove -> cardVault.remove(op.id)
-                }
-            }
-            when (result) {
-                is CardVault.WriteResult.Saved -> {
-                    // Always publish the fresh list: + VAULT is only offered while the
-                    // vault is open, and a save that went through the prompt has just
-                    // proved the user's identity. Either way the tag row's IN VAULT
-                    // state comes from this list, so it has to be current.
-                    publishUnlocked(result.cards)
-                    when (op) {
-                        is VaultOp.Add -> {
-                            // The capture (if any) is now in the encrypted card; drop the copy.
-                            Registry.setPendingVaultCapture(null)
-                            toast("Saved \"${op.card.label}\" to the vault")
-                        }
-                        is VaultOp.Remove -> if (Registry.emulating.value?.id == op.id) stopEmulation()
-                    }
-                }
-                is CardVault.WriteResult.Failed -> when (val f = result.failure) {
-                    CardVault.Failure.AuthRequired ->
-                        if (attempt == 0 && resumed) {
-                            authenticate(VaultAuthPurpose.Write(op, attempt + 1))
-                        } else {
-                            toast("Vault not changed — authentication did not take effect")
-                        }
-                    CardVault.Failure.NoLockScreen -> toast(NO_LOCK_SCREEN)
-                    is CardVault.Failure.Duplicate -> {
-                        // Only an Add can be refused this way; the UI asks before
-                        // overwriting, and the answer comes back with replace = true.
-                        val add = op as? VaultOp.Add ?: return@launch
-                        val tag = Registry.nfc.value.firstOrNull { it.uid == add.card.uid }
-                        if (tag != null) {
-                            Registry.setReplacePrompt(ReplacePrompt(tag, add.card.label, f.existing))
-                        } else {
-                            toast("\"${f.existing.label}\" is already in the vault with this UID")
-                        }
-                    }
-                    else -> {
-                        toast("Vault not changed — it could not be read")
-                        Registry.publishVault(failedState(f))
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Deletes an unreadable vault at the user's explicit request (behind a confirm
-     * dialog). Confirms identity first when the phone can, so a borrowed, unlocked
-     * phone cannot be used to wipe it.
-     */
-    private fun eraseVault() {
-        if (!BuildConfig.CARD_VAULT) return
-        if (BiometricManager.from(this).canAuthenticate(VAULT_AUTHENTICATORS) ==
-            BiometricManager.BIOMETRIC_SUCCESS
-        ) {
-            authenticate(VaultAuthPurpose.Erase)
-        } else {
-            doErase()
-        }
-    }
-
-    private fun doErase() {
-        lifecycleScope.launch {
-            val erased = withContext(Dispatchers.IO) { cardVault.erase() }
-            if (erased) {
-                if (Registry.emulating.value != null) stopEmulation()
-                publishUnlocked(emptyList())
-                toast("Vault erased")
-            } else {
-                toast("The vault could not be erased")
-            }
-        }
-    }
-
-    /** Carries out the operation a completed BiometricPrompt was shown for. */
-    private fun handleAuthResult(result: VaultAuthResult) {
-        val purpose = result.purpose
-        when (val outcome = result.outcome) {
-            VaultAuthOutcome.Succeeded -> when (purpose) {
-                is VaultAuthPurpose.Unlock -> loadVault(purpose.attempt)
-                is VaultAuthPurpose.Write -> writeVault(purpose.op, purpose.attempt)
-                VaultAuthPurpose.Erase -> doErase()
-            }
-            is VaultAuthOutcome.Failed -> when (purpose) {
-                is VaultAuthPurpose.Unlock -> Registry.publishVault(
-                    if (outcome.message == null) VaultState.Locked
-                    else VaultState.Failed(outcome.message, retryable = true, erasable = false)
-                )
-                is VaultAuthPurpose.Write ->
-                    toast(outcome.message ?: "Vault not changed — authentication cancelled")
-                VaultAuthPurpose.Erase -> outcome.message?.let { toast(it) }
-            }
-        }
-    }
-
-    private fun failedState(f: CardVault.Failure): VaultState.Failed = when (f) {
-        CardVault.Failure.AuthRequired -> VaultState.Failed(
-            "Authentication did not reach the vault key. Try unlocking again.",
-            retryable = true, erasable = false
-        )
-        CardVault.Failure.KeyInvalidated -> VaultState.Failed(
-            "Android has permanently invalidated the vault key — this happens when the screen " +
-                "lock is removed or reset. The stored cards can no longer be decrypted by anyone. " +
-                "Nothing has been deleted; erase the vault to start a new one.",
-            retryable = false, erasable = true
-        )
-        CardVault.Failure.NoLockScreen -> VaultState.Failed(
-            NO_LOCK_SCREEN, retryable = true, erasable = false
-        )
-        // A refused overwrite is answered with a prompt, never a failed vault; this
-        // only exists to keep the mapping total.
-        is CardVault.Failure.Duplicate -> VaultState.Failed(
-            "\"${f.existing.label}\" is already stored with this UID.",
-            retryable = true, erasable = false
-        )
-        is CardVault.Failure.Error -> VaultState.Failed(
-            "The vault could not be decrypted (${f.cause.javaClass.simpleName}). " +
-                "Nothing has been changed or overwritten.",
-            retryable = true, erasable = true
-        )
-    }
-
-    /**
-     * Shows BiometricPrompt allowing a strong biometric or the device PIN, pattern or
-     * password — the same set the vault key accepts. The result is published to the
-     * Registry as a [VaultAuthResult] for [purpose], not handed to a closure: the
-     * callback then holds nothing of this Activity instance, and the instance alive
-     * when the result lands (this one, or its replacement after a recreation) acts
-     * on it.
-     */
-    private fun authenticate(purpose: VaultAuthPurpose) {
-        fun fail(message: String?) =
-            Registry.publishVaultAuth(VaultAuthResult(purpose, VaultAuthOutcome.Failed(message)))
-
-        when (val can = BiometricManager.from(this).canAuthenticate(VAULT_AUTHENTICATORS)) {
-            BiometricManager.BIOMETRIC_SUCCESS -> Unit
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> { fail(NO_LOCK_SCREEN); return }
-            else -> {
-                fail("This phone cannot confirm your identity right now (code $can).")
-                return
-            }
-        }
-        val prompt = BiometricPrompt(
-            this, ContextCompat.getMainExecutor(this),
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    Registry.publishVaultAuth(VaultAuthResult(purpose, VaultAuthOutcome.Succeeded))
-                }
-
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    val cancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
-                        errorCode == BiometricPrompt.ERROR_CANCELED ||
-                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
-                    Registry.publishVaultAuth(
-                        VaultAuthResult(purpose, VaultAuthOutcome.Failed(if (cancelled) null else errString.toString()))
-                    )
-                }
-                // onAuthenticationFailed is a single rejected attempt; the prompt
-                // stays up for another try, so there is nothing to do.
-            }
-        )
-        // Each operation says what it is: the erase and save prompts used to wear
-        // the unlock's "view and use stored cards" copy.
-        val (title, subtitle) = when (purpose) {
-            is VaultAuthPurpose.Unlock -> "Unlock card vault" to "Confirm it's you to view and use stored cards"
-            VaultAuthPurpose.Erase -> "Erase card vault" to "This permanently deletes every stored card"
-            is VaultAuthPurpose.Write -> when (purpose.op) {
-                is VaultOp.Add -> "Save card to vault" to "Confirm it's you to store this card"
-                is VaultOp.Remove -> "Remove card from vault" to "Confirm it's you to change stored cards"
-            }
-        }
-        // No negative button: with DEVICE_CREDENTIAL allowed the prompt supplies its
-        // own "use PIN" path, and BiometricPrompt rejects a negative button then.
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setSubtitle(subtitle)
-            .setAllowedAuthenticators(VAULT_AUTHENTICATORS)
-            .build()
-        runCatching { prompt.authenticate(info) }
-            .onFailure { fail("Could not show the ${title.lowercase(Locale.US)} prompt: ${it.message}") }
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    }
-
     private fun granted(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
-
-    private companion object {
-        const val VAULT_AUTHENTICATORS =
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        const val NO_LOCK_SCREEN =
-            "Set a screen lock (PIN, pattern or password) in Android settings to use the vault."
-    }
 }
 
 // ── Formatting helpers ──────────────────────────────────────────────────
@@ -1133,7 +612,7 @@ private val clockFmt   = SimpleDateFormat("HH:mm:ss", Locale.US)
 private val dayFmt     = SimpleDateFormat("MMM d", Locale.US)
 private val dayYearFmt = SimpleDateFormat("MMM d yyyy", Locale.US)
 
-private fun fmtTime(ts: Long): String = fullFmt.format(Date(ts))
+internal fun fmtTime(ts: Long): String = fullFmt.format(Date(ts))
 private fun fmtClock(ts: Long): String = clockFmt.format(Date(ts))
 
 private fun fmtAgo(now: Long, ts: Long): String {
@@ -1167,7 +646,7 @@ private fun fmtDbm(rssi: Int): String = when {
     else -> "$rssi dBm"
 }
 
-private fun plural(n: Int, word: String) = if (n == 1) "$n $word" else "$n ${word}s"
+internal fun plural(n: Int, word: String) = if (n == 1) "$n $word" else "$n ${word}s"
 
 private fun compass(bearing: Double): String {
     val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
@@ -1397,7 +876,7 @@ internal fun SosButton(
 
 /** A short warning line: the warning icon and [text], both in [tone]. */
 @Composable
-private fun WarningLine(text: String, tone: Tone, modifier: Modifier = Modifier) {
+internal fun WarningLine(text: String, tone: Tone, modifier: Modifier = Modifier) {
     val fg = tone.color()
     Row(modifier, verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(
@@ -1417,13 +896,7 @@ private fun MainApp(
     onStop: () -> Unit,
     onClearData: () -> Unit,
     hasPermissions: () -> Boolean,
-    onAddToVault: (NfcTag, String, Boolean) -> Unit,
-    onRemoveVault: (String) -> Unit,
-    onEmulate: (VaultCard?) -> Unit,
-    onUnlockVault: () -> Unit,
-    onLockVault: () -> Unit,
-    onEraseVault: () -> Unit,
-    onAcknowledgeOwnership: () -> Unit,
+    nfc: NfcHost?,
     onRefreshDeviceHealth: () -> Unit,
     onRefreshCell: () -> Unit,
     onRefreshWifi: () -> Unit
@@ -1737,15 +1210,7 @@ private fun MainApp(
                 category == ScanCategory.GPS -> GnssScreen()
                 category == ScanCategory.ULTRASOUND -> UltrasoundScreen()
                 category == ScanCategory.WIFI -> WifiScreen(onShown = onRefreshWifi)
-                category == ScanCategory.NFC -> NfcScreen(
-                    onAddToVault = onAddToVault,
-                    onRemoveVault = onRemoveVault,
-                    onEmulate = onEmulate,
-                    onUnlockVault = onUnlockVault,
-                    onLockVault = onLockVault,
-                    onEraseVault = onEraseVault,
-                    onAcknowledgeOwnership = onAcknowledgeOwnership
-                )
+                category == ScanCategory.NFC -> nfc?.Screen()
                 category == ScanCategory.PHONE -> when (phoneSub) {
                     0 -> DeviceScreen(onShown = onRefreshDeviceHealth, onOpenAccounts = { phoneSub = ACCOUNTS_SUB_TAB })
                     1 -> StalkerwarePage()
@@ -1773,7 +1238,7 @@ private fun MainApp(
                     )
                 }
             }
-            HomeTab.DRIVE -> DriveScreen()
+            HomeTab.DRIVE -> Tier.driveTab?.invoke()
             HomeTab.ACTIVITY -> when (activitySub) {
                 0 -> TimelineScreen(
                     onResumeScan = resumeScan,
@@ -3318,469 +2783,6 @@ private fun FindingRow(f: CatcherFinding, onShowExplainer: (() -> Unit)? = null)
         Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
         if (onShowExplainer != null) {
             Text("Tap for what it means and what to do", style = MaterialTheme.typography.labelMedium, color = c.accent)
-        }
-    }
-}
-
-// ── NFC screen ─────────────────────────────────────────────────────────
-
-/**
- * DESFire and MIFARE Plus are ISO 14443-4 and so technically emulable, but they
- * authenticate with a challenge the phone cannot answer; only the static exchanges
- * a reader happens not to challenge can be replayed. Plain ISO 14443-4 is the case
- * HCE actually covers.
- */
-private val CardProfile.hceLimited: Boolean
-    get() = this == CardProfile.MIFARE_DESFIRE || this == CardProfile.MIFARE_PLUS
-
-private const val HCE_LIMITED_CAVEAT = "Static replay only — readers that challenge the card will reject it"
-
-/**
- * The line shown on the tag row and in the one-time acknowledgement before the first
- * save: the vault is for the owner's own cards, and replaying someone else's
- * credential may be a crime.
- */
-private const val VAULT_OWNERSHIP_NOTICE =
-    "Only cards issued to you. Recording and replaying someone else's card or credential may be a crime."
-
-/**
- * The NFC tab: the tags read this session and, in the full edition, the card
- * vault and card emulation. The Play edition is built with CARD_VAULT off, so
- * the tab there is the tag reader and skimmer check alone: no vault section, no
- * save or emulate controls, and no emulation hints on the tag rows.
- */
-@Composable
-internal fun NfcScreen(
-    onAddToVault: (NfcTag, String, Boolean) -> Unit,
-    onRemoveVault: (String) -> Unit,
-    onEmulate: (VaultCard?) -> Unit,
-    onUnlockVault: () -> Unit,
-    onLockVault: () -> Unit,
-    onEraseVault: () -> Unit,
-    onAcknowledgeOwnership: () -> Unit
-) {
-    val tags       by Registry.nfc.collectAsStateWithLifecycle()
-    val vaultState by Registry.vault.collectAsStateWithLifecycle()
-    val armed      by Registry.emulating.collectAsStateWithLifecycle()
-    val replace    by Registry.replacePrompt.collectAsStateWithLifecycle()
-    val ownershipAck   by Registry.ownershipAck.collectAsStateWithLifecycle()
-    val captureArm     by Registry.vaultCaptureArm.collectAsStateWithLifecycle()
-    val pendingCapture by Registry.pendingVaultCapture.collectAsStateWithLifecycle()
-    val emulId = armed?.id
-    // Cards exist here only while the vault is unlocked.
-    val vault = (vaultState as? VaultState.Unlocked)?.cards.orEmpty()
-    val vaultOpen = vaultState is VaultState.Unlocked
-    var confirmErase by remember { mutableStateOf(false) }
-
-    val vaultEnabled = BuildConfig.CARD_VAULT
-
-    // The one-time ownership acknowledgement, shown before the first save. The action
-    // the owner was about to take is held and run once they confirm.
-    var ackAction by remember { mutableStateOf<(() -> Unit)?>(null) }
-    val pendingAck = ackAction
-    if (vaultEnabled && pendingAck != null) {
-        ClairixDialog(
-            title = "Only cards issued to you",
-            text = VAULT_OWNERSHIP_NOTICE,
-            confirmLabel = "I understand",
-            confirmTone = Tone.Caution,
-            onConfirm = { ackAction = null; onAcknowledgeOwnership(); pendingAck() },
-            dismissLabel = "Cancel",
-            onDismiss = { ackAction = null }
-        )
-    }
-    // Runs [action] straight away once the owner has acknowledged ownership, or shows
-    // the acknowledgement first and runs it on confirm.
-    val guardOwnership: (() -> Unit) -> Unit = { action ->
-        if (ownershipAck) action() else ackAction = action
-    }
-
-    // The vault refused to overwrite a stored card with this UID; ask.
-    val pendingReplace = replace
-    if (vaultEnabled && pendingReplace != null) {
-        ClairixDialog(
-            title = "Replace the stored card?",
-            text = "\"${pendingReplace.existing.label}\" is already in the vault with UID " +
-                "${pendingReplace.existing.uid}. Replace it with this scan, saved as " +
-                "\"${pendingReplace.label}\"? The stored copy is overwritten.",
-            confirmLabel = "Replace",
-            confirmTone = Tone.Caution,
-            onConfirm = { onAddToVault(pendingReplace.tag, pendingReplace.label, true) },
-            dismissLabel = "Keep existing",
-            onDismiss = { Registry.setReplacePrompt(null) }
-        )
-    }
-
-    if (vaultEnabled && confirmErase) {
-        ClairixDialog(
-            title = "Erase the vault?",
-            text = "The stored cards can't be read, and erasing deletes them and the vault key for good. " +
-                "Cards you still have can be scanned and saved again.",
-            confirmLabel = "Erase vault",
-            confirmTone = Tone.Danger,
-            onConfirm = { confirmErase = false; onEraseVault() },
-            onDismiss = { confirmErase = false }
-        )
-    }
-
-    val suspicious = tags.count { it.suspicious }
-
-    ScreenList {
-        // ── Status first ──
-        item(key = "hero") {
-            StatusHero(
-                eyebrow = "NFC",
-                headline = when {
-                    suspicious > 0 -> if (suspicious == 1) "Suspicious tag" else "$suspicious suspicious tags"
-                    tags.isNotEmpty() -> "Tags clean"
-                    else -> "Tap to check"
-                },
-                body = when {
-                    suspicious > 0 -> "A tag below doesn't behave like an ordinary card or sticker. See what was flagged."
-                    tags.isNotEmpty() -> "${plural(tags.size, "tag")} read this session. None look like a skimmer or tracker tag."
-                    else -> "Hold the back of the phone to desk undersides, bag linings, door frames and car seats."
-                },
-                tone = when {
-                    suspicious > 0 -> Tone.Danger
-                    tags.isNotEmpty() -> Tone.Safe
-                    else -> Tone.Neutral
-                },
-                modifier = Modifier.padding(top = 8.dp)
-            )
-        }
-
-        // Active emulation banner
-        val armedCard = armed
-        if (vaultEnabled && armedCard != null) {
-            item(key = "emul_banner") {
-                Notice(
-                    Tone.Info,
-                    "${armedCard.label}. Tag reading is paused while emulating. Unlock the phone and hold its back " +
-                        "to the reader; Clairix can stay open or sit in the background.",
-                    title = "Emulating a card",
-                    action = { GhostButton("Stop emulating", onClick = { onEmulate(null) }, tone = Tone.Danger) }
-                )
-            }
-        }
-
-        // ── Findings: what was read ──
-        item(key = "divider") {
-            SectionHeader(
-                "Scanned tags",
-                action = if (tags.isNotEmpty()) {
-                    { GhostButton("Clear", onClick = { Registry.clearNfc() }, tone = Tone.Neutral) }
-                } else null
-            )
-        }
-        if (tags.isEmpty()) {
-            item(key = "scan_empty") {
-                EmptyState(
-                    title = "No tags read yet",
-                    body = "Any NFC tag or card the phone touches shows up here with what it is.",
-                    icon = ClairixIcons.Nfc
-                )
-            }
-        } else {
-            items(tags, key = { "t_${it.uid}" }) { tag ->
-                NfcTagRow(
-                    t = tag,
-                    vaultEnabled = vaultEnabled,
-                    inVault = vault.any { it.uid == tag.uid },
-                    vaultOpen = vaultOpen,
-                    armedForCapture = captureArm == tag.uid,
-                    captureReady = pendingCapture?.uid == tag.uid,
-                    onAddToVault = { label -> onAddToVault(tag, label, false) },
-                    onUnlockVault = onUnlockVault,
-                    guardOwnership = guardOwnership
-                )
-            }
-        }
-
-        // ── The vault (full edition only) ──
-        if (vaultEnabled) vaultSection(
-            vaultState = vaultState,
-            emulId = emulId,
-            onEmulate = onEmulate,
-            onRemoveVault = onRemoveVault,
-            onUnlockVault = onUnlockVault,
-            onLockVault = onLockVault,
-            onConfirmErase = { confirmErase = true }
-        )
-    }
-}
-
-/** The card vault's rows on the NFC tab: its state, and the stored cards once it is open. */
-private fun LazyListScope.vaultSection(
-    vaultState: VaultState,
-    emulId: String?,
-    onEmulate: (VaultCard?) -> Unit,
-    onRemoveVault: (String) -> Unit,
-    onUnlockVault: () -> Unit,
-    onLockVault: () -> Unit,
-    onConfirmErase: () -> Unit
-) {
-    item(key = "vault_hdr") {
-        SectionHeader(
-            "Card vault",
-            supporting = if (vaultState is VaultState.Unlocked) null else "Hardware-encrypted",
-            action = if (vaultState is VaultState.Unlocked) {
-                { GhostButton("Lock", onClick = onLockVault, tone = Tone.Neutral) }
-            } else null
-        )
-    }
-    when (val state = vaultState) {
-        VaultState.Locked, VaultState.Unlocking -> item(key = "vault_locked") {
-            val c = ClairixTheme.colors
-            ClairixCard {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Icon(Icons.Filled.Lock, contentDescription = null, tint = c.accent)
-                    Text("Vault locked", style = MaterialTheme.typography.titleMedium, color = c.text)
-                }
-                Text(
-                    "Stored cards are encrypted with a hardware key that only works after you confirm it's you " +
-                        "with your fingerprint, face or screen-lock PIN. AES-256-GCM in the Android Keystore.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = c.textSubtle
-                )
-                PrimaryButton(
-                    if (state == VaultState.Unlocking) "Waiting for you to confirm…" else "Unlock vault",
-                    onClick = onUnlockVault,
-                    enabled = state == VaultState.Locked,
-                    loading = state == VaultState.Unlocking,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
-        is VaultState.Failed -> item(key = "vault_failed") {
-            Notice(
-                Tone.Danger,
-                state.message,
-                title = "Vault unavailable",
-                action = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.retryable) GhostButton("Try again", onClick = onUnlockVault)
-                        if (state.erasable) GhostButton("Erase vault", onClick = onConfirmErase, tone = Tone.Danger)
-                    }
-                }
-            )
-        }
-        is VaultState.Unlocked -> if (state.cards.isEmpty()) {
-            item(key = "vault_empty") {
-                EmptyState(
-                    title = "No cards stored",
-                    body = "Scan a card and tap Save to vault to keep it here.",
-                    icon = Icons.Filled.Lock
-                )
-            }
-        } else {
-            items(state.cards, key = { "v_${it.id}" }) { card ->
-                VaultCardRow(card = card, emulId = emulId, onEmulate = onEmulate, onRemove = { onRemoveVault(card.id) })
-            }
-        }
-    }
-}
-
-@Composable
-private fun VaultCardRow(
-    card: VaultCard,
-    emulId: String?,
-    onEmulate: (VaultCard?) -> Unit,
-    onRemove: () -> Unit
-) {
-    val isEmulating = card.id == emulId
-    val c = ClairixTheme.colors
-    ClairixCard(tone = if (isEmulating) Tone.Info else Tone.Safe, spacing = 4.dp) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                card.label, style = MaterialTheme.typography.titleMedium, color = c.text,
-                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            when {
-                isEmulating -> StatusPill("Active", Tone.Info)
-                card.profile.hceLimited -> StatusPill("Replay only", Tone.Caution)
-                card.profile.hceCapable -> StatusPill("Can emulate", Tone.Safe)
-                else -> StatusPill("Stored", Tone.Neutral)
-            }
-        }
-        Text("${card.profile.label} · UID ${card.uid}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
-        if (!card.profile.hceCapable) {
-            Text(
-                "This card type uses its own radio protocol, so the phone can't stand in for it. The UID and type are kept for identification.",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.textSubtle
-            )
-        } else if (card.profile.hceLimited) {
-            Text(HCE_LIMITED_CAVEAT, style = MaterialTheme.typography.bodySmall, color = c.caution)
-        }
-        Text("Saved ${fmtTime(card.addedTs)}", style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (card.profile.hceCapable) {
-                SecondaryButton(
-                    if (isEmulating) "Stop" else "Emulate",
-                    onClick = { onEmulate(if (isEmulating) null else card) },
-                    tone = if (isEmulating) Tone.Danger else Tone.Info,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            GhostButton("Remove", onClick = onRemove, tone = Tone.Neutral)
-        }
-    }
-}
-
-@Composable
-private fun NfcTagRow(
-    t: NfcTag,
-    vaultEnabled: Boolean,
-    inVault: Boolean,
-    vaultOpen: Boolean,
-    armedForCapture: Boolean,
-    captureReady: Boolean,
-    onAddToVault: (String) -> Unit,
-    onUnlockVault: () -> Unit,
-    guardOwnership: (() -> Unit) -> Unit
-) {
-    val clipboard = LocalClipboardManager.current
-    var copied by remember(t.uid) { mutableStateOf(false) }
-    var addingLabel by remember(t.uid) { mutableStateOf(false) }
-    var labelText by remember(t.uid) { mutableStateOf("") }
-    LaunchedEffect(copied) { if (copied) { delay(1500L); copied = false } }
-    // A re-tap has recorded this card: open the label field with a sensible default.
-    LaunchedEffect(captureReady) {
-        if (captureReady && labelText.isBlank()) labelText = t.profile.label
-    }
-    // The label field is shown either for a recorded ISO-DEP card (captureReady) or
-    // for a card saved for identification only (addingLabel).
-    val namingCard = captureReady || addingLabel
-    val c = ClairixTheme.colors
-
-    val isPayment = NfcScanner.isPaymentProfile(t.profile)
-    val tone = when {
-        t.suspicious -> Tone.Danger
-        isPayment    -> Tone.Caution
-        else         -> Tone.Safe
-    }
-
-    ClairixCard(tone = tone, emphasis = t.suspicious) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                t.uid, style = MaterialTheme.typography.mono, color = c.text,
-                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            StatusPill(
-                when {
-                    t.suspicious -> "Suspect"
-                    isPayment    -> "Payment"
-                    else         -> "Clean"
-                },
-                tone
-            )
-        }
-
-        // Profile + ATQA/SAK
-        val techLine = buildString {
-            append(t.type)
-            if (t.atqa != null && t.sak != null) append(" · ATQA ${t.atqa} SAK ${t.sak}")
-            if (t.paymentNetwork != null) append(" · ${t.paymentNetwork}")
-        }
-        Text(techLine, style = MaterialTheme.typography.titleSmall, color = c.text)
-        Text(t.note, style = MaterialTheme.typography.bodyMedium, color = if (t.suspicious) c.danger else c.textSubtle)
-
-        // Skimmer flags
-        t.skimmerFlags.forEach { flag -> WarningLine(flag, Tone.Danger) }
-        if (isPayment) {
-            Text(
-                "Public card details only. Nothing secret can be read, and it isn't a tracker.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.textMuted
-            )
-        }
-        if (t.payload != null) {
-            Text("Data: ${t.payload.take(80)}", style = MaterialTheme.typography.monoSmall, color = c.textMuted)
-        }
-
-        // HCE capability hint, only where there is a vault to emulate from: the
-        // Play edition reads and checks tags but does not store or emulate them.
-        if (vaultEnabled && !isPayment) {
-            if (t.profile.hceLimited) {
-                Text("Replay only: $HCE_LIMITED_CAVEAT. Record it to the vault to try.", style = MaterialTheme.typography.bodySmall, color = c.caution)
-            } else if (t.profile.hceCapable) {
-                Text("Your phone can stand in for this card. Record it to the vault to use it.", style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
-            }
-        }
-
-        // The ownership line, wherever the row offers a way into the vault.
-        if (vaultEnabled && !isPayment && !inVault) {
-            WarningLine(VAULT_OWNERSHIP_NOTICE, Tone.Caution)
-        }
-
-        // Waiting for the re-tap that records the card for the vault.
-        if (vaultEnabled && armedForCapture && !captureReady) {
-            Notice(
-                Tone.Info,
-                "Hold the card to the back of the phone again to record it for the vault.",
-                title = "Ready to record",
-                action = { GhostButton("Cancel", onClick = { Registry.cancelVaultCapture() }, tone = Tone.Neutral) }
-            )
-        }
-
-        // Name-and-save inline input, for a recorded card or an identification-only save.
-        if (vaultEnabled && namingCard) {
-            ClairixTextField(
-                value = labelText,
-                onValueChange = { labelText = it },
-                label = "Card label",
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryButton(
-                    "Save",
-                    onClick = {
-                        if (labelText.isNotBlank()) {
-                            onAddToVault(labelText.trim())
-                            addingLabel = false; labelText = ""
-                        }
-                    },
-                    enabled = labelText.isNotBlank(),
-                    modifier = Modifier.weight(1f)
-                )
-                GhostButton(
-                    "Cancel",
-                    onClick = {
-                        if (captureReady) Registry.setPendingVaultCapture(null)
-                        addingLabel = false; labelText = ""
-                    },
-                    tone = Tone.Neutral
-                )
-            }
-        }
-
-        Text(fmtTime(t.ts), style = MaterialTheme.typography.monoSmall, color = c.textSubtle)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Whether the tag is already stored is only known while the vault
-            // is open, so a locked vault offers the unlock, not the save: with
-            // the key's auth window still warm, a save from here used to go
-            // through without a prompt and replace the stored card unseen.
-            // Without a vault (the Play edition) the row offers only Copy UID.
-            // An ISO-DEP card the phone can emulate is recorded by an explicit
-            // re-tap (so the APDU capture never runs on an ordinary scan); a card
-            // kept for identification only is saved straight away. Both pass the
-            // one-time ownership acknowledgement first.
-            if (vaultEnabled) {
-                when {
-                    !vaultOpen && !isPayment -> GhostButton("Unlock to save", onClick = onUnlockVault)
-                    isPayment || inVault || namingCard || armedForCapture -> if (inVault) StatusPill("In vault", Tone.Safe)
-                    t.profile.hceCapable ->
-                        GhostButton("Record for vault", onClick = { guardOwnership { Registry.armVaultCapture(t.uid) } })
-                    else ->
-                        GhostButton("Save to vault", onClick = { guardOwnership { addingLabel = true; labelText = t.profile.label } })
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            GhostButton(
-                if (copied) "Copied" else "Copy UID",
-                onClick = { clipboard.setSensitiveText("Card UID", t.uid); copied = true },
-                tone = if (copied) Tone.Safe else Tone.Neutral
-            )
         }
     }
 }

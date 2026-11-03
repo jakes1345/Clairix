@@ -9,7 +9,7 @@ class UsbDeviceFilterTest {
 
     @Test
     fun filterMatchesKnownDongles() {
-        val xml = File("src/main/res/xml/usb_device_filter.xml").readText()
+        val xml = File("src/suite/res/xml/usb_device_filter.xml").readText()
         val inFilter = Regex("""vendor-id="(\d+)"\s+product-id="(\d+)"""")
             .findAll(xml)
             .map { it.groupValues[1].toInt() to it.groupValues[2].toInt() }

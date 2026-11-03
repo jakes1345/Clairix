@@ -33,12 +33,12 @@ There is no `playComms`: the comms-only build is never published on Play.
 
 How the Play edition leaves those features out:
 
-- **Card emulation.** `CardEmulationService` (the `HostApduService`), its
-  `res/xml/hce_service.xml` and its description string live in `src/full`, and
-  its manifest entry in `src/fullSuite/AndroidManifest.xml`, so none of them is
-  in a Play build. `src/play` supplies a `CardEmulationBridge` with no service
-  behind it. The release workflow fails if the Play manifest ever declares a
-  HostApduService.
+- **Card emulation.** `CardEmulationService` (the `HostApduService`), the
+  `CardEmulationBridge` that talks to it, its `res/xml/hce_service.xml`, its
+  description string and its manifest entry all live in `src/fullSuite`, so
+  none of them is in a Play build (or in the comms-only build). `src/play`
+  supplies a `CardEmulationBridge` with no service behind it. The release
+  workflow fails if the Play manifest ever declares a HostApduService.
 - **Card Vault and ClairixCoin.** `BuildConfig.CARD_VAULT` and
   `BuildConfig.CLAIRIX_COIN` are `false` in the Play edition. The NFC tab shows
   no vault, save or emulate controls; COMMS shows no balance and no Pay button;
@@ -47,6 +47,17 @@ How the Play edition leaves those features out:
   `"coin": false` (its operator set `COIN=off`) or a coin request answers 404.
 
 Everything else (scanner, tools, map, navigation, COMMS) is identical.
+
+How the comms-only build leaves the toolkit out: its manifest (`src/main`)
+declares none of the scanner's components or permissions, which
+`src/suite/AndroidManifest.xml` adds. Drive mode (the RTL-SDR driver, radio
+scanner and its recordings, ADS-B, OBD-II), the NFC tab, the card vault and the
+card-emulation guard are in `src/suite`, not `src/main`. The shared code reaches
+them only through `TierShell` (`src/main/java/app/clairix/TierShell.kt`), which
+`src/suite/java/app/clairix/Tier.kt` implements with them and
+`src/comms/java/app/clairix/Tier.kt` without them, so `fullComms` is compiled
+without that code at all. The release workflow fails if R8's mapping for the
+Comms APK lists any of those classes. Their unit tests are in `src/testSuite`.
 
 ## Getting an APK without a build environment
 
