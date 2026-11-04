@@ -131,6 +131,8 @@ object StalkwareScanner {
         /** When the stalkerware list matched against was issued (Unix seconds), and how many apps it names; 0 without one. */
         val listIssued: Long = 0L,
         val listApps: Int = 0,
+        /** When each app that is not preloaded was first installed (PackageInfo.firstInstallTime), this app aside. */
+        val installs: Map<String, Long> = emptyMap(),
     ) {
         val high: List<SuspiciousApp> get() = apps.filter { it.severity == Severity.HIGH }
         val medium: List<SuspiciousApp> get() = apps.filter { it.severity == Severity.MEDIUM }
@@ -1070,6 +1072,7 @@ object StalkwareScanner {
         val vouchedAdmins = HashSet<String>()
         val grants = HashMap<String, GrantStatus>()
         val preloadedVpns = HashSet<String>()
+        val installs = HashMap<String, Long>()
         for (pkg in packages) {
             val info = pkg.applicationInfo ?: continue
             val name = pkg.packageName
@@ -1088,6 +1091,7 @@ object StalkwareScanner {
             }
             val system = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             if (vpn && system) preloadedVpns += name
+            if (!system) installs[name] = pkg.firstInstallTime
             val holdsGrant = listener || a11y || ime || admin
             // Every app that is not preloaded is matched against the list by its certificates
             // too, and the owner's marks are read against the certificate of the app holding a grant.
@@ -1180,6 +1184,7 @@ object StalkwareScanner {
             ownProfile = ownProfile(app),
             listIssued = ioc?.issued ?: 0L,
             listApps = ioc?.families?.size ?: 0,
+            installs = installs,
         )
         _results.value = result
         return result

@@ -15,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.TimeZone
 
 /** What a stalkerware check reports as new, how it is alerted, and the record it keeps. */
 class StalkwareWatchTest {
@@ -236,5 +237,86 @@ class StalkwareWatchTest {
         reopened.clearFindings()
         assertNull(StalkwareRecord(store(file)).lastFindings())
         assertEquals(1, StalkwareRecord(store(file)).acknowledged().size)
+    }
+
+    // ── Installs after an unlock while the owner slept ──────────────────────
+
+    private val utc = TimeZone.getTimeZone("UTC")
+    /** 2026-11-04 02:00 UTC. */
+    private val night = 1_793_757_600_000L
+    private val minute = 60_000L
+
+    @Test
+    fun onlyAppsInstalledSinceTheLastCheckAreNew() {
+        val installs = mapOf("a.old" to 100L, "a.new" to 2_000L, "app.clairix" to 3_000L)
+        assertEquals(mapOf("a.new" to 2_000L), StalkwareWatch.newInstalls(installs, lastCheckAt = 1_000L, self = "app.clairix"))
+        // The first check is the baseline.
+        assertTrue(StalkwareWatch.newInstalls(installs, lastCheckAt = null, self = "app.clairix").isEmpty())
+    }
+
+    @Test
+    fun anInstallFollowsTheLatestSleepUnlockWithinHalfAnHour() {
+        val install = night + 20 * minute
+        assertEquals(night + 10 * minute, StalkwareWatch.unlockBefore(install, listOf(night, night + 10 * minute, night + 25 * minute)))
+        // Too long before, or after the install: not its unlock.
+        assertNull(StalkwareWatch.unlockBefore(install, listOf(install - StalkwareWatch.AFTER_UNLOCK_MS - 1, install + minute)))
+        assertEquals(install - StalkwareWatch.AFTER_UNLOCK_MS, StalkwareWatch.unlockBefore(install, listOf(install - StalkwareWatch.AFTER_UNLOCK_MS)))
+    }
+
+    @Test
+    fun theNoteSaysWhenItWasInstalledAndHowLongAfterTheUnlock() {
+        val notes = StalkwareWatch.sleepInstallNotes(
+            mapOf("com.example.spy" to night + 14 * minute, "com.example.day" to night + 10 * 3600_000L, "com.example.quick" to night + 30_000L),
+            unlocks = listOf(night, night + 8 * minute),
+            zone = utc,
+        )
+        assertEquals(
+            "installed at 02:14, 6 minutes after the phone was unlocked inside your sleep window (at 02:08)",
+            notes["com.example.spy"],
+        )
+        assertEquals("installed at 02:00, less than a minute after the phone was unlocked inside your sleep window (at 02:00)", notes["com.example.quick"])
+        assertFalse("an install in the day follows no sleep unlock", "com.example.day" in notes)
+    }
+
+    @Test
+    fun aFlaggedAppSaysItInItsOwnAlertAndTheRestGetOneOfTheirOwn() {
+        val r = result(apps = listOf(app("com.example.spy", "Spy", 9)))
+        val notes = mapOf(
+            "com.example.spy" to "installed at 02:14, 6 minutes after the phone was unlocked inside your sleep window (at 02:08)",
+            "com.example.other" to "installed at 02:20, 12 minutes after the phone was unlocked inside your sleep window (at 02:08)",
+        )
+        val stalkerware = StalkwareWatch.alerts(setOf("app:com.example.spy"), r, label, now = 5L, silent = true, notes = notes).single()
+        assertTrue(stalkerware.detail, stalkerware.detail.contains("It was installed at 02:14, 6 minutes after the phone was unlocked"))
+        val own = StalkwareWatch.sleepInstallAlert(notes, alreadySaid = setOf("com.example.spy"), label = label, now = 5L, silent = true)
+        assertNotNull(own)
+        own!!
+        assertEquals("Other was installed after an unlock while you slept", own.title)
+        assertEquals(Severity.HIGH, own.severity)
+        assertEquals(EventKind.UNLOCK_ANOMALY, own.kind)
+        assertFalse(own.detail.contains("com.example.spy"))
+        assertTrue(own.detail, own.detail.startsWith("Other (com.example.other) was installed at 02:20, 12 minutes after"))
+        assertNull(StalkwareWatch.sleepInstallAlert(notes, alreadySaid = notes.keys, label = label, now = 5L, silent = true))
+        assertEquals(
+            "2 apps were installed after an unlock while you slept",
+            StalkwareWatch.sleepInstallAlert(notes, emptySet(), label, 5L, silent = true)?.title,
+        )
+    }
+
+    // ── Paired devices in the record ────────────────────────────────────────
+
+    @Test
+    fun theRecordKeepsThePairedDevicesAndClearAllDataForgetsThem() {
+        val file = File(Files.createTempDirectory("stalkerware").toFile().apply { deleteOnExit() }, "stalkerware.json")
+        val record = StalkwareRecord(store(file))
+        assertNull(record.bonds())
+        assertNull(record.lastCheckedAt())
+        record.saveBonds(setOf("AA:BB:CC:DD:EE:FF"))
+        record.saveFindings(emptySet(), 7_000L)
+        val reopened = StalkwareRecord(store(file))
+        assertEquals(setOf("AA:BB:CC:DD:EE:FF"), reopened.bonds())
+        assertEquals(7_000L, reopened.lastCheckedAt())
+        reopened.clearFindings()
+        assertNull(StalkwareRecord(store(file)).bonds())
+        assertNull(StalkwareRecord(store(file)).lastCheckedAt())
     }
 }
