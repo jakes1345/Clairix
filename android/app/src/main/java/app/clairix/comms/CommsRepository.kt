@@ -238,6 +238,11 @@ object CommsRepository {
 
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
+    /** One-to-one sends the relay took whose "sent" a seal kept out of the database; under [outboxLock]. */
+    private val sentUnrecorded = UnrecordedSends { Vault.sealed.value }
+    /** The same for group outbox rows: SOS rows under [sosOutboxLock], the rest under [groupOutboxLock]. */
+    private val sosUnrecorded = UnrecordedSends { Vault.sealed.value }
+    private val groupUnrecorded = UnrecordedSends { Vault.sealed.value }
     /**
      * The same for the group outbox's SOS rows, apart from everything else so
      * an SOS never waits behind a photo going out or a group text to two
@@ -1950,8 +1955,9 @@ object CommsRepository {
         outboxLock.withLock {
             // The inviter hears which invite was used before anything else from this phone.
             val waitingFor = flushJoinedLocked()
-            for (m in store.queued()) {
-                if (m.peer == waitingFor) continue
+            // Sends a seal cut off from their "sent" are recorded before the queue is read.
+            sentUnrecorded.replay()
+            for (m in outboxQueue(waitingFor)) {
                 // A contact who moved while the queue was read is found under their new number.
                 val contact = store.contact(m.peer) ?: store.message(m.id)?.peer?.let { store.contact(it) }
                 if (contact == null) {
@@ -1960,7 +1966,10 @@ object CommsRepository {
                 }
                 val outcome = if (m.isMedia) deliverMedia(contact, m) else deliver(contact, CommsWire.message(m.id, m.ts, m.body, m.ttl))
                 when (outcome) {
-                    Deliver.Sent -> { store.markSentIfQueued(m.id); retryBackoffMs = RETRY_MIN_MS }
+                    Deliver.Sent -> {
+                        retryBackoffMs = RETRY_MIN_MS
+                        sentUnrecorded.record(m.id) { store.markSentIfQueued(m.id) }
+                    }
                     is Deliver.Failed -> {
                         CommsLog.add("Message to ${formatClairixNumber(contact.number)} failed: ${outcome.reason}")
                         store.setStatus(m.id, "failed", outcome.reason)
@@ -1996,6 +2005,16 @@ object CommsRepository {
         flushGroupOutbox(OTHER_ROWS)
         bump()
     }
+
+    /**
+     * The one-to-one queue as [flushOutbox] goes through it: nothing for
+     * [waitingFor] yet, nothing whose send is still to be recorded, and
+     * nothing more once the phone has locked.
+     */
+    private fun outboxQueue(waitingFor: String?): Sequence<ChatMessage> =
+        store.queued().asSequence()
+            .takeWhile { !Vault.sealed.value }
+            .filter { it.peer != waitingFor && !sentUnrecorded.has(it.id) }
 
     /**
      * Sends a queued photo or video: its header, then every chunk in order. A
@@ -3188,6 +3207,9 @@ object CommsRepository {
     }
 
     private suspend fun passGroupOutbox(kinds: Set<GroupOutbox.Kind>, batch: String?, everyone: Boolean): List<GroupOutbox.Row> {
+        // Rows a seal kept from their outcome are brought up to date before any is read.
+        val unrecorded = unrecordedFor(kinds)
+        unrecorded.replay()
         val now = System.currentTimeMillis()
         // What ran out of time is settled first, and held rows go to whoever the roster now confirms.
         var rows = groupRows(kinds).map { r ->
@@ -3209,14 +3231,15 @@ object CommsRepository {
         var offline = false
         var backoff = false
         var retryAfter = Long.MAX_VALUE
-        for (row in due) {
+        // Nothing more goes out once the phone has locked.
+        for (row in due.asSequence().takeWhile { !Vault.sealed.value }) {
             val quiet = memoryRows.has(row)
             when (val t = tryRow(row, quiet)) {
                 is Tried.Drop -> dropRow(row, t.why)
                 is Tried.Done -> {
                     val o = t.outcome
                     val next = GroupOutbox.after(row, o, System.currentTimeMillis())
-                    saveRow(next)
+                    unrecorded.record("${row.id}/${row.recipient}") { saveRow(next) }
                     if (!quiet) logRow(row, next, o)
                     if (o is GroupOutbox.Outcome.Offline) {
                         offline = true
@@ -3233,6 +3256,10 @@ object CommsRepository {
         settleGroupRows(after, kinds)
         return batchRows
     }
+
+    /** The kept writes for the outbox lock that guards [kinds]. */
+    private fun unrecordedFor(kinds: Set<GroupOutbox.Kind>): UnrecordedSends =
+        if (GroupOutbox.Kind.SOS in kinds) sosUnrecorded else groupUnrecorded
 
     /**
      * Held rows once the roster may have changed ([GroupOutbox.release]):

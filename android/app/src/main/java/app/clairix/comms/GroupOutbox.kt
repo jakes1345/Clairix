@@ -363,3 +363,63 @@ object OutboxRetry {
         return Next(wait, at, nextBackoff)
     }
 }
+
+/**
+ * Writes that record a send the relay already took, kept when the vault
+ * sealed before they reached the database.
+ *
+ * A message is sent first and marked sent after. When the phone locks in
+ * between, the database is closed under the mark: the row stays queued, and
+ * the next pass after unlocking would encrypt it again (a new ratchet step)
+ * and send a second copy. Instead the mark is kept here, in memory only, and
+ * written by [replay] before the outbox is read again; the row is skipped
+ * until then. A process that dies in between forgets it, and the recipient
+ * drops the second copy by its message id, as it already does.
+ *
+ * One per outbox lock: [replay] runs with that lock held, so no pass reads
+ * the rows a kept write is about to change.
+ */
+class UnrecordedSends(private val sealed: () -> Boolean) {
+
+    private val pending = LinkedHashMap<String, () -> Unit>()
+
+    /**
+     * Runs [write], the record of a send under [key]. When the vault sealed
+     * under it, the write is kept for [replay] and the failure rethrown, so
+     * the pass stops as it would have.
+     */
+    fun record(key: String, write: () -> Unit) {
+        try {
+            write()
+        } catch (e: VaultSealedException) {
+            keep(key, write)
+            throw e
+        } catch (e: IllegalStateException) {
+            // The database closed under the write by the seal.
+            if (sealed()) keep(key, write)
+            throw e
+        }
+    }
+
+    @Synchronized
+    private fun keep(key: String, write: () -> Unit) {
+        pending[key] = write
+    }
+
+    /**
+     * Writes everything kept, oldest first. A write that fails (the vault
+     * sealed again) stays kept, with everything after it, and the failure is
+     * thrown.
+     */
+    fun replay() {
+        while (true) {
+            val next = synchronized(this) { pending.entries.firstOrNull()?.toPair() } ?: return
+            next.second()
+            synchronized(this) { if (pending[next.first] === next.second) pending.remove(next.first) }
+        }
+    }
+
+    /** Whether a send under [key] is still waiting to be recorded. */
+    @Synchronized
+    fun has(key: String): Boolean = key in pending
+}

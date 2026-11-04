@@ -48,7 +48,11 @@ class TorDeviceTest {
         assumeTrue("pass tor=true to run the tests that use the Tor network", InstrumentationRegistry.getArguments().getString("tor") == "true")
         TorTransport.init(context)
         TorTransport.setEnabled(true)
-        runBlocking { withTimeout(300_000) { TorTransport.state.first { it == TorTransport.State.Ready } } }
+        // The first start on a fresh emulator fetches the whole directory and has
+        // taken over five minutes on a slow runner (2f98674, API 35 AOSP image),
+        // while every later start was ready in seconds. Ten minutes still fits the
+        // workflow step's 1400 s with the other tests.
+        runBlocking { withTimeout(BOOTSTRAP_MS) { TorTransport.state.first { it == TorTransport.State.Ready } } }
     }
 
     @After
@@ -157,5 +161,6 @@ class TorDeviceTest {
 
     private companion object {
         const val CHECK_TRIES = 3
+        const val BOOTSTRAP_MS = 600_000L
     }
 }
