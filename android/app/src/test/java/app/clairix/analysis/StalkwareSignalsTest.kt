@@ -166,4 +166,63 @@ class StalkwareSignalsTest {
         val spy = AppFacts(rogue, system = false, installer = null, hasLauncher = false, requested = all, granted = all)
         assertEquals(Severity.HIGH, severity(spy))
     }
+
+    // ── Apps published outside the stores by their own makers ────────────────
+
+    private val signal = "org.thoughtcrime.securesms"
+
+    @Test
+    fun signalFromSignalOrgIsNeitherAnImpostorNorSideloaded() {
+        // Signal's APK from signal.org: installed by the package installer, microphone and camera
+        // granted, exempt from battery optimisation, and signed with Signal's key.
+        val perms = setOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        val official = AppFacts(
+            signal, system = false, installer = "com.google.android.packageinstaller", hasLauncher = true,
+            requested = perms, granted = perms, batteryExempt = true, officialBuild = true,
+        )
+        assertFalse(official.sideloaded)
+        assertTrue(official.nameTrusted)
+        val reasons = StalkwareScanner.assess(official).map { it.reason }
+        assertFalse(reasons.any { "name of a known app" in it })
+        // It scores exactly what the same app from Play would: only what it holds, nothing for where it came from.
+        val fromPlay = official.copy(installer = play, officialBuild = false)
+        assertEquals(score(fromPlay), score(official))
+        assertEquals(severity(fromPlay), severity(official))
+    }
+
+    @Test
+    fun anotherSignerUnderSignalsNameIsStillAnImpostor() {
+        val perms = setOf(Manifest.permission.RECORD_AUDIO)
+        val impostor = AppFacts(
+            signal, system = false, installer = "com.google.android.packageinstaller", hasLauncher = true,
+            requested = perms, granted = perms,
+        )
+        assertTrue(impostor.sideloaded)
+        assertTrue(StalkwareScanner.assess(impostor).any { it.points == StalkwareScanner.IMPOSTOR_SCORE })
+        assertEquals(Severity.HIGH, severity(impostor))
+    }
+
+    @Test
+    fun anOfficialBuildIsRecognisedByItsPublishersCertificateOnly() {
+        val cert = byteArrayOf(1, 2, 3, 4)
+        val other = byteArrayOf(5, 6, 7, 8)
+        val digest = StalkwareScanner.hex(java.security.MessageDigest.getInstance("SHA-256").digest(cert))
+        val signers = mapOf(signal to setOf(digest))
+        assertTrue(StalkwareScanner.officialBuild(signal, listOf(cert), signers))
+        // A rotated key: the publisher's certificate anywhere in the signing history counts.
+        assertTrue(StalkwareScanner.officialBuild(signal, listOf(other, cert), signers))
+        assertFalse(StalkwareScanner.officialBuild(signal, listOf(other), signers))
+        assertFalse(StalkwareScanner.officialBuild(signal, emptyList(), signers))
+        // The certificate vouches only for the name it is listed under.
+        assertFalse(StalkwareScanner.officialBuild("com.example.other", listOf(cert), signers))
+    }
+
+    @Test
+    fun theOfficialSignerTableHoldsSha256FingerprintsInTheListForm() {
+        assertTrue(StalkwareScanner.OFFICIAL_SIGNERS.isNotEmpty())
+        for ((name, digests) in StalkwareScanner.OFFICIAL_SIGNERS) {
+            assertTrue(name, digests.isNotEmpty())
+            for (d in digests) assertTrue("$name: $d", Regex("[0-9A-F]{64}").matches(d))
+        }
+    }
 }

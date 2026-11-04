@@ -630,6 +630,12 @@ object StalkwareScanner {
         val granted: Set<String>? = null,
         /** The defaults it holds: SMS app, phone app, home screen ([DefaultRoles]). */
         val defaultRoles: Set<DefaultRoles.Role> = emptySet(),
+        /**
+         * Signed with the publisher's own key for a name whose genuine app is also published outside
+         * every store ([OFFICIAL_SIGNERS]): Signal's APK from signal.org, say. Only the publisher's
+         * private key makes that signature, so the copy is theirs, wherever it was downloaded.
+         */
+        val officialBuild: Boolean = false,
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -640,8 +646,8 @@ object StalkwareScanner {
                 (installerPreloaded && declaredInstaller != null && declaredInstaller in genuineStores)
             )
 
-        /** Installed by something other than a genuine store; preloaded apps never are. */
-        val sideloaded: Boolean get() = !system && !fromStore
+        /** Installed by something other than a genuine store; preloaded apps and [officialBuild]s never are. */
+        val sideloaded: Boolean get() = !system && !fromStore && !officialBuild
 
         /** From the system image or a genuine store. */
         val trustedOrigin: Boolean get() = !sideloaded
@@ -650,7 +656,8 @@ object StalkwareScanner {
          * Whether its name can be taken at its word: preloaded, from a vendor store, or from an
          * open store under a name that is not a vendor's.
          */
-        val nameTrusted: Boolean get() = system || (fromStore && (installer in VENDOR_STORES || VENDOR_PREFIXES.none { name.startsWith(it) }))
+        val nameTrusted: Boolean get() = system || officialBuild ||
+            (fromStore && (installer in VENDOR_STORES || VENDOR_PREFIXES.none { name.startsWith(it) }))
     }
 
     /**
@@ -658,6 +665,29 @@ object StalkwareScanner {
      * as APKs from GitHub, so a sideloaded copy under the name is no sign of an impostor.
      */
     private val PUBLISHED_OUTSIDE_STORES = setOf("app.clairix")
+
+    /**
+     * Apps whose publisher also hands out the genuine APK from its own site, with the SHA-256 of
+     * the certificates that publisher says it signs with, uppercase hex with no separators ([hex]).
+     * A copy signed with one of them is the publisher's ([AppFacts.officialBuild]); a copy under
+     * the name signed with anything else is still an impostor.
+     *
+     * Signal (https://signal.org/android/apk/, read 4 November 2026) lists two: the 4096-bit
+     * certificate it signs with now and the 1024-bit one it rotated from. An APK signed after the
+     * rotation carries both in its signing history, and only Signal's key can put the old one there.
+     */
+    internal val OFFICIAL_SIGNERS: Map<String, Set<String>> = mapOf(
+        "org.thoughtcrime.securesms" to setOf(
+            "4BE4F6CD5BE844083E900279DC822AF65A547FECC26ABA7FF1F5203A45518CD8",
+            "29F34E5F27F211B424BC5BF9D67162C0EAFBA2DA35AF35C16416FC446276BA26",
+        ),
+    )
+
+    /** Whether [certs] include a certificate [name]'s publisher signs its own APK with ([OFFICIAL_SIGNERS]). */
+    internal fun officialBuild(name: String, certs: List<ByteArray>, signers: Map<String, Set<String>> = OFFICIAL_SIGNERS): Boolean {
+        val official = signers[name] ?: return false
+        return certs.any { hex(sha256(it)) in official }
+    }
 
     /** Every name the scanner vouches for, so a sideloaded app wearing one stands out. */
     private val KNOWN_NAMES: Set<String> by lazy {
@@ -1000,17 +1030,21 @@ object StalkwareScanner {
             val src = installSourceOf(pm, packageName)
             var acked = emptySet<GrantKind>()
             var match: IocMatch? = null
-            if (acknowledged.any { ackPackage(it) == packageName }) {
+            var official = false
+            val marked = acknowledged.any { ackPackage(it) == packageName }
+            if (marked || (!system && packageName in OFFICIAL_SIGNERS)) {
                 val pkg = runCatching { packageInfo(pm, packageName, PackageManager.GET_SIGNING_CERTIFICATES) }.getOrNull()
                 if (pkg != null) {
-                    acked = acknowledgedKinds(packageName, signerKey(pkg), acknowledged)
-                    if (!system) match = ioc?.match(packageName, digests(signingCertificates(pkg)))
+                    val certs = signingCertificates(pkg)
+                    if (marked) acked = acknowledgedKinds(packageName, signerKey(pkg), acknowledged)
+                    if (marked && !system) match = ioc?.match(packageName, digests(certs))
+                    if (!system) official = officialBuild(packageName, certs)
                 }
             }
             return AppFacts(
                 name = packageName, system = system, installer = src?.initiating, hasLauncher = true,
                 declaredInstaller = src?.installing, genuineStores = stores, installerPreloaded = preloaded(src?.initiating),
-                acknowledged = acked, knownStalkerware = match,
+                acknowledged = acked, knownStalkerware = match, officialBuild = official,
             )
         }
 
@@ -1112,6 +1146,7 @@ object StalkwareScanner {
                 declaredInstaller = source?.installing, genuineStores = stores,
                 installerPreloaded = origins.preloaded(installer),
                 acknowledged = acked, knownStalkerware = match,
+                officialBuild = !system && officialBuild(name, certs),
             )
             if (holdsGrant) {
                 fun judge(kind: GrantKind): GrantStatus = grantStatus(kind, origin).also { grants[grantKey(kind, name)] = it }
