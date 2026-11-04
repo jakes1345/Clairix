@@ -13,5 +13,5 @@ plugins {
     // licences (app/build.gradle.kts, thirdPartyNotices). 15.0 and later need
     // the 8.13 plugin this build now has; moving to them is its own change,
     // checked against the notices it writes.
-    id("com.mikepenz.aboutlibraries.plugin") version "14.2.1" apply false
+    id("com.mikepenz.aboutlibraries.plugin") version "15.3.0" apply false
 }
