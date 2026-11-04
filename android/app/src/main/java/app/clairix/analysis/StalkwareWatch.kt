@@ -240,8 +240,8 @@ object StalkwareWatch {
         val title = rest.keys.singleOrNull()?.let { "${label(it)} was installed after an unlock while you slept" }
             ?: "${rest.size} apps were installed after an unlock while you slept"
         val detail = rest.entries.joinToString("\n") { (pkg, note) -> "${label(pkg)} ($pkg) was $note." } +
-            "\nIf that was not you, someone used your phone while you slept and installed it. Save its evidence in " +
-            "Phone check → Stalkerware before you remove anything, and change your screen lock."
+            "\nIf that was not you, someone used your phone while you slept and installed it. Look at it in Settings → Apps; " +
+            "if Phone check → Stalkerware lists it, save its evidence there before you remove anything. Change your screen lock."
         return Alert(
             id = "install_after_sleep@$now", ts = now, severity = Severity.HIGH, title = title, detail = detail,
             kind = EventKind.UNLOCK_ANOMALY, dedupeKey = "install_after_sleep:" + rest.keys.sorted().joinToString(","),
@@ -284,8 +284,10 @@ object StalkwareWatch {
                 val rec = record(app)
                 val known = rec.bonds()
                 if (known != null && BondWatch.newBonds(listOf(bond), known).isEmpty()) return@withLock null
-                val base = known ?: BondWatch.read(app)?.let(BondWatch::snapshot) ?: emptySet()
-                rec.saveBonds(base + BondWatch.snapshot(listOf(bond)))
+                // Before the first look, the list now is the baseline; if it cannot be read, nothing is
+                // saved, or every device paired before would read as new at the next check.
+                val base = known ?: BondWatch.read(app)?.let(BondWatch::snapshot)
+                if (base != null) rec.saveBonds(base + BondWatch.snapshot(listOf(bond)))
                 BondWatch.alert(listOf(bond), System.currentTimeMillis(), silent = true)
             }
         } ?: return
