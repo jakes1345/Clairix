@@ -626,6 +626,8 @@ object StalkwareScanner {
          * ([grantedOf]); null when not known, and then every requested permission is weighed as granted.
          */
         val granted: Set<String>? = null,
+        /** The defaults it holds: SMS app, phone app, home screen ([DefaultRoles]). */
+        val defaultRoles: Set<DefaultRoles.Role> = emptySet(),
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -872,6 +874,7 @@ object StalkwareScanner {
         if (f.hiddenService) {
             out += Signal(HIDDEN_SERVICE_SCORE, "ran a background service this week without ever showing a screen")
         }
+        out += defaultRoleSignals(f)
 
         if (f.imeEnabled) {
             out += when {
@@ -907,6 +910,16 @@ object StalkwareScanner {
         if (!f.sideloaded && !hidden && !unvouchedGrant(f)) return null
         return Signal(BATTERY_EXEMPT_SCORE, "is exempt from battery optimisation, so Android never pauses it in the background")
     }
+
+    /**
+     * One signal for each default (SMS app, phone app, home screen) [f] holds, when it came from
+     * outside a genuine store: being the default gives it every text, every call or every app
+     * opened, with no permission to ask for. A preloaded or store app holding one is what the
+     * phone is meant to have, and adds nothing.
+     */
+    internal fun defaultRoleSignals(f: AppFacts): List<Signal> =
+        if (!f.sideloaded) emptyList()
+        else f.defaultRoles.sortedBy { it.ordinal }.map { Signal(it.score, DefaultRoles.reason(it)) }
 
     /** Whether [f] holds accessibility, notification access, a device admin or a keyboard that is neither known nor marked as the owner's. */
     private fun unvouchedGrant(f: AppFacts): Boolean {
@@ -1045,6 +1058,8 @@ object StalkwareScanner {
 
         val usageAccess = hasUsageAccess(app)
         val power = app.getSystemService(PowerManager::class.java)
+        val rolesOf = HashMap<String, MutableSet<DefaultRoles.Role>>()
+        runCatching { DefaultRoles.holderPackages(app) }.getOrNull()?.forEach { (role, pkg) -> rolesOf.getOrPut(pkg) { HashSet() } += role }
         val (fgsPkgs, resumedPkgs) = if (usageAccess) usageSignals(app) else emptySet<String>() to emptySet()
 
         val packages = installedPackages(pm)
@@ -1118,6 +1133,7 @@ object StalkwareScanner {
                 hiddenService = usageAccess && name in fgsPkgs && name !in resumedPkgs,
                 installedBeforeSystemBuild = installedBefore(pkg.firstInstallTime, Build.TIME),
                 batteryExempt = batteryExempt(power, name),
+                defaultRoles = rolesOf[name].orEmpty(),
             )
             val signals = assess(facts)
             val score = signals.sumOf { it.points }
