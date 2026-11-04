@@ -674,6 +674,11 @@ class StalkwareScannerTest {
         // With the grant flags read and the camera and background location not granted, 4.
         val granted = full.requested - Manifest.permission.CAMERA - Manifest.permission.ACCESS_BACKGROUND_LOCATION
         assertEquals(4, score(full.copy(granted = granted)))
+        // Exempt from battery optimisation, which Clairix asks for: nothing more until the admin is on,
+        // a grant the model does not vouch for in a copy from outside a store; then 9, and 11 after the week.
+        assertEquals(6, score(full.copy(batteryExempt = true)))
+        assertEquals(9, score(full.copy(deviceAdminActive = true, batteryExempt = true)))
+        assertEquals(11, score(full.copy(deviceAdminActive = true, hiddenService = true, batteryExempt = true)))
     }
 
     @Test
@@ -688,6 +693,9 @@ class StalkwareScannerTest {
         assertEquals(Severity.LOW, severity(fromPlay))
         assertTrue(StalkwareScanner.isVouchedAdmin(fromPlay))
         assertEquals(4, score(fromPlay.copy(hiddenService = true)))
+        // The battery exemption adds nothing: its admin is known, and nothing else is of the monitoring kind.
+        assertEquals(2, score(fromPlay.copy(batteryExempt = true)))
+        assertEquals(4, score(fromPlay.copy(hiddenService = true, batteryExempt = true)))
         // It holds no listener, accessibility service or keyboard, and no list vouches for one.
         assertFalse(StalkwareScanner.isVouchedListener(fromPlay))
         assertFalse(StalkwareScanner.isVouchedAccessibility(fromPlay))
@@ -703,5 +711,7 @@ class StalkwareScannerTest {
         )
         assertEquals(4, score(comms))
         assertEquals(Severity.MEDIUM, severity(comms))
+        // Exempt from battery optimisation, which Comms asks for to stay online: still 4, medium.
+        assertEquals(4, score(comms.copy(batteryExempt = true)))
     }
 }

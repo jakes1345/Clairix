@@ -516,17 +516,23 @@ What there is to see:
   instead, through a second launcher entry for the same app; the Play edition
   keeps the Clairix icon, as Google Play requires. There is always exactly
   one launcher entry, so the app never counts as hidden.
+- **Battery.** Clairix asks to be exempted from battery optimisation, so the
+  scanner and Comms keep running; once you allow it, Android's battery
+  settings list Clairix as unrestricted.
 - **What it does not hold.** No accessibility service, notification access,
   keyboard, VPN or permission to draw over other apps.
 
 Scored by Clairix's own model (`StalkwareScanner`) with every permission it
 asks for granted, Clairix Full comes to 6: 2 for an install from outside a
 store, and 1 each for the microphone, background location, the camera (which
-counts only for an app from outside a store) and a device-admin receiver.
-HIGH starts at 5. A permission you have not granted counts for less, so with
-the camera and background location denied it is 4. With the unlock ledger's
-admin switched on it is 8, and 10 if the scanner then ran for a week without
-the app being opened. The Comms edition comes to 4, listed as medium. The
+counts only for an app from outside a store or without a launcher icon) and a
+device-admin receiver. HIGH starts at 5. A permission you have not granted
+counts for less, so with the camera and background location denied it is 4.
+With the unlock ledger's admin switched on it is 8, and 10 if the scanner then
+ran for a week without the app being opened. The battery exemption adds 1
+only to an app already listed that hides its icon or holds access the model
+does not vouch for, which for Clairix Full is the unlock ledger's admin: 9
+with it on and exempt, 11 after the week. The Comms edition comes to 4, listed as medium. The
 Play edition comes to 2, below the 3 at which an app is listed, or 4 after a
 week unopened; its device admin is known to the model, since it comes from a
 store. Other scanners weigh these things differently. A unit test reads

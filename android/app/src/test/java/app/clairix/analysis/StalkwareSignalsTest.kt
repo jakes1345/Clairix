@@ -43,13 +43,27 @@ class StalkwareSignalsTest {
     }
 
     @Test
-    fun aBatteryExemptionStrengthensAListedAppThatHidesOrCameFromOutsideAStore() {
+    fun aBatteryExemptionStrengthensAListedAppThatHides() {
         val hiddenSideload = AppFacts(rogue, system = false, installer = null, hasLauncher = false)
         assertEquals(Severity.MEDIUM, severity(hiddenSideload))
         val exempt = hiddenSideload.copy(batteryExempt = true)
         assertEquals(score(hiddenSideload) + StalkwareScanner.BATTERY_EXEMPT_SCORE, score(exempt))
         assertEquals(Severity.HIGH, severity(exempt))
         assertTrue(exemptReason in StalkwareScanner.assess(exempt).map { it.reason })
+    }
+
+    @Test
+    fun aMessengerFromItsMakersSiteStaysMediumWhenExempt() {
+        // A messenger from its maker's site: an APK install, the microphone and the camera granted,
+        // and the exemption asked for to stay connected without Google's push. Medium, never high.
+        val perms = setOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        val messenger = AppFacts(
+            "com.example.messenger", system = false, installer = "com.google.android.packageinstaller", hasLauncher = true,
+            requested = perms, granted = perms, batteryExempt = true,
+        )
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE + 2, score(messenger))
+        assertEquals(Severity.MEDIUM, severity(messenger))
+        assertFalse(exemptReason in StalkwareScanner.assess(messenger).map { it.reason })
     }
 
     @Test
@@ -76,11 +90,13 @@ class StalkwareSignalsTest {
     @Test
     fun theBatterySignalIsJudgedOnTheOtherSignalsAlone() {
         val f = AppFacts(rogue, system = false, installer = null, hasLauncher = true, batteryExempt = true)
-        assertNull(StalkwareScanner.batterySignal(f, listOf(StalkwareScanner.Signal(2, "x")), hidden = false))
+        assertNull(StalkwareScanner.batterySignal(f, listOf(StalkwareScanner.Signal(2, "x")), hidden = true))
         assertEquals(
             StalkwareScanner.BATTERY_EXEMPT_SCORE,
-            StalkwareScanner.batterySignal(f, listOf(StalkwareScanner.Signal(3, "x")), hidden = false)?.points,
+            StalkwareScanner.batterySignal(f, listOf(StalkwareScanner.Signal(3, "x")), hidden = true)?.points,
         )
+        // Listed, but only for coming from outside a store: not of the monitoring kind on its own.
+        assertNull(StalkwareScanner.batterySignal(f, listOf(StalkwareScanner.Signal(3, "x")), hidden = false))
         assertNull(StalkwareScanner.batterySignal(f.copy(batteryExempt = false), listOf(StalkwareScanner.Signal(5, "x")), hidden = true))
     }
 

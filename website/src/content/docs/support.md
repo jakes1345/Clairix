@@ -91,10 +91,10 @@ Clairix's own spyware check skips Clairix. Another app's stalkerware scanner may
 - **Where it came from.** Clairix Full and the Comms edition are installed from an APK file, and Settings says so; a copy installed from Google Play, once that edition exists, will say Google Play.
 - **Permissions.** Location, and "Allow all the time" if you let the scanner keep running in your pocket; the microphone, for calls, voice notes and the ultrasound listener; the camera, for the camera sweep and pairing codes; nearby devices; notifications. The scanner editions can also see every installed app, for the spyware check, and hold usage access and the alarms permission if you grant them.
 - **Device admin.** Only once you switch on the unlock ledger. **Settings > Security > Device admin apps** then lists Clairix with two policies: watching lock-screen events and locking the screen.
-- **Running in the background.** The scanner, and Comms when it stays online, run with a notification of their own.
+- **Running in the background.** The scanner, and Comms when it stays online, run with a notification of their own. Clairix asks to be exempted from battery optimisation so they keep running; once you allow it, Android's battery settings list Clairix as unrestricted.
 - **What it does not hold.** No accessibility service, notification access, keyboard, VPN or permission to draw over other apps.
 
-Run against itself with every permission it asks for granted, Clairix's own scoring gives Clairix Full 6 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location, the camera and the device-admin receiver; 8 with the unlock ledger's admin on. A permission you have not granted counts for less. The Comms edition scores 4; a copy installed from Google Play, once that edition exists, will score 2, which is not listed. Other scanners weigh these things differently.
+Run against itself with every permission it asks for granted, Clairix's own scoring gives Clairix Full 6 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location, the camera and the device-admin receiver; 8 with the unlock ledger's admin on, or 9 if you have also let it run unrestricted by battery optimisation. A permission you have not granted counts for less. The Comms edition scores 4; a copy installed from Google Play, once that edition exists, will score 2, which is not listed. Other scanners weigh these things differently.
 
 ### I have no invite
 

@@ -902,14 +902,18 @@ object StalkwareScanner {
      * The battery-exemption signal, or null when it does not count. Many legitimate apps are
      * exempt, so the exemption alone says nothing: it adds [BATTERY_EXEMPT_SCORE] only to an app
      * the other [signals] already list (MEDIUM or more) and only when one of them is the kind a
-     * monitoring app shows: installed from outside a genuine store, no icon in the app drawer
-     * ([hidden]), or a special-access grant nobody vouches for ([unvouchedGrant]). It can lift a
-     * listed app to HIGH; it never lists one.
+     * monitoring app shows: no icon in the app drawer ([hidden]), or a special-access grant nobody
+     * vouches for ([unvouchedGrant]). It can lift a listed app to HIGH; it never lists one.
+     *
+     * An install from outside a store is not enough: a messenger downloaded from its maker's site
+     * (Molly, Session, Threema's shop build) is installed that way, uses the microphone and the camera,
+     * and asks for the exemption to stay connected without Google's push service. Counting it
+     * would make each of them HIGH, "looks like stalkerware", with a notification.
      */
     internal fun batterySignal(f: AppFacts, signals: List<Signal>, hidden: Boolean): Signal? {
         if (!f.batteryExempt) return null
         if (signals.sumOf { it.points } < MEDIUM_SCORE) return null
-        if (!f.sideloaded && !hidden && !unvouchedGrant(f)) return null
+        if (!hidden && !unvouchedGrant(f)) return null
         return Signal(BATTERY_EXEMPT_SCORE, "is exempt from battery optimisation, so Android never pauses it in the background")
     }
 
