@@ -54,7 +54,7 @@ Clairix inspects the apps on your phone for stalkerware, audits the certificates
 - It cannot see into other profiles. Apps in a work profile, Samsung's Secure Folder, Android's Private space, a second space or a dual-apps profile are not scanned. Phone check says how many other profiles Android shows it; Private space is hidden from every app, Clairix included.
 - The stalkerware list is not complete. Its maintainers say so, new stalkerware appears faster than anyone lists it, and an app sold as parental control can come from a store. Not being on the list proves nothing; the behaviour score is there for what the list misses.
 - It cannot name the app that is using the microphone. Android tells third-party apps how many recordings are active, not which app owns them. Clairix shows the count and does not guess.
-- It cannot remove spyware. It shows you the app and takes you to the system page where you can uninstall it or revoke its access.
+- It cannot remove spyware. It shows you the app and takes you to the system page where you can uninstall it or revoke its access. Before that page opens for an app it flagged, it stops to say that removing the app can alert whoever installed it and, for some people, make things more dangerous, and offers to save the app's evidence and to find a helpline first; you then continue or cancel.
 - The interception canary checks the path to the Clairix relay. It does not inspect your other apps' traffic.
 - The unlock ledger is only as complete as the grants you give it. Without the device-admin grant it relies on the usage log, which may lag.
 - Screen-recording detection needs Android 15 or newer. On older versions Clairix cannot be told.

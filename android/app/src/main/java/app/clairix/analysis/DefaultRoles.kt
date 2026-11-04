@@ -140,7 +140,11 @@ internal object DefaultRoles {
                 "genuine app store or with the phone."
         } + " If you did not choose ${if (flagged.size == 1) "it" else "them"} yourself, change the default under $WHERE, " +
             "then look at the app in Phone check → Stalkerware. Changing a default can be noticed by whoever set it." + uncheckedText
-        return HealthFact(ID, CATEGORY, LABEL, value, Severity.MEDIUM, detail, fixAction = Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
+        return HealthFact(
+            ID, CATEGORY, LABEL, value, Severity.MEDIUM, detail,
+            fixAction = Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS,
+            subject = first.packageName,
+        )
     }
 
     private fun short(role: Role): String = when (role) {

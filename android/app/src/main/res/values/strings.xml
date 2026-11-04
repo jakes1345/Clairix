@@ -1495,8 +1495,10 @@
     <string name="scan_copied">Copied</string>
     <string name="scan_copy_to_clipboard">Copy to clipboard</string>
     <string name="scan_anyone_who_pastes_on_this_phone">Anyone who pastes on this phone can see what is on the clipboard, and so can the keyboard you type with. Paste it somewhere only you can reach; Clairix clears it when this closes.</string>
-    <string name="scan_talk_to_someone_first">Talk to someone first</string>
-    <string name="scan_open_settings_anyway">Open settings anyway</string>
+    <string name="scan_removal_can_alert">Removing it or switching it off can alert whoever installed it. For some people, that makes things more dangerous.</string>
+    <string name="scan_removal_first_steps">Save the evidence first. If someone you know may be behind it, a helpline can help you plan what to do next.</string>
+    <string name="scan_contact_a_helpline">Contact a helpline</string>
+    <string name="scan_removal_continue">Continue</string>
     <!-- AccountChecklistPage.kt -->
     <string name="scan_who_else_can_see_this_phone">Who else can see this phone</string>
     <string name="scan_open_the_checklist">Open the checklist</string>

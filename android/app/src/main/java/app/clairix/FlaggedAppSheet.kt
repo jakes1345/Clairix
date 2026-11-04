@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -50,19 +51,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /*
- * Before a flagged app's settings open. The stalkerware rows end in a button to
- * the app's own settings page, where Uninstall is; removing a monitoring app can
- * tell whoever installed it that it was found, and takes the evidence with it.
- * So the button asks first, in a sheet: save the evidence now (the default),
- * talk to someone first, or open the settings anyway.
+ * Before a flagged app's settings open. The stalkerware rows, the grant rows and
+ * Phone check's rows about one app end in a button to the Settings page where the
+ * app is uninstalled, switched off or replaced; removing a monitoring app can tell
+ * whoever installed it that it was found, which for some people makes things more
+ * dangerous, and takes the evidence with it. So the button asks first, in a sheet:
+ * save the evidence now (the default), contact a helpline (the Get help page),
+ * then Continue to the settings or Cancel.
  */
 
 /**
  * The button on a stalkerware row that opens [packageName]'s settings with
  * [onOpen]. When [gated] (see [SafetyFirst.gatesSettings]) a tap shows the
- * sheet first and [onOpen] runs only from its "Open settings anyway"; otherwise
- * it opens straight away. [flagged] is the scan's record of the app, when it
- * scored one.
+ * sheet first and [onOpen] runs only from its "Continue"; otherwise it opens
+ * straight away. [flagged] is the scan's record of the app, when it scored one.
+ * [compact] draws a small text button for a row of buttons (Phone check)
+ * instead of a full-width one.
  */
 @Composable
 internal fun FlaggedAppButton(
@@ -70,6 +74,7 @@ internal fun FlaggedAppButton(
     packageName: String,
     flagged: StalkwareScanner.SuspiciousApp?,
     gated: Boolean = true,
+    compact: Boolean = false,
     onOpen: () -> Unit
 ) {
     var asking by remember(packageName) { mutableStateOf(false) }
@@ -77,12 +82,12 @@ internal fun FlaggedAppButton(
     // locking closes it rather than leave it showing over the lock.
     val locked by AppLock.locked.collectAsStateWithLifecycle()
     LaunchedEffect(locked) { if (locked) asking = false }
-    SecondaryButton(
-        text,
-        onClick = { if (gated) asking = true else onOpen() },
-        tone = Tone.Accent,
-        modifier = Modifier.fillMaxWidth()
-    )
+    val onClick = { if (gated) asking = true else onOpen() }
+    if (compact) {
+        GhostButton(text, onClick = onClick)
+    } else {
+        SecondaryButton(text, onClick = onClick, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+    }
     if (asking && !locked) {
         BeforeYouOpenSheet(
             packageName = packageName,
@@ -94,6 +99,15 @@ internal fun FlaggedAppButton(
             }
         )
     }
+}
+
+/** Which Phone check rows go through the sheet before their settings open. */
+internal object RemovalGate {
+    /**
+     * The app [f]'s "Open settings" asks about first: its [HealthFact.subject] when the row is a
+     * finding (it has a severity) with a page to open; null when it opens straight away.
+     */
+    fun subjectOf(f: HealthFact): String? = f.subject?.takeIf { f.severity != null && f.fixAction != null }
 }
 
 /**
@@ -221,8 +235,8 @@ private fun BeforeYouOpenSheet(
                 color = c.text,
                 modifier = Modifier.semantics { heading() }
             )
-            Text(SafetyFirst.NOTICE, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
-            Text(SafetyFirst.ADVOCATE, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
+            Text(stringResource(R.string.scan_removal_can_alert), style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
+            Text(stringResource(R.string.scan_removal_first_steps), style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
 
             val savedAt = saved?.savedAt
             PrimaryButton(
@@ -258,8 +272,9 @@ private fun BeforeYouOpenSheet(
             }
             failure?.let { Notice(Tone.Danger, it) }
 
+            // The Get help page: helplines for where the phone is, from its SIM or region.
             SecondaryButton(
-                stringResource(R.string.scan_talk_to_someone_first),
+                stringResource(R.string.scan_contact_a_helpline),
                 onClick = {
                     onDismiss()
                     Registry.requestHelp()
@@ -267,7 +282,10 @@ private fun BeforeYouOpenSheet(
                 tone = Tone.Accent,
                 modifier = Modifier.fillMaxWidth()
             )
-            GhostButton(stringResource(R.string.scan_open_settings_anyway), onClick = onOpen, tone = Tone.Neutral, modifier = Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral, modifier = Modifier.weight(1f))
+                GhostButton(stringResource(R.string.scan_removal_continue), onClick = onOpen, tone = Tone.Neutral, modifier = Modifier.weight(1f))
+            }
         }
     }
 }
