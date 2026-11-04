@@ -658,7 +658,7 @@ dependencies {
     // scans the pairing QR codes; the UnifiedPush connector wakes the app through
     // a distributor of the owner's choosing (for example the ntfy app). No Google
     // service is involved anywhere.
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
     // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18.0 and
     // later declare minCompileSdk 37 in their AAR metadata (checked against 4.18.0:
     // "requires ... to compile against version 37 or later"), which needs an
