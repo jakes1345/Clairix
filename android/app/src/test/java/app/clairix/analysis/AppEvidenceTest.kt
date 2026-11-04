@@ -120,4 +120,12 @@ class AppEvidenceTest {
         assertTrue(e.detail.contains("Access: none of the special access Clairix checks"))
         assertTrue(e.detail.contains("Signing certificate SHA-256: not readable"))
     }
+
+    @Test
+    fun theBatteryExemptionIsRecordedOnItsOwnLine() {
+        assertTrue(evidence.copy(batteryExempt = true).timelineEvent(utc).detail
+            .contains("Battery optimisation: exempt (Android never pauses it in the background)"))
+        assertTrue(evidence.copy(batteryExempt = false).text(utc).lines().contains("Battery optimisation: not exempt"))
+        assertTrue(evidence.copy(batteryExempt = null).text(utc).lines().contains("Battery optimisation: not readable"))
+    }
 }

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import app.clairix.EventKind
@@ -48,7 +49,13 @@ data class AppEvidence(
     val reasons: List<String>,
     /** SHA-256 of each certificate the app is signed with now, as colon-separated hex. */
     val signers: List<String>,
-    val savedAt: Long
+    val savedAt: Long,
+    /**
+     * Whether Android exempted it from battery optimisation when this was saved, so nothing paused
+     * it in the background; null when the phone would not say. Recorded on its own, never as a
+     * verdict: many ordinary apps are exempt.
+     */
+    val batteryExempt: Boolean? = null
 ) {
 
     /** The timeline entry: one line of detail, which is how the evidence report prints it. */
@@ -74,6 +81,7 @@ data class AppEvidence(
         if (namedInstaller != null && namedInstaller != installer) add("Installer it names" to namedInstaller)
         add("Access" to access.ifEmpty { listOf("none of the special access Clairix checks") }.joinToString(", "))
         add("Permissions granted" to permissions.ifEmpty { listOf("none of the sensitive ones Clairix checks") }.joinToString(", "))
+        add("Battery optimisation" to batteryText(batteryExempt))
         if (reasons.isNotEmpty()) add("Reasons" to reasons.joinToString("; "))
         add("Signing certificate SHA-256" to signers.ifEmpty { listOf("not readable") }.joinToString(", "))
         add("Saved" to stamp(savedAt, zone))
@@ -116,6 +124,13 @@ data class AppEvidence(
             "android.permission.BODY_SENSORS" to "body sensors",
             "android.permission.ACTIVITY_RECOGNITION" to "physical activity"
         )
+
+        /** What the evidence says about the battery exemption. */
+        internal fun batteryText(exempt: Boolean?): String = when (exempt) {
+            true -> "exempt (Android never pauses it in the background)"
+            false -> "not exempt"
+            null -> "not readable"
+        }
 
         /** PackageInfo.REQUESTED_PERMISSION_GRANTED, spelled out so the JVM tests need no Android stub. */
         private const val GRANTED = 2
@@ -173,7 +188,10 @@ data class AppEvidence(
                 permissions = grantedPermissions(info?.requestedPermissions, info?.requestedPermissionsFlags),
                 reasons = flagged?.reasons.orEmpty(),
                 signers = info?.let { runCatching { signers(it) }.getOrNull() }.orEmpty(),
-                savedAt = now
+                savedAt = now,
+                batteryExempt = runCatching {
+                    app.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)
+                }.getOrNull()
             )
         }
 

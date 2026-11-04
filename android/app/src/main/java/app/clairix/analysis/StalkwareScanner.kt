@@ -12,6 +12,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 import android.os.UserManager
 import android.provider.Settings
@@ -71,6 +72,8 @@ object StalkwareScanner {
         val installerPackage: String?,
         /** The stalkerware list's name for it, when its package name or a signing certificate is on the list. */
         val knownAs: String? = null,
+        /** Android exempts it from battery optimisation ([AppFacts.batteryExempt]). */
+        val batteryExempt: Boolean = false,
     ) {
         val severity: Severity
             get() = when {
@@ -484,6 +487,12 @@ object StalkwareScanner {
      * (keyboard 4, admin 3, accessibility 3, listener 3) it reaches HIGH on its own.
      */
     internal const val IMPOSTOR_SCORE = 2
+    /**
+     * Score for an exemption from battery optimisation ([batterySignal]). Weak, and never a
+     * verdict: messengers, alarm clocks, fitness trackers, VPNs and home-automation apps ask for
+     * it too. It only strengthens an app that is already listed for something else.
+     */
+    internal const val BATTERY_EXEMPT_SCORE = 1
 
     /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
     private val SUSPECT_PERMISSIONS = linkedMapOf(
@@ -563,6 +572,11 @@ object StalkwareScanner {
          * install record may have been carried over an OS upgrade, which keeps only the installer.
          */
         val installedBeforeSystemBuild: Boolean = false,
+        /**
+         * Android exempts it from battery optimisation (PowerManager.isIgnoringBatteryOptimizations):
+         * Doze and App Standby never pause it, so it can keep reporting with the screen off for days.
+         */
+        val batteryExempt: Boolean = false,
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -825,7 +839,33 @@ object StalkwareScanner {
                 else -> Signal(IME_ENABLED_SCORE, "is an enabled keyboard (can log every keystroke, passwords included)")
             }
         }
+        // Last, so "already listed" means every other signal above.
+        batterySignal(f, out, hidden)?.let { out += it }
         return out
+    }
+
+    /**
+     * The battery-exemption signal, or null when it does not count. Many legitimate apps are
+     * exempt, so the exemption alone says nothing: it adds [BATTERY_EXEMPT_SCORE] only to an app
+     * the other [signals] already list (MEDIUM or more) and only when one of them is the kind a
+     * monitoring app shows: installed from outside a genuine store, no icon in the app drawer
+     * ([hidden]), or a special-access grant nobody vouches for ([unvouchedGrant]). It can lift a
+     * listed app to HIGH; it never lists one.
+     */
+    internal fun batterySignal(f: AppFacts, signals: List<Signal>, hidden: Boolean): Signal? {
+        if (!f.batteryExempt) return null
+        if (signals.sumOf { it.points } < MEDIUM_SCORE) return null
+        if (!f.sideloaded && !hidden && !unvouchedGrant(f)) return null
+        return Signal(BATTERY_EXEMPT_SCORE, "is exempt from battery optimisation, so Android never pauses it in the background")
+    }
+
+    /** Whether [f] holds accessibility, notification access, a device admin or a keyboard that is neither known nor marked as the owner's. */
+    private fun unvouchedGrant(f: AppFacts): Boolean {
+        val settled = setOf(GrantStatus.KNOWN, GrantStatus.YOURS, GrantStatus.PRELOADED)
+        return (f.accessibilityEnabled && grantStatus(GrantKind.ACCESSIBILITY, f) !in settled) ||
+            (f.notificationListener && grantStatus(GrantKind.NOTIFICATION_LISTENER, f) !in settled) ||
+            (f.deviceAdminActive && grantStatus(GrantKind.DEVICE_ADMIN, f) !in settled) ||
+            (f.imeEnabled && grantStatus(GrantKind.KEYBOARD, f) !in settled)
     }
 
     /**
@@ -920,6 +960,13 @@ object StalkwareScanner {
 
     fun usageAccessIntent(): Intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
 
+    /**
+     * Whether Android exempts [packageName] from battery optimisation. Any app may ask this of any
+     * package, with no permission; false when the phone will not say.
+     */
+    fun batteryExempt(power: PowerManager?, packageName: String): Boolean =
+        runCatching { power?.isIgnoringBatteryOptimizations(packageName) }.getOrNull() == true
+
     /** Opens the system's own details page for [packageName], where Uninstall lives. */
     fun appDetailsIntent(packageName: String): Intent =
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))
@@ -948,6 +995,7 @@ object StalkwareScanner {
         val ownerKinds = owners.associate { it.packageName to it.kind }
 
         val usageAccess = hasUsageAccess(app)
+        val power = app.getSystemService(PowerManager::class.java)
         val (fgsPkgs, resumedPkgs) = if (usageAccess) usageSignals(app) else emptySet<String>() to emptySet()
 
         val packages = installedPackages(pm)
@@ -1019,6 +1067,7 @@ object StalkwareScanner {
                 deviceAdminActive = admin,
                 hiddenService = usageAccess && name in fgsPkgs && name !in resumedPkgs,
                 installedBeforeSystemBuild = installedBefore(pkg.firstInstallTime, Build.TIME),
+                batteryExempt = batteryExempt(power, name),
             )
             val signals = assess(facts)
             val score = signals.sumOf { it.points }
@@ -1041,6 +1090,7 @@ object StalkwareScanner {
                 deviceAdminActive = admin,
                 installerPackage = installer ?: source?.installing,
                 knownAs = match?.family?.name,
+                batteryExempt = facts.batteryExempt,
             )
         }
 
