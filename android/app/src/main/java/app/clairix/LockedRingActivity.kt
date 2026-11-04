@@ -47,6 +47,7 @@ class LockedRingActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        app.clairix.security.WindowShield.shield(this)
         if (intent?.action == ACTION_ANSWER) answer()
         setContent {
             val theme by AppSettings.theme.collectAsStateWithLifecycle()

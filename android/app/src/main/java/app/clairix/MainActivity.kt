@@ -234,6 +234,8 @@ class MainActivity : AppCompatActivity() {
         // positions, a conversation, the Device tab. Secure always, passcode or
         // not; the screen-recording monitor reports attempts regardless.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        // And out of reach of other apps' accessibility services and overlays (suite only).
+        app.clairix.security.WindowShield.shield(this)
         Registry.bindTrustStore(this)
 
         if (BuildConfig.FULL_ACCESS) {
@@ -1262,6 +1264,7 @@ private fun MainApp(
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet
         ) {
+            app.clairix.security.ShieldThisWindow()
             ThreatExplainerSheet(target = target, onDismiss = { explainerTarget = null })
         }
     }

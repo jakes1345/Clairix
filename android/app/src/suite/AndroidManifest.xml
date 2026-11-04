@@ -61,6 +61,11 @@
          mode is on. Older releases do not know it and ignore it. -->
     <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE" />
 
+    <!-- Window shield (security/WindowShield.kt): while a Clairix screen shows, Android hides
+         every other app's overlay windows, so nothing is drawn over a warning or a button. A
+         normal permission, granted at install; Android 12 and newer. -->
+    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 

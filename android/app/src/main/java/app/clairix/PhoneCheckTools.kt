@@ -441,6 +441,7 @@ private fun MarkAsMineDialog(
         shape = ClairixShapes.Sheet,
         containerColor = ClairixTheme.colors.surfaceRaised,
         title = {
+            app.clairix.security.ShieldThisWindow()
             Text(
                 if (enrolled) stringResource(R.string.scan_did_you_enrol_this_phone) else stringResource(R.string.scan_is_yours, label),
                 style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text
@@ -575,7 +576,10 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             onDismissRequest = { confirmPin = false },
             shape = ClairixShapes.Sheet,
             containerColor = ClairixTheme.colors.surfaceRaised,
-            title = { Text(stringResource(R.string.scan_pin_this_certificate), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            title = {
+                app.clairix.security.ShieldThisWindow()
+                Text(stringResource(R.string.scan_pin_this_certificate), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            },
             text = {
                 Text(
                     stringResource(R.string.scan_only_for_your_own_relay_served, pinCandidate.relayHost),

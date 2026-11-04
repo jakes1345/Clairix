@@ -129,6 +129,7 @@ class CallActivity : ComponentActivity() {
         // A call screen shows who is calling: never in a screenshot, a screen
         // recording or the Recents thumbnail, whatever the passcode setting.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        app.clairix.security.WindowShield.shield(this)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         // A call can start this Activity in a cold process, before MainActivity

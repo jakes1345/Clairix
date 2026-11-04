@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.AppEvidence
 import app.clairix.analysis.StalkwareScanner
 import app.clairix.security.AppLock
+import app.clairix.security.ShieldThisWindow
 import app.clairix.ui.SafetyFirst
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.GhostButton
@@ -205,6 +206,7 @@ private fun BeforeYouOpenSheet(
         containerColor = c.surfaceRaised,
         shape = ClairixShapes.Sheet
     ) {
+        ShieldThisWindow()
         Column(
             Modifier
                 .fillMaxWidth()

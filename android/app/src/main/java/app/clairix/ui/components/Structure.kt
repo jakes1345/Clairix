@@ -357,7 +357,11 @@ fun ClairixDialog(
         containerColor = c.surfaceRaised,
         titleContentColor = c.text,
         textContentColor = c.textMuted,
-        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        title = {
+            // A dialog is a window of its own, outside the activity's shield.
+            app.clairix.security.ShieldThisWindow()
+            Text(title, style = MaterialTheme.typography.titleLarge)
+        },
         text = if (text == null && content == null) null else {
             {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
