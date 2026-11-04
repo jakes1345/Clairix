@@ -11,7 +11,8 @@ import org.junit.Test
 
 /**
  * The stalkerware score's weaker signals and what qualifies them: the battery-optimisation
- * exemption, which only strengthens an app already listed. (StalkwareScannerTest has the rest.)
+ * exemption, which only strengthens an app already listed, and permissions granted rather than
+ * only asked for. (StalkwareScannerTest has the rest.)
  */
 class StalkwareSignalsTest {
     private val rogue = "com.example.keylogger"
@@ -81,5 +82,72 @@ class StalkwareSignalsTest {
             StalkwareScanner.batterySignal(f, listOf(StalkwareScanner.Signal(3, "x")), hidden = false)?.points,
         )
         assertNull(StalkwareScanner.batterySignal(f.copy(batteryExempt = false), listOf(StalkwareScanner.Signal(5, "x")), hidden = true))
+    }
+
+    // ── Granted or only asked for ─────────────────────────────────────────────
+
+    private val sms = setOf(Manifest.permission.READ_SMS, Manifest.permission.READ_CALL_LOG, Manifest.permission.RECORD_AUDIO)
+
+    @Test
+    fun aGrantedPermissionWeighsMoreThanOneOnlyAskedFor() {
+        val asks = AppFacts(rogue, system = false, installer = play, hasLauncher = true, requested = sms, granted = emptySet())
+        val holds = asks.copy(granted = sms)
+        assertTrue(score(holds) > score(asks))
+        // READ_SMS 2, READ_CALL_LOG 2, microphone 1 granted; 1, 1, 0 only asked for.
+        assertEquals(5, score(holds))
+        assertEquals(2, score(asks))
+        val reasons = StalkwareScanner.assess(asks).map { it.reason }
+        assertTrue(reasons.toString(), "asks to read SMS, not granted" in reasons)
+        assertTrue(reasons.toString(), "asks for the microphone, not granted" in reasons)
+        assertTrue("can read SMS (including one-time codes) (granted)" in StalkwareScanner.assess(holds).map { it.reason })
+    }
+
+    @Test
+    fun withoutTheGrantFlagsEveryRequestedPermissionIsWeighedAsGranted() {
+        val unknown = AppFacts(rogue, system = false, installer = play, hasLauncher = true, requested = sms)
+        assertEquals(5, score(unknown))
+        assertTrue("can read SMS (including one-time codes)" in StalkwareScanner.assess(unknown).map { it.reason })
+    }
+
+    @Test
+    fun drawingOverOtherAppsIsNotARuntimeGrantSoItsFlagIsIgnored() {
+        val overlay = AppFacts(
+            rogue, system = false, installer = play, hasLauncher = true,
+            requested = setOf(Manifest.permission.SYSTEM_ALERT_WINDOW), granted = emptySet(),
+        )
+        assertEquals(listOf("can draw over other apps"), StalkwareScanner.assess(overlay).map { it.reason })
+        assertEquals(1, score(overlay))
+    }
+
+    @Test
+    fun theCameraCountsOnlyForAnAppFromOutsideAStoreOrWithoutAnIcon() {
+        val camera = setOf(Manifest.permission.CAMERA)
+        val store = AppFacts("com.example.chat", system = false, installer = play, hasLauncher = true, requested = camera, granted = camera)
+        assertEquals(0, score(store))
+        assertTrue("can use the camera (granted)" in StalkwareScanner.assess(store).map { it.reason })
+        val sideloaded = store.copy(installer = "com.android.packageinstaller")
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE + 1, score(sideloaded))
+        assertEquals(StalkwareScanner.NO_LAUNCHER_SCORE + 1, score(store.copy(hasLauncher = false)))
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE, score(sideloaded.copy(granted = emptySet())))
+    }
+
+    @Test
+    fun grantFlagsAreReadPositionByPosition() {
+        val requested = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        assertEquals(setOf(Manifest.permission.READ_SMS, Manifest.permission.RECORD_AUDIO), StalkwareScanner.grantedOf(requested, intArrayOf(3, 1, 2)))
+        // A flags array shorter than the list: what has no flag is not granted.
+        assertEquals(setOf(Manifest.permission.READ_SMS), StalkwareScanner.grantedOf(requested, intArrayOf(2)))
+        assertNull(StalkwareScanner.grantedOf(requested, null))
+        assertEquals(emptySet<String>(), StalkwareScanner.grantedOf(null, null))
+    }
+
+    @Test
+    fun aStalkerwareSetupWithEveryGrantInPlaceIsHigh() {
+        val all = setOf(
+            Manifest.permission.READ_SMS, Manifest.permission.READ_CALL_LOG, Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.ACCESS_BACKGROUND_LOCATION, Manifest.permission.CAMERA,
+        )
+        val spy = AppFacts(rogue, system = false, installer = null, hasLauncher = false, requested = all, granted = all)
+        assertEquals(Severity.HIGH, severity(spy))
     }
 }

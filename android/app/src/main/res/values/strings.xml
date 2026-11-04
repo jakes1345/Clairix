@@ -1303,6 +1303,7 @@
     <string name="scan_known_app">Known app</string>
     <string name="scan_installed">Installed</string>
     <string name="scan_installer">Installer</string>
+    <string name="scan_permissions_granted">Granted</string>
     <string name="scan_unknown_sideloaded">unknown (sideloaded)</string>
     <string name="scan_keyboard">Keyboard</string>
     <string name="scan_device_admin">Device admin</string>

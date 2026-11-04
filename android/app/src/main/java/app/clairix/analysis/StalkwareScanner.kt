@@ -74,6 +74,8 @@ object StalkwareScanner {
         val knownAs: String? = null,
         /** Android exempts it from battery optimisation ([AppFacts.batteryExempt]). */
         val batteryExempt: Boolean = false,
+        /** The sensitive runtime permissions it holds granted, in plain words ([AppEvidence.grantedPermissions]). */
+        val grantedPermissions: List<String> = emptyList(),
     ) {
         val severity: Severity
             get() = when {
@@ -494,16 +496,58 @@ object StalkwareScanner {
      */
     internal const val BATTERY_EXEMPT_SCORE = 1
 
-    /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
-    private val SUSPECT_PERMISSIONS = linkedMapOf(
-        Manifest.permission.READ_SMS to (2 to "can read SMS (including one-time codes)"),
-        Manifest.permission.RECEIVE_SMS to (1 to "receives SMS as they arrive"),
-        Manifest.permission.READ_CALL_LOG to (2 to "can read the call log"),
-        Manifest.permission.PROCESS_OUTGOING_CALLS to (1 to "sees outgoing calls as they are placed"),
-        Manifest.permission.SYSTEM_ALERT_WINDOW to (1 to "can draw over other apps"),
-        Manifest.permission.RECORD_AUDIO to (1 to "can record audio"),
-        Manifest.permission.ACCESS_BACKGROUND_LOCATION to (1 to "can read location in the background")
+    /**
+     * A permission an app requests (`<uses-permission>`) that a monitoring app needs. [points] when
+     * it is granted, or when that is not known; [askedPoints] when the app asks for it and Android
+     * has not granted it, which says what the app wants but not what it can do. [runtime] is false
+     * for a permission Android does not grant at run time (drawing over other apps is a special
+     * access), whose grant flag says nothing. With [strangersOnly], the grant counts only for an
+     * app from outside a genuine store or with no launcher icon: half the apps on a phone may use
+     * the camera.
+     */
+    private class Suspect(
+        val points: Int,
+        val askedPoints: Int,
+        val reason: String,
+        val asked: String,
+        val runtime: Boolean = true,
+        val strangersOnly: Boolean = false,
     )
+
+    /** Permissions an app *requests*, with their weight and reason, granted or only asked for. */
+    private val SUSPECT_PERMISSIONS = linkedMapOf(
+        Manifest.permission.READ_SMS to Suspect(2, 1, "can read SMS (including one-time codes)", "to read SMS"),
+        Manifest.permission.RECEIVE_SMS to Suspect(1, 0, "receives SMS as they arrive", "to receive SMS"),
+        Manifest.permission.READ_CALL_LOG to Suspect(2, 1, "can read the call log", "to read the call log"),
+        Manifest.permission.PROCESS_OUTGOING_CALLS to Suspect(1, 0, "sees outgoing calls as they are placed", "to see outgoing calls"),
+        Manifest.permission.SYSTEM_ALERT_WINDOW to Suspect(1, 1, "can draw over other apps", "to draw over other apps", runtime = false),
+        Manifest.permission.RECORD_AUDIO to Suspect(1, 0, "can record audio", "for the microphone"),
+        Manifest.permission.ACCESS_BACKGROUND_LOCATION to Suspect(1, 0, "can read location in the background", "for location in the background"),
+        Manifest.permission.CAMERA to Suspect(1, 0, "can use the camera", "for the camera", strangersOnly = true),
+    )
+
+    /** PackageInfo.REQUESTED_PERMISSION_GRANTED, spelled out so the JVM tests need no Android stub. */
+    private const val REQUESTED_PERMISSION_GRANTED = 2
+
+    /**
+     * The members of [requested] that [flags] (PackageInfo.requestedPermissionsFlags) mark granted;
+     * null when the flags were not read, which [AppFacts.granted] takes as "not known".
+     */
+    internal fun grantedOf(requested: Array<String>?, flags: IntArray?): Set<String>? {
+        if (requested == null) return emptySet()
+        if (flags == null) return null
+        return requested.indices.filter { it < flags.size && (flags[it] and REQUESTED_PERMISSION_GRANTED) != 0 }
+            .mapTo(HashSet()) { requested[it] }
+    }
+
+    /** The signal for [perm], which [f] requests: weighed by whether Android has granted it. */
+    private fun permissionSignal(perm: String, s: Suspect, f: AppFacts, hidden: Boolean): Signal {
+        val granted = f.granted
+        val known = s.runtime && granted != null
+        if (known && perm !in granted.orEmpty()) return Signal(s.askedPoints, "asks ${s.asked}, not granted")
+        val points = if (s.strangersOnly && f.trustedOrigin && !hidden) 0 else s.points
+        return Signal(points, if (known) "${s.reason} (granted)" else s.reason)
+    }
 
     /**
      * What a keyboard requests to do its job: the microphone for voice typing and an
@@ -577,6 +621,11 @@ object StalkwareScanner {
          * Doze and App Standby never pause it, so it can keep reporting with the screen off for days.
          */
         val batteryExempt: Boolean = false,
+        /**
+         * The members of [requested] Android has granted, from PackageInfo.requestedPermissionsFlags
+         * ([grantedOf]); null when not known, and then every requested permission is weighed as granted.
+         */
+        val granted: Set<String>? = null,
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -770,12 +819,12 @@ object StalkwareScanner {
         val hidden = !f.system && !f.hasLauncher
         if (hidden) out += Signal(NO_LAUNCHER_SCORE, "has no icon in the app drawer")
 
-        for ((perm, weight) in SUSPECT_PERMISSIONS) {
+        for ((perm, suspect) in SUSPECT_PERMISSIONS) {
             if (perm !in f.requested) continue
             // Waived only for a keyboard from a store or the system image, or one the owner marked
             // as theirs, that is not an impostor.
             if (f.imeEnabled && (f.trustedOrigin || yours(f, GrantKind.KEYBOARD)) && !impostor && perm in KEYBOARD_PERMISSIONS) continue
-            out += Signal(weight.first, weight.second)
+            out += permissionSignal(perm, suspect, f, hidden)
         }
         for ((perm, weight) in SUSPECT_BINDINGS) {
             if (perm !in f.declared) continue
@@ -1059,6 +1108,7 @@ object StalkwareScanner {
             val facts = origin.copy(
                 hasLauncher = name in launcherPkgs,
                 requested = pkg.requestedPermissions?.toSet() ?: emptySet(),
+                granted = grantedOf(pkg.requestedPermissions, pkg.requestedPermissionsFlags),
                 declared = declaredBindings(pkg),
                 notificationListener = listener,
                 accessibilityEnabled = a11y,
@@ -1091,6 +1141,7 @@ object StalkwareScanner {
                 installerPackage = installer ?: source?.installing,
                 knownAs = match?.family?.name,
                 batteryExempt = facts.batteryExempt,
+                grantedPermissions = AppEvidence.grantedPermissions(pkg.requestedPermissions, pkg.requestedPermissionsFlags),
             )
         }
 

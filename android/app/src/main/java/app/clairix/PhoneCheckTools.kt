@@ -510,6 +510,9 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
         }
         KeyValueRow(stringResource(R.string.scan_installed), tDay(app.installTs))
         KeyValueRow(stringResource(R.string.scan_installer), app.installerPackage ?: if (app.sideloaded) stringResource(R.string.scan_unknown_sideloaded) else "—")
+        if (app.grantedPermissions.isNotEmpty()) {
+            KeyValueRow(stringResource(R.string.scan_permissions_granted), app.grantedPermissions.joinToString(", "), mono = false)
+        }
         if (app.imeEnabled) KeyValueRow(stringResource(R.string.scan_keyboard), "enabled")
         if (app.deviceAdminActive) KeyValueRow(stringResource(R.string.scan_device_admin), "active")
         if (app.reasons.isNotEmpty()) {

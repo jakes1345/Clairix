@@ -94,7 +94,7 @@ Clairix's own spyware check skips Clairix. Another app's stalkerware scanner may
 - **Running in the background.** The scanner, and Comms when it stays online, run with a notification of their own.
 - **What it does not hold.** No accessibility service, notification access, keyboard, VPN or permission to draw over other apps.
 
-Run against itself, Clairix's own scoring gives Clairix Full 5 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location and the device-admin receiver; 7 with the unlock ledger's admin on. The Comms edition scores 3; a copy installed from Google Play, once that edition exists, will score 2, which is not listed. Other scanners weigh these things differently.
+Run against itself with every permission it asks for granted, Clairix's own scoring gives Clairix Full 6 (high starts at 5): 2 for coming from outside a store and 1 each for the microphone, background location, the camera and the device-admin receiver; 8 with the unlock ledger's admin on. A permission you have not granted counts for less. The Comms edition scores 4; a copy installed from Google Play, once that edition exists, will score 2, which is not listed. Other scanners weigh these things differently.
 
 ### I have no invite
 
