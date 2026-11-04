@@ -1,5 +1,6 @@
 package app.clairix
 
+import androidx.compose.ui.res.stringResource
 import app.clairix.ui.components.ClairixProgressBar
 import android.content.Context
 import android.content.Intent
@@ -70,7 +71,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
         scope.launch {
             // Through the watch, so the hub, the timeline and the next background check see it too.
             val r = runCatching { StalkwareWatch.check(context, foreground = true, refreshList = true) }
-            r.onSuccess { result = it }.onFailure { error = "The scan failed: ${it.javaClass.simpleName}: ${it.message}" }
+            r.onSuccess { result = it }.onFailure { error = context.getString(R.string.scan_the_scan_failed, it.javaClass.simpleName, it.message.toString()) }
             scanning = false
         }
     }
@@ -82,7 +83,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 if (yes) StalkwareWatch.acknowledge(context, kind, packageName)
                 else { StalkwareWatch.unacknowledge(context, kind, packageName); true }
             }
-            if (!ok) error = "Could not read who signed $packageName, so it cannot be marked."
+            if (!ok) error = context.getString(R.string.scan_could_not_read_who_signed_so, packageName)
             runScan()
         }
     }
@@ -110,47 +111,45 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
         usageAccess = StalkwareScanner.hasUsageAccess(context)
     }
 
-    ToolPageList(title = "Stalkerware", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.scan_stalkerware), onBack = onBack) {
         if (!usageAccess) {
             item(key = "§usage") {
                 ClairixCard {
-                    Text("Usage access not granted", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+                    Text(stringResource(R.string.scan_usage_access_not_granted), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
                     Text(
-                        "With usage access Clairix can also see which apps run a hidden foreground service " +
-                        "without ever being opened — the strongest single sign of stalkerware. Without it " +
-                        "that signal is skipped.",
+                        stringResource(R.string.scan_with_usage_access_clairix_can_also),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.textSubtle
                     )
-                    SecondaryButton("Grant usage access", onClick = { openExternal(context, StalkwareScanner.usageAccessIntent()) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton(stringResource(R.string.scan_grant_usage_access), onClick = { openExternal(context, StalkwareScanner.usageAccessIntent()) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
 
         if (scanning) {
-            item(key = "§progress") { LoadingBlock("Scanning installed apps…") }
+            item(key = "§progress") { LoadingBlock(stringResource(R.string.scan_scanning_installed_apps)) }
         } else {
-            item(key = "§rescan") { SecondaryButton("Scan again", onClick = { runScan() }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth()) }
+            item(key = "§rescan") { SecondaryButton(stringResource(R.string.scan_scan_again), onClick = { runScan() }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth()) }
         }
 
-        error?.let { e -> item(key = "§error") { Notice(Tone.Danger, e, title = "Error") } }
+        error?.let { e -> item(key = "§error") { Notice(Tone.Danger, e, title = stringResource(R.string.scan_error_2)) } }
 
         val r = result
         if (r != null) {
             item(key = "§summary") {
                 ClairixCard(spacing = 4.dp) {
-                    KeyValueRow("Scanned", tFull(r.scannedAt))
-                    KeyValueRow("Flagged", "${r.high.size} high · ${r.medium.size} medium")
-                    KeyValueRow("Notification access", "${r.notificationListeners.size} ${if (r.notificationListeners.size == 1) "app" else "apps"} (${unknownCount(r, StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, r.notificationListeners)} unknown)")
-                    KeyValueRow("Accessibility services", "${r.accessibilityServices.size} (${unknownCount(r, StalkwareScanner.GrantKind.ACCESSIBILITY, r.accessibilityServices)} unknown)")
-                    KeyValueRow("VPN-capable apps", "${r.vpnApps.size}")
-                    KeyValueRow("Keyboards", "${r.enabledImes.size} enabled (${r.suspiciousImes.size} unknown)")
+                    KeyValueRow(stringResource(R.string.scan_scanned), tFull(r.scannedAt))
+                    KeyValueRow(stringResource(R.string.scan_flagged), stringResource(R.string.scan_high_medium, r.high.size, r.medium.size))
+                    KeyValueRow(stringResource(R.string.scan_notification_access), "${r.notificationListeners.size} ${if (r.notificationListeners.size == 1) "app" else "apps"} (${unknownCount(r, StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, r.notificationListeners)} unknown)")
+                    KeyValueRow(stringResource(R.string.scan_accessibility_services), stringResource(R.string.scan_unknown_2, r.accessibilityServices.size, unknownCount(r, StalkwareScanner.GrantKind.ACCESSIBILITY, r.accessibilityServices)))
+                    KeyValueRow(stringResource(R.string.scan_vpn_capable_apps), "${r.vpnApps.size}")
+                    KeyValueRow(stringResource(R.string.scan_keyboards), stringResource(R.string.scan_enabled_unknown, r.enabledImes.size, r.suspiciousImes.size))
                     val unknownAdmins = r.activeDeviceAdmins.count { it !in r.vouchedAdmins }
-                    KeyValueRow("Active device admins", "${r.activeDeviceAdmins.size} ($unknownAdmins unknown)")
-                    if (r.owners.isNotEmpty()) KeyValueRow("Managed by", r.owners.joinToString(", ") { StalkwareScanner.appLabel(context, it.packageName) }, mono = false)
-                    KeyValueRow("Other profiles", if (r.otherProfiles == 0) "None visible" else "${r.otherProfiles}, not scanned", mono = false)
-                    if (r.listApps > 0) KeyValueRow("Stalkerware list", "${r.listApps} apps · issued ${tDay(r.listIssued * 1000)}", mono = false)
-                    else if (BuildConfig.FULL_ACCESS) KeyValueRow("Stalkerware list", "Not loaded: apps were checked by behaviour only", mono = false)
+                    KeyValueRow(stringResource(R.string.scan_active_device_admins), stringResource(R.string.scan_unknown_2, r.activeDeviceAdmins.size, unknownAdmins))
+                    if (r.owners.isNotEmpty()) KeyValueRow(stringResource(R.string.scan_managed_by), r.owners.joinToString(", ") { StalkwareScanner.appLabel(context, it.packageName) }, mono = false)
+                    KeyValueRow(stringResource(R.string.scan_other_profiles), if (r.otherProfiles == 0) stringResource(R.string.scan_none_visible) else stringResource(R.string.scan_not_scanned, r.otherProfiles), mono = false)
+                    if (r.listApps > 0) KeyValueRow(stringResource(R.string.scan_stalkerware_list), stringResource(R.string.scan_apps_issued, r.listApps, tDay(r.listIssued * 1000)), mono = false)
+                    else if (BuildConfig.FULL_ACCESS) KeyValueRow(stringResource(R.string.scan_stalkerware_list), stringResource(R.string.scan_not_loaded_apps_were_checked_by), mono = false)
                 }
             }
             managedBySection(r, context, onMine)
@@ -158,10 +157,9 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
             if (r.clean) {
                 item(key = "§clean") {
                     ClairixCard {
-                        Text("No suspicious apps found", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.safe)
+                        Text(stringResource(R.string.scan_no_suspicious_apps_found), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.safe)
                         Text(
-                            "Nothing installed scores high enough to worry about. A clean result is not " +
-                            "proof: stalkerware sold as a 'parental control' app can look like a store install.",
+                            stringResource(R.string.scan_nothing_installed_scores_high_enough_to),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )
@@ -190,23 +188,21 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 }
             }
             if (r.high.isNotEmpty()) {
-                item(key = "§high-hdr") { SectionHeader("High") }
+                item(key = "§high-hdr") { SectionHeader(stringResource(R.string.scan_high_2)) }
                 items(r.high, key = { "high|${it.packageName}" }) { SuspiciousAppCard(it, context) }
             }
             if (r.medium.isNotEmpty()) {
-                item(key = "§medium-hdr") { SectionHeader("Medium") }
+                item(key = "§medium-hdr") { SectionHeader(stringResource(R.string.scan_medium)) }
                 items(r.medium, key = { "medium|${it.packageName}" }) { SuspiciousAppCard(it, context) }
             }
             // Every enabled keyboard, the known ones marked as such.
             if (r.enabledImes.isNotEmpty()) {
-                item(key = "§ime-hdr") { SectionHeader("Keyboards") }
+                item(key = "§ime-hdr") { SectionHeader(stringResource(R.string.scan_keyboards)) }
                 if (r.suspiciousImes.isNotEmpty()) item(key = "§ime-note") {
                     Notice(
                         Tone.Caution,
-                        "An enabled keyboard sees everything typed while it is in use, passwords and " +
-                            "messages included. If you did not install it yourself, switch it off in " +
-                            "keyboard settings, then uninstall it.",
-                        title = "Unknown keyboard"
+                        stringResource(R.string.scan_an_enabled_keyboard_sees_everything_typed),
+                        title = stringResource(R.string.scan_unknown_keyboard)
                     )
                 }
                 // Every row opens the same keyboard settings page, so each asks first while any keyboard there needs a look.
@@ -217,7 +213,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                             packageName = pkg,
                             flagged = r.apps.firstOrNull { it.packageName == pkg },
                             context = context,
-                            actionLabel = "Keyboard settings",
+                            actionLabel = stringResource(R.string.scan_keyboard_settings),
                             action = StalkwareScanner.keyboardSettingsIntent(),
                             known = r.status(StalkwareScanner.GrantKind.KEYBOARD, pkg) == StalkwareScanner.GrantStatus.KNOWN,
                             sharedSubject = imeSubject,
@@ -227,14 +223,12 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 }
             }
             if (r.activeDeviceAdmins.isNotEmpty()) {
-                item(key = "§admin-hdr") { SectionHeader("Device admins") }
+                item(key = "§admin-hdr") { SectionHeader(stringResource(R.string.scan_device_admins)) }
                 item(key = "§admin-note") {
                     Notice(
                         Tone.Caution,
-                        "A device admin can stop its own uninstall and may lock or wipe the phone. Work " +
-                            "profiles and Find My Device use it legitimately. To remove one you do not " +
-                            "recognise, switch it off under Settings → Security → Device admin apps, then uninstall it.",
-                        title = "Active device admin"
+                        stringResource(R.string.scan_a_device_admin_can_stop_its),
+                        title = stringResource(R.string.scan_active_device_admin)
                     )
                 }
                 items(r.activeDeviceAdmins, key = { "admin|$it" }) { pkg ->
@@ -243,7 +237,7 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                             packageName = pkg,
                             flagged = r.apps.firstOrNull { it.packageName == pkg },
                             context = context,
-                            actionLabel = "Open in Settings",
+                            actionLabel = stringResource(R.string.scan_open_in_settings),
                             action = StalkwareScanner.appDetailsIntent(pkg),
                             // A known name alone is not enough: the scanner vouches only for one from a store or the
                             // system image, and never for an owner or an unconfirmed management app, whatever its name.
@@ -265,8 +259,7 @@ private fun unknownCount(r: StalkwareScanner.Result, kind: StalkwareScanner.Gran
 private fun profilesCaveat(r: StalkwareScanner.Result): String = buildString {
     r.ownProfile?.let { append("Clairix is installed in $it, so none of the phone's main apps were checked. ") }
     append(
-        "Only apps in the profile Clairix runs in were checked: apps in a work profile, Secure Folder, " +
-            "Private space or a second space were not."
+        "Only apps in the profile Clairix runs in were checked: apps in a work profile, Secure Folder, Private space or a second space were not."
     )
     if (r.otherProfiles > 0) {
         append(" This phone has ${r.otherProfiles} other ${if (r.otherProfiles == 1) "profile" else "profiles"}; look through its apps yourself.")
@@ -286,27 +279,22 @@ private fun LazyListScope.managedBySection(
 ) {
     if (r.owners.isEmpty()) return
     val confirmed = r.owners.all { r.status(it.kind, it.packageName) == StalkwareScanner.GrantStatus.YOURS }
-    item(key = "§owner-hdr") { SectionHeader("Managed by", tone = if (confirmed) Tone.Accent else Tone.Danger) }
+    item(key = "§owner-hdr") { SectionHeader(stringResource(R.string.scan_managed_by), tone = if (confirmed) Tone.Accent else Tone.Danger) }
     items(r.owners, key = { "owner|${it.packageName}" }) { owner ->
         val label = remember(owner.packageName) { StalkwareScanner.appLabel(context, owner.packageName) }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (r.status(owner.kind, owner.packageName) == StalkwareScanner.GrantStatus.YOURS) {
                 Notice(
                     Tone.Info,
-                    "You confirmed you enrolled this phone with $label. It can still install and remove apps, hide apps, " +
-                        "set policies and install certificates.",
-                    title = "Managed by $label"
+                    stringResource(R.string.scan_you_confirmed_you_enrolled_this_phone, label),
+                    title = stringResource(R.string.scan_managed_by_2, label)
                 )
             } else {
                 Notice(
                     Tone.Danger,
-                    (if (owner.deviceOwner) "$label is this phone's device owner. "
-                    else "$label owns the profile Clairix runs in, as Family Link supervision and some work set-ups do. ") +
-                        "An owner can install and remove apps without asking, hide apps, set location and other policies, " +
-                        "and install certificates that let it read encrypted traffic, and Settings does not let you switch it " +
-                        "off. Did you enrol this phone yourself (a work phone, or Family Link you set up)? If you did, confirm " +
-                        "it below. If you did not, someone else enrolled it.",
-                    title = "This phone is managed by $label"
+                    stringResource(R.string.scan_an_owner_can_install_and_remove, (if (owner.deviceOwner) stringResource(R.string.scan_is_this_phones_device_owner, label)
+                    else stringResource(R.string.scan_owns_the_profile_clairix_runs_in, label))),
+                    title = stringResource(R.string.scan_this_phone_is_managed_by, label)
                 )
             }
             GrantRow(r, owner.kind, owner.packageName, onMine) {
@@ -314,7 +302,7 @@ private fun LazyListScope.managedBySection(
                     packageName = owner.packageName,
                     flagged = r.apps.firstOrNull { it.packageName == owner.packageName },
                     context = context,
-                    actionLabel = "Open in Settings",
+                    actionLabel = stringResource(R.string.scan_open_in_settings),
                     action = StalkwareScanner.appDetailsIntent(owner.packageName),
                 )
             }
@@ -357,22 +345,19 @@ private fun LazyListScope.accessSections(
 
     grantList(
         StalkwareScanner.GrantKind.ACCESSIBILITY, "Accessibility services",
-        "An accessibility service reads every screen and can tap for you. Screen readers, password managers and " +
-            "automation apps use one; so does almost every stalkerware app.",
+        "An accessibility service reads every screen and can tap for you. Screen readers, password managers and automation apps use one; so does almost every stalkerware app.",
         r.accessibilityServices, Settings.ACTION_ACCESSIBILITY_SETTINGS, "Accessibility settings"
     )
     grantList(
         StalkwareScanner.GrantKind.NOTIFICATION_LISTENER, "Notification access",
-        "These apps read every notification as it arrives, one-time codes and message previews included. Watches, " +
-            "car systems and messaging apps use it.",
+        "These apps read every notification as it arrives, one-time codes and message previews included. Watches, car systems and messaging apps use it.",
         r.notificationListeners, Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS, "Notification access settings"
     )
     if (r.vpnApps.isNotEmpty()) {
-        item(key = "§vpn-hdr") { SectionHeader("Apps that can be the VPN", supporting = "${r.vpnApps.size}") }
+        item(key = "§vpn-hdr") { SectionHeader(stringResource(R.string.scan_apps_that_can_be_the_vpn), supporting = "${r.vpnApps.size}") }
         item(key = "§vpn-note") {
             Text(
-                "Once allowed, any of these can see all of the phone's traffic. Being able to is not the same as being on: " +
-                    "the VPN settings page shows which one is connected or always on.",
+                stringResource(R.string.scan_once_allowed_any_of_these_can),
                 style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
@@ -383,12 +368,12 @@ private fun LazyListScope.accessSections(
                     packageName = pkg,
                     flagged = r.apps.firstOrNull { it.packageName == pkg },
                     context = context,
-                    actionLabel = "VPN settings",
+                    actionLabel = stringResource(R.string.scan_vpn_settings),
                     action = Intent(Settings.ACTION_VPN_SETTINGS),
                 )
                 if (pkg in r.preloadedVpns) {
                     Text(
-                        "Part of the phone's own system.",
+                        stringResource(R.string.scan_part_of_the_phones_own_system),
                         style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle,
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
@@ -399,7 +384,7 @@ private fun LazyListScope.accessSections(
     // The clean card carries this when nothing needs a look; otherwise it is said here.
     if (!r.clean) {
         item(key = "§profiles") {
-            Notice(Tone.Neutral, profilesCaveat(r), title = "Not checked")
+            Notice(Tone.Neutral, profilesCaveat(r), title = stringResource(R.string.scan_not_checked))
         }
     }
 }
@@ -427,14 +412,14 @@ private fun GrantRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "You marked this ${kind.label} as yours.",
+                    stringResource(R.string.scan_you_marked_this_as_yours, kind.label),
                     style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle,
                     modifier = Modifier.weight(1f)
                 )
-                GhostButton("Undo", onClick = { onMine(kind, packageName, false) }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.scan_undo), onClick = { onMine(kind, packageName, false) }, tone = Tone.Neutral)
             }
             !listed && (status == StalkwareScanner.GrantStatus.UNKNOWN || status == StalkwareScanner.GrantStatus.CONFIRM) -> GhostButton(
-                if (status == StalkwareScanner.GrantStatus.CONFIRM) "I enrolled this phone myself" else "This is mine",
+                if (status == StalkwareScanner.GrantStatus.CONFIRM) stringResource(R.string.scan_i_enrolled_this_phone_myself) else stringResource(R.string.scan_this_is_mine),
                 onClick = { onMine(kind, packageName, true) },
                 tone = Tone.Neutral
             )
@@ -457,21 +442,19 @@ private fun MarkAsMineDialog(
         containerColor = ClairixTheme.colors.surfaceRaised,
         title = {
             Text(
-                if (enrolled) "Did you enrol this phone?" else "Is $label yours?",
+                if (enrolled) stringResource(R.string.scan_did_you_enrol_this_phone) else stringResource(R.string.scan_is_yours, label),
                 style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text
             )
         },
         text = {
             Text(
-                (if (enrolled) "Only if you set this phone up with $label yourself: a work or school phone, or Family Link you set up. "
-                else "Only if you installed $label and switched on its ${kind.label} yourself. ") +
-                    "Clairix then lists it as yours and stops counting it as an issue. If someone else set it up, leave it. " +
-                    "The mark goes on the timeline and can be undone here.",
+                stringResource(R.string.scan_clairix_then_lists_it_as_yours, (if (enrolled) stringResource(R.string.scan_only_if_you_set_this_phone, label)
+                else stringResource(R.string.scan_only_if_you_installed_and_switched, label, kind.label))),
                 style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted
             )
         },
-        confirmButton = { GhostButton(if (enrolled) "I enrolled it" else "It is mine", onClick = onConfirm, tone = Tone.Accent) },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral) }
+        confirmButton = { GhostButton(if (enrolled) stringResource(R.string.scan_i_enrolled_it) else stringResource(R.string.scan_it_is_mine), onClick = onConfirm, tone = Tone.Accent) },
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral) }
     )
 }
 
@@ -500,7 +483,7 @@ private fun GrantCard(
                 Text(packageName, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
             }
             if (flagged != null) StatusPill("${flagged.severity.name} · ${flagged.score}", flagged.severity.tone())
-            else if (known) StatusPill("Known app", Tone.Safe)
+            else if (known) StatusPill(stringResource(R.string.scan_known_app), Tone.Safe)
         }
         val ownGate = SafetyFirst.gatesSettings(flagged != null, known)
         val subject = if (ownGate) packageName else sharedSubject
@@ -525,10 +508,10 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
             }
             StatusPill("${app.severity.name} · ${app.score}", app.severity.tone())
         }
-        KeyValueRow("Installed", tDay(app.installTs))
-        KeyValueRow("Installer", app.installerPackage ?: if (app.sideloaded) "unknown (sideloaded)" else "—")
-        if (app.imeEnabled) KeyValueRow("Keyboard", "enabled")
-        if (app.deviceAdminActive) KeyValueRow("Device admin", "active")
+        KeyValueRow(stringResource(R.string.scan_installed), tDay(app.installTs))
+        KeyValueRow(stringResource(R.string.scan_installer), app.installerPackage ?: if (app.sideloaded) stringResource(R.string.scan_unknown_sideloaded) else "—")
+        if (app.imeEnabled) KeyValueRow(stringResource(R.string.scan_keyboard), "enabled")
+        if (app.deviceAdminActive) KeyValueRow(stringResource(R.string.scan_device_admin), "active")
         if (app.reasons.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 for (reason in app.reasons) {
@@ -536,7 +519,7 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
                 }
             }
         }
-        FlaggedAppButton("Open in settings", app.packageName, flagged = app) {
+        FlaggedAppButton(stringResource(R.string.scan_open_in_settings_2), app.packageName, flagged = app) {
             openExternal(context, StalkwareScanner.appDetailsIntent(app.packageName))
         }
     }
@@ -575,7 +558,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
         checking = true
         scope.launch {
             runCatching { TlsCanary.check(context).collect { tls = it } }
-                .onFailure { tls = TlsCanaryResult(intercepted = false, method = null, proxyHost = null, error = "Check failed: ${it.message}") }
+                .onFailure { tls = TlsCanaryResult(intercepted = false, method = null, proxyHost = null, error = context.getString(R.string.scan_check_failed, it.message.toString())) }
             last = TlsCanary.lastResult(context)
             next = TlsCanary.nextRun(context)
             pinned = TlsCanary.pinned(context)
@@ -589,19 +572,17 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             onDismissRequest = { confirmPin = false },
             shape = ClairixShapes.Sheet,
             containerColor = ClairixTheme.colors.surfaceRaised,
-            title = { Text("Pin this certificate?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            title = { Text(stringResource(R.string.scan_pin_this_certificate), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
             text = {
                 Text(
-                    "Only for your own relay, served with a certificate from your own private CA. " +
-                    "From now on, any other key from ${pinCandidate.relayHost} is reported as interception. " +
-                    "If you did not set up this relay yourself, do not pin it: someone may be answering in its place.",
+                    stringResource(R.string.scan_only_for_your_own_relay_served, pinCandidate.relayHost),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
                 GhostButton(
-                    "Pin certificate",
+                    stringResource(R.string.scan_pin_certificate),
                     onClick = {
                         confirmPin = false
                         TlsCanary.pinManually(context, pinCandidate.relayHost, pinCandidate.observedSpki)
@@ -612,70 +593,65 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                 )
             },
             dismissButton = {
-                GhostButton("Cancel", onClick = { confirmPin = false }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.settings_cancel), onClick = { confirmPin = false }, tone = Tone.Neutral)
             }
         )
     }
 
-    ToolPageList(title = "Certificates & TLS", onBack = onBack) {
-        item(key = "§tls-hdr") { SectionHeader("TLS canary") }
+    ToolPageList(title = stringResource(R.string.scan_certificates_tls), onBack = onBack) {
+        item(key = "§tls-hdr") { SectionHeader(stringResource(R.string.scan_tls_canary)) }
         item(key = "§tls") {
             val r = tls
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Relay connection", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                        Text(stringResource(R.string.scan_relay_connection), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
-                            "Opens TLS to the comms relay — directly and, when a proxy is set, through the proxy — " +
-                            "and compares the server's key with the one pinned on first contact. An intercepting " +
-                            "proxy cannot present the same key.",
+                            stringResource(R.string.scan_opens_tls_to_the_comms_relay),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
                     when {
                         r == null -> Unit
-                        r.intercepted -> StatusPill("Intercepted", Tone.Danger)
-                        r.untrustedUnpinned -> StatusPill("Not trusted", Tone.Danger)
-                        r.proxyOnly -> StatusPill("Proxy", Tone.Caution)
-                        r.error != null && r.observedSpki == null -> StatusPill("No result", Tone.Caution)
-                        r.pinnedNow -> StatusPill("Pinned", Tone.Info)
-                        else -> StatusPill("Clear", Tone.Safe)
+                        r.intercepted -> StatusPill(stringResource(R.string.scan_intercepted), Tone.Danger)
+                        r.untrustedUnpinned -> StatusPill(stringResource(R.string.scan_not_trusted), Tone.Danger)
+                        r.proxyOnly -> StatusPill(stringResource(R.string.scan_proxy), Tone.Caution)
+                        r.error != null && r.observedSpki == null -> StatusPill(stringResource(R.string.scan_no_result), Tone.Caution)
+                        r.pinnedNow -> StatusPill(stringResource(R.string.scan_pinned), Tone.Info)
+                        else -> StatusPill(stringResource(R.string.comms_clear), Tone.Safe)
                     }
                 }
                 val lastRun = last
                 if (lastRun != null) {
                     val alarming = lastRun.second.startsWith("INTERCEPTED") || lastRun.second.startsWith("NOT PUBLICLY TRUSTED")
-                    KeyValueRow("Last result", lastRun.second, valueColor = if (alarming) ClairixTheme.colors.danger else ClairixTheme.colors.textMuted)
-                    if (lastRun.first > 0) KeyValueRow("Checked", tFull(lastRun.first))
+                    KeyValueRow(stringResource(R.string.scan_last_result), lastRun.second, valueColor = if (alarming) ClairixTheme.colors.danger else ClairixTheme.colors.textMuted)
+                    if (lastRun.first > 0) KeyValueRow(stringResource(R.string.scan_checked), tFull(lastRun.first))
                 }
                 // The scheduled run: every four hours and on each network change, for as
                 // long as comms are set up or the scanner is on. Nothing armed means neither is.
                 val nextRun = next
                 if (nextRun != null) {
-                    KeyValueRow("Next check", tFull(nextRun))
+                    KeyValueRow(stringResource(R.string.scan_next_check), tFull(nextRun))
                 } else {
-                    KeyValueRow("Next check", "Not scheduled: runs every four hours while Comms is set up or the scanner is on", mono = false)
+                    KeyValueRow(stringResource(R.string.scan_next_check), stringResource(R.string.scan_not_scheduled_runs_every_four_hours), mono = false)
                 }
-                pinned?.let { (host, pin) -> KeyValueRow("Pinned ($host)", pin.take(24) + "…") }
+                pinned?.let { (host, pin) -> KeyValueRow(stringResource(R.string.scan_pinned_2, host), pin.take(24) + "…") }
                 if (pinned != null) {
                     ToggleRow(
-                        title = "Refuse the relay if its key changes",
-                        subtitle = "Every comms connection, not only this check, is held to the pinned key: a different one is " +
-                            "refused even when the phone's trust store accepts it, which is what a coerced certificate " +
-                            "authority would produce. Comms then stop until you forget the pin here. Expect that once " +
-                            "whenever the relay's certificate is renewed with a new key.",
+                        title = stringResource(R.string.scan_refuse_the_relay_if_its_key),
+                        subtitle = stringResource(R.string.scan_every_comms_connection_not_only_this),
                         checked = strict,
                         onCheckedChange = { on -> strict = on; TlsCanary.setStrict(context, on) }
                     )
                 }
                 if (r != null) {
-                    r.relayHost?.let { KeyValueRow("Relay", it) }
-                    r.observedSpki?.let { KeyValueRow("Observed key", it.take(24) + "…") }
-                    r.observedIssuer?.let { KeyValueRow("Issuer", it) }
-                    r.chainTrusted?.let { KeyValueRow("Chain trusted", if (it) "yes" else "no", valueColor = if (it) ClairixTheme.colors.safe else ClairixTheme.colors.danger) }
-                    r.proxyHost?.let { KeyValueRow("Proxy", it, valueColor = ClairixTheme.colors.caution) }
-                    r.viaProxySpki?.let { KeyValueRow("Key through proxy", it.take(24) + "…", valueColor = if (r.proxyVerified == true) ClairixTheme.colors.safe else ClairixTheme.colors.danger) }
+                    r.relayHost?.let { KeyValueRow(stringResource(R.string.comms_relay), it) }
+                    r.observedSpki?.let { KeyValueRow(stringResource(R.string.scan_observed_key), it.take(24) + "…") }
+                    r.observedIssuer?.let { KeyValueRow(stringResource(R.string.scan_issuer), it) }
+                    r.chainTrusted?.let { KeyValueRow(stringResource(R.string.scan_chain_trusted), if (it) "yes" else "no", valueColor = if (it) ClairixTheme.colors.safe else ClairixTheme.colors.danger) }
+                    r.proxyHost?.let { KeyValueRow(stringResource(R.string.scan_proxy), it, valueColor = ClairixTheme.colors.caution) }
+                    r.viaProxySpki?.let { KeyValueRow(stringResource(R.string.scan_key_through_proxy), it.take(24) + "…", valueColor = if (r.proxyVerified == true) ClairixTheme.colors.safe else ClairixTheme.colors.danger) }
                     r.method?.let {
                         val tone = when {
                             r.intercepted || r.untrustedUnpinned -> ClairixTheme.colors.danger
@@ -692,10 +668,10 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                 if (checking) {
                     ClairixProgressBar(null)
                 } else {
-                    SecondaryButton("Check now", onClick = { checkNow() }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                    SecondaryButton(stringResource(R.string.scan_check_now), onClick = { checkNow() }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
                     if (r != null && r.untrustedUnpinned && r.observedSpki != null) {
                         GhostButton(
-                            "Pin this certificate (my own relay)",
+                            stringResource(R.string.scan_pin_this_certificate_my_own_relay),
                             onClick = { confirmPin = true },
                             tone = Tone.Neutral
                         )
@@ -703,7 +679,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                 }
                 if (pinned != null) {
                     GhostButton(
-                        "Forget the pinned key (relay rotated its key)",
+                        stringResource(R.string.scan_forget_the_pinned_key_relay_rotated),
                         onClick = { TlsCanary.resetPin(context); pinned = null },
                         tone = Tone.Neutral
                     )
@@ -711,17 +687,15 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§ca-hdr") { SectionHeader("Trust store audit") }
+        item(key = "§ca-hdr") { SectionHeader(stringResource(R.string.scan_trust_store_audit)) }
         when (val state = CaAuditScanner.page(audit)) {
-            CaPage.Reading -> item(key = "§ca-progress") { LoadingBlock("Reading the trust store…") }
+            CaPage.Reading -> item(key = "§ca-progress") { LoadingBlock(stringResource(R.string.scan_reading_the_trust_store)) }
             // Only when both sources were read: a read that failed is never shown as a clean store.
             CaPage.Clean -> item(key = "§ca-clean") {
                 ClairixCard {
-                    Text("No unexpected root certificates", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.safe)
+                    Text(stringResource(R.string.scan_no_unexpected_root_certificates), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.safe)
                     Text(
-                        "Nothing was installed by hand, and every system root is one Android ships with. " +
-                        "A hand-installed root is how HTTPS traffic is read through a proxy by someone " +
-                        "who has had the phone and its PIN.",
+                        stringResource(R.string.scan_nothing_was_installed_by_hand_and),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -734,7 +708,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                         Tone.Caution,
                         state.failureDetail.orEmpty(),
                         title = failure,
-                        action = { GhostButton("Read it again", onClick = { readTrustStore() }, tone = Tone.Neutral) }
+                        action = { GhostButton(stringResource(R.string.scan_read_it_again), onClick = { readTrustStore() }, tone = Tone.Neutral) }
                     )
                 }
                 if (state.unreadableUser > 0) item(key = "§ca-unreadable") {
@@ -745,7 +719,7 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                             "${if (n == 1) "it" else "they"} would not open, so nothing more can be shown here. Unless you " +
                             "installed ${if (n == 1) "it" else "them"} yourself, remove ${if (n == 1) "it" else "them"} under " +
                             "Settings → Security → Encryption & credentials → User credentials.",
-                        title = if (n == 1) "1 certificate installed by hand" else "$n certificates installed by hand"
+                        title = if (n == 1) stringResource(R.string.scan_1_certificate_installed_by_hand) else stringResource(R.string.scan_certificates_installed_by_hand, n)
                     )
                 }
                 items(state.roots, key = { "ca|${it.fingerprint}" }) { ca ->
@@ -761,9 +735,9 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
                             )
                             StatusPill(ca.source.uppercase(Locale.US), ca.severity.tone())
                         }
-                        KeyValueRow("Issuer", CaAuditScanner.cn(ca.issuerDn) ?: ca.issuerDn)
+                        KeyValueRow(stringResource(R.string.scan_issuer), CaAuditScanner.cn(ca.issuerDn) ?: ca.issuerDn)
                         KeyValueRow("SHA-256", ca.fingerprint.take(23) + "…")
-                        KeyValueRow("Valid", "${tDay(ca.validFrom)} – ${tDay(ca.validTo)}")
+                        KeyValueRow(stringResource(R.string.scan_valid), "${tDay(ca.validFrom)} – ${tDay(ca.validTo)}")
                         if (ca.reason.isNotBlank()) {
                             Text(ca.reason, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                         }
@@ -819,13 +793,10 @@ internal fun rememberAudioInputs(): AudioInputs {
  */
 internal fun LazyListScope.audioInputItems(inputs: AudioInputs) {
     if (inputs.isEmpty) return
-    item(key = "audio_inputs_hdr") { SectionHeader("Headsets and microphones") }
+    item(key = "audio_inputs_hdr") { SectionHeader(stringResource(R.string.scan_headsets_and_microphones)) }
     item(key = "audio_inputs_note") {
         Text(
-            "A Bluetooth or USB microphone that connects while nothing is playing is listed here and put on the " +
-                "timeline. It sends a notification only if it becomes the phone's call audio with the screen off. One " +
-                "you mark as yours is not reported again, and a paired one that was already connected on an earlier " +
-                "day is left alone.",
+            stringResource(R.string.scan_a_bluetooth_or_usb_microphone_that),
             style = MaterialTheme.typography.bodyMedium,
             color = ClairixTheme.colors.textSubtle,
             modifier = Modifier.padding(horizontal = 4.dp)
@@ -842,10 +813,10 @@ private fun AudioInputRow(e: AudioRouteEvent, onMine: () -> Unit) {
     val tone = alerted?.tone() ?: Tone.Neutral
     val line = when {
         alerted == Severity.MEDIUM ->
-            "Became the phone's call audio with the screen off and no call up, ${tFull(e.ts)}."
+            stringResource(R.string.scan_became_the_phones_call_audio_with, tFull(e.ts))
         alerted != null ->
-            "Connected while nothing was playing and no call was up, ${tFull(e.ts)}. On the timeline, without a notification."
-        else -> "Already connected when scanning was switched on, so it was listed, not reported."
+            stringResource(R.string.scan_connected_while_nothing_was_playing_and, tFull(e.ts))
+        else -> stringResource(R.string.scan_already_connected_when_scanning_was_switched)
     }
     ClairixCard(tone = tone, spacing = 4.dp) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -857,7 +828,7 @@ private fun AudioInputRow(e: AudioRouteEvent, onMine: () -> Unit) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            StatusPill(if (alerted != null) levelLabel(alerted.name) else "Listed", tone)
+            StatusPill(if (alerted != null) levelLabel(alerted.name) else stringResource(R.string.scan_listed), tone)
         }
         Text(
             e.deviceTypeLabel + (e.address?.let { " · $it" } ?: ""),
@@ -865,7 +836,7 @@ private fun AudioInputRow(e: AudioRouteEvent, onMine: () -> Unit) {
             color = c.textSubtle
         )
         Text(line, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
-        GhostButton("This is my headset", onClick = onMine, tone = Tone.Neutral)
+        GhostButton(stringResource(R.string.scan_this_is_my_headset), onClick = onMine, tone = Tone.Neutral)
     }
 }
 
@@ -882,13 +853,13 @@ private fun MarkedAudioRow(m: AudioRouteMonitor.Mark, onNotMine: () -> Unit) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            StatusPill("Yours", Tone.Safe)
+            StatusPill(stringResource(R.string.scan_yours), Tone.Safe)
         }
         Text(
-            "Marked as your headset" + (if (m.at > 0L) " " + tFull(m.at) else "") + ": not reported again.",
+            stringResource(R.string.scan_marked_as_your_headset_not_reported, (if (m.at > 0L) " " + tFull(m.at) else "")),
             style = MaterialTheme.typography.bodyMedium,
             color = c.textMuted
         )
-        GhostButton("Not mine", onClick = onNotMine, tone = Tone.Neutral)
+        GhostButton(stringResource(R.string.scan_not_mine), onClick = onNotMine, tone = Tone.Neutral)
     }
 }

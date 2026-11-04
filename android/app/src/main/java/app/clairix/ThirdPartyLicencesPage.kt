@@ -1,6 +1,7 @@
 package app.clairix
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -15,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.ThirdPartyNotices.Component
@@ -62,32 +64,29 @@ internal fun ThirdPartyLicencesPage(onBack: () -> Unit) {
         return
     }
 
-    ToolPageList(title = "Third-party licences", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.settings_third_party_licences), onBack = onBack) {
         when {
             unreadable -> item(key = "§unreadable") {
                 EmptyState(
-                    title = "The list could not be read",
-                    body = "This build's licence list is missing or damaged. The licences are also listed in " +
-                        "THIRD-PARTY-NOTICES.md in Clairix's source code, at github.com/jakes1345/Clairix.",
+                    title = stringResource(R.string.settings_the_list_could_not_be_read),
+                    body = stringResource(R.string.settings_this_builds_licence_list_is_missing),
                     tone = Tone.Caution
                 )
             }
-            list == null -> item(key = "§loading") { LoadingBlock("Reading the licences") }
+            list == null -> item(key = "§loading") { LoadingBlock(stringResource(R.string.settings_reading_the_licences)) }
             else -> {
                 item(key = "§intro") {
                     ClairixCard(spacing = 6.dp) {
                         Text(
-                            "Clairix is built on the open-source work below, each used under its own licence. " +
-                                "Tap one to read its licence in full. This list was made when this copy of the app " +
-                                "was built, from the licences the libraries publish and the licence files of the Rust crates.",
+                            stringResource(R.string.settings_clairix_is_built_on_the_open),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
                 }
-                section(list, Origin.ANDROID, "Android libraries") { openKey = keyOf(it) }
-                section(list, Origin.NATIVE, "Compiled into those libraries") { openKey = keyOf(it) }
-                section(list, Origin.RUST, "Rust crates in the encryption library") { openKey = keyOf(it) }
+                section(list, Origin.ANDROID, R.string.settings_android_libraries) { openKey = keyOf(it) }
+                section(list, Origin.NATIVE, R.string.settings_compiled_into_those_libraries) { openKey = keyOf(it) }
+                section(list, Origin.RUST, R.string.settings_rust_crates_in_the_encryption_library) { openKey = keyOf(it) }
             }
         }
     }
@@ -104,35 +103,32 @@ internal fun AboutCredits(onOpenLicences: () -> Unit) {
     if (BuildConfig.FULL_ACCESS) {
         val tiles by MapTiles.config.collectAsStateWithLifecycle()
         Text(
-            "Map data © OpenStreetMap contributors, available under the Open Database Licence (ODbL) " +
-                "at openstreetmap.org/copyright. The map's tiles come from ${tiles.name}'s tile server " +
-                "(${tiles.attribution}), and an online place search from OpenStreetMap's Nominatim.",
+            stringResource(R.string.settings_map_data_openstreetmap_contributors_available_un, tiles.name, tiles.attribution),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.textSubtle
         )
     }
     Text(
-        "The libraries Clairix is built with keep their own licences: Android libraries, the code " +
-            "compiled into them, and the Rust crates of the encryption library.",
+        stringResource(R.string.settings_the_libraries_clairix_is_built_with),
         style = MaterialTheme.typography.bodyMedium,
         color = colors.textSubtle
     )
-    SecondaryButton("Third-party licences", onClick = onOpenLicences, modifier = Modifier.fillMaxWidth())
+    SecondaryButton(stringResource(R.string.settings_third_party_licences), onClick = onOpenLicences, modifier = Modifier.fillMaxWidth())
 }
 
 private fun keyOf(c: Component): String = "${c.origin}:${c.id}:${c.version.orEmpty()}"
 
-private fun LazyListScope.section(list: ThirdPartyNotices, origin: Origin, title: String, onOpen: (Component) -> Unit) {
+private fun LazyListScope.section(list: ThirdPartyNotices, origin: Origin, @StringRes title: Int, onOpen: (Component) -> Unit) {
     val components = list.from(origin)
     if (components.isEmpty()) return
-    item(key = "§hdr-$origin") { SectionHeader(title, supporting = components.size.toString()) }
+    item(key = "§hdr-$origin") { SectionHeader(stringResource(title), supporting = components.size.toString()) }
     items(components, key = { keyOf(it) }) { c ->
         ListGroup {
             ListRow(
                 title = c.name + (c.version?.let { " $it" } ?: ""),
                 subtitle = list.licencesOf(c).joinToString(" · ") { it.name },
                 onClick = { onOpen(c) },
-                onClickLabel = "Read the licence"
+                onClickLabel = stringResource(R.string.settings_read_the_licence)
             )
         }
     }
@@ -147,8 +143,8 @@ private fun ComponentLicences(list: ThirdPartyNotices, c: Component, onBack: () 
             ClairixCard(spacing = 4.dp) {
                 Text(c.name + (c.version?.let { " $it" } ?: ""), style = MaterialTheme.typography.titleSmall, color = colors.text)
                 if (c.id != c.name) Text(c.id, style = MaterialTheme.typography.mono, color = colors.textMuted)
-                c.by?.let { Text("By $it", style = MaterialTheme.typography.bodyMedium, color = colors.textSubtle) }
-                c.inside?.let { Text("Compiled into $it", style = MaterialTheme.typography.bodyMedium, color = colors.textSubtle) }
+                c.by?.let { Text(stringResource(R.string.settings_by, it), style = MaterialTheme.typography.bodyMedium, color = colors.textSubtle) }
+                c.inside?.let { Text(stringResource(R.string.settings_compiled_into, it), style = MaterialTheme.typography.bodyMedium, color = colors.textSubtle) }
                 c.website?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.textSubtle) }
                 c.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.textSubtle) }
             }
@@ -159,7 +155,7 @@ private fun ComponentLicences(list: ThirdPartyNotices, c: Component, onBack: () 
                     Text(licence.name, style = MaterialTheme.typography.titleSmall, color = colors.text)
                     licence.url?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.textSubtle) }
                     Text(
-                        licence.text ?: "The full text is at the address above.",
+                        licence.text ?: stringResource(R.string.settings_the_full_text_is_at_the),
                         style = if (licence.text != null) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
                         color = colors.textMuted
                     )

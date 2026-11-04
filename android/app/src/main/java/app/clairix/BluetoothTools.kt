@@ -18,6 +18,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,88 +73,79 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
         value = withContext(Dispatchers.IO) { ScanService.accessoryUse(context) }
     }
 
-    ToolPageList(title = "Bluetooth exposure", onBack = onBack) {
+    ToolPageList(title = stringResource(R.string.scan_bluetooth_exposure), onBack = onBack) {
         item(key = "§intro") {
             Notice(
                 Tone.Info,
-                title = "What a sensor by the road gets",
-                text = "A Bluetooth receiver on a pole, in a shop or in a patrol car logs every address it hears, " +
-                    "with the time. It cannot open the phone or read anything off it. The phone itself advertises on an " +
-                    "address Android changes every quarter of an hour, so it is hard to follow; your accessories are not. " +
-                    "A car's hands-free, most earbuds and many watches keep one address for life, and it is logged " +
-                    "at every sensor they pass. Flock's plate readers themselves do not listen for Bluetooth; separate " +
-                    "sensors do, and the two kinds of record are easy to join."
+                title = stringResource(R.string.scan_what_a_sensor_by_the_road),
+                text = stringResource(R.string.scan_a_bluetooth_receiver_on_a_pole)
             )
         }
 
-        item(key = "§phone-hdr") { SectionHeader("Your phone") }
+        item(key = "§phone-hdr") { SectionHeader(stringResource(R.string.scan_your_phone)) }
         item(key = "§phone") {
             val s = snapshot
             ClairixCard {
                 if (s == null) {
-                    Text("Reading the Bluetooth adapter…", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+                    Text(stringResource(R.string.scan_reading_the_bluetooth_adapter), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                 } else if (!s.hasAdapter) {
-                    Text("This phone has no Bluetooth adapter.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+                    Text(stringResource(R.string.scan_this_phone_has_no_bluetooth_adapter), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                 } else {
-                    KeyValueRow("Bluetooth", if (s.enabled) "On" else "Off")
+                    KeyValueRow(stringResource(R.string.scan_bluetooth), if (s.enabled) stringResource(R.string.comms_on) else stringResource(R.string.comms_off))
                     if (!s.readable) {
                         Text(
-                            "The Nearby devices permission is needed to read the name and the paired list.",
+                            stringResource(R.string.scan_the_nearby_devices_permission_is_needed),
                             style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                         )
                     } else {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                KeyValueRow("Name", s.name?.let { "\"$it\"" } ?: "Unknown")
+                                KeyValueRow(stringResource(R.string.comms_name), s.name?.let { "\"$it\"" } ?: stringResource(R.string.scan_unknown))
                             }
-                            if (s.personalName) StatusPill("Personal", Tone.Danger)
-                            else if (s.name != null) StatusPill("Anonymous", Tone.Safe)
+                            if (s.personalName) StatusPill(stringResource(R.string.scan_personal), Tone.Danger)
+                            else if (s.name != null) StatusPill(stringResource(R.string.scan_anonymous), Tone.Safe)
                         }
                         if (s.personalName) {
                             Text(
-                                "The name is sent to every device in range whenever Bluetooth is on and reads like a " +
-                                    "person's. Anyone with a phone learns who is in the room, and in a car park, whose car. " +
-                                    "The model name, \"${s.modelName}\", is what thousands of identical phones are called.",
+                                stringResource(R.string.scan_the_name_is_sent_to_every, s.modelName),
                                 style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                             )
                         }
                     }
                     KeyValueRow(
-                        "Discoverable",
+                        stringResource(R.string.scan_discoverable),
                         when {
-                            !s.enabled -> "No, radio off"
-                            s.discoverable -> "YES, answering discovery now"
-                            s.scanMode == null -> "Unknown"
-                            else -> "No, paired devices only"
+                            !s.enabled -> stringResource(R.string.scan_no_radio_off)
+                            s.discoverable -> stringResource(R.string.scan_yes_answering_discovery_now)
+                            s.scanMode == null -> stringResource(R.string.scan_unknown)
+                            else -> stringResource(R.string.scan_no_paired_devices_only)
                         },
                         valueColor = if (s.discoverable) ClairixTheme.colors.caution else null
                     )
                     if (s.discoverable) {
                         Text(
-                            "While discoverable the phone answers any scanner with its fixed Classic address and its name. " +
-                                "Android does this only while the Bluetooth settings page is open; leave that page.",
+                            stringResource(R.string.scan_while_discoverable_the_phone_answers_any),
                             style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    KeyValueRow("Advertising address", "Rotates (Android randomises it)")
+                    KeyValueRow(stringResource(R.string.scan_advertising_address), stringResource(R.string.scan_rotates_android_randomises_it))
                     Text(
-                        "Android keeps the phone's fixed address for paired devices and advertises on a private one that " +
-                            "changes about every 15 minutes, so a sensor cannot string the phone's own packets together for long.",
+                        stringResource(R.string.scan_android_keeps_the_phones_fixed_address),
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                     )
                     renameMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (s.readable && s.personalName && s.enabled) {
-                            PrimaryButton("Use the model name", onClick = {
+                            PrimaryButton(stringResource(R.string.scan_use_the_model_name), onClick = {
                                 scope.launch {
                                     val ok = withContext(Dispatchers.IO) { BluetoothExposure.renameToModel(context) }
-                                    renameMessage = if (ok) "Renamed to \"${BluetoothExposure.defaultName()}\". Paired devices keep working."
+                                    renameMessage = if (ok) context.getString(R.string.scan_renamed_to_paired_devices_keep_working, BluetoothExposure.defaultName())
                                     else "The phone refused the rename. Settings → Connected devices → Device name does the same."
                                     refresh++
                                 }
                             })
                         }
-                        SecondaryButton("Bluetooth settings", onClick = {
+                        SecondaryButton(stringResource(R.string.scan_bluetooth_settings), onClick = {
                             openExternal(context, Intent(BluetoothExposure.SETTINGS_ACTION))
                         })
                     }
@@ -164,7 +156,7 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
         item(key = "§acc-hdr") {
             val s = snapshot
             SectionHeader(
-                "Paired accessories",
+                stringResource(R.string.scan_paired_accessories),
                 supporting = s?.let { if (it.accessories.isEmpty()) null else "${it.connected.size} connected" }
             )
         }
@@ -172,9 +164,9 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
         if (s != null && s.readable && s.accessories.isEmpty()) {
             item(key = "§acc-none") {
                 ClairixCard {
-                    Text("Nothing is paired with this phone.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+                    Text(stringResource(R.string.scan_nothing_is_paired_with_this_phone), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                     Text(
-                        "With no accessory on a fixed address, the phone's Bluetooth gives a sensor almost nothing to keep.",
+                        stringResource(R.string.scan_with_no_accessory_on_a_fixed),
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                     )
                 }
@@ -182,9 +174,7 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
         } else if (s != null && s.accessories.isNotEmpty()) {
             item(key = "§acc-note") {
                 Text(
-                    "An accessory can only be logged while it is switched on and in range of the sensor. Turning the " +
-                        "car's Bluetooth off for a drive, or leaving earbuds in their case, is the whole fix; an app cannot " +
-                        "change an accessory's address. Forgetting one here opens the system page.",
+                    stringResource(R.string.scan_an_accessory_can_only_be_logged),
                     style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                 )
             }
@@ -208,10 +198,10 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
                             trailing = {
                                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     when {
-                                        a.connected -> StatusPill("Connected", tone)
-                                        a.fixedAddress == true -> StatusPill("Fixed", tone)
-                                        a.fixedAddress == false -> StatusPill("Rotates", tone)
-                                        else -> StatusPill("Unknown", tone)
+                                        a.connected -> StatusPill(stringResource(R.string.scan_connected), tone)
+                                        a.fixedAddress == true -> StatusPill(stringResource(R.string.scan_fixed), tone)
+                                        a.fixedAddress == false -> StatusPill(stringResource(R.string.scan_rotates), tone)
+                                        else -> StatusPill(stringResource(R.string.scan_unknown), tone)
                                     }
                                     Text(a.address, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                 }
@@ -222,17 +212,16 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
             }
         }
 
-        item(key = "§drives-hdr") { SectionHeader("On your drives") }
+        item(key = "§drives-hdr") { SectionHeader(stringResource(R.string.scan_on_your_drives)) }
         item(key = "§drives") {
             ClairixCard {
                 if (accessoryUse.isEmpty()) {
                     Text(
-                        "No drive with an accessory connected has been recorded yet.",
+                        stringResource(R.string.scan_no_drive_with_an_accessory_connected),
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted
                     )
                     Text(
-                        "While the scanner runs, each drive remembers which of your accessories was connected, so this " +
-                            "can say which fixed address announces your car at every sensor it passes.",
+                        stringResource(R.string.scan_while_the_scanner_runs_each_drive),
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                     )
                 } else {
@@ -245,9 +234,9 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
                                 Text(u.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
                                     when {
-                                        a == null -> "No longer paired"
-                                        fixed == true -> "Fixed address: the same number at every sensor on these drives"
-                                        fixed == false -> "Rotating address"
+                                        a == null -> stringResource(R.string.scan_no_longer_paired)
+                                        fixed == true -> stringResource(R.string.scan_fixed_address_the_same_number_at)
+                                        fixed == false -> stringResource(R.string.scan_rotating_address)
                                         else -> a.radio
                                     },
                                     style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
@@ -265,22 +254,19 @@ internal fun BluetoothExposurePage(onBack: (() -> Unit)? = null) {
         }
 
         item(key = "§infra-hdr") {
-            SectionHeader("Surveillance hardware heard", supporting = if (sightings.isEmpty()) null else "${sightings.size} this run")
+            SectionHeader(stringResource(R.string.scan_surveillance_hardware_heard), supporting = if (sightings.isEmpty()) null else stringResource(R.string.scan_this_run, sightings.size))
         }
         if (!status.scanning) {
             item(key = "§infra-off") {
-                Notice(Tone.Caution, "The radios are only listened to while the scanner runs. Start scanning in Scan > Trackers.", title = "Scanner off")
+                Notice(Tone.Caution, stringResource(R.string.scan_the_radios_are_only_listened_to), title = stringResource(R.string.scan_scanner_off))
             }
         }
         if (sightings.isEmpty()) {
             item(key = "§infra-none") {
                 ClairixCard {
-                    Text("Nothing heard.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+                    Text(stringResource(R.string.scan_nothing_heard), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                     Text(
-                        "Flock's cameras upload over LTE and most have had their Bluetooth turned down since 2025, so " +
-                            "hearing nothing next to one is normal. What can still be heard is an older camera's battery " +
-                            "pack, a Raven gunshot detector or a unit's setup Wi-Fi. The map list is the better guide to " +
-                            "where the readers are; this catches one the map does not have.",
+                        stringResource(R.string.scan_flocks_cameras_upload_over_lte_and),
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                     )
                 }
@@ -309,13 +295,12 @@ private fun SightingCard(x: InfrastructureSighting, now: Long) {
         Text(
             when {
                 x.nearestKnownM != null && x.nearestKnownM <= ScanService.KNOWN_CAMERA_MATCH_M ->
-                    "Matches the plate reader mapped ${x.nearestKnownM.toInt()} m from where it was heard" +
-                        (x.nearestKnownLabel?.let { " ($it)" } ?: "") + "."
+                    stringResource(R.string.scan_matches_the_plate_reader_mapped_m, x.nearestKnownM.toInt(), (x.nearestKnownLabel?.let { " ($it)" } ?: ""))
                 x.nearestKnownM != null ->
                     "Not on the map: the nearest mapped plate reader is ${(x.nearestKnownM / 1000).let { "%.1f".format(it) }} km away. " +
                         "This may be one OpenStreetMap does not have yet."
-                x.lat == null -> "No position fix when it was heard, so it cannot be compared with the map."
-                else -> "No plate-reader list is on this phone to compare it with; load a map region in Drive."
+                x.lat == null -> stringResource(R.string.scan_no_position_fix_when_it_was)
+                else -> stringResource(R.string.scan_no_plate_reader_list_is_on)
             },
             style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
         )

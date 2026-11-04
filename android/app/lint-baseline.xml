@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<issues format="6" by="lint 8.7.3" type="baseline" client="gradle" dependencies="true" name="AGP (8.7.3)" variant="all" version="8.7.3">
+<issues format="6" by="lint 8.13.2" type="baseline" client="gradle" dependencies="true" name="AGP (8.13.2)" variant="all" version="8.13.2">
 
     <issue
         id="MissingPermission"
@@ -48,10 +48,32 @@
     <issue
         id="MissingPermission"
         message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        return runCatching { adapter.setName(defaultName()) }.getOrDefault(false)"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BluetoothExposure.kt"
+            line="174"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        runCatching { manager.getConnectedDevices(BluetoothProfile.GATT) }.getOrNull()"
+        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BluetoothExposure.kt"
+            line="191"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
         errorLine1="        val bonded = adapter.bondedDevices ?: return null"
         errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
+            file="src/suite/java/app/clairix/ObdBluetoothManager.kt"
             line="218"
             column="22"/>
     </issue>
@@ -59,34 +81,56 @@
     <issue
         id="MissingPermission"
         message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
-        errorLine1="            device.createRfcommSocketToServiceRecord(SPP_UUID)"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine1="            val name = runCatching { device.name }.getOrNull()?.uppercase(Locale.US) ?: return@firstOrNull false"
+        errorLine2="                                     ~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
-            line="232"
-            column="13"/>
+            file="src/suite/java/app/clairix/ObdBluetoothManager.kt"
+            line="220"
+            column="38"/>
     </issue>
 
     <issue
         id="MissingPermission"
         message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
-        errorLine1="                primary.connect()"
-        errorLine2="                ~~~~~~~~~~~~~~~~~">
+        errorLine1="        val btName = if (adapter != null &amp;&amp; btConnect) runCatching { adapter.name }.getOrNull() else null"
+        errorLine2="                                                                     ~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
-            line="239"
-            column="17"/>
+            file="src/main/java/app/clairix/analysis/PhoneHealthMonitor.kt"
+            line="538"
+            column="70"/>
     </issue>
 
     <issue
         id="MissingPermission"
         message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
-        errorLine1="            fallback.connect()"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~">
+        errorLine1="        val scanMode = if (adapter != null &amp;&amp; btScan) runCatching { adapter.scanMode }.getOrNull() else null"
+        errorLine2="                                                                    ~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/ObdBluetoothManager.kt"
-            line="263"
-            column="13"/>
+            file="src/main/java/app/clairix/analysis/PhoneHealthMonitor.kt"
+            line="553"
+            column="69"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                    runCatching { adapter.scanMode }.getOrNull() == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE"
+        errorLine2="                                  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ScanService.kt"
+            line="435"
+            column="35"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        val bonded = runCatching { adapter.bondedDevices }.getOrNull() ?: return"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ScanService.kt"
+            line="1415"
+            column="36"/>
     </issue>
 
     <issue
@@ -96,7 +140,7 @@
         errorLine2="                                                        ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="247"
+            line="260"
             column="57"/>
     </issue>
 
@@ -107,7 +151,7 @@
         errorLine2="                                                        ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="254"
+            line="267"
             column="57"/>
     </issue>
 
@@ -118,7 +162,7 @@
         errorLine2="                                                   ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="258"
+            line="271"
             column="52"/>
     </issue>
 
@@ -129,8 +173,19 @@
         errorLine2="                                                                 ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="337"
+            line="367"
             column="66"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                .putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()"
+        errorLine2="                                                         ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="410"
+            column="58"/>
     </issue>
 
     <issue
@@ -140,7 +195,7 @@
         errorLine2="                                                       ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="373"
+            line="424"
             column="56"/>
     </issue>
 
@@ -151,7 +206,7 @@
         errorLine2="                                                                 ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="539"
+            line="594"
             column="66"/>
     </issue>
 
@@ -162,7 +217,7 @@
         errorLine2="                                                                                      ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="565"
+            line="625"
             column="87"/>
     </issue>
 
@@ -173,7 +228,7 @@
         errorLine2="                                    ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="579"
+            line="639"
             column="37"/>
     </issue>
 
@@ -184,7 +239,7 @@
         errorLine2="             ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="602"
+            line="662"
             column="14"/>
     </issue>
 
@@ -195,19 +250,8 @@
         errorLine2="                                               ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/AppLock.kt"
-            line="620"
+            line="680"
             column="48"/>
-    </issue>
-
-    <issue
-        id="ApplySharedPref"
-        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
-        errorLine1="            prefs(context).edit().clear().commit()"
-        errorLine2="                                          ~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/security/AppLock.kt"
-            line="715"
-            column="43"/>
     </issue>
 
     <issue
@@ -216,7 +260,7 @@
         errorLine1="        prefs().edit().remove(PREFS_KEY_V1).commit()"
         errorLine2="                                            ~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/analysis/CardVault.kt"
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
             line="165"
             column="45"/>
     </issue>
@@ -227,7 +271,7 @@
         errorLine1="            prefs().edit().remove(PREFS_KEY_V1).remove(PREFS_KEY_V2).commit()"
         errorLine2="                                                                     ~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/analysis/CardVault.kt"
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
             line="224"
             column="70"/>
     </issue>
@@ -272,7 +316,7 @@
         errorLine2="                                                                        ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/HistoryRetention.kt"
-            line="75"
+            line="81"
             column="73"/>
     </issue>
 
@@ -283,7 +327,7 @@
         errorLine2="                                                                                                              ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/IdentityStore.kt"
-            line="69"
+            line="75"
             column="111"/>
     </issue>
 
@@ -316,7 +360,7 @@
         errorLine2="                                                        ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/TorTransport.kt"
-            line="155"
+            line="159"
             column="57"/>
     </issue>
 
@@ -382,7 +426,7 @@
         errorLine2="                                                                                ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/Wiper.kt"
-            line="377"
+            line="461"
             column="81"/>
     </issue>
 
@@ -393,7 +437,7 @@
         errorLine2="                                                                                       ~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/Wiper.kt"
-            line="398"
+            line="482"
             column="88"/>
     </issue>
 
@@ -409,13 +453,24 @@
     </issue>
 
     <issue
+        id="ExifInterface"
+        message="Avoid using `android.media.ExifInterface`; use `androidx.exifinterface.media.ExifInterface` instead"
+        errorLine1="        val rotation = resolver.openInputStream(uri)?.use { s -> runCatching { exifRotation(ExifInterface(s)) }.getOrDefault(0) } ?: 0"
+        errorLine2="                                                                                            ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsMedia.kt"
+            line="169"
+            column="93"/>
+    </issue>
+
+    <issue
         id="InlinedApi"
         message="Field requires API level 34 (current min is 31): `android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_SHORT_SERVICE`"
         errorLine1="            ServiceCompat.startForeground(this, FakeCall.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE)"
         errorLine2="                                                                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/FakeCall.kt"
-            line="624"
+            line="628"
             column="89"/>
     </issue>
 
@@ -426,7 +481,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/MainActivity.kt"
-            line="167"
+            line="156"
             column="5"/>
     </issue>
 
@@ -437,7 +492,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/MainActivity.kt"
-            line="187"
+            line="176"
             column="5"/>
     </issue>
 
@@ -448,7 +503,7 @@
         errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/security/PlatformAlerts.kt"
-            line="133"
+            line="132"
             column="52"/>
     </issue>
 
@@ -470,7 +525,7 @@
         errorLine2="                                                ~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/analysis/PatternOfLife.kt"
-            line="219"
+            line="234"
             column="49"/>
     </issue>
 
@@ -481,7 +536,7 @@
         errorLine2="                                               ~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/analysis/PatternOfLife.kt"
-            line="237"
+            line="252"
             column="48"/>
     </issue>
 
@@ -492,7 +547,7 @@
         errorLine2="                                                     ~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/analysis/PatternOfLife.kt"
-            line="256"
+            line="271"
             column="54"/>
     </issue>
 
@@ -503,7 +558,7 @@
         errorLine2="                ~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/analysis/StalkwareScanner.kt"
-            line="1128"
+            line="1167"
             column="17"/>
     </issue>
 
@@ -514,7 +569,7 @@
         errorLine2="                                        ~~~~~~">
         <location
             file="build/rust/kotlin/uniffi/clairix_comms_crypto/clairix_comms_crypto.kt"
-            line="1233"
+            line="1261"
             column="41"/>
     </issue>
 
@@ -525,7 +580,7 @@
         errorLine2="                                     ~~~~~~~~">
         <location
             file="build/rust/kotlin/uniffi/clairix_comms_crypto/clairix_comms_crypto.kt"
-            line="1236"
+            line="1264"
             column="38"/>
     </issue>
 
@@ -536,19 +591,8 @@
         errorLine2="                                     ~~~~~">
         <location
             file="build/rust/kotlin/uniffi/clairix_comms_crypto/clairix_comms_crypto.kt"
-            line="1242"
+            line="1270"
             column="38"/>
-    </issue>
-
-    <issue
-        id="PrivateApi"
-        message="Accessing internal APIs via reflection is not supported and may not work on all devices or in the future"
-        errorLine1="        val cls = runCatching { Class.forName(&quot;android.security.advancedprotection.AdvancedProtectionManager&quot;) }.getOrNull()"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/analysis/AdvancedProtection.kt"
-            line="44"
-            column="33"/>
     </issue>
 
     <issue
@@ -564,12 +608,23 @@
 
     <issue
         id="WrongConstant"
+        message="Must be one or more of: AudioManager.GET_DEVICES_INPUTS, AudioManager.GET_DEVICES_OUTPUTS"
+        errorLine1="            val present = runCatching { am.getDevices(AudioManager.GET_DEVICES_ALL) }.getOrNull() ?: emptyArray()"
+        errorLine2="                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/AudioRouteMonitor.kt"
+            line="208"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
         message="Must be one of: BluetoothStatusCodes.SUCCESS, BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION, BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND, BluetoothStatusCodes.ERROR_GATT_WRITE_NOT_ALLOWED, BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY, BluetoothStatusCodes.ERROR_UNKNOWN"
         errorLine1="                gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS"
         errorLine2="                                                                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/mesh/MeshNode.kt"
-            line="361"
+            line="369"
             column="98"/>
     </issue>
 
@@ -580,7 +635,7 @@
         errorLine2="                                                                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/mesh/MeshNode.kt"
-            line="463"
+            line="471"
             column="107"/>
     </issue>
 
@@ -591,7 +646,7 @@
         errorLine2="                                                                                ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/mesh/MeshNode.kt"
-            line="476"
+            line="484"
             column="81"/>
     </issue>
 
@@ -613,7 +668,7 @@
         errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/CommsNotifications.kt"
-            line="832"
+            line="858"
             column="38"/>
     </issue>
 
@@ -635,8 +690,19 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="75"
+            line="80"
             column="13"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        message="A newer version of Gradle than 8.14.3 is available: 8.14.6"
+        errorLine1="distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-bin.zip"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../gradle/wrapper/gradle-wrapper.properties"
+            line="3"
+            column="17"/>
     </issue>
 
     <issue
@@ -646,7 +712,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="348"
+            line="600"
             column="20"/>
     </issue>
 
@@ -657,7 +723,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="349"
+            line="601"
             column="20"/>
     </issue>
 
@@ -668,7 +734,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="350"
+            line="602"
             column="20"/>
     </issue>
 
@@ -679,7 +745,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="351"
+            line="603"
             column="20"/>
     </issue>
 
@@ -690,7 +756,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="353"
+            line="605"
             column="20"/>
     </issue>
 
@@ -701,18 +767,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="354"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="GradleDependency"
-        message="A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-android than 1.8.1 is available: 1.9.0"
-        errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="build.gradle.kts"
-            line="355"
+            line="606"
             column="20"/>
     </issue>
 
@@ -723,19 +778,30 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="357"
+            line="609"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
         message="A newer version of com.google.android.gms:play-services-location than 21.3.0 is available: 21.4.0"
-        errorLine1="    implementation(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine1="    &quot;fullImplementation&quot;(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="365"
-            column="20"/>
+            line="619"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.gms:play-services-location than 21.3.0 is available: 21.4.0"
+        errorLine1="    &quot;playImplementation&quot;(&quot;com.google.android.gms:play-services-location:21.3.0&quot;)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="620"
+            column="26"/>
     </issue>
 
     <issue
@@ -745,7 +811,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="370"
+            line="625"
             column="20"/>
     </issue>
 
@@ -756,7 +822,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="371"
+            line="626"
             column="20"/>
     </issue>
 
@@ -767,7 +833,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="372"
+            line="627"
             column="20"/>
     </issue>
 
@@ -778,7 +844,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="373"
+            line="628"
             column="20"/>
     </issue>
 
@@ -789,7 +855,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="381"
+            line="636"
             column="20"/>
     </issue>
 
@@ -800,7 +866,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="398"
+            line="655"
             column="20"/>
     </issue>
 
@@ -811,7 +877,7 @@
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="408"
+            line="665"
             column="31"/>
     </issue>
 
@@ -822,7 +888,7 @@
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="409"
+            line="666"
             column="31"/>
     </issue>
 
@@ -833,7 +899,7 @@
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="410"
+            line="667"
             column="31"/>
     </issue>
 
@@ -844,7 +910,7 @@
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="411"
+            line="668"
             column="31"/>
     </issue>
 
@@ -855,7 +921,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="77"
+            line="82"
             column="13"/>
     </issue>
 
@@ -866,7 +932,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="124"
+            line="175"
             column="13"/>
     </issue>
 
@@ -877,7 +943,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="134"
+            line="185"
             column="13"/>
     </issue>
 
@@ -888,7 +954,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="246"
+            line="304"
             column="13"/>
     </issue>
 
@@ -899,293 +965,117 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="264"
+            line="322"
             column="13"/>
     </issue>
 
     <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val snapshot by produceState&lt;BluetoothExposure.Snapshot?>(initialValue = null, connected, refresh) {"
-        errorLine2="                    ~~~~~~~~~~~~">
+        id="NewerVersionAvailable"
+        message="A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-android than 1.8.1 is available: 1.11.0"
+        errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/BluetoothTools.kt"
-            line="65"
-            column="21"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val accessoryUse by produceState&lt;List&lt;VehicleTrips.AccessoryUse>>(initialValue = emptyList(), refresh) {"
-        errorLine2="                        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/BluetoothTools.kt"
-            line="71"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val photo by produceState&lt;Pair&lt;Boolean, ImageBitmap?>>(initialValue = false to null, attachment) {"
-        errorLine2="                 ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CameraSweepScreen.kt"
-            line="970"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val threads by produceState(initialValue = emptyList&lt;ChatThread>(), version) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="666"
+            file="build.gradle.kts"
+            line="607"
             column="20"/>
     </issue>
 
     <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val groupThreads by produceState(initialValue = emptyList&lt;GroupThread>(), version) {"
-        errorLine2="                        ~~~~~~~~~~~~">
+        id="NewerVersionAvailable"
+        message="A newer version of net.zetetic:sqlcipher-android than 4.17.0 is available: 4.20.0"
+        errorLine1="    implementation(&quot;net.zetetic:sqlcipher-android:4.17.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="669"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val requests by produceState(initialValue = emptyList&lt;ChatThread>(), version) {"
-        errorLine2="                    ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="673"
-            column="21"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val timer by produceState(initialValue = 0, version, peer) {"
-        errorLine2="                 ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="830"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val contact by produceState&lt;Contact?>(initialValue = null, version, peer) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="1199"
+            file="build.gradle.kts"
+            line="651"
             column="20"/>
     </issue>
 
     <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val messages by produceState(initialValue = emptyList&lt;ChatMessage>(), version, peer) {"
-        errorLine2="                    ~~~~~~~~~~~~">
+        id="NewerVersionAvailable"
+        message="A newer version of org.json:json than 20240303 is available: 20260814"
+        errorLine1="    testImplementation(&quot;org.json:json:20240303&quot;)"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="1202"
-            column="21"/>
+            file="build.gradle.kts"
+            line="672"
+            column="24"/>
     </issue>
 
     <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val held by produceState(initialValue = 0, version, peer) {"
-        errorLine2="                ~~~~~~~~~~~~">
+        id="NewerVersionAvailable"
+        message="A newer version of org.robolectric:robolectric than 4.14.1 is available: 4.17"
+        errorLine1="    testImplementation(&quot;org.robolectric:robolectric:4.14.1&quot;)"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="1206"
-            column="17"/>
+            file="build.gradle.kts"
+            line="680"
+            column="24"/>
     </issue>
 
     <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val full by produceState&lt;ImageBitmap?>(initialValue = null, m.id, m.status) {"
-        errorLine2="                ~~~~~~~~~~~~">
+        id="NewerVersionAvailable"
+        message="A newer version of org.robolectric:android-all-instrumented than 15-robolectric-12650502-i7 is available: 15-robolectric-13954326-i7"
+        errorLine1="    robolectricTarget(&quot;org.robolectric:android-all-instrumented:15-robolectric-12650502-i7&quot;)"
+        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="1774"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="                val image by produceState&lt;ImageBitmap?>(initialValue = null, m.id) {"
-        errorLine2="                             ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="1931"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val lookup by produceState&lt;Pair&lt;Boolean, Contact?>>(initialValue = false to null, version, peer) {"
-        errorLine2="                  ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="2157"
-            column="19"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val blocked by produceState(initialValue = emptyList&lt;ContactGate.Blocked>(), version) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="2795"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val kept by produceState(initialValue = emptyMap&lt;String, Contact>(), version) {"
-        errorLine2="                ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="2798"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val group by produceState&lt;Group?>(null, groupId, version) {"
-        errorLine2="                 ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="3105"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val messages by produceState(emptyList&lt;ChatMessage>(), groupId, version) {"
-        errorLine2="                    ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="3108"
-            column="21"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val members by produceState(emptyList&lt;GroupMember>(), groupId, version) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="3111"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val group by produceState&lt;Group?>(null, groupId, version) {"
-        errorLine2="                 ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="3337"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val members by produceState(emptyList&lt;GroupMember>(), groupId, version) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="3340"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="ProduceStateDoesNotAssignValue"
-        message="produceState calls should assign `value` inside the producer lambda"
-        errorLine1="    val contacts by produceState(emptyList&lt;Contact>(), version) {"
-        errorLine2="                    ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/app/clairix/CommsScreen.kt"
-            line="3456"
-            column="21"/>
+            file="build.gradle.kts"
+            line="697"
+            column="23"/>
     </issue>
 
     <issue
         id="DiscouragedApi"
-        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
         errorLine1="            android:screenOrientation=&quot;portrait&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="77"
+            line="82"
             column="13"/>
     </issue>
 
     <issue
         id="DiscouragedApi"
-        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
         errorLine1="            android:screenOrientation=&quot;portrait&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="124"
+            line="175"
             column="13"/>
     </issue>
 
     <issue
         id="DiscouragedApi"
-        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
         errorLine1="            android:screenOrientation=&quot;portrait&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="134"
+            line="185"
             column="13"/>
     </issue>
 
     <issue
         id="DiscouragedApi"
-        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
         errorLine1="            android:screenOrientation=&quot;portrait&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="246"
+            line="304"
             column="13"/>
     </issue>
 
     <issue
         id="DiscouragedApi"
-        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
         errorLine1="            android:screenOrientation=&quot;portrait&quot;"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="264"
+            line="322"
             column="13"/>
     </issue>
 
@@ -1196,7 +1086,7 @@
         errorLine2="                            ~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="343"
+            line="595"
             column="29"/>
     </issue>
 
@@ -1209,6 +1099,17 @@
             file="src/main/AndroidManifest.xml"
             line="25"
             column="6"/>
+    </issue>
+
+    <issue
+        id="HardwareIds"
+        message="Using `getMacAddress` to get device identifiers is not recommended"
+        errorLine1="        val mac = runCatching { info?.macAddress }.getOrNull()?.takeIf { it.isNotBlank() }"
+        errorLine2="                                ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/PhoneHealthMonitor.kt"
+            line="611"
+            column="33"/>
     </issue>
 
     <issue
@@ -1251,24 +1152,13 @@
         errorLine2="         ~~~~~~~~">
         <location
             file="src/suite/AndroidManifest.xml"
-            line="107"
+            line="117"
             column="10"/>
     </issue>
 
     <issue
-        id="Recycle"
-        message="This `Cursor` should be freed up after use with `#close()`"
-        errorLine1="                helper.readableDatabase.query(LEGACY_TABLE, arrayOf(&quot;ts&quot;, &quot;event&quot;, &quot;extra&quot;), null, null, null, null, &quot;ts ASC&quot;).use { c ->"
-        errorLine2="                                        ~~~~~">
-        <location
-            file="src/main/java/app/clairix/security/UnlockLedger.kt"
-            line="159"
-            column="41"/>
-    </issue>
-
-    <issue
         id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is never &lt; 31"
+        message="Unnecessary; `SDK_INT` is never &lt; 31"
         errorLine1="        if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.Q || info !is CellInfoNr) return null"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -1291,7 +1181,7 @@
         errorLine2="    ^">
         <location
             file="src/main/java/app/clairix/comms/CallManager.kt"
-            line="140"
+            line="145"
             column="5"/>
     </issue>
 
@@ -1302,7 +1192,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/comms/CallManager.kt"
-            line="155"
+            line="160"
             column="5"/>
     </issue>
 
@@ -1313,7 +1203,7 @@
         errorLine2="    ^">
         <location
             file="src/main/java/app/clairix/comms/CommsRepository.kt"
-            line="160"
+            line="164"
             column="5"/>
     </issue>
 
@@ -1335,7 +1225,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/analysis/GnssMonitor.kt"
-            line="69"
+            line="71"
             column="5"/>
     </issue>
 
@@ -1368,7 +1258,7 @@
         errorLine2="        ^">
         <location
             file="src/main/java/app/clairix/analysis/PhoneHealthMonitor.kt"
-            line="880"
+            line="891"
             column="9"/>
     </issue>
 
@@ -1379,7 +1269,7 @@
         errorLine2="^">
         <location
             file="src/main/java/app/clairix/analysis/StalkwareWatch.kt"
-            line="31"
+            line="33"
             column="1"/>
     </issue>
 
@@ -1390,7 +1280,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/analysis/StalkwareWatch.kt"
-            line="254"
+            line="352"
             column="5"/>
     </issue>
 
@@ -1429,6 +1319,17 @@
 
     <issue
         id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var savedAt by remember { mutableStateOf(CommsRepository.recoverySavedAt()) }"
+        errorLine2="                              ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/RecoveryFileUi.kt"
+            line="94"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
         message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
         errorLine1="    var groupCount by remember { mutableStateOf(-1) }"
         errorLine2="                                 ~~~~~~~~~~~~~~">
@@ -1445,7 +1346,7 @@
         errorLine2="                                                    ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/SettingsScreen.kt"
-            line="863"
+            line="915"
             column="53"/>
     </issue>
 
@@ -1456,7 +1357,7 @@
         errorLine2="                                                                                ~~~~~~~~~~~">
         <location
             file="src/main/java/app/clairix/nav/NavViewModel.kt"
-            line="383"
+            line="392"
             column="81"/>
     </issue>
 
@@ -1467,8 +1368,1438 @@
         errorLine2="                     ~~~~~~">
         <location
             file="src/main/java/app/clairix/security/LockScreen.kt"
-            line="213"
+            line="228"
             column="22"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="    is Action.Web -> Intent(Intent.ACTION_VIEW, Uri.parse(action.url))"
+        errorLine2="                                                ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/AccountChecklistPage.kt"
+            line="95"
+            column="49"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        ?: action.fallbackUrl?.let { Intent(Intent.ACTION_VIEW, Uri.parse(it)) }"
+        errorLine2="                                                                ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/AccountChecklistPage.kt"
+            line="97"
+            column="65"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                if (!p.contains(K_DURESS_VERIFIER)) decoyDuress(p.edit()).commit()"
+        errorLine2="                                                                ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="201"
+            column="65"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                p.edit().putBoolean(K_BIOMETRIC, false).commit()"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="260"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                p.edit().putBoolean(K_BIOMETRIC, false).commit()"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="267"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            p.edit().putBoolean(K_BIOMETRIC, true).commit()"
+        errorLine2="            ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="271"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs(context).edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="360"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs(context).edit().putBoolean(K_BIOMETRIC, false).commit()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="367"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs(context).edit().putInt(K_WIPE_AFTER, attempts).putBoolean(K_WIPE_CHOSEN, true)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="409"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putLong(K_RELOCK_MS, ms).commit()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="424"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                p.edit().putInt(K_FAILED, 0).remove(K_LAST_FAIL).commit()"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="594"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit().putString(K_WRONG_AT, stamps.takeLast(WRONG_KEPT).joinToString(&quot;,&quot;)).commit()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="625"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit().remove(K_WRONG_AT).commit()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="639"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        val edit = p.edit().putInt(K_FAILED, failed)"
+        errorLine2="                   ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="660"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            p.edit().putLong(K_LAST_FAIL, now).commit()"
+        errorLine2="            ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="680"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                decoyDuress(p.edit()).commit()"
+        errorLine2="                            ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="748"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            if (!prefs(context).edit().clear().commit()) return"
+        errorLine2="                 ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="778"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        val edit = prefs(context).edit().clear()"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="821"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        if (at != 0L) p.edit().remove(K_WIPE_NOTICE_AT).apply()"
+        errorLine2="                      ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/AppLock.kt"
+            line="848"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_DISMISSED, dismissed).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/AppUpdate.kt"
+            line="202"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="    val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse(&quot;package:${context.packageName}&quot;))"
+        errorLine2="                                                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ui/BatteryExemptionCard.kt"
+            line="111"
+            column="79"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit().putLong(K_LAST_CHECK_TS, now).apply()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BiometricTripwire.kt"
+            line="134"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            p.edit().putLong(K_ARMED_TS, 0L).putLong(K_LAST_CHECK_TS, now).apply()"
+        errorLine2="            ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BiometricTripwire.kt"
+            line="162"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/BiometricTripwire.kt"
+            line="195"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SparseArray.isEmpty` instead?"
+        errorLine1="        if (mfr.size() == 0) return null"
+        errorLine2="            ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/detect/BleNames.kt"
+            line="252"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension property `SparseArray.size` instead?"
+        errorLine1="        for (i in 0 until mfr.size()) COMPANIES[mfr.keyAt(i)]?.let { return it }"
+        errorLine2="                          ~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/detect/BleNames.kt"
+            line="254"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SparseArray.isNotEmpty` instead?"
+        errorLine1="        val mfr = record?.manufacturerSpecificData?.takeIf { it.size() > 0 }"
+        errorLine2="                                                             ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/detect/CadenceFingerprinter.kt"
+            line="310"
+            column="62"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        runCatching { prefs().edit().putBoolean(PREFS_KEY_OWNERSHIP_ACK, true).commit() }"
+        errorLine2="                      ~~~~~~~~~~~~~~">
+        <location
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
+            line="105"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs().edit().remove(PREFS_KEY_V1).commit()"
+        errorLine2="        ~~~~~~~~~~~~~~">
+        <location
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
+            line="165"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs().edit().remove(PREFS_KEY_V1).remove(PREFS_KEY_V2).commit()"
+        errorLine2="            ~~~~~~~~~~~~~~">
+        <location
+            file="src/suite/java/app/clairix/analysis/CardVault.kt"
+            line="224"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().remove(key).apply()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsConfig.kt"
+            line="358"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putString(key, blob).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsConfig.kt"
+            line="362"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putString(KEY, Base64.encodeToString(KeystoreBox.encryptString(encode()), Base64.NO_WRAP)).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsConfig.kt"
+            line="386"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().remove(KEY).apply()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsConfig.kt"
+            line="411"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putString(KEY, blob).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsConfig.kt"
+            line="415"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsDb.kt"
+            line="67"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                    prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).commit()"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsDb.kt"
+            line="97"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_WRAPPED).commit()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsDb.kt"
+            line="115"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        val editor = prefs?.edit() ?: return"
+        errorLine2="                     ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsLog.kt"
+            line="134"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Bitmap.scale` instead?"
+        errorLine1="        return Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true)"
+        errorLine2="               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsMedia.kt"
+            line="244"
+            column="16"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, android.net.Uri.parse(&quot;package:${context.packageName}&quot;))"
+        errorLine2="                                                                                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsNotifications.kt"
+            line="403"
+            column="97"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        val packageUri = Uri.parse(&quot;package:${context.packageName}&quot;)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/CommsNotifications.kt"
+            line="856"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putBoolean(KEY_MIC_ASKED, true).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="233"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="    fun capturedFile(): File? = captureUri?.let { File(File(context.cacheDir, &quot;camera&quot;), Uri.parse(it).lastPathSegment ?: return null) }"
+        errorLine2="                                                                                         ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1261"
+            column="90"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        val uri = captureUri?.let { Uri.parse(it) }"
+        errorLine2="                                    ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1263"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        val uri = captureUri?.let { Uri.parse(it) }"
+        errorLine2="                                    ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CommsScreen.kt"
+            line="1269"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        val uri = Uri.parse(&quot;mailto:$SUPPORT_ADDRESS?subject=${Uri.encode(subject)}&amp;body=${Uri.encode(body)}&quot;)"
+        errorLine2="                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/CrashJournal.kt"
+            line="149"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        app.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE).edit()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/DiscreetMode.kt"
+            line="75"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="            onClick = { openLink(context, Intent(Intent.ACTION_VIEW, Uri.parse(TERMS_URL)), &quot;No app on this phone can open $TERMS_URL&quot;) }"
+        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/suite/java/app/clairix/DriveScreen.kt"
+            line="362"
+            column="70"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putString(KEY_PHRASE, blob).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/DuressPhrase.kt"
+            line="80"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().remove(KEY_PHRASE).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/DuressPhrase.kt"
+            line="85"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            runCatching { prefs(context).edit().putString(KEY_PHRASE, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).apply() }"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/DuressPhrase.kt"
+            line="169"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putString(KEY_CALLER_NAME, name.trim().take(40)).putString(KEY_CALLER_NUMBER, number?.trim()).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/FakeCall.kt"
+            line="157"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(app).edit().putString(KEY_PENDING_CONTACT, contactNumber).putLong(KEY_PENDING_AT, at).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/FakeCall.kt"
+            line="171"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(app).edit().remove(KEY_PENDING_CONTACT).remove(KEY_PENDING_AT).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/FakeCall.kt"
+            line="185"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse(&quot;package:${context.packageName}&quot;))"
+        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/FakeCall.kt"
+            line="200"
+            column="70"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(app).edit().remove(KEY_PENDING_AT).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/FakeCall.kt"
+            line="325"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="            onClick = { open(context, Intent(Intent.ACTION_VIEW, Uri.parse(d.url)), &quot;No app on this phone can open ${d.url}&quot;) },"
+        errorLine2="                                                                 ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/HelpTools.kt"
+            line="231"
+            column="66"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="                    onClick = { open(context, Intent(Intent.ACTION_VIEW, Uri.parse(chat.url)), &quot;No app on this phone can open ${chat.url}&quot;) },"
+        errorLine2="                                                                         ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/HelpTools.kt"
+            line="292"
+            column="74"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putInt(K_DAYS, days).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/HistoryRetention.kt"
+            line="76"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        if (days in CHOICES) prefs(context).edit().putInt(K_DAYS, days).commit()"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/HistoryRetention.kt"
+            line="81"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SparseArray.isNotEmpty` instead?"
+        errorLine1="        if (mfr != null &amp;&amp; mfr.size() > 0) {"
+        errorLine2="                           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/Identity.kt"
+            line="25"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension property `SparseArray.size` instead?"
+        errorLine1="            for (i in 0 until mfr.size()) {"
+        errorLine2="                              ~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/Identity.kt"
+            line="26"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(key), Base64.NO_WRAP)).commit()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/IdentityStore.kt"
+            line="75"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs.edit().clear().commit()"
+        errorLine2="            ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/IdentityStore.kt"
+            line="136"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            runCatching { prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(VaultBox.encrypt(opened.plain), Base64.NO_WRAP)).commit() }"
+        errorLine2="                          ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/IdentityStore.kt"
+            line="169"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        val edit = prefs.edit()"
+        errorLine2="                   ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/detect/KarmaCanary.kt"
+            line="381"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putBoolean(K_SATELLITE_ONLY, value).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/LocationClient.kt"
+            line="47"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putBoolean(K_NETWORK_CROSS_CHECK, value).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/LocationClient.kt"
+            line="54"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.applicationContext.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/analysis/LowPowerMode.kt"
+            line="86"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX function `createBitmap` instead?"
+        errorLine1="    val bm = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)"
+        errorLine2="             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/MainActivity.kt"
+            line="1884"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Bitmap.toDrawable` instead?"
+        errorLine1="    return BitmapDrawable(Resources.getSystem(), bm)"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/MainActivity.kt"
+            line="1897"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))"
+        errorLine2="                                                         ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/MapChrome.kt"
+            line="88"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_ON, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/mesh/Mesh.kt"
+            line="48"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putLong(KEY_UPDATE_CHECKED + slug, now).remove(KEY_UPDATE_SEEN + slug).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="452"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="466"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putString(KEY_REGION, slug).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="496"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                    prefs.edit().remove(KEY_REGION).apply()"
+        errorLine2="                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="610"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putBoolean(KEY_MUTED, m).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="926"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putBoolean(KEY_AVOID_CAMERAS, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="934"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putBoolean(KEY_WARN_CAMERAS, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="944"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putBoolean(KEY_SHARE_TRAFFIC, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="950"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().putFloat(KEY_FUEL_PRICE, dollarsPerGal.toFloat()).apply()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/nav/NavViewModel.kt"
+            line="960"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="    context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)"
+        errorLine2="    ^">
+        <location
+            file="src/main/java/app/clairix/OnboardingScreen.kt"
+            line="79"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="    context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)"
+        errorLine2="    ^">
+        <location
+            file="src/main/java/app/clairix/OnboardingScreen.kt"
+            line="91"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX function `createBitmap` instead?"
+        errorLine1="    val bitmap = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)"
+        errorLine2="                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/PlaceMap.kt"
+            line="112"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Bitmap.toDrawable` instead?"
+        errorLine1="    return BitmapDrawable(Resources.getSystem(), bitmap)"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/PlaceMap.kt"
+            line="123"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        appContext"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/Registry.kt"
+            line="164"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs(ctx).edit()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/RelayClock.kt"
+            line="63"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            runCatching { prefs(app).edit().putLong(KEY_NEXT_TRY, next).apply() }"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/RelayDirectory.kt"
+            line="259"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putLong(KEY_HEARTBEAT, now).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/ScannerHealth.kt"
+            line="165"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_RADIO_NOTICE, true).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/suite/java/app/clairix/ScannerMonitor.kt"
+            line="130"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/suite/java/app/clairix/ScannerMonitor.kt"
+            line="259"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="161"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="167"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="173"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="179"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="185"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="191"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="197"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/app/clairix/SettingsScreen.kt"
+            line="204"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_TEXT, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/SosExtras.kt"
+            line="61"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_NUMBER, number.trim()).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/SosExtras.kt"
+            line="64"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        context.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_CALL, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/SosExtras.kt"
+            line="67"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs(app).edit().putLong(KEY_NEXT_TRY, next).apply()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/StalkwareIoc.kt"
+            line="267"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse(&quot;package:$packageName&quot;))"
+        errorLine2="                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/StalkwareScanner.kt"
+            line="925"
+            column="62"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension property `SparseArray.size` instead?"
+        errorLine1="        val companyIds = ArrayList&lt;Int>(mfr?.size() ?: 0)"
+        errorLine2="                                             ~~~~~~">
+        <location
+            file="src/main/java/app/clairix/detect/SurveillanceHardware.kt"
+            line="171"
+            column="46"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension property `SparseArray.size` instead?"
+        errorLine1="        if (mfr != null) for (i in 0 until mfr.size()) companyIds += mfr.keyAt(i)"
+        errorLine2="                                           ~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/detect/SurveillanceHardware.kt"
+            line="172"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        if (p.contains(KEY_NEXT_RUN)) p.edit().remove(KEY_NEXT_RUN).apply()"
+        errorLine2="                                      ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="281"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().clear().apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="291"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs(app).edit().putLong(KEY_NEXT_RUN, System.currentTimeMillis() + delay).apply()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="343"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                    prefs(app).edit().remove(KEY_NEXT_RUN).apply()"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="374"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().remove(KEY_HOST).remove(KEY_PIN).remove(KEY_PINNED_AT).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="399"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit().putBoolean(KEY_STRICT, on).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="419"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(app).edit().putString(KEY_HOST, host).putString(KEY_PIN, spki)"
+        errorLine2="        ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="686"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(app).edit().putString(KEY_LAST_RESULT, text).putLong(KEY_LAST_TS, r.ts).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/analysis/TlsCanary.kt"
+            line="713"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            prefs?.edit()?.putBoolean(KEY_ENABLED, on)?.commit()"
+        errorLine2="            ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TorTransport.kt"
+            line="159"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="    context.getSharedPreferences(TOUR_PREFS, Context.MODE_PRIVATE).edit().putBoolean(TOUR_SEEN_KEY, true).apply()"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/Tour.kt"
+            line="59"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                prefs.edit().putString(KEY_SEED, Base64.encodeToString(KeystoreBox.encrypt(seed), Base64.NO_WRAP)).commit()"
+        errorLine2="                ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TransportKeyStore.kt"
+            line="34"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="    fun setPublished(published: Boolean) { prefs.edit().putBoolean(KEY_PUBLISHED, published).apply() }"
+        errorLine2="                                           ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TransportKeyStore.kt"
+            line="47"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs.edit().clear().commit()"
+        errorLine2="        ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/TransportKeyStore.kt"
+            line="54"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit().putLong(K_BACKFILL_TS, now).apply()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/UnlockLedger.kt"
+            line="383"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs(context).edit()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/UnlockLedger.kt"
+            line="399"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit().putLong(K_SLEEP_CHECK_TS, now).apply()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/UnlockLedger.kt"
+            line="444"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))"
+        errorLine2="                                                         ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/ui/UpdateCopy.kt"
+            line="76"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="                p.edit().putString(WRAPPED_LOCKED, wrapped).remove(WRAPPED_OPEN).commit()"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/VaultBox.kt"
+            line="154"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        p.edit().putString(WRAPPED_OPEN, wrap(OPEN_ALIAS, unlockedDeviceRequired = false, key)).remove(WRAPPED_LOCKED).commit()"
+        errorLine2="        ~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/VaultBox.kt"
+            line="160"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        prefs?.edit()?.remove(WRAPPED_LOCKED)?.remove(WRAPPED_OPEN)?.commit()"
+        errorLine2="        ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/comms/VaultBox.kt"
+            line="227"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            app.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/Wiper.kt"
+            line="461"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="            val edit = app.getSharedPreferences(AppSettings.PREFS_NAME, Context.MODE_PRIVATE).edit().clear()"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/app/clairix/security/Wiper.kt"
+            line="472"
+            column="24"/>
     </issue>
 
     <issue
@@ -1478,7 +2809,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="398"
+            line="655"
             column="20"/>
     </issue>
 

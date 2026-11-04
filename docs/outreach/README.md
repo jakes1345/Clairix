@@ -24,8 +24,9 @@ support@clairix.app, the address the website already publishes) before sending.
   as a pre-release) and https://clairix.app/download, which links the Full APK
   with its SHA-256. Obtainium works with "Include prereleases" on and the APK
   filter `clairix-v[^/]*\.apk$`.
-- **Not on Google Play** (`PLAY_LIVE` is `false`), **not on F-Droid** (every
-  edition includes `play-services-location`), **not on IzzyOnDroid** (not
+- **Not on Google Play** (`PLAY_LIVE` is `false`), **not on F-Droid** (the published
+  editions include `play-services-location`; the foss flavour built without it
+  exists in the source but has not been submitted, see `docs/DISTRIBUTION.md`), **not on IzzyOnDroid** (not
   requested yet), **not on Accrescent**.
 - **Not independently audited.** vodozemac, the Olm library it uses, has been
   audited; Clairix has not. Our own findings are in `docs/SECURITY-FINDINGS.md`
@@ -93,7 +94,7 @@ address from a third-party site.
 |---|---|---|---|---|---|
 | 1 | Obtainium | store | Nothing to submit; /download already has `obtainium://add/https://github.com/jakes1345/Clairix`. Optional config request: https://github.com/ImranR98/apps.obtainium.imranr.dev/issues or a PR to that repo | GitHub account for the optional config. Users need "Include prereleases" and the regex `clairix-v[^/]*\.apk$` | not sent |
 | 2 | IzzyOnDroid | store | Issue at https://codeberg.org/IzzyOnDroid/repodata/issues (contact page: https://izzyondroid.org/contact) | Codeberg account. Policy: https://izzyondroid.org/docs/general/AppInclusionPolicy/. **AI policy rejects vibe-coded apps and code written by LLMs; our history is mostly AI-assisted.** Also: ~30 MB rule of thumb vs our 68.8 MB; `play-services-location`; pre-releases only | not sent |
-| 3 | F-Droid (main repository) | store | RFP at https://gitlab.com/fdroid/rfp/issues; real submission is a merge request to https://gitlab.com/fdroid/fdroiddata adding `metadata/app.clairix.yml` | GitLab account; only FOSS dependencies. **Not possible today**: every edition depends on `play-services-location` | not sent (blocked) |
+| 3 | F-Droid (main repository) | store | RFP at https://gitlab.com/fdroid/rfp/issues; real submission is a merge request to https://gitlab.com/fdroid/fdroiddata adding `metadata/app.clairix.yml` | GitLab account; only FOSS dependencies. The `foss` flavour now builds without Google Play services or Firebase (CI checks it); what a submission still needs is in `docs/DISTRIBUTION.md`, with a metadata draft in `docs/fdroid/app.clairix.yml` | not sent |
 | 4 | Accrescent | store | https://console.accrescent.app (GitHub login, allowlist only); questions in #accrescent:matrix.org | **Closed to new developers.** If it reopens: .apks set, 512x512 icon, DNS TXT `_accverify` proof, v2+ signature, rules at https://accrescent.app/docs/guide/appendix/requirements/ | not sent (closed) |
 | 5 | NNEDV Safety Net Project | org | Technology Consultation Request Survey https://www.surveymonkey.com/r/techconsult; questions to safetynet@nnedv.org | Does not endorse products or fund. Ask for feedback on survivor safety. Reply in 1 to 2 weeks; may lead to a call or a paid consultation | not sent |
 | 6 | Coalition Against Stalkerware | org | Partner enquiry form on https://stopstalkerware.org/about/ | No written criteria; partners are support groups, digital-rights groups, security companies, researchers. Offer something concrete; joining is not endorsement | not sent |

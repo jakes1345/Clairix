@@ -1,27 +1,31 @@
 package app.clairix.analysis
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import android.security.advancedprotection.AdvancedProtectionManager
+import androidx.annotation.RequiresApi
+import androidx.annotation.RequiresPermission
 import app.clairix.HealthFact
 import app.clairix.Severity
-import java.lang.reflect.InvocationTargetException
 
 /**
  * Android 16's Advanced Protection mode: one switch that turns on the platform's whole hardened
  * profile (no sideloading, no 2G, no insecure Wi-Fi, USB data off while locked, memory tagging,
  * theft protection), and Phone check's row for it.
  *
- * `AdvancedProtectionManager` is API 36 and this app compiles against 35, so it is reached by
- * reflection. Its `isAdvancedProtectionEnabled()` answers only an app holding
- * QUERY_ADVANCED_PROTECTION_MODE, a normal permission new in Android 16 that
- * src/suite/AndroidManifest.xml declares: granted at install there, and ignored by older releases,
- * which do not know it. Without it every Android 16 phone read "Unknown".
+ * `AdvancedProtectionManager` (API 36, the SDK this app compiles against) answers
+ * `isAdvancedProtectionEnabled()` only to an app holding QUERY_ADVANCED_PROTECTION_MODE, a normal
+ * permission new in Android 16 that src/suite/AndroidManifest.xml declares: granted at install
+ * there, and ignored by older releases, which do not know it. Without it every Android 16 phone
+ * read "Unknown".
  */
 internal object AdvancedProtection {
 
     /** Android 16, the first release with the mode. */
-    const val SINCE_SDK = 36
+    const val SINCE_SDK = Build.VERSION_CODES.BAKLAVA
 
     /** What the phone said about the mode. */
     sealed interface State {
@@ -38,25 +42,25 @@ internal object AdvancedProtection {
         data class NoAnswer(val reason: String) : State
     }
 
-    /** Asks the phone; [sdk] is the Android version, a parameter so the decision is tested without a phone. */
+    /**
+     * Asks the phone; [sdk] is the Android version, a parameter so the decision is tested without
+     * a phone. Lint cannot see that [sdk] is Build.VERSION.SDK_INT everywhere but the JVM tests,
+     * hence NewApi: below 36 the manager is never touched.
+     */
+    @SuppressLint("NewApi")
     fun read(context: Context, sdk: Int = Build.VERSION.SDK_INT): State {
         if (sdk < SINCE_SDK) return State.NotOnThisRelease
-        val cls = runCatching { Class.forName("android.security.advancedprotection.AdvancedProtectionManager") }.getOrNull()
+        return ask(context)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.BAKLAVA)
+    @RequiresPermission(Manifest.permission.QUERY_ADVANCED_PROTECTION_MODE)
+    private fun ask(context: Context): State {
+        val manager = runCatching { context.getSystemService(AdvancedProtectionManager::class.java) }.getOrNull()
             ?: return State.NotOnThisPhone
-        // Context.ADVANCED_PROTECTION_SERVICE; the class lookup is the type-safe route when the name does not answer.
-        val manager = runCatching { context.getSystemService("advanced_protection") }.getOrNull()
-            ?: runCatching { context.getSystemService(cls) }.getOrNull()
-            ?: return State.NotOnThisPhone
-        return runCatching {
-            when (val on = cls.getMethod("isAdvancedProtectionEnabled").invoke(manager)) {
-                is Boolean -> State.Answered(on)
-                else -> State.NoAnswer("it gave no answer")
-            }
-        }.getOrElse { e ->
-            // A refusal arrives wrapped by the reflective call: name what the platform threw.
-            val cause = (e as? InvocationTargetException)?.targetException ?: e
-            State.NoAnswer(cause.javaClass.simpleName)
-        }
+        // A refusal (SecurityException without the permission) is named rather than read as off.
+        return runCatching { State.Answered(manager.isAdvancedProtectionEnabled) }
+            .getOrElse { State.NoAnswer(it.javaClass.simpleName) }
     }
 
     /** Whether the mode is on, for the rows that depend on it (2G); null when the phone did not say. */

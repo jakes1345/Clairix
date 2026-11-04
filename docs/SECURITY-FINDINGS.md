@@ -780,7 +780,8 @@ builds every debug variant, runs the Kotlin unit tests, and builds the full
 edition twice on two machines and requires the two to agree; `relay.yml`
 type-checks, tests and bundles the relay (`wrangler deploy --dry-run`) and
 tests its token module; `emulator.yml` drives every screen and runs the
-end-to-end tests against two local relays on Android 12, 13, 14 and 15;
+end-to-end tests against two local relays on Android 12, 13, 14, 15 and 16
+(and on an Android 15 image without Google Play services);
 `release.yml` builds each release, minified, and `verify-release.yml`
 rebuilds it from its tag and compares. The minify change this section once
 warned about has been through the release build of every release from Beta 3

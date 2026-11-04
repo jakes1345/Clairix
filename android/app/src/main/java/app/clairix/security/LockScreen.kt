@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.ui.res.stringResource
 import app.clairix.ClairixIcons
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.clairix.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -244,9 +246,9 @@ fun LockScreen() {
             val msg = when {
                 showLockout -> {
                     val s = (countdown / 1000L).coerceAtLeast(1L)
-                    if (s >= 3600L) "Try again in ${s / 3600}h ${(s % 3600) / 60}m"
-                    else if (s >= 60L) "Try again in ${s / 60}m ${s % 60}s"
-                    else "Try again in ${s}s"
+                    if (s >= 3600L) stringResource(R.string.safety_try_again_in_h_m, s / 3600, (s % 3600) / 60)
+                    else if (s >= 60L) stringResource(R.string.safety_try_again_in_m_s, s / 60, s % 60)
+                    else stringResource(R.string.safety_try_again_in_s, s)
                 }
                 else -> errorText
             }
@@ -283,9 +285,9 @@ fun LockScreen() {
             // ── Submit (for codes shorter than MAX_LENGTH), or biometrics ──
             Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
                 if (code.length in AppLock.MIN_LENGTH until maxLen) {
-                    PrimaryButton("Unlock", onClick = { submit() }, enabled = active)
+                    PrimaryButton(stringResource(R.string.safety_unlock), onClick = { submit() }, enabled = active)
                 } else if (biometricEnabled && activity != null && code.isEmpty()) {
-                    GhostButton("Use biometrics", onClick = { promptBiometric() }, tone = Tone.Neutral, enabled = active)
+                    GhostButton(stringResource(R.string.scan_use_biometrics), onClick = { promptBiometric() }, tone = Tone.Neutral, enabled = active)
                 }
             }
         }
@@ -356,7 +358,7 @@ private fun NumKey(label: String, size: Dp, active: Boolean, accent: Boolean = t
             .border(1.dp, if (active) c.border else c.surface, ClairixShapes.Octagon)
             .then(
                 if (active) Modifier.clickable(
-                    onClickLabel = if (label == KEY_BACKSPACE) "Delete last digit" else "Enter $label",
+                    onClickLabel = if (label == KEY_BACKSPACE) stringResource(R.string.safety_delete_last_digit) else stringResource(R.string.safety_enter, label),
                     role = Role.Button,
                     onClick = onClick
                 ) else Modifier
@@ -364,7 +366,7 @@ private fun NumKey(label: String, size: Dp, active: Boolean, accent: Boolean = t
         contentAlignment = Alignment.Center
     ) {
         if (label == KEY_BACKSPACE) {
-            Icon(ClairixIcons.Backspace, contentDescription = "Delete", tint = color, modifier = Modifier.size(24.dp))
+            Icon(ClairixIcons.Backspace, contentDescription = stringResource(R.string.settings_delete), tint = color, modifier = Modifier.size(24.dp))
         } else {
             Text(label, style = MaterialTheme.typography.headlineMedium, color = color)
         }

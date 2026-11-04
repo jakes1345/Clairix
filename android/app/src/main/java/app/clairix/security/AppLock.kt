@@ -6,8 +6,8 @@ import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
-import app.clairix.EmulationGuard
 import app.clairix.Registry
+import app.clairix.Tier
 import app.clairix.comms.CommsMedia
 import app.clairix.comms.CommsNotifications
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -440,7 +440,7 @@ object AppLock {
         lockedSince = seam.now()
         Registry.lockVault()
         appContext?.let { app ->
-            EmulationGuard.disarm(app)
+            Tier.disarmCardEmulation(app)
             runCatching { CommsNotifications.redact(app) }
             runCatching { PlatformAlerts.redact(app) }
             CommsMedia.dropPlayCopies(app)

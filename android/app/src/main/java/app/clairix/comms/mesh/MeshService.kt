@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import app.clairix.MainActivity
+import app.clairix.R
 import app.clairix.security.ChannelNames
 import app.clairix.security.DiscreetMode
 import app.clairix.security.NotificationPresentation
@@ -60,7 +61,7 @@ class MeshService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val shown = NotificationPresentation.service(
-            NotificationText("Offline mesh on", "Carrying messages phone to phone over Bluetooth"), discreet
+            NotificationText(getString(R.string.comms_offline_mesh_on), getString(R.string.comms_carrying_messages_phone_to_phone_over)), discreet
         )
         return NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle(shown.title)

@@ -28,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -101,7 +102,7 @@ internal object EvidenceExport {
     /** "Full, play flavour (playSuite)": the tier, then the flavour the build came from. */
     private fun edition(): String {
         val tier = if (BuildConfig.FULL_ACCESS) "Full" else "Comms"
-        val flavour = if (BuildConfig.FLAVOR.startsWith("play")) "play" else "full"
+        val flavour = listOf("play", "foss", "full").firstOrNull { BuildConfig.FLAVOR.startsWith(it) } ?: BuildConfig.FLAVOR
         return "$tier, $flavour flavour (${BuildConfig.FLAVOR})"
     }
 
@@ -217,7 +218,7 @@ internal fun EvidenceExportButtons(textLabel: String, modifier: Modifier = Modif
             SecondaryButton(textLabel, onClick = exportText, icon = Icons.Filled.Share, modifier = Modifier.fillMaxWidth())
         }
         SecondaryButton(
-            "Export as JSON",
+            stringResource(R.string.safety_export_as_json),
             onClick = { EvidenceExport.request(ReportFormat.JSON) },
             modifier = Modifier.fillMaxWidth()
         )
@@ -246,7 +247,7 @@ internal fun EvidenceExportHost() {
     if (locked) return
     if (!check.passes(passcodeSet)) {
         OwnerCheckDialog(
-            purpose = "export the evidence report",
+            purpose = stringResource(R.string.safety_export_the_evidence_report),
             onConfirmed = { check.ownerConfirmed() },
             onDismiss = { EvidenceExport.dismiss() }
         )
@@ -303,9 +304,9 @@ private fun EvidenceExportDialog(format: ReportFormat, onDone: () -> Unit) {
     LaunchedEffect(Unit) { fingerprint = withContext(Dispatchers.IO) { runCatching { EvidenceExport.keyFingerprint() }.getOrNull() } }
 
     ClairixDialog(
-        title = if (format == ReportFormat.JSON) "Export as JSON" else "Export evidence report",
+        title = if (format == ReportFormat.JSON) stringResource(R.string.safety_export_as_json) else stringResource(R.string.scan_export_evidence_report),
         text = Report.preShareWarning(range, retention, now),
-        confirmLabel = if (working) "Preparing…" else "Share",
+        confirmLabel = if (working) stringResource(R.string.comms_preparing) else stringResource(R.string.settings_share),
         confirmEnabled = !working,
         onConfirm = {
             working = true
@@ -313,18 +314,18 @@ private fun EvidenceExportDialog(format: ReportFormat, onDone: () -> Unit) {
                 val made = runCatching { withContext(Dispatchers.IO) { EvidenceExport.intent(context, format, range) } }
                 working = false
                 made.onSuccess { intent ->
-                    val chooser = Intent.createChooser(intent, "Share evidence report")
+                    val chooser = Intent.createChooser(intent, context.getString(R.string.safety_share_evidence_report))
                     if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     runCatching { context.startActivity(chooser) }
                 }.onFailure {
-                    Toast.makeText(context, "Could not export the evidence report", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, context.getString(R.string.safety_could_not_export_the_evidence_report), Toast.LENGTH_LONG).show()
                 }
                 onDone()
             }
         },
         onDismiss = { if (!working) onDone() }
     ) {
-        Text("Period", style = MaterialTheme.typography.titleSmall, color = c.text)
+        Text(stringResource(R.string.safety_period), style = MaterialTheme.typography.titleSmall, color = c.text)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SecondaryButton(
                 "From ${range.from?.let { dayLabel(it, zone) } ?: "the oldest kept"}",
@@ -340,11 +341,11 @@ private fun EvidenceExportDialog(format: ReportFormat, onDone: () -> Unit) {
             )
         }
         if (range.from != null || range.to != null) {
-            GhostButton("Everything kept", onClick = { range = ReportRange() }, enabled = !working)
+            GhostButton(stringResource(R.string.safety_everything_kept), onClick = { range = ReportRange() }, enabled = !working)
         }
         Text(
-            fingerprint?.let { "The report is signed on this phone. Key fingerprint: $it" }
-                ?: "The report carries a SHA-256 of its text; this phone's signing key is not available, so it is not signed.",
+            fingerprint?.let { stringResource(R.string.safety_the_report_is_signed_on_this, it) }
+                ?: stringResource(R.string.safety_the_report_carries_a_sha_256),
             style = MaterialTheme.typography.bodySmall,
             color = c.textSubtle
         )
@@ -384,7 +385,7 @@ private fun RangeDatePicker(initial: Long?, today: Long, onPicked: (Long) -> Uni
     DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = { GhostButton("OK", onClick = { state.selectedDateMillis?.let(onPicked) ?: onDismiss() }) },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss) }
     ) {
         DatePicker(state = state)
     }

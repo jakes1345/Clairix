@@ -905,11 +905,13 @@ class RelayClient(
     fun trafficLive(region: String): JSONObject =
         anonymous(TokenKind.TRAFFIC, "GET", "/v1/traffic/live?region=${query(region)}", null)
 
-    /** Hour-of-week speed profiles for at most 500 segments: {"segments":{seg:{"h":[168]}}}. */
-    fun trafficTypical(region: String, segs: List<String>): JSONObject {
-        require(segs.size <= TRAFFIC_TYPICAL_MAX) { "At most $TRAFFIC_TYPICAL_MAX segments per request" }
-        return anonymous(TokenKind.TRAFFIC, "GET", "/v1/traffic/typical?region=${query(region)}&segs=${query(segs.joinToString(","))}", null)
-    }
+    /**
+     * Hour-of-week speed profiles for at most 500 segments: {"segments":{seg:{"h":[168]}}}.
+     * The segment ids of a route say where it goes, so they travel in the
+     * POST body ([typicalBody]), never in the URL a request log could keep.
+     */
+    fun trafficTypical(region: String, segs: List<String>): JSONObject =
+        anonymous(TokenKind.TRAFFIC, "POST", TRAFFIC_TYPICAL_PATH, typicalBody(region, segs))
 
     /** Reports an incident ("police", "crash", "hazard", "closure" or "jam") under [trip]; returns {"incident"}. */
     fun trafficReport(region: String, trip: String, type: String, lat: Double, lon: Double, seg: String?): JSONObject {
@@ -1201,6 +1203,15 @@ class RelayClient(
         private val TRANSPORT_ROUTES = setOf("GET /v1/inbox", "POST /v1/ack", "GET /v1/ws")
         /** Segments per /v1/traffic/typical request (the relay's limit). */
         const val TRAFFIC_TYPICAL_MAX = 500
+
+        /** The typical-speed route; nothing about the route rides in it. */
+        const val TRAFFIC_TYPICAL_PATH = "/v1/traffic/typical"
+
+        /** The body of a typical-speed lookup: {"region", "segs": [...]}. */
+        fun typicalBody(region: String, segs: List<String>): JSONObject {
+            require(segs.size <= TRAFFIC_TYPICAL_MAX) { "At most $TRAFFIC_TYPICAL_MAX segments per request" }
+            return JSONObject().put("region", region).put("segs", JSONArray(segs))
+        }
         /** The relay refuses incident boxes larger than this in either direction. */
         const val TRAFFIC_INCIDENTS_MAX_SPAN_DEG = 1.0
         private const val CLOCK_WARN_MS = 30_000L

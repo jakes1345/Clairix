@@ -27,6 +27,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -193,7 +194,7 @@ private fun BeforeYouOpenSheet(
             }
             result
                 .onSuccess { evidence -> saved = evidence }
-                .onFailure { failure = "Could not save it: ${it.message ?: it.javaClass.simpleName}" }
+                .onFailure { failure = context.getString(R.string.scan_could_not_save_it, it.message ?: it.javaClass.simpleName) }
             saving = false
         }
     }
@@ -213,7 +214,7 @@ private fun BeforeYouOpenSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                "Before you remove or switch off $label",
+                stringResource(R.string.scan_before_you_remove_or_switch_off, label),
                 style = MaterialTheme.typography.headlineSmall,
                 color = c.text,
                 modifier = Modifier.semantics { heading() }
@@ -223,25 +224,22 @@ private fun BeforeYouOpenSheet(
 
             val savedAt = saved?.savedAt
             PrimaryButton(
-                if (savedAt == null) "Save evidence now" else "Save evidence again",
+                if (savedAt == null) stringResource(R.string.scan_save_evidence_now) else stringResource(R.string.scan_save_evidence_again),
                 onClick = { save() },
                 enabled = !saving,
                 loading = saving,
                 modifier = Modifier.fillMaxWidth().focusRequester(saveFocus)
             )
             Text(
-                "Its package name, who installed it and when, the access it holds, why it was flagged and the " +
-                    "fingerprint of its signing certificate go on the timeline with the time, and so into the " +
-                    "evidence report. It stays there, whatever Keep history for is set to, until you clear all data " +
-                    "or wipe Clairix.",
+                stringResource(R.string.scan_its_package_name_who_installed_it),
                 style = MaterialTheme.typography.bodyMedium,
                 color = c.textSubtle
             )
             saved?.let { evidence ->
-                Notice(Tone.Safe, "Saved at ${tTime(evidence.savedAt)}, on the timeline.")
+                Notice(Tone.Safe, stringResource(R.string.scan_saved_at_on_the_timeline, tTime(evidence.savedAt)))
                 if (offersCopy) {
                     GhostButton(
-                        if (copied) "Copied" else "Copy to clipboard",
+                        if (copied) stringResource(R.string.scan_copied) else stringResource(R.string.scan_copy_to_clipboard),
                         onClick = {
                             clipboard.setSensitiveText(EvidenceClip.LABEL, evidence.text())
                             copied = true
@@ -250,8 +248,7 @@ private fun BeforeYouOpenSheet(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        "Anyone who pastes on this phone can see what is on the clipboard, and so can the keyboard " +
-                            "you type with. Paste it somewhere only you can reach; Clairix clears it when this closes.",
+                        stringResource(R.string.scan_anyone_who_pastes_on_this_phone),
                         style = MaterialTheme.typography.bodySmall,
                         color = c.textSubtle
                     )
@@ -260,7 +257,7 @@ private fun BeforeYouOpenSheet(
             failure?.let { Notice(Tone.Danger, it) }
 
             SecondaryButton(
-                "Talk to someone first",
+                stringResource(R.string.scan_talk_to_someone_first),
                 onClick = {
                     onDismiss()
                     Registry.requestHelp()
@@ -268,7 +265,7 @@ private fun BeforeYouOpenSheet(
                 tone = Tone.Accent,
                 modifier = Modifier.fillMaxWidth()
             )
-            GhostButton("Open settings anyway", onClick = onOpen, tone = Tone.Neutral, modifier = Modifier.fillMaxWidth())
+            GhostButton(stringResource(R.string.scan_open_settings_anyway), onClick = onOpen, tone = Tone.Neutral, modifier = Modifier.fillMaxWidth())
         }
     }
 }

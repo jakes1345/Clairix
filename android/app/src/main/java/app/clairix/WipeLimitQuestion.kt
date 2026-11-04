@@ -1,5 +1,6 @@
 package app.clairix
 
+import android.content.res.Resources
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -7,6 +8,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.security.AppLock
+import app.clairix.ui.appResources
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -29,9 +31,8 @@ internal fun wipeLimitQuestionDue(due: Boolean, locked: Boolean, wrongAttemptsPe
     wipeQuestionShown(asking = due, locked = locked) && !wrongAttemptsPending
 
 /** What the owner is told about a limit an earlier version set for her ([AppLock.pausedWipeAfter]). */
-internal fun pausedWipeNote(limit: Int): String =
-    "Earlier versions set a wipe after $limit wrong passcodes in a row whenever a passcode was made, " +
-        "without asking. It is paused: until you choose, wrong passcodes lock you out for longer instead."
+internal fun pausedWipeNote(res: Resources, limit: Int): String =
+    res.getQuantityString(R.plurals.settings_paused_wipe_note, limit, limit)
 
 /**
  * The wipe-limit question, once Clairix is open after an unlock, on a phone
@@ -52,7 +53,7 @@ internal fun WipeLimitQuestion() {
     val paused = remember(due) { AppLock.pausedWipeAfter(context) }
     WipeChoiceDialog(
         onExportEvidence = if (BuildConfig.FULL_ACCESS) { { EvidenceExport.request() } } else null,
-        note = if (paused > 0) pausedWipeNote(paused) else null,
+        note = if (paused > 0) pausedWipeNote(appResources(), paused) else null,
         onChosen = { choice -> scope.launch(Dispatchers.IO) { AppLock.setWipeAfter(context, choice) } }
     )
 }

@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -61,16 +62,16 @@ class LockedRingActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // Over the lock screen, where anyone can read it: without the app's name in discreet mode.
-                        val heading = NotificationPresentation.unbranded("Incoming Clairix call", DiscreetMode.on(this@LockedRingActivity))
+                        val heading = NotificationPresentation.unbranded(stringResource(R.string.comms_incoming_clairix_call), DiscreetMode.on(this@LockedRingActivity))
                         Text(heading, style = MaterialTheme.typography.headlineMedium, color = ClairixTheme.colors.text, textAlign = TextAlign.Center)
                         Text(
-                            "Unlock to answer. Who is calling shows once the phone is unlocked: until then nothing on it can be read.",
+                            stringResource(R.string.comms_unlock_to_answer_who_is_calling),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClairixTheme.colors.textSubtle,
                             textAlign = TextAlign.Center
                         )
-                        PrimaryButton("Answer", onClick = { answer() }, modifier = Modifier.fillMaxWidth(), tone = Tone.Accent)
-                        SecondaryButton("Not now", onClick = { decline() }, modifier = Modifier.fillMaxWidth())
+                        PrimaryButton(stringResource(R.string.comms_answer), onClick = { answer() }, modifier = Modifier.fillMaxWidth(), tone = Tone.Accent)
+                        SecondaryButton(stringResource(R.string.comms_not_now), onClick = { decline() }, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }

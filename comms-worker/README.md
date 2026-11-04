@@ -808,7 +808,7 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/admin/suspend`, `/v1/admin/unsuspend` | `{number}`, signed by an operator identity (its key in `OPERATOR_KEYS`) and with `X-Admin-Secret` → `{ok, number, suspended, since, already}` or `{ok, number, suspended: false, wasSuspended}` (see "Suspending a number"; `scripts/operator.mjs`); 404 for no such account; off unless both settings are set; a few tries a minute per address |
 | POST | `/v1/traffic/probe` | `{region, trip, samples: [{seg, kph, t, lat?, lon?}]}` → `{ok, accepted}`; a traffic token, no identity |
 | GET | `/v1/traffic/live?region=` | `{now, segments: {seg: {kph, n, t}}, incidents}`; a traffic token |
-| GET | `/v1/traffic/typical?region=&segs=a,b` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments; a traffic token |
+| POST | `/v1/traffic/typical` `{region, segs: [a, b]}` | `{segments: {seg: {h: [168 × km/h or null]}}}`, up to 500 segments; a traffic token. The segments go in the body because a route's segments say where it goes, and a body is not kept in request logs. `GET ?region=&segs=a,b` is still answered for one release, for apps from before the change |
 | POST | `/v1/traffic/report` | `{region, trip, type, lat, lon, seg?}` → `{incident}`; merges with a nearby report of the same type; a report token |
 | POST | `/v1/traffic/report/vote` | `{region, trip, id, still}` → `{incident}`, null once voted away; a traffic token |
 | GET | `/v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon` | `{now, incidents, providers: {here, tomtom}}`: HERE / TomTom incidents in a box of at most 1° × 1°; a traffic token |

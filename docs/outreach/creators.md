@@ -26,8 +26,9 @@ I'm not asking for a sponsored video or a recommendation. If it interests you,
 I'd value an honest look, including the criticism. Things your audience will
 care about, up front:
 
-- It includes Google's play-services-location (used only where Play services
-  exists), so it isn't on F-Droid and isn't fully de-Googled.
+- The editions we publish include Google's play-services-location (used only
+  where Play services exists), so they aren't fully de-Googled. A build without
+  it exists in the source for F-Droid but isn't on F-Droid yet.
 - It has not been independently audited; detection is best-effort.
 - Much of the code was written with an AI coding assistant; the commit history
   says so.

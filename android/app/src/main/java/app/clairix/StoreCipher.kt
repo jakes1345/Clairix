@@ -14,7 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
  * load. The scanner's stores are where the owner has been: the location log,
  * the timeline of detections with their positions, the cell-tower baseline,
  * the vehicle trips. In the clear, a copy of the app's files is a map of the
- * owner's life. The radio scanner's recordings ([ScannerRecordings]) are
+ * owner's life. The radio scanner's recordings (ScannerRecordings, src/suite) are
  * sealed under the same key, a piece at a time ([sealBytes]).
  */
 interface StoreCipher {

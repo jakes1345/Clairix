@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -113,18 +114,18 @@ internal fun UltrasoundScreen() {
     ScreenList {
         item(key = "§hero") {
             StatusHero(
-                eyebrow = if (state.listening) "Listening · ${state.seconds} s" else "Ultrasonic beacons",
+                eyebrow = if (state.listening) stringResource(R.string.scan_listening_s, state.seconds) else stringResource(R.string.scan_ultrasonic_beacons),
                 headline = when {
-                    found.isNotEmpty() -> "Beacon"
-                    state.listening -> "Listening"
-                    state.seconds > 0 -> "Quiet"
-                    else -> "Idle"
+                    found.isNotEmpty() -> stringResource(R.string.scan_beacon)
+                    state.listening -> stringResource(R.string.comms_listening)
+                    state.seconds > 0 -> stringResource(R.string.scan_quiet)
+                    else -> stringResource(R.string.scan_idle)
                 },
                 body = when {
-                    found.isNotEmpty() -> "Something nearby is playing a tone too high for you to hear, the way ad-tracking kits mark a TV ad, a shop or a web page for an app on the phone to pick up."
-                    state.listening -> "Hold the phone in the open, near the TV or speaker you are wondering about. Nothing is recorded; only the spectrum is read."
-                    state.seconds > 0 -> "Nothing in the beacon band during ${state.seconds} s of listening."
-                    else -> "Listens to 17.5 to 21.5 kHz for the inaudible tones that tie your phone to a TV, a shop or another device. Run the self-test first."
+                    found.isNotEmpty() -> stringResource(R.string.scan_something_nearby_is_playing_a_tone)
+                    state.listening -> stringResource(R.string.scan_hold_the_phone_in_the_open)
+                    state.seconds > 0 -> stringResource(R.string.scan_nothing_in_the_beacon_band_during, state.seconds)
+                    else -> stringResource(R.string.scan_listens_to_17_5_to_21)
                 },
                 tone = when {
                     found.isNotEmpty() -> Tone.Caution
@@ -136,43 +137,43 @@ internal fun UltrasoundScreen() {
 
         if (!hasMic) {
             item(key = "§perm") {
-                Notice(Tone.Caution, "Listening needs the microphone. Clairix reads only the spectrum of what it hears; no audio is stored or sent.", title = "Microphone permission",
-                    action = { SecondaryButton("Allow microphone", onClick = { askMic.launch(Manifest.permission.RECORD_AUDIO) }) })
+                Notice(Tone.Caution, stringResource(R.string.scan_listening_needs_the_microphone_clairix_reads), title = stringResource(R.string.scan_microphone_permission),
+                    action = { SecondaryButton(stringResource(R.string.scan_allow_microphone), onClick = { askMic.launch(Manifest.permission.RECORD_AUDIO) }) })
             }
         }
 
         item(key = "§actions") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.listening) {
-                    PrimaryButton("Stop", onClick = { stop() }, tone = Tone.Danger)
+                    PrimaryButton(stringResource(R.string.comms_stop), onClick = { stop() }, tone = Tone.Danger)
                 } else {
-                    PrimaryButton("Listen", onClick = { start(selfTest = false) }, enabled = hasMic)
-                    SecondaryButton("Self-test", onClick = { start(selfTest = true) }, enabled = hasMic)
+                    PrimaryButton(stringResource(R.string.scan_listen), onClick = { start(selfTest = false) }, enabled = hasMic)
+                    SecondaryButton(stringResource(R.string.scan_self_test), onClick = { start(selfTest = true) }, enabled = hasMic)
                 }
             }
         }
 
-        state.error?.let { e -> item(key = "§err") { Notice(Tone.Caution, e, title = "Could not listen") } }
+        state.error?.let { e -> item(key = "§err") { Notice(Tone.Caution, e, title = stringResource(R.string.scan_could_not_listen)) } }
 
-        item(key = "§mic-hdr") { SectionHeader("This phone's microphone") }
+        item(key = "§mic-hdr") { SectionHeader(stringResource(R.string.scan_this_phones_microphone)) }
         item(key = "§mic") {
             ClairixCard {
-                KeyValueRow("Self-test", state.selfTest.label,
+                KeyValueRow(stringResource(R.string.scan_self_test), state.selfTest.label,
                     valueColor = when (state.selfTest) {
                         SelfTest.PASSED -> ClairixTheme.colors.safe
                         SelfTest.FAILED, SelfTest.MUTED -> ClairixTheme.colors.caution
                         else -> null
                     })
                 if (state.sampleRate > 0) {
-                    KeyValueRow("Sample rate", "${state.sampleRate} Hz")
-                    KeyValueRow("Audio path", state.source)
+                    KeyValueRow(stringResource(R.string.scan_sample_rate), stringResource(R.string.scan_hz, state.sampleRate))
+                    KeyValueRow(stringResource(R.string.scan_audio_path), state.source)
                 }
                 Text(
                     when (state.selfTest) {
-                        SelfTest.PASSED -> "The speaker played 19 kHz and the microphone heard it, so this phone can hear the beacon band and a quiet result means something."
-                        SelfTest.FAILED -> "Either the speaker cannot play 19 kHz or the microphone filters it out. On this phone a quiet result proves nothing; another phone can do the listening."
-                        SelfTest.MUTED -> "Turn the media volume up and run the self-test again; the tone is played through the media speaker."
-                        else -> "The self-test plays a 19 kHz tone for four seconds through the speaker and listens for it. Some phones cut their microphone off below that."
+                        SelfTest.PASSED -> stringResource(R.string.scan_the_speaker_played_19_khz_and)
+                        SelfTest.FAILED -> stringResource(R.string.scan_either_the_speaker_cannot_play_19)
+                        SelfTest.MUTED -> stringResource(R.string.scan_turn_the_media_volume_up_and)
+                        else -> stringResource(R.string.scan_the_self_test_plays_a_19)
                     },
                     style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                 )
@@ -180,7 +181,7 @@ internal fun UltrasoundScreen() {
         }
 
         if (found.isNotEmpty()) {
-            item(key = "§found-hdr") { SectionHeader("Heard", supporting = "${found.size}", tone = Tone.Caution) }
+            item(key = "§found-hdr") { SectionHeader(stringResource(R.string.scan_heard), supporting = "${found.size}", tone = Tone.Caution) }
             items(found, key = { "b|${(it.freqHz / Ultrasonic.BUCKET_HZ).toInt()}|${it.modulated}" }) { b ->
                 ClairixCard(tone = Tone.Caution, spacing = 4.dp) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -188,10 +189,10 @@ internal fun UltrasoundScreen() {
                             if (b.modulated) "%.1f–%.1f kHz".format(b.lowHz / 1000, b.highHz / 1000) else "%.2f kHz".format(b.freqHz / 1000),
                             style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f)
                         )
-                        StatusPill(if (b.modulated) "Carries data" else "Steady tone", Tone.Caution)
+                        StatusPill(if (b.modulated) stringResource(R.string.scan_carries_data) else stringResource(R.string.scan_steady_tone), Tone.Caution)
                     }
                     Text(
-                        (if (b.modulated) "Hops between tones the way a beacon sends an identifier. " else "A single steady tone, the simplest kind of beacon or a device's pilot tone. ") +
+                        (if (b.modulated) stringResource(R.string.scan_hops_between_tones_the_way_a) else stringResource(R.string.scan_a_single_steady_tone_the_simplest)) +
                             "%.0f dB above the background, present %.0f%% of the time.".format(b.snrDb, b.presence * 100),
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                     )
@@ -199,20 +200,16 @@ internal fun UltrasoundScreen() {
             }
             item(key = "§what-now") {
                 Notice(
-                    Tone.Info, title = "What to do",
-                    text = "Find the source by walking with the page open: the tone gets stronger near it. A beacon only matters if an app on " +
-                        "your phone is listening for it, and that app needs microphone access. Settings → Security & privacy → Privacy → " +
-                        "Permission manager → Microphone lists every app that can hear; remove it from anything that has no reason to."
+                    Tone.Info, title = stringResource(R.string.scan_what_to_do),
+                    text = stringResource(R.string.scan_find_the_source_by_walking_with)
                 )
             }
         }
 
         item(key = "§limits") {
             Notice(
-                Tone.Info, title = "Limits",
-                text = "Phones differ: many hear up to about 20 kHz, some stop near 16. Run the self-test before trusting a quiet result. " +
-                    "Other things make steady high tones too: some chargers, monitors and alarm sensors. A tone that hops between " +
-                    "frequencies is the one that carries an identifier."
+                Tone.Info, title = stringResource(R.string.comms_limits),
+                text = stringResource(R.string.scan_phones_differ_many_hear_up_to)
             )
         }
     }
@@ -239,7 +236,7 @@ private suspend fun listen(context: Context, selfTest: Boolean, update: ((Listen
     val rec = try {
         AudioRecord(source, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(minBuf, Ultrasonic.FRAME * 4))
     } catch (e: Exception) {
-        update { it.copy(error = "The microphone could not be opened: ${e.message}") }; return@withContext
+        update { it.copy(error = "The microphone could not be opened: ${e.message.toString()}") }; return@withContext
     }
     if (rec.state != AudioRecord.STATE_INITIALIZED) {
         rec.release()
@@ -294,7 +291,7 @@ private suspend fun listen(context: Context, selfTest: Boolean, update: ((Listen
         }
         if (selfTest) update { it.copy(selfTest = if (heardTest) SelfTest.PASSED else SelfTest.FAILED) }
     } catch (e: IllegalStateException) {
-        update { it.copy(error = "Recording stopped: ${e.message}") }
+        update { it.copy(error = "Recording stopped: ${e.message.toString()}") }
     } finally {
         runCatching { track?.stop() }
         runCatching { track?.release() }

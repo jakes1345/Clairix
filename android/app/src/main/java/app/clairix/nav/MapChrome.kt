@@ -14,9 +14,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.clairix.R
 import app.clairix.comms.RelayDirectory
 import app.clairix.ui.components.ClairixShapes
 import app.clairix.ui.components.Notice
@@ -46,7 +48,7 @@ fun MapAttribution(modifier: Modifier = Modifier) {
         maxLines = 1,
         modifier = modifier
             .background(c.surfaceRaised.copy(alpha = 0.88f), ClairixShapes.Tag)
-            .clickable(role = Role.Button, onClickLabel = "Open the map data licence") {
+            .clickable(role = Role.Button, onClickLabel = stringResource(R.string.drive_open_the_map_data_licence)) {
                 openLink(context, config.attributionUrl)
             }
             .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -63,7 +65,7 @@ fun TilesUnavailableNotice(consequence: String, modifier: Modifier = Modifier) {
     val outage by MapTiles.outage.collectAsStateWithLifecycle()
     val config by MapTiles.config.collectAsStateWithLifecycle()
     val now = outage ?: return
-    Notice(Tone.Caution, now.describe(config.name) + " " + consequence, modifier = modifier, title = "Map tiles unavailable")
+    Notice(Tone.Caution, now.describe(config.name) + " " + consequence, modifier = modifier, title = stringResource(R.string.drive_map_tiles_unavailable))
 }
 
 /**

@@ -31,15 +31,24 @@ class UpdateNoticesTest {
         assertTrue(UpdateCopy.offerBody(behind, newer, fromPlay = true).contains("Google Play"))
         val unsafe = UpdateCopy.offerBody(UpdateNotice(newer, offer = true, unsafe = true), newer, fromPlay = false)
         assertTrue(unsafe.contains("known security flaw"))
+        val foss = UpdateCopy.offerBody(behind, newer, fromPlay = false, fromFdroid = true)
+        assertTrue(foss.contains("F-Droid"))
+        assertFalse("F-Droid's build is not on the download page", foss.contains("download page"))
         assertEquals("Update available: 3.0.0-beta.9", UpdateCopy.offerTitle(newer))
     }
 
     @Test
-    fun thePlayEditionUpdatesFromPlayAndEveryOtherFromTheDownloadPage() {
+    fun thePlayEditionUpdatesFromPlayTheFossEditionFromFdroidAndTheFullFromTheDownloadPage() {
         assertTrue(updatesFromPlay("playSuite"))
         assertFalse(updatesFromPlay("fullSuite"))
         assertFalse(updatesFromPlay("fullComms"))
-        assertEquals("https://clairix.app/download", updateUrl(fromPlay = false))
-        assertTrue(updateUrl(fromPlay = true).startsWith("https://play.google.com/store/apps/details?id="))
+        assertFalse(updatesFromPlay("fossSuite"))
+        assertTrue(updatesFromFdroid("fossSuite"))
+        assertTrue(updatesFromFdroid("fossComms"))
+        assertFalse(updatesFromFdroid("fullSuite"))
+        assertFalse(updatesFromFdroid("playSuite"))
+        assertEquals("https://clairix.app/download", updateUrl(fromPlay = false, fromFdroid = false))
+        assertTrue(updateUrl(fromPlay = true, fromFdroid = false).startsWith("https://play.google.com/store/apps/details?id="))
+        assertTrue(updateUrl(fromPlay = false, fromFdroid = true).startsWith("https://f-droid.org/packages/"))
     }
 }

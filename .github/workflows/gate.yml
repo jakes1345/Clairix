@@ -43,6 +43,11 @@ jobs:
           python -m pip install --require-hashes -r tools/requirements-test.txt
           python -m pytest -q .github/scripts
 
+      # Every host the app and the relay name in their source is in docs/egress.json, and the
+      # security page's egress table has the same rows (gap audit item 8). Reads files only.
+      - name: Check what leaves the phone is all listed
+        run: python .github/scripts/egress_check.py
+
       - name: Wait for the other workflows
         env:
           GH_TOKEN: ${{ github.token }}

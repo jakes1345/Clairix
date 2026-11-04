@@ -283,4 +283,26 @@ class StoreTest {
         assertTrue(recent.exists())
         assertTrue(ordinary.exists())
     }
+
+    @Test
+    fun clearAllDataDeletesTheSetAsideCopiesOfTheStoresItClearsAndNoOthers() {
+        val dir = Files.createTempDirectory("setaside-clear").toFile().apply { deleteOnExit() }
+        val timeline = File(dir, "timeline.json${Store.SET_ASIDE_SUFFIX}").apply { writeText("x") }
+        val datedTimeline = File(dir, "timeline.json.1700000000000${Store.SET_ASIDE_SUFFIX}").apply { writeText("x") }
+        val log = File(dir, "location_log.json${Store.SET_ASIDE_SUFFIX}").apply { writeText("x") }
+        // Kept by "Clear all data": the unlock ledger, Comms, and the live stores themselves.
+        val ledger = File(dir, "unlock_ledger.json${Store.SET_ASIDE_SUFFIX}").apply { writeText("x") }
+        val mesh = File(dir, "mesh_store.json${Store.SET_ASIDE_SUFFIX}").apply { writeText("x") }
+        val live = File(dir, "timeline.json").apply { writeText("x") }
+        // A store whose name only starts like a cleared one is not that store.
+        val lookalike = File(dir, "timeline.jsonx${Store.SET_ASIDE_SUFFIX}").apply { writeText("x") }
+        assertEquals(3, Store.deleteSetAside(dir, ScanService.CLEARED_STORE_FILES))
+        assertFalse(timeline.exists())
+        assertFalse(datedTimeline.exists())
+        assertFalse(log.exists())
+        assertTrue(ledger.exists())
+        assertTrue(mesh.exists())
+        assertTrue(live.exists())
+        assertTrue(lookalike.exists())
+    }
 }

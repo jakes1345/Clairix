@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -127,7 +128,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
             Spacer(Modifier.weight(1f))
             if (!last) {
                 GhostButton(
-                    "Skip",
+                    stringResource(R.string.shell_skip),
                     onClick = { scope.launch { pagerState.scrollToPage(TOTAL_PAGES - 1) } },
                     tone = Tone.Neutral
                 )
@@ -138,86 +139,71 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
             if (BuildConfig.FULL_ACCESS) {
                 when (page) {
                     0 -> IntroPage(
-                        eyebrow = "Counter-surveillance",
-                        title = "Nothing hides.",
-                        lead = "Clairix finds hidden cameras, trackers following you, fake cell towers, rogue " +
-                            "Wi-Fi and spyware, and keeps your calls and messages private.",
-                        note = "Detection data stays on this phone. The map downloads tiles from OpenStreetMap, " +
-                            "which sees your IP address and the area you're viewing."
+                        eyebrow = stringResource(R.string.shell_counter_surveillance),
+                        title = stringResource(R.string.settings_nothing_hides),
+                        lead = stringResource(R.string.shell_clairix_finds_hidden_cameras_trackers_following),
+                        note = stringResource(R.string.shell_detection_data_stays_on_this_phone)
                     )
                     1 -> ListPage(
-                        eyebrow = "Permissions",
-                        title = "What it needs",
-                        lead = "Three permissions, asked for when you start scanning.",
+                        eyebrow = stringResource(R.string.shell_permissions),
+                        title = stringResource(R.string.shell_what_it_needs),
+                        lead = stringResource(R.string.shell_three_permissions_asked_for_when_you),
                         items = listOf(
-                            Triple(ClairixIcons.BluetoothSearching, "Nearby devices", "Listens for Bluetooth trackers such as AirTags, Tile and SmartTags."),
-                            Triple(Icons.Filled.LocationOn, "Precise location", "Proves a tracker is moving with you, not just nearby, by checking it shows up in different places."),
-                            Triple(Icons.Filled.Notifications, "Notifications", "Tells you the moment something is confirmed on you, even with the app closed.")
+                            Triple(ClairixIcons.BluetoothSearching, stringResource(R.string.shell_nearby_devices), stringResource(R.string.shell_listens_for_bluetooth_trackers_such_as)),
+                            Triple(Icons.Filled.LocationOn, stringResource(R.string.shell_precise_location), stringResource(R.string.shell_proves_a_tracker_is_moving_with)),
+                            Triple(Icons.Filled.Notifications, stringResource(R.string.settings_notifications), stringResource(R.string.shell_tells_you_the_moment_something_is))
                         )
                     )
                     2 -> ListPage(
-                        eyebrow = "How it works",
-                        title = "Watch the watchers",
-                        lead = "Clairix learns what's normal around you, then flags what isn't.",
+                        eyebrow = stringResource(R.string.shell_how_it_works),
+                        title = stringResource(R.string.shell_watch_the_watchers),
+                        lead = stringResource(R.string.shell_clairix_learns_whats_normal_around_you),
                         items = listOf(
-                            Triple(ClairixIcons.TrackChanges, "Trackers", "Matches known tracker signals and checks whether one keeps turning up as you move."),
-                            Triple(ClairixIcons.CellTower, "Fake cell towers", "Learns your usual towers, then watches for forced downgrades, unknown cells and signals that are too strong."),
-                            Triple(ClairixIcons.Wifi, "Wi-Fi and NFC", "Flags bait hotspots that copy real networks, and NFC tags hidden where they shouldn't be.")
+                            Triple(ClairixIcons.TrackChanges, stringResource(R.string.scan_trackers), stringResource(R.string.shell_matches_known_tracker_signals_and_checks)),
+                            Triple(ClairixIcons.CellTower, stringResource(R.string.shell_fake_cell_towers), stringResource(R.string.shell_learns_your_usual_towers_then_watches)),
+                            Triple(ClairixIcons.Wifi, stringResource(R.string.shell_wi_fi_and_nfc), stringResource(R.string.shell_flags_bait_hotspots_that_copy_real))
                         )
                     )
                     3 -> LockOfferPage(
-                        lead = "If someone else can pick up this phone, give Clairix a passcode of its own. Without " +
-                            "one, anyone who opens Clairix can read everything in it: the timeline, your usual places " +
-                            "and times, when the phone was unlocked, and your messages.",
-                        note = "A passcode keeps what is in Clairix to you. It does not hide the app: Clairix appears " +
-                            "by name in the app list and shows a notification while it scans, and while Comms stays online.",
+                        lead = stringResource(R.string.shell_if_someone_else_can_pick_up),
+                        note = stringResource(R.string.shell_a_passcode_keeps_what_is_in),
                         onNotNow = nextPage
                     )
                     else -> ReadyPage(
-                        comms = "Messaging, calls, SOS and the duress phrase need a Clairix number: an invite from " +
-                            "someone already on Clairix, or a relay you run. Everything else here works without one.",
-                        title = "Ready when you are",
-                        lead = "Start scanning now and keep the app running while you move, or look around first " +
-                            "and start it later from Scan → Trackers.",
-                        note = "Confirming a tracker is on you takes about 10 minutes and 300 metres of moving together. " +
-                            "Android may ask whether Clairix can suggest Wi-Fi networks: that is the Wi-Fi trap, a made-up " +
-                            "network name only interception kit answers to. It is added with auto-join off and a password " +
-                            "nobody knows, so the phone does not join what answers. The tour explains it."
+                        comms = stringResource(R.string.shell_messaging_calls_sos_and_the_duress),
+                        title = stringResource(R.string.shell_ready_when_you_are),
+                        lead = stringResource(R.string.shell_start_scanning_now_and_keep_the),
+                        note = stringResource(R.string.shell_confirming_a_tracker_is_on_you)
                     )
                 }
             } else {
                 when (page) {
                     0 -> IntroPage(
-                        eyebrow = "Clairix Comms",
-                        title = "Yours only.",
-                        lead = "Messages and calls for your circle, encrypted on this phone. Only the person you send " +
-                            "to can read them. No phone number, no Google account, no carrier.",
-                        note = "Your keys, contacts and message history stay on this phone."
+                        eyebrow = stringResource(R.string.shell_clairix_comms),
+                        title = stringResource(R.string.shell_yours_only),
+                        lead = stringResource(R.string.shell_messages_and_calls_for_your_circle),
+                        note = stringResource(R.string.shell_your_keys_contacts_and_message_history)
                     )
                     1 -> ListPage(
-                        eyebrow = "Permissions",
-                        title = "What it needs",
-                        lead = "Each one is asked for the first time it's needed.",
+                        eyebrow = stringResource(R.string.shell_permissions),
+                        title = stringResource(R.string.shell_what_it_needs),
+                        lead = stringResource(R.string.shell_each_one_is_asked_for_the),
                         items = listOf(
-                            Triple(Icons.Filled.Notifications, "Notifications", "So a new message shows and a call rings while the app is closed."),
-                            Triple(Icons.Filled.Call, "Microphone", "For calls. Asked once you have a number, so the first call isn't also the first question."),
-                            Triple(ClairixIcons.Videocam, "Camera", "To scan a contact's pairing code. Nothing is recorded."),
-                            Triple(Icons.Filled.LocationOn, "Location", "Attached to an SOS so your group knows where you are. Read only for an SOS: the button, or the duress phrase.")
+                            Triple(Icons.Filled.Notifications, stringResource(R.string.settings_notifications), stringResource(R.string.shell_so_a_new_message_shows_and)),
+                            Triple(Icons.Filled.Call, stringResource(R.string.shell_microphone), stringResource(R.string.shell_for_calls_asked_once_you_have)),
+                            Triple(ClairixIcons.Videocam, stringResource(R.string.shell_camera), stringResource(R.string.shell_to_scan_a_contacts_pairing_code)),
+                            Triple(Icons.Filled.LocationOn, stringResource(R.string.settings_location), stringResource(R.string.shell_attached_to_an_sos_so_your))
                         )
                     )
                     2 -> LockOfferPage(
-                        lead = "If someone else can pick up this phone, give Clairix a passcode of its own. Without " +
-                            "one, anyone who opens Clairix can read your messages and see who you talk to.",
-                        note = "A passcode keeps what is in Clairix to you. It does not hide the app: Clairix appears " +
-                            "by name in the app list and shows a notification while Comms stays online.",
+                        lead = stringResource(R.string.shell_if_someone_else_can_pick_up_2),
+                        note = stringResource(R.string.shell_a_passcode_keeps_what_is_in_2),
                         onNotNow = nextPage
                     )
                     else -> ReadyPage(
-                        title = "You need an invite",
-                        lead = "The person who gave you this app sends an invite link or shows a QR code. Opening it " +
-                            "gives you a Clairix number and adds them as your first contact.",
-                        note = "A Clairix number isn't a phone number. It only reaches other Clairix apps on the same " +
-                            "relay. Keep Comms online so calls ring while the app is closed."
+                        title = stringResource(R.string.shell_you_need_an_invite),
+                        lead = stringResource(R.string.shell_the_person_who_gave_you_this),
+                        note = stringResource(R.string.shell_a_clairix_number_isnt_a_phone)
                     )
                 }
             }
@@ -231,14 +217,14 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
             PageBars(current = pagerState.currentPage, count = TOTAL_PAGES)
             if (last) {
                 PrimaryButton(
-                    if (BuildConfig.FULL_ACCESS) "Start scanning" else "Get started",
+                    if (BuildConfig.FULL_ACCESS) stringResource(R.string.scan_start_scanning) else stringResource(R.string.shell_get_started),
                     onClick = { finish() },
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (BuildConfig.FULL_ACCESS) {
                     // Nothing is asked for and nothing starts: the scanner waits in Scan → Trackers.
                     GhostButton(
-                        "Not now",
+                        stringResource(R.string.comms_not_now),
                         onClick = { finish(scan = false) },
                         tone = Tone.Neutral,
                         modifier = Modifier.fillMaxWidth()
@@ -246,7 +232,7 @@ fun OnboardingScreen(startScanService: () -> Unit, onComplete: () -> Unit) {
                 }
             } else {
                 PrimaryButton(
-                    "Next",
+                    stringResource(R.string.settings_next),
                     onClick = nextPage,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -311,7 +297,7 @@ private fun IntroPage(eyebrow: String, title: String, lead: String, note: String
                 .background(c.surface, ClairixShapes.Octagon),
             contentAlignment = Alignment.Center
         ) {
-            LogoMark(size = 88.dp, contentDescription = "Clairix")
+            LogoMark(size = 88.dp, contentDescription = stringResource(R.string.brand_name))
         }
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -383,7 +369,7 @@ private fun LockOfferPage(lead: String, note: String, onNotNow: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Spacer(Modifier.height(16.dp))
-        PageTitle("Before you start", "Does anyone else use this phone?")
+        PageTitle(stringResource(R.string.shell_before_you_start), stringResource(R.string.shell_does_anyone_else_use_this_phone))
         Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
         Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
         when {
@@ -395,18 +381,17 @@ private fun LockOfferPage(lead: String, note: String, onNotNow: () -> Unit) {
             )
             enabled -> Notice(
                 Tone.Safe,
-                "Clairix asks for it whenever the screen has been off, or after 30 seconds away. Settings → " +
-                    "App passcode changes that, and adds biometrics or a duress passcode.",
-                title = "Passcode set"
+                stringResource(R.string.shell_clairix_asks_for_it_whenever_the),
+                title = stringResource(R.string.shell_passcode_set)
             )
             else -> {
                 PrimaryButton(
-                    "Set a passcode for Clairix",
+                    stringResource(R.string.shell_set_a_passcode_for_clairix),
                     onClick = { setting = true },
                     icon = Icons.Filled.Lock,
                     modifier = Modifier.fillMaxWidth()
                 )
-                GhostButton("Not now", onClick = onNotNow, tone = Tone.Neutral, modifier = Modifier.fillMaxWidth())
+                GhostButton(stringResource(R.string.comms_not_now), onClick = onNotNow, tone = Tone.Neutral, modifier = Modifier.fillMaxWidth())
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -433,7 +418,7 @@ private fun ReadyPage(title: String, lead: String, note: String, comms: String? 
                 modifier = Modifier.size(44.dp)
             )
         }
-        PageTitle("Last step", title)
+        PageTitle(stringResource(R.string.shell_last_step), title)
         Text(lead, style = MaterialTheme.typography.bodyLarge, color = c.textMuted)
         Text(note, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)
         if (comms != null) Text(comms, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle)

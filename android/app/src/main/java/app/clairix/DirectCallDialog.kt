@@ -1,10 +1,13 @@
 package app.clairix
 
+import android.content.res.Resources
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.comms.CallManager
 import app.clairix.comms.formatClairixNumber
+import app.clairix.ui.appResources
 import app.clairix.ui.components.ClairixDialog
 import app.clairix.ui.components.Tone
 
@@ -20,22 +23,17 @@ fun DirectCallDialog() {
     val ask = pending ?: return
     val who = ask.contact.name.ifBlank { formatClairixNumber(ask.contact.number) }
     ClairixDialog(
-        title = "Call directly?",
-        text = directCallExplanation(who, ask.relayUsuallyOffersTurn),
+        title = stringResource(R.string.comms_call_directly),
+        text = directCallExplanation(appResources(), who, ask.relayUsuallyOffersTurn),
         onDismiss = { CallManager.dismissDirectCallAsk() },
-        confirmLabel = "Call directly",
+        confirmLabel = stringResource(R.string.comms_call_directly_2),
         onConfirm = { CallManager.place(ask.contact, allowDirect = true) },
         confirmTone = Tone.Caution,
     )
 }
 
 /** What the "Call directly?" dialog says about [who], and why it is asking. */
-internal fun directCallExplanation(who: String, relayUsuallyOffersTurn: Boolean): String {
-    val why = if (relayUsuallyOffersTurn) {
-        "Your relay's call server did not answer for this call."
-    } else {
-        "Your relay offers no call server (TURN), so this call cannot go through the relay."
-    }
-    return "$why Your network address will be shared with $who, whether or not they answer. " +
-        "To never be asked, choose in Comms settings under Relay-only calls."
+internal fun directCallExplanation(res: Resources, who: String, relayUsuallyOffersTurn: Boolean): String {
+    val why = res.getString(if (relayUsuallyOffersTurn) R.string.comms_direct_turn_silent else R.string.comms_direct_no_turn)
+    return res.getString(R.string.comms_direct_call_explained, why, who)
 }

@@ -378,7 +378,7 @@ val assetPublicKey: String = rootProject.file("asset-signing.pub").takeIf { it.i
 
 android {
     namespace = "app.clairix"
-    compileSdk = 35
+    compileSdk = 36
 
     // The NDK cargo-ndk builds with, so the Android Gradle plugin has a strip
     // tool. Without one it packages every native library as it is, debug info
@@ -407,7 +407,7 @@ android {
     defaultConfig {
         applicationId = "app.clairix"
         minSdk = 31
-        targetSdk = 35
+        targetSdk = 36
         // The asset signing public key (tools/signing): what the app checks
         // downloaded maps, work zones and release checksums against. Empty in
         // a checkout that has not run keygen; a release build refuses that below.
@@ -426,22 +426,37 @@ android {
     //          this build at all) and no ClairixCoin. Everything else is the same.
     //   full   Sideloaded from clairix.app and GitHub Releases: everything,
     //          including the card vault with card emulation and ClairixCoin.
+    //   foss   For F-Droid: the full edition without Google Play services or
+    //          Firebase. It takes the full edition's code and manifests (src/full,
+    //          and src/fullSuite for its suite; see sourceSets below) and leaves out
+    //          src/gms, the one place that uses Google's fused location client:
+    //          its own src/foss supplies no such client, so every position comes
+    //          from Android's own location service, the path the other editions
+    //          take on a phone without Play services. play-services-location is a
+    //          dependency of full and play only, and .github/workflows/android.yml
+    //          fails the build if a com.google.android.gms or com.google.firebase
+    //          artifact reaches this edition's runtime classpath or classes.
     //
     // tier — how much of the app a build carries:
     //   suite  the whole app: scanner, map, cell/NFC/Wi-Fi/device tabs, tools, COMMS
     //   comms  COMMS only: encrypted messages, calls, groups and SOS, with the safety
     //          pages (duress phrase, fake call, Wipe Clairix); no scanner or tools
     //
-    // Variants built: playSuite (the Play upload), fullSuite and fullComms. The
-    // comms-only build is handed out directly, never through Play, so playComms
-    // is switched off below.
+    // Variants built: playSuite (the Play upload), fullSuite, fullComms, and
+    // fossSuite and fossComms for F-Droid. The comms-only build is handed out
+    // directly, never through Play, so playComms is switched off below.
     //
     // A comms install upgrades to the full edition's suite in place (the same
     // applicationId and signing key) and keeps its Clairix number, contacts and
     // message history. The comms manifest (src/main) declares only what COMMS
     // needs; the scanner's permissions and components are added by
     // src/suite/AndroidManifest.xml, and the card-emulation service only by
-    // src/fullSuite/AndroidManifest.xml. The code reads FULL_ACCESS to decide
+    // src/fullSuite/AndroidManifest.xml. The code follows the same lines: Drive
+    // mode (SDR, radio scanner, ADS-B, OBD-II), the NFC tab and the card vault
+    // are in src/suite and card emulation in src/fullSuite, reached from the
+    // shared code only through TierShell (src/main), which src/suite and
+    // src/comms each implement as `object Tier`, so the comms build is compiled
+    // without them (release.yml checks its R8 mapping). The code reads FULL_ACCESS to decide
     // which screens exist, CARD_VAULT for the vault and card emulation,
     // CLAIRIX_COIN for the coin balance, payments and their relay requests, and
     // LAUNCHER_DISGUISE for discreet mode's neutral launcher entries ("Compass",
@@ -451,12 +466,23 @@ android {
     productFlavors {
         create("play") {
             dimension = "edition"
+            buildConfigField("boolean", "PLAY_SERVICES", "true")
             buildConfigField("boolean", "CARD_VAULT", "false")
             buildConfigField("boolean", "CLAIRIX_COIN", "false")
             buildConfigField("boolean", "LAUNCHER_DISGUISE", "false")
         }
         create("full") {
             dimension = "edition"
+            buildConfigField("boolean", "PLAY_SERVICES", "true")
+            buildConfigField("boolean", "CARD_VAULT", "true")
+            buildConfigField("boolean", "CLAIRIX_COIN", "true")
+            buildConfigField("boolean", "LAUNCHER_DISGUISE", "true")
+        }
+        create("foss") {
+            dimension = "edition"
+            // PLAY_SERVICES false: no Google Play services library in this build, so
+            // the screens say positions come from Android's own location service.
+            buildConfigField("boolean", "PLAY_SERVICES", "false")
             buildConfigField("boolean", "CARD_VAULT", "true")
             buildConfigField("boolean", "CLAIRIX_COIN", "true")
             buildConfigField("boolean", "LAUNCHER_DISGUISE", "true")
@@ -526,6 +552,9 @@ android {
     testOptions {
         // android.util.Log and friends return defaults on the JVM instead of throwing.
         unitTests.isReturnDefaultValues = true
+        // The app's merged resources, so the Robolectric tests of the text the screens
+        // show (BatteryTextTest and the like) read the real strings.xml.
+        unitTests.isIncludeAndroidResources = true
     }
 
     // Android Lint, run by .github/workflows/android.yml (lintFullSuiteDebug):
@@ -538,12 +567,19 @@ android {
         abortOnError = true
         checkDependencies = true
         baseline = file("lint-baseline.xml")
-        // CI's SDK knows API 36, so "targetSdk = 35" reads as out of date there
-        // (not on an SDK without 36). Moving to 36 is its own change: compileSdk,
-        // AGP and an API 36 emulator together, with the behaviour changes tested.
-        // Until it lands, the reminder stays in every report without failing it;
-        // take this line out with that change.
+        // OldTargetApi compares targetSdk with the newest platform installed, not
+        // with what this toolchain can build. GitHub's runner image carries API 37,
+        // but Android Gradle plugin 8.x stops at 36 (37 needs 9.x, as does
+        // sqlcipher-android 4.18; see the dependency below). So the reminder is
+        // shown in every report without failing it; take this line out with the
+        // move to AGP 9 and targetSdk 37.
         informational += "OldTargetApi"
+        // NewerVersionAvailable asks Maven Central, at the moment lint runs, whether
+        // any dependency has a newer release, so its answer changes whenever a
+        // library publishes: on 3 November okhttp 5.5.1 failed every build with no
+        // change in this repository. Updates are proposed by Dependabot
+        // (.github/dependabot.yml, weekly), so lint reports them without failing.
+        informational += "NewerVersionAvailable"
     }
 
     sourceSets {
@@ -551,6 +587,22 @@ android {
             jniLibs.srcDir(rustJniLibs)
             kotlin.srcDir(rustBindings)
             assets.srcDir(relayListAssets)
+        }
+        // Google's fused location client (EditionLocation), in the two editions
+        // that carry Google Play services. The foss edition has its own EditionLocation.
+        getByName("full") { kotlin.srcDir("src/gms/java") }
+        getByName("play") { kotlin.srcDir("src/gms/java") }
+        // The foss edition is the full edition without Google Play services: the
+        // same direct SOS text (src/full) and, for its suite, the same card vault
+        // with card emulation (src/fullSuite), from the same files.
+        getByName("foss") {
+            kotlin.srcDir("src/full/java")
+            manifest.srcFile("src/full/AndroidManifest.xml")
+        }
+        maybeCreate("fossSuite").apply {
+            kotlin.srcDir("src/fullSuite/java")
+            res.srcDir("src/fullSuite/res")
+            manifest.srcFile("src/fullSuite/AndroidManifest.xml")
         }
     }
 
@@ -578,7 +630,10 @@ dependencies {
     // the handful of others the app draws are carried in ClairixIcons.kt.
     implementation("androidx.compose.material:material-icons-core")
 
-    implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Google's fused location client, in the full and Play editions only (src/gms).
+    // The foss edition, for F-Droid, is built without it; see productFlavors.
+    "fullImplementation"("com.google.android.gms:play-services-location:21.3.0")
+    "playImplementation"("com.google.android.gms:play-services-location:21.3.0")
 
     // Hidden-camera sweep — CameraX drives the torch-on lens-glint analyser and the
     // front-camera IR-illuminator view. Frames are read from the Y plane in process
@@ -604,9 +659,11 @@ dependencies {
     // a distributor of the owner's choosing (for example the ntfy app). No Google
     // service is involved anywhere.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18 and
-    // later demand compileSdk 36 and so a newer Android Gradle plugin; 4.17 is
-    // the newest that builds against 35.
+    // Every page of the comms database encrypted; see comms/CommsDb.kt. 4.18.0 and
+    // later declare minCompileSdk 37 in their AAR metadata (checked against 4.18.0:
+    // "requires ... to compile against version 37 or later"), which needs an
+    // Android Gradle plugin of the 9.x line; the 8.x line stops at compileSdk 36.
+    // 4.17 is the newest release this toolchain can build.
     implementation("net.zetetic:sqlcipher-android:4.17.0")
     // SQLCipher's database and open-helper classes implement androidx.sqlite's
     // support interfaces, which its POM lists at runtime scope only; the Kotlin
@@ -644,15 +701,16 @@ dependencies {
 // which made every run depend on Maven Central answering at that moment (it
 // rate-limits). The tests then run Robolectric offline against this copy. The
 // versions are the ones robolectric 4.14.1 pairs with SDK 34, which the tests
-// run on (src/test/resources/robolectric.properties), and SDK 35, the target.
+// run on (src/test/resources/robolectric.properties), and SDK 35, the newest it
+// knows: the app targets 36, past it, and the offline runs need no other jar.
 // Two configurations: one module in two versions in one configuration resolves to
 // the newer alone.
 val robolectricRuntime: Configuration by configurations.creating
 val robolectricTarget: Configuration by configurations.creating
 dependencies {
     robolectricRuntime("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
-    // The SDK the app targets: Robolectric reads the app's resources against it,
-    // whichever SDK the tests run on.
+    // The SDK Robolectric reads the app's resources against, whichever SDK the
+    // tests run on: the target, or the newest it knows when the target is newer.
     robolectricTarget("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7")
 }
 val robolectricJars = layout.buildDirectory.dir("robolectric-jars")
@@ -704,8 +762,10 @@ configurations.matching { it.name == "detekt" }.configureEach {
 
 // A CycloneDX bill of materials of the libraries in the release builds, which
 // .github/workflows/release.yml attaches to every release: each library in the
-// runtime classpath, with its version. The three release variants have the
-// same dependencies, so the full edition's classpath stands for all of them.
+// runtime classpath, with its version. The three variants release.yml publishes
+// have the same dependencies, so the full edition's classpath stands for all of
+// them. (The foss edition, which release.yml does not build, has the same less
+// play-services-location and what it pulls in.)
 // The Rust crates inside the crypto library get a bill of their own from
 // cargo-cyclonedx in the same workflow.
 tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
@@ -720,7 +780,8 @@ tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
 }
 
 // The comms-only build is never published on Google Play, so the Play edition
-// has no comms variant: playSuite, fullSuite and fullComms are the three built.
+// has no comms variant: playSuite, fullSuite, fullComms, fossSuite and fossComms
+// are the five built.
 androidComponents {
     beforeVariants(selector().withFlavor("edition" to "play").withFlavor("tier" to "comms")) { variant ->
         variant.enable = false

@@ -1,5 +1,6 @@
 package app.clairix
 
+import android.content.res.Resources
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.BatteryUse
@@ -27,6 +29,7 @@ import app.clairix.comms.CommsRepository
 import app.clairix.comms.LinkTiming
 import app.clairix.comms.mesh.Mesh
 import app.clairix.nav.DrivePower
+import app.clairix.ui.appResources
 import app.clairix.ui.components.ClairixCard
 import app.clairix.ui.components.Hairline
 import app.clairix.ui.components.SectionHeader
@@ -44,7 +47,7 @@ import java.util.Locale
  * app the battery level and charge, not its own draw.
  */
 internal fun LazyListScope.batterySection() {
-    item(key = "§battery-hdr") { SectionHeader("Battery") }
+    item(key = "§battery-hdr") { SectionHeader(stringResource(R.string.settings_battery)) }
     item(key = "§battery") { BatteryCard() }
 }
 
@@ -70,19 +73,20 @@ private fun BatteryCard() {
     val sample = remember(now, scan.scanning) { LowPowerMode.sample(context, now) }
     val effort = remember(now, scan.scanning) { ScanPower.effort }
     val snapshot = remember(now, effort) { effort?.snapshot(now) }
+    val text = BatteryText(appResources())
 
     ClairixCard(spacing = 0.dp, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
         ToggleRow(
-            title = "Low power",
-            subtitle = BatteryText.lowPower(low.reason),
+            title = stringResource(R.string.settings_low_power),
+            subtitle = text.lowPower(low.reason),
             checked = low.switchOn,
             onCheckedChange = { v -> LowPowerMode.setSwitch(context, v) }
         )
         if (BuildConfig.FULL_ACCESS) {
             Hairline()
             CostLine(
-                "Used since the scan started",
-                BatteryText.used(
+                stringResource(R.string.settings_used_since_the_scan_started),
+                text.used(
                     use = if (effort != null && sample != null) ScanPower.use(sample) else null,
                     scanning = effort != null,
                     charging = sample?.charging == true,
@@ -90,18 +94,18 @@ private fun BatteryCard() {
                 )
             )
             Hairline()
-            CostLine("Bluetooth scan", snapshot?.let { BatteryText.bluetooth(it) } ?: BatteryText.SCANNER_OFF)
-            CostLine("Position", snapshot?.let { BatteryText.position(it) } ?: BatteryText.SCANNER_OFF)
-            CostLine("Cell and Wi-Fi checks", snapshot?.let { BatteryText.checks(it) } ?: BatteryText.SCANNER_OFF)
+            CostLine(stringResource(R.string.settings_bluetooth_scan), snapshot?.let { text.bluetooth(it) } ?: text.scannerOff)
+            CostLine(stringResource(R.string.settings_position), snapshot?.let { text.position(it) } ?: text.scannerOff)
+            CostLine(stringResource(R.string.settings_cell_and_wi_fi_checks), snapshot?.let { text.checks(it) } ?: text.scannerOff)
         }
-        CostLine("Comms", BatteryText.comms(comms.online && CommsRepository.isRegistered(), CommsRepository.coverTraffic(), low.active))
-        CostLine("Offline mesh", BatteryText.mesh(mesh.running, mesh.fullPace))
+        CostLine(stringResource(R.string.settings_comms), text.comms(comms.online && CommsRepository.isRegistered(), CommsRepository.coverTraffic(), low.active))
+        CostLine(stringResource(R.string.settings_offline_mesh), text.mesh(mesh.running, mesh.fullPace))
         if (BuildConfig.FULL_ACCESS) {
-            CostLine("Drive mode", BatteryText.DRIVE)
-            CostLine("Navigation", BatteryText.NAVIGATION)
+            CostLine(stringResource(R.string.settings_drive_mode), text.drive)
+            CostLine(stringResource(R.string.settings_navigation), text.navigation)
         }
         Text(
-            BatteryText.FOOTNOTE,
+            text.footnote,
             style = MaterialTheme.typography.bodySmall,
             color = c.textSubtle,
             modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -119,114 +123,108 @@ private fun CostLine(title: String, body: String) {
 }
 
 /** The words of Settings > Battery, apart from the screen so they can be tested. */
-internal object BatteryText {
+internal class BatteryText(private val res: Resources) {
 
-    const val SCANNER_OFF = "Counted while the scanner runs."
+    val scannerOff: String get() = res.getString(R.string.battery_scanner_off)
 
-    const val DRIVE = "Only while drive mode is on: the radio stick streams and the OBD-II adapter is polled. " +
-        "The stick is powered from this phone's battery through the USB port. Below ${DrivePower.CUTOFF_PCT} % " +
-        "with no charger, both stop until the phone charges."
+    val drive: String get() = res.getString(R.string.battery_drive, DrivePower.CUTOFF_PCT)
 
-    const val NAVIGATION = "Only during a route: a position every second, spoken directions and the traffic " +
-        "checks. Below ${DrivePower.CUTOFF_PCT} % with no charger, traffic, speed reports and the check for a " +
-        "faster route slow to every 5 minutes."
+    val navigation: String get() = res.getString(R.string.battery_navigation, DrivePower.CUTOFF_PCT)
 
-    const val FOOTNOTE = "These are Clairix's own counts of what it runs, not measured current: Android does not " +
-        "tell an app what it draws. Android's battery page shows Clairix's share. Measured figures per phone " +
-        "are pending."
+    val footnote: String get() = res.getString(R.string.battery_footnote)
 
-    private const val LOW_POWER_DOES = "The scanner counts the phone as settled after 2 minutes still instead of 4, " +
-        "scans Bluetooth at low power, reads the cell every 2 minutes and the Wi-Fi every 15; cover traffic " +
-        "pauses and the mesh stays at its quiet pace unless it has something to carry. SOS, the duress " +
-        "passcode and incoming calls are never slowed."
+    private val lowPowerDoes: String get() = res.getString(R.string.battery_low_power_does)
 
     /** The switch's line: whether low power is on and why, and what it does. */
     fun lowPower(reason: LowPower.Reason?): String = when (reason) {
-        LowPower.Reason.SWITCH -> "On. $LOW_POWER_DOES"
-        LowPower.Reason.POWER_SAVE -> "On while Android's battery saver is on. $LOW_POWER_DOES"
-        LowPower.Reason.BATTERY -> "On: the battery is below ${LowPower.AUTO_BELOW_PCT} % and not charging. " +
-            "It goes off when the phone charges or reaches ${LowPower.AUTO_RESUME_PCT} %. $LOW_POWER_DOES"
-        null -> "Off. Comes on by itself below ${LowPower.AUTO_BELOW_PCT} % with no charger, and while " +
-            "Android's battery saver is on. $LOW_POWER_DOES"
+        LowPower.Reason.SWITCH -> res.getString(R.string.battery_low_power_switch, lowPowerDoes)
+        LowPower.Reason.POWER_SAVE -> res.getString(R.string.battery_low_power_saver, lowPowerDoes)
+        LowPower.Reason.BATTERY -> res.getString(
+            R.string.battery_low_power_battery, LowPower.AUTO_BELOW_PCT, LowPower.AUTO_RESUME_PCT, lowPowerDoes
+        )
+        null -> res.getString(R.string.battery_low_power_off, LowPower.AUTO_BELOW_PCT, lowPowerDoes)
     }
 
     /** "Used since the scan started": the whole phone's drain, said as such; see [BatteryUse]. */
     fun used(use: BatteryUse.Use?, scanning: Boolean, charging: Boolean, scanStartedAt: Long?): String {
-        if (!scanning) return SCANNER_OFF
-        if (charging) return "Charging now. Counting starts again when the phone is unplugged."
-        if (use == null) return "Waiting for a battery reading."
+        if (!scanning) return scannerOff
+        if (charging) return res.getString(R.string.battery_charging_now)
+        if (use == null) return res.getString(R.string.battery_waiting_for_reading)
         val parts = buildList {
-            use.pct?.let { add("$it %") }
-            use.mAh?.let { add("$it mAh") }
+            use.pct?.let { add(res.getString(R.string.battery_percent, it)) }
+            use.mAh?.let { add(res.getString(R.string.battery_mah, it)) }
         }
         val amount = when (parts.size) {
-            0 -> "The phone did not report its level"
+            0 -> res.getString(R.string.battery_no_level)
             1 -> parts[0]
-            else -> "${parts[0]} (${parts[1]})"
+            else -> res.getString(R.string.battery_percent_and_mah, parts[0], parts[1])
         }
-        val rate = use.pctPerHour?.let { ", about ${String.format(Locale.US, "%.1f", it)} % an hour" } ?: ""
+        val rate = use.pctPerHour?.let { res.getString(R.string.battery_rate, String.format(Locale.US, "%.1f", it)) } ?: ""
         val since = if (scanStartedAt != null && use.sinceAt - scanStartedAt > UNPLUG_NOTE_MS) {
-            " since the phone was unplugged at ${SimpleDateFormat("HH:mm", Locale.US).format(Date(use.sinceAt))}"
+            res.getString(R.string.battery_since_unplugged, SimpleDateFormat("HH:mm", Locale.US).format(Date(use.sinceAt)))
         } else ""
-        return "$amount in ${duration(use.elapsedMs)}$since$rate. The whole phone's use, not Clairix's alone."
+        return res.getString(R.string.battery_used, amount, duration(use.elapsedMs), since, rate)
     }
 
     /** The Bluetooth scan's time in each mode; the duty cycles are Android's defaults, which phone makers may change. */
     fun bluetooth(s: ScanEffort.Snapshot): String {
-        if (s.bleMs == 0L) return "Not running."
+        if (s.bleMs == 0L) return res.getString(R.string.battery_not_running)
         val modes = buildList {
-            if (s.bleLowPowerMs > 0) add("${duration(s.bleLowPowerMs)} at low power (listening about a tenth of the time)")
-            if (s.bleBalancedMs > 0) add("${duration(s.bleBalancedMs)} balanced (about a quarter)")
-            if (s.bleLowLatencyMs > 0) add("${duration(s.bleLowLatencyMs)} at low latency (all the time)")
+            if (s.bleLowPowerMs > 0) add(res.getString(R.string.battery_ble_low_power, duration(s.bleLowPowerMs)))
+            if (s.bleBalancedMs > 0) add(res.getString(R.string.battery_ble_balanced, duration(s.bleBalancedMs)))
+            if (s.bleLowLatencyMs > 0) add(res.getString(R.string.battery_ble_low_latency, duration(s.bleLowLatencyMs)))
         }
-        val batched = if (s.bleBatchedMs > 0) " Results handed over in batches for ${duration(s.bleBatchedMs)}." else ""
-        return "Running ${duration(s.bleMs)}: ${modes.joinToString(", ")}.$batched"
+        val batched = if (s.bleBatchedMs > 0) res.getString(R.string.battery_ble_batched, duration(s.bleBatchedMs)) else ""
+        return res.getString(
+            R.string.battery_ble_running, duration(s.bleMs), modes.joinToString(res.getString(R.string.battery_list_separator)), batched
+        )
     }
 
     /** Time moving (precise fixes every few seconds) and settled (an occasional coarse fix). */
     fun position(s: ScanEffort.Snapshot): String {
-        if (s.movingMs == 0L && s.settledMs == 0L) return "No positions: location access is off."
-        return "Moving ${duration(s.movingMs)}, with a precise fix every 15 seconds; settled ${duration(s.settledMs)}, " +
-            "with a coarse fix every 3 minutes."
+        if (s.movingMs == 0L && s.settledMs == 0L) return res.getString(R.string.battery_no_positions)
+        return res.getString(R.string.battery_position, duration(s.movingMs), duration(s.settledMs))
     }
 
     /** How often the modem and Android's Wi-Fi scan were asked. */
-    fun checks(s: ScanEffort.Snapshot): String =
-        "${s.cellReadings} cell ${plural(s.cellReadings, "reading", "readings")} from the modem, " +
-            "${s.wifiScans} Wi-Fi ${plural(s.wifiScans, "scan", "scans")} asked of Android."
+    fun checks(s: ScanEffort.Snapshot): String = res.getString(
+        R.string.battery_checks,
+        res.getQuantityString(R.plurals.battery_cell_readings, s.cellReadings, s.cellReadings),
+        res.getQuantityString(R.plurals.battery_wifi_scans, s.wifiScans, s.wifiScans)
+    )
 
     /** The relay connection and cover traffic. */
     fun comms(online: Boolean, coverTraffic: Boolean, lowPower: Boolean): String {
-        if (!online) return "Offline: no connection is kept open."
+        if (!online) return res.getString(R.string.battery_comms_offline)
         val cover = when {
             !coverTraffic -> ""
-            lowPower -> " Cover traffic is paused while low power is on."
-            else -> " Cover traffic sends an envelope at random intervals."
+            lowPower -> res.getString(R.string.battery_cover_paused)
+            else -> res.getString(R.string.battery_cover_on)
         }
-        return "Online: one connection to your relay, which sends a heartbeat about every " +
-            "${LinkTiming.HEARTBEAT_MS / 60_000L} minutes when nothing is happening.$cover"
+        val minutes = (LinkTiming.HEARTBEAT_MS / 60_000L).toInt()
+        return res.getQuantityString(R.plurals.battery_comms_online, minutes, minutes, cover)
     }
 
     /** The mesh's radio pace. */
     fun mesh(running: Boolean, fullPace: Boolean): String = when {
-        !running -> "Off."
-        fullPace -> "On, at full pace: scanning and advertising over Bluetooth."
-        else -> "On, listening and advertising at low power."
+        !running -> res.getString(R.string.battery_mesh_off)
+        fullPace -> res.getString(R.string.battery_mesh_full)
+        else -> res.getString(R.string.battery_mesh_low)
     }
 
     /** "45 min", "3 h 5 min", "under a minute". */
     fun duration(ms: Long): String {
         val minutes = ms / 60_000L
         return when {
-            minutes < 1 -> "under a minute"
-            minutes < 60 -> "$minutes min"
-            minutes % 60 == 0L -> "${minutes / 60} h"
-            else -> "${minutes / 60} h ${minutes % 60} min"
+            minutes < 1 -> res.getString(R.string.battery_under_a_minute)
+            minutes < 60 -> res.getString(R.string.battery_minutes, minutes)
+            minutes % 60 == 0L -> res.getString(R.string.battery_hours, minutes / 60)
+            else -> res.getString(R.string.battery_hours_minutes, minutes / 60, minutes % 60)
         }
     }
 
-    private fun plural(n: Int, one: String, many: String) = if (n == 1) one else many
-
-    /** A start later than the scan's by more than this was an unplug after a charge. */
-    private const val UNPLUG_NOTE_MS = 60_000L
+    private companion object {
+        /** A start later than the scan's by more than this was an unplug after a charge. */
+        const val UNPLUG_NOTE_MS = 60_000L
+    }
 }

@@ -1,6 +1,7 @@
 package app.clairix.security
 
 import android.app.Notification
+import app.clairix.BuildConfig
 import app.clairix.Store
 import app.clairix.TestStoreCipher
 import kotlinx.coroutines.Dispatchers
@@ -325,17 +326,27 @@ class WiperTest {
 
     @Test
     fun everyForegroundServiceInEveryEditionIsStoppedByTheWipe() {
-        val declared = listOf("src/main/AndroidManifest.xml", "src/suite/AndroidManifest.xml").flatMap { path ->
+        fun declaredIn(vararg paths: String) = paths.flatMap { path ->
             val doc = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
                 .newDocumentBuilder().parse(File(path))
             val nodes = doc.getElementsByTagName("service")
             (0 until nodes.length).map { nodes.item(it) as Element }
                 .filter { it.getAttributeNS(ANDROID_NS, "foregroundServiceType").isNotEmpty() }
                 .map { "app.clairix" + it.getAttributeNS(ANDROID_NS, "name") }
-        }
+        }.toSet()
+        val everyEdition = declaredIn("src/main/AndroidManifest.xml", "src/suite/AndroidManifest.xml")
         // ScanService, CommsService, CallService, the fake call's ring, the mesh, drive and navigation.
-        assertTrue("foreground services missing from the manifests: $declared", declared.size >= 7)
-        assertEquals(declared.toSet(), Wiper.FOREGROUND_SERVICES.map { it.name }.toSet())
+        assertTrue("foreground services missing from the manifests: $everyEdition", everyEdition.size >= 7)
+        val stopped = Wiper.FOREGROUND_SERVICES.map { it.name }.toSet()
+        // The comms tier is compiled without src/suite, and so without Drive's service:
+        // its list may stop no class it does not have, and the suite's must be the whole set.
+        if (BuildConfig.FULL_ACCESS) {
+            assertEquals(everyEdition, stopped)
+        } else {
+            assertTrue("the wipe stops a service no edition declares: ${stopped - everyEdition}", everyEdition.containsAll(stopped))
+            val comms = declaredIn("src/main/AndroidManifest.xml")
+            assertTrue("a comms foreground service the wipe leaves running: ${comms - stopped}", stopped.containsAll(comms))
+        }
     }
 
     @Test

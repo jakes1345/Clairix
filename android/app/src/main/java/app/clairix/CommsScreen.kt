@@ -17,6 +17,7 @@ import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -35,6 +36,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -188,6 +191,7 @@ fun CommsScreen(
     onGroupConsumed: () -> Unit = {},
     onAppSettings: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
     val state by CommsRepository.state.collectAsStateWithLifecycle()
     val activeCall by CallManager.call.collectAsStateWithLifecycle()
     var page by remember { mutableStateOf<CommsPage>(CommsPage.List) }
@@ -200,7 +204,7 @@ fun CommsScreen(
         if (openInvite != null) {
             val code = PairingCode.fromText(openInvite)
             when {
-                code == null -> inviteError = "That invite link is incomplete; ask for it to be sent again."
+                code == null -> inviteError = context.getString(R.string.comms_that_invite_link_is_incomplete_ask)
                 state.registered -> inviterToAdd = code
                 else -> invite = code
             }
@@ -224,7 +228,6 @@ fun CommsScreen(
     // Calls need the microphone. Asked for once as soon as this phone has a
     // number, so the first incoming call is not also the first time the
     // question comes up, on a locked phone, with the caller waiting.
-    val context = LocalContext.current
     val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(state.registered) {
         if (!state.registered || hasMicrophone(context)) return@LaunchedEffect
@@ -312,7 +315,7 @@ private fun Header(title: String, onBack: (() -> Unit)? = null, trailing: @Compo
     ) {
         if (onBack != null) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = ClairixTheme.colors.text)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.comms_back), tint = ClairixTheme.colors.text)
             }
             Spacer(Modifier.width(4.dp))
         }
@@ -359,7 +362,7 @@ private fun rememberMicrophoneGate(onGranted: () -> Unit): () -> Unit {
             val blocked = activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
             Toast.makeText(
                 context,
-                if (blocked) "The microphone is blocked for Clairix. Allow it under Permissions, then try again." else "Calls need the microphone.",
+                context.getString(if (blocked) R.string.comms_microphone_blocked_retry else R.string.comms_calls_need_microphone),
                 Toast.LENGTH_LONG
             ).show()
             if (blocked) openAppDetails(context)
@@ -394,6 +397,7 @@ private const val QR_CAMERA_CLAIM = "qr"
 /** Launches the QR scanner and hands back the decoded pairing code. */
 @Composable
 private fun rememberCodeScanner(onCode: (PairingCode?) -> Unit): () -> Unit {
+    val context = LocalContext.current
     // The scanner activity opens the camera in this app's process; the claim keeps
     // that from being reported as another app using the camera. The result arrives
     // on cancel and on failure too, and that is where the claim is released.
@@ -408,7 +412,7 @@ private fun rememberCodeScanner(onCode: (PairingCode?) -> Unit): () -> Unit {
             launcher.launch(
                 ScanOptions()
                     .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                    .setPrompt("Point at the other person's Clairix code")
+                    .setPrompt(context.getString(R.string.comms_point_at_the_other_persons_clairix))
                     .setBeepEnabled(false)
                     .setOrientationLocked(true)
             )
@@ -442,12 +446,13 @@ private fun rememberTick(periodMs: Long = 30_000L): Long {
     return now
 }
 
+@Composable
 private fun agoText(now: Long, ts: Long): String {
     val s = ((now - ts) / 1000L).coerceAtLeast(0L)
     return when {
-        s < 60 -> "just now"
-        s < 3600 -> "${s / 60} min ago"
-        s < 86_400 -> "${s / 3600} h ago"
+        s < 60 -> stringResource(R.string.comms_just_now)
+        s < 3600 -> stringResource(R.string.comms_minutes_ago, s / 60)
+        s < 86_400 -> stringResource(R.string.comms_hours_ago, s / 3600)
         else -> dateTimeFmt.format(Date(ts))
     }
 }
@@ -474,8 +479,8 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
     }
     val takeInvite: (PairingCode?) -> Unit = { code ->
         when {
-            code == null -> inviteError = "That is not a Clairix invite."
-            code.invite == null -> inviteError = "That's someone's contact code, not an invite. Ask them to tap Invite in Comms on their phone."
+            code == null -> inviteError = context.getString(R.string.comms_that_is_not_a_clairix_invite)
+            code.invite == null -> inviteError = context.getString(R.string.comms_thats_someones_contact_code_not_an)
             else -> { inviteError = null; onInvite(code) }
         }
     }
@@ -484,9 +489,9 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(8.dp))
         StatusHero(
-            eyebrow = "Messages and calls",
-            headline = if (invite != null) "Invite ready" else "Not set up",
-            body = "End-to-end encrypted messages and calls between Clairix apps, through a relay you or a friend run.",
+            eyebrow = stringResource(R.string.comms_messages_and_calls),
+            headline = if (invite != null) stringResource(R.string.comms_invite_ready) else stringResource(R.string.comms_not_set_up),
+            body = stringResource(R.string.comms_end_to_end_encrypted_messages_and),
             tone = if (invite != null) Tone.Accent else Tone.Neutral,
             trailing = { LogoMark(size = 48.dp, contentDescription = null) }
         )
@@ -497,70 +502,67 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             val listedRelay = relayList?.find(RelayClient.originOf(invite.relayUrl) ?: invite.relayUrl)
             var trustRelay by remember(invite) { mutableStateOf(false) }
             ClairixCard {
-                Text("Join with an invite", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-                Text("Invited by", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                Text(stringResource(R.string.comms_join_with_an_invite), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_invited_by), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                 Text(invite.name.ifBlank { formatClairixNumber(invite.number) }, style = MaterialTheme.typography.headlineMedium, color = ClairixTheme.colors.accent)
                 Text("${formatClairixNumber(invite.number)} · ${invite.relayUrl.removePrefix("https://")}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
                 Text(
-                    "This phone makes its own keys and gets its own Clairix number on their relay. " +
-                        "${invite.name.ifBlank { "They" }} will be in your contacts, with a first message telling them you joined. " +
-                        "Compare safety numbers with them, or scan their code, to verify them.",
+                    stringResource(R.string.comms_invite_join_explained, invite.name.ifBlank { stringResource(R.string.comms_they) }),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 InviteRelayNotice(invite, listedRelay)
                 if (listedRelay == null) {
                     ToggleRow(
-                        title = "I know who runs this relay",
+                        title = stringResource(R.string.comms_i_know_who_runs_this_relay),
                         checked = trustRelay,
                         onCheckedChange = { trustRelay = it },
-                        subtitle = "Register only if ${invite.name.ifBlank { "the person who invited you" }} told you about this relay themselves."
+                        subtitle = stringResource(R.string.comms_register_only_if, invite.name.ifBlank { stringResource(R.string.comms_the_person_who_invited_you) })
                     )
                 }
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
-                    label = { Text("Your name shown to contacts (optional)", style = MaterialTheme.typography.bodyMedium) },
+                    label = { Text(stringResource(R.string.comms_your_name_shown_to_contacts_optional), style = MaterialTheme.typography.bodyMedium) },
                     singleLine = true, modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
                 ToggleRow(
-                    title = "Listed number",
+                    title = stringResource(R.string.comms_listed_number),
                     checked = listed,
                     onCheckedChange = { listed = it },
-                    subtitle = if (listed) "Anyone with your number on this relay can add you." else "Unlisted: people can add you only by scanning your code. You can change this later."
+                    subtitle = if (listed) stringResource(R.string.comms_anyone_with_your_number_on_this) else stringResource(R.string.comms_unlisted_people_can_add_you_only)
                 )
                 state.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
                 PrimaryButton(
-                    if (state.busy) "Registering…" else "Register",
+                    if (state.busy) stringResource(R.string.comms_registering) else stringResource(R.string.comms_register),
                     onClick = {
                         scope.launch { CommsRepository.register(invite.relayUrl, "", name, listed, invite) }
                     },
                     enabled = !state.busy && (listedRelay != null || trustRelay),
                     modifier = Modifier.fillMaxWidth()
                 )
-                GhostButton("Use a relay URL and secret instead", onClick = { onInvite(null) }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.comms_use_a_relay_url_and_secret), onClick = { onInvite(null) }, tone = Tone.Neutral)
             }
-            Notice(Tone.Caution, NO_CLOUD_BACKUP, title = "No cloud backup")
-            Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
+            Notice(Tone.Caution, NO_CLOUD_BACKUP, title = stringResource(R.string.comms_no_cloud_backup))
+            Notice(Tone.Info, NOT_A_PHONE, title = stringResource(R.string.comms_not_a_phone_number))
             Spacer(Modifier.height(16.dp))
             return@Column
         }
 
         ClairixCard {
-            Text("Have an invite?", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_have_an_invite), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
-                "Someone already on Clairix can invite you: they tap Invite in Comms on their phone. Scan the QR code " +
-                    "it shows, or copy the invite they sent and paste it here. No relay URL or secret needed.",
+                stringResource(R.string.comms_someone_already_on_clairix_can_invite),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PrimaryButton(
-                    "Scan invite",
+                    stringResource(R.string.comms_scan_invite),
                     onClick = { inviteError = null; scanInvite() },
                     modifier = Modifier.weight(1f)
                 )
                 SecondaryButton(
-                    "Paste invite",
+                    stringResource(R.string.comms_paste_invite),
                     onClick = { takeInvite(clipboard.getText()?.text?.let { PairingCode.fromText(it) }) },
                     modifier = Modifier.weight(1f)
                 )
@@ -570,11 +572,9 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
 
         relayList?.relays?.takeIf { it.isNotEmpty() }?.let { relays ->
             ClairixCard {
-                Text("Relays you can join", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_relays_you_can_join), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
                 Text(
-                    "From the Clairix relay list. Pick one run somewhere you trust: its operator and host can be ordered " +
-                        "to hand over what the relay holds (never your messages, which it cannot read). Clairix checks the " +
-                        "relay still has the key the list gives it before registering.",
+                    stringResource(R.string.comms_from_the_clairix_relay_list_pick),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -582,11 +582,11 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
                     HorizontalDivider(color = ClairixTheme.colors.border)
                     Text(relay.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text("${relay.country} · ${relay.host}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
-                    Text("Run by ${relay.operator}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text(stringResource(R.string.comms_run_by, relay.operator), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
                     Text(relay.url.removePrefix("https://"), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                     relay.join?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) }
                     SecondaryButton(
-                        if (url.trim().trimEnd('/') == relay.url) "Selected below" else "Use this relay",
+                        if (url.trim().trimEnd('/') == relay.url) stringResource(R.string.comms_selected_below) else stringResource(R.string.comms_use_this_relay),
                         onClick = { url = relay.url },
                         enabled = url.trim().trimEnd('/') != relay.url,
                         modifier = Modifier.fillMaxWidth()
@@ -596,45 +596,40 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
         }
 
         ClairixCard {
-            Text("Or enter a relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_or_enter_a_relay), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
-                "Run comms-worker from the Clairix repository (on Cloudflare, or on a server of your own with " +
-                    "selfhost/install.sh) or pick a relay above, then enter its URL and its enrollment " +
-                    "secret; leave the secret empty for a relay whose operator has opened registration to anyone. " +
-                    "This phone generates its keys here, never shares the private half, and the relay " +
-                    "hands it a random nine-digit Clairix number. Clairix then keeps a quiet background connection to the " +
-                    "relay so messages arrive and calls ring while it's closed; Online in Comms settings switches that off.",
+                stringResource(R.string.comms_run_comms_worker_from_the_clairix),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
             OutlinedTextField(
                 value = url, onValueChange = { url = it },
-                label = { Text("Relay URL", style = MaterialTheme.typography.bodyMedium) },
+                label = { Text(stringResource(R.string.comms_relay_url), style = MaterialTheme.typography.bodyMedium) },
                 placeholder = { Text("https://relay.clairix.app", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = clairixTextFieldColors()
             )
             OutlinedTextField(
                 value = secret, onValueChange = { secret = it },
-                label = { Text("Enrollment secret, if the relay asks for one", style = MaterialTheme.typography.bodyMedium) },
+                label = { Text(stringResource(R.string.comms_enrollment_secret_if_the_relay_asks), style = MaterialTheme.typography.bodyMedium) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = clairixTextFieldColors()
             )
             OutlinedTextField(
                 value = name, onValueChange = { name = it.take(40) },
-                label = { Text("Name shown to contacts (optional)", style = MaterialTheme.typography.bodyMedium) },
+                label = { Text(stringResource(R.string.comms_name_shown_to_contacts_optional), style = MaterialTheme.typography.bodyMedium) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
             )
             ToggleRow(
-                title = "Listed number",
+                title = stringResource(R.string.comms_listed_number),
                 checked = listed,
                 onCheckedChange = { listed = it },
-                subtitle = if (listed) "Anyone with your number on this relay can add you." else "Unlisted: people can add you only by scanning your code. You can change this later."
+                subtitle = if (listed) stringResource(R.string.comms_anyone_with_your_number_on_this) else stringResource(R.string.comms_unlisted_people_can_add_you_only)
             )
             state.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             PrimaryButton(
-                if (state.busy) "Registering…" else "Register",
+                if (state.busy) stringResource(R.string.comms_registering) else stringResource(R.string.comms_register),
                 onClick = {
                     scope.launch { CommsRepository.register(url, secret, name, listed) }
                 },
@@ -644,18 +639,15 @@ private fun SetupScreen(invite: PairingCode?, linkError: String?, onInvite: (Pai
             )
         }
 
-        Notice(Tone.Caution, NO_CLOUD_BACKUP, title = "No cloud backup")
+        Notice(Tone.Caution, NO_CLOUD_BACKUP, title = stringResource(R.string.comms_no_cloud_backup))
         RestoreFromFileCard()
 
-        Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
+        Notice(Tone.Info, NOT_A_PHONE, title = stringResource(R.string.comms_not_a_phone_number))
 
         ClairixCard {
-            Text("What's protected", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_whats_protected), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             Text(
-                "Every message is encrypted on this phone for one contact with the Olm double ratchet (vodozemac) and " +
-                    "sealed again so the relay cannot see who sent it. The relay stores only opaque envelopes, your public " +
-                    "keys and a push endpoint. Contacts are pinned by their keys; scanning a code or comparing safety " +
-                    "numbers in person proves nobody sits in between. Nothing here uses Google or a phone carrier.",
+                stringResource(R.string.comms_every_message_is_encrypted_on_this),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -709,55 +701,55 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
         ClairixCard(spacing = 8.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Your Clairix number", style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.comms_your_clairix_number), style = MaterialTheme.typography.labelSmall, color = ClairixTheme.colors.textSubtle)
                     Text(
                         state.number?.let { formatClairixNumber(it) } ?: "—",
                         style = MaterialTheme.typography.monoLarge,
                         color = ClairixTheme.colors.accent
                     )
                 }
-                StatusPill(if (state.connected) "Live" else "Connecting", if (state.connected) Tone.Safe else Tone.Caution)
+                StatusPill(if (state.connected) stringResource(R.string.comms_live) else stringResource(R.string.comms_connecting), if (state.connected) Tone.Safe else Tone.Caution)
             }
             Text(
                 buildString {
                     append(
                         when {
-                            state.online -> "Online in the background"
-                            state.pushRegistered -> "Push wake-ups on"
-                            else -> "Nothing arrives while Clairix is closed"
+                            state.online -> stringResource(R.string.comms_online_in_the_background)
+                            state.pushRegistered -> stringResource(R.string.comms_push_wake_ups_on)
+                            else -> stringResource(R.string.comms_nothing_arrives_while_clairix_is_closed)
                         }
                     )
-                    if (!state.listed) append(" · unlisted")
+                    if (!state.listed) append(stringResource(R.string.comms_unlisted))
                     if (coinShown && state.balance >= 0L) append(" · ${state.balance} $COIN_SYMBOL")
-                    if (state.lastSync > 0L) append(" · synced ${agoText(now, state.lastSync)}")
+                    if (state.lastSync > 0L) append(stringResource(R.string.comms_synced, agoText(now, state.lastSync)))
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = reachTone.color()
             )
             Text(
-                "Not a phone number. It reaches Clairix apps on your relay only.",
+                stringResource(R.string.comms_not_a_phone_number_it_reaches),
                 style = MaterialTheme.typography.bodySmall,
                 color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                GhostButton("My code", onClick = onMyCode, tone = Tone.Accent)
-                GhostButton(if (state.busy) "Syncing" else "Sync", onClick = { scope.launch { CommsRepository.sync() } }, tone = Tone.Neutral, enabled = !state.busy)
+                GhostButton(stringResource(R.string.comms_my_code), onClick = onMyCode, tone = Tone.Accent)
+                GhostButton(if (state.busy) stringResource(R.string.comms_syncing) else stringResource(R.string.comms_sync), onClick = { scope.launch { CommsRepository.sync() } }, tone = Tone.Neutral, enabled = !state.busy)
                 Spacer(Modifier.weight(1f))
-                GhostButton("Settings", onClick = onSettings, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.settings_settings), onClick = onSettings, tone = Tone.Neutral)
             }
         }
         Spacer(Modifier.height(8.dp))
         // ── Actions ──
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PrimaryButton("Add contact", onClick = { addContact = true }, modifier = Modifier.weight(1f))
-            SecondaryButton("Invite", onClick = onInvite, tone = Tone.Accent, modifier = Modifier.weight(1f))
-            SecondaryButton("Group", onClick = { createGroup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
+            PrimaryButton(stringResource(R.string.comms_add_contact), onClick = { addContact = true }, modifier = Modifier.weight(1f))
+            SecondaryButton(stringResource(R.string.comms_invite), onClick = onInvite, tone = Tone.Accent, modifier = Modifier.weight(1f))
+            SecondaryButton(stringResource(R.string.comms_group), onClick = { createGroup = true }, tone = Tone.Accent, modifier = Modifier.weight(1f))
         }
         state.error?.let {
             Spacer(Modifier.height(8.dp))
             Notice(
                 Tone.Danger, it,
-                action = { GhostButton("Dismiss", onClick = { CommsRepository.clearError() }, tone = Tone.Neutral) }
+                action = { GhostButton(stringResource(R.string.comms_dismiss), onClick = { CommsRepository.clearError() }, tone = Tone.Neutral) }
             )
         }
         val batteryFree by rememberBatteryUnrestricted()
@@ -772,16 +764,16 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                 Tone.Caution,
                 text = buildString {
                     append(
-                        if (linkStopped) "Android refused twice in a row to restart Clairix's connection in the background, so calls may not ring and messages may wait until Clairix is opened. "
-                        else "Battery saving can cut Clairix off in the background, and then calls don't ring. "
+                        if (linkStopped) stringResource(R.string.comms_android_refused_twice_in_a_row)
+                        else stringResource(R.string.comms_battery_saving_can_cut_clairix_off)
                     )
-                    if (!batteryFree) append("Let Clairix run unrestricted. ")
+                    if (!batteryFree) append(stringResource(R.string.comms_let_clairix_run_unrestricted))
                     append(makerSteps)
                 },
                 title = if (linkStopped) NotificationPresentation.LINK_STOPPED_TITLE else null,
                 action = {
-                    if (!batteryFree) GhostButton("Allow", onClick = { openBatterySettings(context) })
-                    else GhostButton("App info", onClick = { openAppDetails(context) })
+                    if (!batteryFree) GhostButton(stringResource(R.string.comms_allow), onClick = { openBatterySettings(context) })
+                    else GhostButton(stringResource(R.string.comms_app_info), onClick = { openAppDetails(context) })
                 }
             )
         }
@@ -799,17 +791,17 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
                 modifier = Modifier.weight(1f)
             ) {
                 if (requests.isNotEmpty()) {
-                    item(key = "§requests") { SectionHeader("Requests", supporting = "${requests.size}", tone = Tone.Caution) }
+                    item(key = "§requests") { SectionHeader(stringResource(R.string.comms_requests), supporting = "${requests.size}", tone = Tone.Caution) }
                     items(requests, key = { "r:${it.contact.number}" }) { t -> RequestRow(t, onClick = { onOpen(t.contact.number) }) }
                 }
                 // Groups first: a group's stripe is always the accent colour, so
                 // the section label keeps them apart from a contact with unread messages.
                 if (groupThreads.isNotEmpty()) {
-                    item(key = "§groups") { SectionHeader("Groups", supporting = "${groupThreads.size}") }
+                    item(key = "§groups") { SectionHeader(stringResource(R.string.comms_groups), supporting = "${groupThreads.size}") }
                     items(groupThreads, key = { "g:${it.group.id}" }) { gt -> GroupRow(gt, onClick = { onOpenGroup(gt.group.id) }) }
                 }
                 if (groupThreads.isNotEmpty() || requests.isNotEmpty()) {
-                    item(key = "§contacts") { SectionHeader("Contacts", supporting = "${threads.size}") }
+                    item(key = "§contacts") { SectionHeader(stringResource(R.string.comms_contacts), supporting = "${threads.size}") }
                 }
                 if (threads.isEmpty()) {
                     item(key = "§no-contacts") { NoContactsCard() }
@@ -824,8 +816,8 @@ private fun ThreadListScreen(onOpen: (String) -> Unit, onOpenGroup: (String) -> 
 @Composable
 private fun NoContactsCard() {
     EmptyState(
-        title = "No contacts yet",
-        body = "Tap Add contact and scan their Clairix code, or enter their listed number. Show yours under My code.",
+        title = stringResource(R.string.comms_no_contacts_yet),
+        body = stringResource(R.string.comms_tap_add_contact_and_scan_their),
         icon = ClairixIcons.Forum,
         modifier = Modifier.padding(top = 8.dp)
     )
@@ -844,18 +836,19 @@ private fun DisappearingRow(peer: String, version: Long, enabled: Boolean) {
     var choosing by remember(peer) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            if (timer > 0) "Messages disappear ${ttlLabel(timer)} after they are read" else "Disappearing messages are off",
+            if (timer > 0) stringResource(R.string.comms_messages_disappear_after_they_are_read, ttlLabel(timer)) else stringResource(R.string.comms_disappearing_messages_are_off),
             style = MaterialTheme.typography.bodySmall,
             color = if (timer > 0) ClairixTheme.colors.accent else ClairixTheme.colors.textSubtle,
             modifier = Modifier.weight(1f)
         )
-        GhostButton("Disappearing", onClick = { choosing = true }, tone = Tone.Neutral, enabled = enabled)
+        GhostButton(stringResource(R.string.comms_disappearing), onClick = { choosing = true }, tone = Tone.Neutral, enabled = enabled)
     }
     if (choosing) DisappearingDialog(peer, timer, onDismiss = { choosing = false })
 }
 
 @Composable
 private fun DisappearingDialog(peer: String, current: Int, onDismiss: () -> Unit) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -863,28 +856,26 @@ private fun DisappearingDialog(peer: String, current: Int, onDismiss: () -> Unit
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Disappearing messages", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_disappearing_messages), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Each message is deleted from this phone that long after it is read (yours, after they are sent), " +
-                        "photos and voice notes with it. The other side is told and their Clairix does the same; " +
-                        "a screenshot or another app on their phone can still keep a copy.",
+                    stringResource(R.string.comms_each_message_is_deleted_from_this),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 for (choice in TIMER_CHOICES) {
-                    val label = if (choice == 0) "Off" else ttlLabel(choice).replaceFirstChar { it.uppercase() }
+                    val label = if (choice == 0) stringResource(R.string.comms_off) else ttlLabel(choice).replaceFirstChar { it.uppercase() }
                     Row(
                         Modifier.fillMaxWidth().clip(ClairixShapes.Tag)
-                            .clickable(enabled = !busy, onClickLabel = "Set disappearing messages to $label") {
+                            .clickable(enabled = !busy, onClickLabel = stringResource(R.string.comms_set_disappearing_messages_to, label)) {
                                 if (choice == current) { onDismiss(); return@clickable }
                                 busy = true
                                 error = null
                                 scope.launch {
                                     CommsRepository.setTimer(peer, choice)
                                         .onSuccess { onDismiss() }
-                                        .onFailure { busy = false; error = it.message ?: "Could not change it" }
+                                        .onFailure { busy = false; error = it.message ?: context.getString(R.string.comms_could_not_change_it) }
                                 }
                             }
                             .padding(vertical = 8.dp, horizontal = 4.dp),
@@ -898,12 +889,13 @@ private fun DisappearingDialog(peer: String, current: Int, onDismiss: () -> Unit
                 error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
             }
         },
-        confirmButton = { GhostButton("Close", onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
+        confirmButton = { GhostButton(stringResource(R.string.comms_close), onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
 @Composable
 private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var groupName by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -916,7 +908,7 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
             scope.launch {
                 runCatching { CommsRepository.createGroup(name) }
                     .onSuccess { onCreated(it) }
-                    .onFailure { busy = false; error = it.message ?: "Could not create the group" }
+                    .onFailure { busy = false; error = it.message ?: context.getString(R.string.comms_could_not_create_the_group) }
             }
         }
     }
@@ -924,18 +916,17 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Create a group", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_create_a_group), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "A group is a conversation with several contacts at once, each message encrypted for every member. " +
-                        "You start as its admin and add members from your contacts.",
+                    stringResource(R.string.comms_a_group_is_a_conversation_with),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 OutlinedTextField(
                     value = groupName, onValueChange = { groupName = it.take(60) },
-                    label = { Text("Group name", style = MaterialTheme.typography.bodyMedium) }, singleLine = true, enabled = !busy,
+                    label = { Text(stringResource(R.string.comms_group_name), style = MaterialTheme.typography.bodyMedium) }, singleLine = true, enabled = !busy,
                     modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
                 error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
@@ -943,13 +934,13 @@ private fun CreateGroupDialog(onDismiss: () -> Unit, onCreated: (String) -> Unit
         },
         confirmButton = {
             GhostButton(
-                if (busy) "Creating…" else "Create",
+                if (busy) stringResource(R.string.comms_creating) else stringResource(R.string.comms_create),
                 onClick = create,
                 tone = if (groupName.isNotBlank() && !busy) Tone.Accent else Tone.Neutral,
                 enabled = groupName.isNotBlank() && !busy
             )
         },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
@@ -963,7 +954,7 @@ private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
         t.unread > 0 -> Tone.Accent
         else -> null
     }
-    ClairixCard(tone = tone, onClick = onClick, onClickLabel = "Open conversation", spacing = 4.dp) {
+    ClairixCard(tone = tone, onClick = onClick, onClickLabel = stringResource(R.string.comms_open_conversation), spacing = 4.dp) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Avatar(contactLabel(t.contact), highlighted = t.unread > 0)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -985,9 +976,9 @@ private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
                         color = c.textSubtle
                     )
                     when {
-                        t.contact.keyChanged -> StatusPill("Keys changed", Tone.Danger)
-                        t.contact.verified -> StatusPill("Verified", Tone.Safe)
-                        else -> StatusPill("Unverified", Tone.Neutral)
+                        t.contact.keyChanged -> StatusPill(stringResource(R.string.comms_keys_changed), Tone.Danger)
+                        t.contact.verified -> StatusPill(stringResource(R.string.comms_verified), Tone.Safe)
+                        else -> StatusPill(stringResource(R.string.comms_unverified), Tone.Neutral)
                     }
                 }
             }
@@ -995,13 +986,13 @@ private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
         }
         if (m != null) {
             Text(
-                (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
+                (if (m.direction == Direction.OUT) stringResource(R.string.comms_you) else "") + m.preview(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (t.unread > 0) c.text else c.textSubtle,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            if (m.failed) Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = c.danger)
+            if (m.failed) Text(m.error ?: stringResource(R.string.comms_not_sent), style = MaterialTheme.typography.bodySmall, color = c.danger)
         }
     }
 }
@@ -1015,7 +1006,7 @@ private fun ThreadRow(t: ChatThread, onClick: () -> Unit) {
 private fun RequestRow(t: ChatThread, onClick: () -> Unit) {
     val c = ClairixTheme.colors
     val m = t.lastMessage
-    ClairixCard(tone = Tone.Caution, onClick = onClick, onClickLabel = "Open message request", spacing = 4.dp) {
+    ClairixCard(tone = Tone.Caution, onClick = onClick, onClickLabel = stringResource(R.string.comms_open_message_request), spacing = 4.dp) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Avatar("#", highlighted = t.unread > 0)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1032,8 +1023,8 @@ private fun RequestRow(t: ChatThread, onClick: () -> Unit) {
                 }
                 Text(
                     buildString {
-                        if (t.contact.name.isNotBlank()) append("Says they are ").append(t.contact.name).append(" · ")
-                        append(if (t.contact.relay != null) "on ${relayHost(t.contact.relay)}" else "not in your contacts")
+                        if (t.contact.name.isNotBlank()) append(stringResource(R.string.comms_says_they_are)).append(t.contact.name).append(" · ")
+                        append(if (t.contact.relay != null) "on ${relayHost(t.contact.relay)}" else stringResource(R.string.comms_not_in_your_contacts))
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = c.textSubtle,
@@ -1052,7 +1043,7 @@ private fun GroupRow(gt: GroupThread, onClick: () -> Unit) {
     val m = gt.lastMessage
     val unread = gt.unread > 0
     val c = ClairixTheme.colors
-    ClairixCard(tone = if (unread) Tone.Accent else null, onClick = onClick, onClickLabel = "Open group", spacing = 4.dp) {
+    ClairixCard(tone = if (unread) Tone.Accent else null, onClick = onClick, onClickLabel = stringResource(R.string.comms_open_group), spacing = 4.dp) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(
                 Modifier.size(44.dp).background(if (unread) c.accentContainer else c.surfaceOverlay, ClairixShapes.Octagon),
@@ -1078,7 +1069,7 @@ private fun GroupRow(gt: GroupThread, onClick: () -> Unit) {
         }
         if (m != null) {
             Text(
-                (if (m.direction == Direction.OUT) "You: " else "") + m.preview(),
+                (if (m.direction == Direction.OUT) stringResource(R.string.comms_you) else "") + m.preview(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (unread) c.text else c.textSubtle,
                 maxLines = 2,
@@ -1136,13 +1127,14 @@ private fun GroupGlyph(colour: Color, modifier: Modifier = Modifier) {
 
 @Composable
 private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
+    val context = LocalContext.current
     val state by CommsRepository.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var number by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val scan = rememberCodeScanner { code ->
-        if (code == null) { error = "That is not a Clairix code"; return@rememberCodeScanner }
+        if (code == null) { error = context.getString(R.string.comms_that_is_not_a_clairix_code); return@rememberCodeScanner }
         scope.launch {
             CommsRepository.addContactFromCode(code, name.takeIf { it.isNotBlank() }, CommsRepository.CodeSource.SCANNED)
                 .onSuccess { onAdded(it.number) }
@@ -1154,25 +1146,24 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
         onDismissRequest = onDismiss,
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Add a contact", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_add_a_contact), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "Scanning their Clairix code pins their keys directly and marks them verified. Adding by number " +
-                        "asks the relay for their keys instead, so they stay unverified until you compare safety numbers.",
+                    stringResource(R.string.comms_scanning_their_clairix_code_pins_their),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
-                    label = { Text("Name (optional)", style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
+                    label = { Text(stringResource(R.string.comms_name_optional), style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
                     modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
-                SecondaryButton("Scan their code", onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
-                Text("or, if their number is listed", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, modifier = Modifier.align(Alignment.CenterHorizontally))
+                SecondaryButton(stringResource(R.string.comms_scan_their_code), onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
+                Text(stringResource(R.string.comms_or_if_their_number_is_listed), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, modifier = Modifier.align(Alignment.CenterHorizontally))
                 OutlinedTextField(
                     value = number, onValueChange = { number = it.filter { ch -> ch.isDigit() || ch == ' ' }.take(11) },
-                    label = { Text("Clairix number (9 digits)", style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
+                    label = { Text(stringResource(R.string.comms_clairix_number_9_digits), style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(), colors = clairixTextFieldColors()
                 )
@@ -1182,7 +1173,7 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
         },
         confirmButton = {
             GhostButton(
-                if (state.busy) "Looking up…" else "Add by number",
+                if (state.busy) stringResource(R.string.comms_looking_up) else stringResource(R.string.comms_add_by_number),
                 onClick = {
                         error = null
                         scope.launch {
@@ -1194,7 +1185,7 @@ private fun AddContactDialog(onDismiss: () -> Unit, onAdded: (String) -> Unit) {
                 enabled = !state.busy && parseClairixNumber(number) != null
             )
         },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral) }
     )
 }
 
@@ -1248,7 +1239,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             deleteAfter?.let { runCatching { it.delete() } }
             preparing = false
             result.onSuccess { attachment = it }
-                .onFailure { sendError = it.message ?: "That file could not be read" }
+                .onFailure { sendError = it.message ?: context.getString(R.string.comms_that_file_could_not_be_read) }
         }
     }
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -1283,7 +1274,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val video = cameraWanted ?: return@rememberLauncherForActivityResult
         cameraWanted = null
-        if (granted) openCamera(video) else sendError = "Taking a ${if (video) "video" else "photo"} needs the camera. Allow it under Permissions."
+        if (granted) openCamera(video) else sendError = context.getString(if (video) R.string.comms_camera_needed_video else R.string.comms_camera_needed_photo)
     }
     fun camera(video: Boolean) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) openCamera(video)
@@ -1361,18 +1352,18 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         Header(c?.takeIf { usable }?.let { contactLabel(it) } ?: formatClairixNumber(peer), onBack = onBack) {
             val (label, tone) = when {
                 c == null || !usable -> "" to Tone.Neutral
-                c.keyChanged -> "Keys changed" to Tone.Danger
-                c.verified -> "Verified" to Tone.Safe
-                else -> "Verify" to Tone.Caution
+                c.keyChanged -> stringResource(R.string.comms_keys_changed) to Tone.Danger
+                c.verified -> stringResource(R.string.comms_verified) to Tone.Safe
+                else -> stringResource(R.string.comms_verify) to Tone.Caution
             }
             if (label.isNotEmpty()) GhostButton(label, onClick = onVerify, tone = tone)
             if (coinShown && usable) {
-                GhostButton("Pay", onClick = { paying = true }, enabled = c?.keyChanged == false)
+                GhostButton(stringResource(R.string.comms_pay), onClick = { paying = true }, enabled = c?.keyChanged == false)
             }
-            if (usable) GhostButton("Call", onClick = placeCall, tone = Tone.Safe, enabled = c?.keyChanged == false)
+            if (usable) GhostButton(stringResource(R.string.comms_call), onClick = placeCall, tone = Tone.Safe, enabled = c?.keyChanged == false)
         }
         Text(
-            "${formatClairixNumber(peer)} · end-to-end encrypted · Clairix number, not a phone number",
+            stringResource(R.string.comms_end_to_end_encrypted_clairix_number, formatClairixNumber(peer)),
             style = MaterialTheme.typography.monoSmall,
             color = ClairixTheme.colors.textSubtle
         )
@@ -1380,20 +1371,21 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
         if (c?.request == true) {
             Spacer(Modifier.height(6.dp))
             ClairixCard(tone = Tone.Caution, spacing = 6.dp) {
-                Text("Someone new wrote to you", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_someone_new_wrote_to_you), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    (if (c.name.isNotBlank()) "They say they are ${c.name}, a name anyone can type. " else "") +
-                        "${formatClairixNumber(c.number)} is not in your contacts, so they are not told you have read this, " +
-                        "and a call from them is noted here as missed instead of ringing" +
-                        (if (held > 0) "; an invitation to a group from them waits too" else "") + ". " +
-                        "Accept to reply. Decline blocks the number and deletes what it sent.",
+                    stringResource(
+                        R.string.comms_request_explained,
+                        if (c.name.isNotBlank()) stringResource(R.string.comms_they_say_they_are_a_name, c.name) else "",
+                        formatClairixNumber(c.number),
+                        if (held > 0) stringResource(R.string.comms_an_invitation_to_a_group_from) else ""
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PrimaryButton("Accept", onClick = { scope.launch { CommsRepository.acceptRequest(c.number) } })
-                    SecondaryButton("Decline", onClick = { scope.launch { CommsRepository.declineRequest(c.number); onBack() } }, tone = Tone.Danger)
-                    GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
+                    PrimaryButton(stringResource(R.string.comms_accept), onClick = { scope.launch { CommsRepository.acceptRequest(c.number) } })
+                    SecondaryButton(stringResource(R.string.comms_decline), onClick = { scope.launch { CommsRepository.declineRequest(c.number); onBack() } }, tone = Tone.Danger)
+                    GhostButton(stringResource(R.string.comms_report), onClick = { reporting = true }, tone = Tone.Caution)
                 }
             }
         }
@@ -1401,12 +1393,12 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             Spacer(Modifier.height(6.dp))
             Notice(
                 Tone.Danger,
-                "Nothing they send reaches this phone, and they are not told. This conversation is kept as a record; nothing new is added to it.",
-                title = "You blocked this number",
+                stringResource(R.string.comms_nothing_they_send_reaches_this_phone),
+                title = stringResource(R.string.comms_you_blocked_this_number),
                 action = {
                     Row {
-                        GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
-                        GhostButton("Unblock", onClick = { unblocking = true }, tone = Tone.Neutral)
+                        GhostButton(stringResource(R.string.comms_report), onClick = { reporting = true }, tone = Tone.Caution)
+                        GhostButton(stringResource(R.string.settings_unblock_2), onClick = { unblocking = true }, tone = Tone.Neutral)
                     }
                 }
             )
@@ -1423,20 +1415,20 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             Spacer(Modifier.height(6.dp))
             Notice(
                 Tone.Danger,
-                "They may have reinstalled Clairix, or someone may be in between. Scan their code or compare safety numbers before you carry on.",
-                title = "This contact's keys changed"
+                stringResource(R.string.comms_they_may_have_reinstalled_clairix_or),
+                title = stringResource(R.string.comms_this_contacts_keys_changed)
             )
         }
         if (c != null && usable && (c.keyChanged || held > 0)) {
             Spacer(Modifier.height(6.dp))
-            ClairixCard(tone = Tone.Caution, onClick = { reviewing = true }, onClickLabel = "Review held messages", spacing = 4.dp) {
+            ClairixCard(tone = Tone.Caution, onClick = { reviewing = true }, onClickLabel = stringResource(R.string.comms_review_held_messages), spacing = 4.dp) {
                 Text(
-                    if (held > 0) "$held held from their new keys" else "Anything from their new keys is held",
+                    if (held > 0) stringResource(R.string.comms_held_from_their_new_keys, held) else stringResource(R.string.comms_anything_from_their_new_keys_is),
                     style = MaterialTheme.typography.titleSmall,
                     color = ClairixTheme.colors.text
                 )
                 Text(
-                    "Messages, files and group posts from the new keys stay hidden until you verify or accept them. Tap to review.",
+                    stringResource(R.string.comms_messages_files_and_group_posts_from),
                     style = MaterialTheme.typography.bodySmall,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -1448,8 +1440,8 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             if (messages.isEmpty()) {
                 item(key = "§empty") {
                     Text(
-                        if (c != null && !usable) "No messages here."
-                        else "No messages yet. The first one you send starts an encrypted session with ${c?.let { contactLabel(it) } ?: "this contact"}.",
+                        if (c != null && !usable) stringResource(R.string.comms_no_messages_here)
+                        else stringResource(R.string.comms_no_messages_yet_first_starts, c?.let { contactLabel(it) } ?: stringResource(R.string.comms_this_contact)),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.textSubtle
                     )
@@ -1469,7 +1461,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                         } else {
                             val audio = VoicemailBody.decode(m.body)
                             if (audio != null && player.play(m.id, audio.audioB64) { playing = null }) playing = m.id
-                            else Toast.makeText(context, "This voicemail cannot be played", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(context, context.getString(R.string.comms_this_voicemail_cannot_be_played), Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
@@ -1494,21 +1486,21 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         when {
-                            pending == null -> "Preparing…"
-                            pending.isVideo -> "Video · ${durationLabel(pending.durationMs)}"
-                            else -> "Photo · ${pending.width}×${pending.height}"
+                            pending == null -> stringResource(R.string.comms_preparing)
+                            pending.isVideo -> stringResource(R.string.comms_video, durationLabel(pending.durationMs))
+                            else -> stringResource(R.string.comms_photo, pending.width, pending.height)
                         },
                         style = MaterialTheme.typography.titleSmall,
                         color = ClairixTheme.colors.text
                     )
                     Text(
-                        if (pending == null) "Reading and compressing the file"
-                        else "${sizeLabel(pending.bytes.size.toLong())} · ${(pending.bytes.size + CommsWire.MEDIA_CHUNK_BYTES - 1) / CommsWire.MEDIA_CHUNK_BYTES} encrypted envelope(s) · type a caption below, or none",
+                        if (pending == null) stringResource(R.string.comms_reading_and_compressing_the_file)
+                        else stringResource(R.string.comms_encrypted_envelope_s_type_a_caption, sizeLabel(pending.bytes.size.toLong()), (pending.bytes.size + CommsWire.MEDIA_CHUNK_BYTES - 1) / CommsWire.MEDIA_CHUNK_BYTES),
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.textSubtle
                     )
                 }
-                GhostButton("Remove", onClick = { attachment = null }, tone = Tone.Neutral, enabled = !preparing)
+                GhostButton(stringResource(R.string.settings_remove), onClick = { attachment = null }, tone = Tone.Neutral, enabled = !preparing)
             }
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1523,10 +1515,10 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 placeholder = {
                     Text(
                         when {
-                            c?.request == true -> "Accept the request to reply"
-                            c?.blocked == true -> "Unblock to write to them"
-                            attachment != null -> "Caption (optional)"
-                            else -> "Encrypted message"
+                            c?.request == true -> stringResource(R.string.comms_accept_the_request_to_reply)
+                            c?.blocked == true -> stringResource(R.string.comms_unblock_to_write_to_them)
+                            attachment != null -> stringResource(R.string.comms_caption_optional)
+                            else -> stringResource(R.string.comms_encrypted_message)
                         },
                         style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle
                     )
@@ -1535,7 +1527,7 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                 modifier = Modifier.weight(1f), maxLines = 5, colors = clairixTextFieldColors()
             )
             PrimaryButton(
-                "Send",
+                stringResource(R.string.comms_send),
                 onClick = {
                         val text = draft.trim()
                         val media = attachment
@@ -1544,8 +1536,8 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
                         draft = ""
                         attachment = null
                         scope.launch {
-                            if (media != null) CommsRepository.sendMedia(peer, media, text).onFailure { sendError = it.message ?: "Not sent" }
-                            else CommsRepository.send(peer, text).onFailure { sendError = it.message ?: "Not sent" }
+                            if (media != null) CommsRepository.sendMedia(peer, media, text).onFailure { sendError = it.message ?: context.getString(R.string.comms_not_sent) }
+                            else CommsRepository.send(peer, text).onFailure { sendError = it.message ?: context.getString(R.string.comms_not_sent) }
                         }
                     },
                 enabled = (draft.isNotBlank() || attachment != null) && usable && !preparing,
@@ -1553,8 +1545,8 @@ private fun ThreadScreen(peer: String, onBack: () -> Unit, onVerify: () -> Unit)
             )
         }
         when {
-            !state.connected -> Text("Connecting to the relay… messages you send are queued until it is back.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
-            !state.online && !state.pushRegistered -> Text("Live while Clairix is open. Once it's closed nothing arrives and calls can't ring: turn on Online or push in Comms settings.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
+            !state.connected -> Text(stringResource(R.string.comms_connecting_to_the_relay_messages_you), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
+            !state.online && !state.pushRegistered -> Text(stringResource(R.string.comms_live_while_clairix_is_open_once), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.padding(bottom = 8.dp))
         }
     }
 }
@@ -1569,26 +1561,25 @@ private fun HeldReviewDialog(c: Contact, held: Int, onVerify: () -> Unit, onAcce
         onDismissRequest = onDismiss,
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("${contactLabel(c)}'s new keys", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_s_new_keys, contactLabel(c)), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    (if (held > 0) "$held item(s) arrived from keys you have not checked. " else "Nothing has arrived from the new keys yet. ") +
-                        "If they reinstalled Clairix, compare safety numbers or scan their code. If someone is in between, the held items are theirs.",
+                    stringResource(R.string.comms_if_they_reinstalled_clairix_compare_safety, (if (held > 0) stringResource(R.string.comms_item_s_arrived_from_keys_you, held) else stringResource(R.string.comms_nothing_has_arrived_from_the_new))),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
                 Text(
-                    "Accepting shows them and lets you message again, but leaves the contact unverified, and groups take no roster changes from them until you verify.",
+                    stringResource(R.string.comms_accepting_shows_them_and_lets_you),
                     style = MaterialTheme.typography.bodySmall,
                     color = ClairixTheme.colors.textSubtle
                 )
-                GhostButton("Compare safety numbers", onClick = onVerify, tone = Tone.Safe)
-                if (c.keyChanged) GhostButton("Accept new keys", onClick = onAccept, tone = Tone.Caution)
-                if (held > 0) GhostButton("Discard held items", onClick = onDiscard, tone = Tone.Danger)
+                GhostButton(stringResource(R.string.comms_compare_safety_numbers), onClick = onVerify, tone = Tone.Safe)
+                if (c.keyChanged) GhostButton(stringResource(R.string.comms_accept_new_keys), onClick = onAccept, tone = Tone.Caution)
+                if (held > 0) GhostButton(stringResource(R.string.comms_discard_held_items), onClick = onDiscard, tone = Tone.Danger)
             }
         },
-        confirmButton = { GhostButton("Close", onClick = onDismiss, tone = Tone.Neutral) }
+        confirmButton = { GhostButton(stringResource(R.string.comms_close), onClick = onDismiss, tone = Tone.Neutral) }
     )
 }
 
@@ -1608,20 +1599,18 @@ private fun ReportDialog(c: Contact, onDismiss: () -> Unit) {
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Report ${formatClairixNumber(c.number)}", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_report_2, formatClairixNumber(c.number)), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Tells the operator of your relay that this number is abusing it: the number, the relay it is on, the reason, and a " +
-                        "fingerprint of the last envelope it sent you. Never what it said, and not who you are. What the operator does " +
-                        "about it is theirs to decide. Reporting does not block them; do that too if you want nothing more from them.",
+                    stringResource(R.string.comms_tells_the_operator_of_your_relay),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 for (choice in ContactGate.ReportReason.entries) {
                     Row(
                         Modifier.fillMaxWidth().clip(ClairixShapes.Tag)
-                            .clickable(enabled = !busy, onClickLabel = "Report for ${choice.label}") { reason = choice }
+                            .clickable(enabled = !busy, onClickLabel = stringResource(R.string.comms_report_for, choice.label)) { reason = choice }
                             .padding(vertical = 6.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1635,7 +1624,7 @@ private fun ReportDialog(c: Contact, onDismiss: () -> Unit) {
         },
         confirmButton = {
             GhostButton(
-                if (busy) "Sending…" else "Send report",
+                if (busy) stringResource(R.string.comms_sending) else stringResource(R.string.comms_send_report),
                 onClick = {
                     val chosen = reason ?: return@GhostButton
                     busy = true
@@ -1643,17 +1632,17 @@ private fun ReportDialog(c: Contact, onDismiss: () -> Unit) {
                     scope.launch {
                         CommsRepository.report(c.number, chosen)
                             .onSuccess {
-                                Toast.makeText(context, "Report sent to your relay's operator", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.comms_report_sent_to_your_relays_operator), Toast.LENGTH_SHORT).show()
                                 onDismiss()
                             }
-                            .onFailure { busy = false; error = it.message ?: "The report could not be sent" }
+                            .onFailure { busy = false; error = it.message ?: context.getString(R.string.comms_the_report_could_not_be_sent) }
                     }
                 },
                 tone = Tone.Caution,
                 enabled = reason != null && !busy
             )
         },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
@@ -1716,12 +1705,12 @@ private fun MessageBubble(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 PrimaryButton(
-                    if (playing) "Stop" else "Play",
+                    if (playing) stringResource(R.string.comms_stop) else stringResource(R.string.comms_play),
                     onClick = onPlay,
                     tone = if (playing) Tone.Danger else Tone.Safe
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Voicemail · ${durationLabel(duration)}", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
+                    Text(stringResource(R.string.comms_voicemail, durationLabel(duration)), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text)
                     Text(timeFmt.format(Date(m.ts)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                 }
             }
@@ -1746,8 +1735,8 @@ private fun MessageBubble(
         }
         if (m.failed) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger, modifier = Modifier.widthIn(max = 240.dp))
-                GhostButton("Retry", onClick = onRetry)
+                Text(m.error ?: stringResource(R.string.comms_not_sent), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger, modifier = Modifier.widthIn(max = 240.dp))
+                GhostButton(stringResource(R.string.comms_retry), onClick = onRetry)
             }
         }
     }
@@ -1770,10 +1759,10 @@ private fun DeliveryMark(status: String) {
     val size = Modifier.size(12.dp)
     when (status) {
         "queued" -> Text("…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
-        "sent" -> Icon(Icons.Filled.Done, contentDescription = "Sent", tint = ClairixTheme.colors.textSubtle, modifier = size)
-        "delivered" -> Icon(ClairixIcons.DoneAll, contentDescription = "Delivered", tint = ClairixTheme.colors.textSubtle, modifier = size)
-        "read" -> Icon(ClairixIcons.DoneAll, contentDescription = "Read", tint = ClairixTheme.colors.safe, modifier = size)
-        "failed" -> Icon(Icons.Filled.Warning, contentDescription = "Not sent", tint = ClairixTheme.colors.danger, modifier = size)
+        "sent" -> Icon(Icons.Filled.Done, contentDescription = stringResource(R.string.comms_sent), tint = ClairixTheme.colors.textSubtle, modifier = size)
+        "delivered" -> Icon(ClairixIcons.DoneAll, contentDescription = stringResource(R.string.comms_delivered), tint = ClairixTheme.colors.textSubtle, modifier = size)
+        "read" -> Icon(ClairixIcons.DoneAll, contentDescription = stringResource(R.string.comms_read), tint = ClairixTheme.colors.safe, modifier = size)
+        "failed" -> Icon(Icons.Filled.Warning, contentDescription = stringResource(R.string.comms_not_sent), tint = ClairixTheme.colors.danger, modifier = size)
         else -> Unit
     }
 }
@@ -1818,7 +1807,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
             ) {
                 if (picture != null) {
                     Image(
-                        picture, contentDescription = media?.label() ?: "Attachment",
+                        picture, contentDescription = media?.label() ?: stringResource(R.string.comms_attachment),
                         modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
                     )
                 } else {
@@ -1843,7 +1832,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
                         CircularProgressIndicator(color = ClairixTheme.colors.accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            if (progress != null) "Sending ${progress.first}/${progress.second}" else "Receiving…",
+                            if (progress != null) stringResource(R.string.comms_sending_2, progress.first, progress.second) else stringResource(R.string.comms_receiving),
                             style = MaterialTheme.typography.monoSmall,
                             color = ClairixTheme.colors.text
                         )
@@ -1855,7 +1844,7 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
             }
             Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    (media?.let { if (it.isVideo) "Video" else "Photo" } ?: "Attachment") + (media?.let { " · ${sizeLabel(it.size)}" } ?: "") + " · " + timeFmt.format(Date(m.ts)),
+                    (media?.let { if (it.isVideo) stringResource(R.string.comms_video_2) else stringResource(R.string.comms_photo_2) } ?: stringResource(R.string.comms_attachment)) + (media?.let { " · ${sizeLabel(it.size)}" } ?: "") + " · " + timeFmt.format(Date(m.ts)),
                     style = MaterialTheme.typography.monoSmall,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -1866,8 +1855,8 @@ private fun MediaBubble(m: ChatMessage, mine: Boolean, progress: Pair<Int, Int>?
         }
         if (m.failed) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(m.error ?: "Not sent", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger, modifier = Modifier.widthIn(max = 240.dp))
-                if (mine) GhostButton("Retry", onClick = onRetry)
+                Text(m.error ?: stringResource(R.string.comms_not_sent), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.danger, modifier = Modifier.widthIn(max = 240.dp))
+                if (mine) GhostButton(stringResource(R.string.comms_retry), onClick = onRetry)
             }
         }
     }
@@ -1880,22 +1869,21 @@ private fun AttachMenu(onDismiss: () -> Unit, onGallery: () -> Unit, onPhoto: ()
         onDismissRequest = onDismiss,
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Send a photo or video", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_send_a_photo_or_video), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Photos are resized to at most ${CommsMedia.MAX_IMAGE_EDGE} px and sent as JPEG; videos go as they are, up to " +
-                        "${CommsMedia.MAX_BYTES / (1024 * 1024)} MB. Either travels end-to-end encrypted in pieces the relay cannot read.",
+                    stringResource(R.string.comms_photos_are_resized_to_at_most, CommsMedia.MAX_IMAGE_EDGE, CommsMedia.MAX_BYTES / (1024 * 1024)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
-                SecondaryButton("Choose from gallery", onClick = onGallery, modifier = Modifier.fillMaxWidth())
-                SecondaryButton("Take a photo", onClick = onPhoto, modifier = Modifier.fillMaxWidth())
-                SecondaryButton("Record a video", onClick = onVideo, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.comms_choose_from_gallery), onClick = onGallery, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.comms_take_a_photo), onClick = onPhoto, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.comms_record_a_video), onClick = onVideo, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {},
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral) }
     )
 }
 
@@ -1910,7 +1898,7 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Box(Modifier.fillMaxSize().background(ClairixTheme.colors.base.copy(alpha = 0.95f))) {
             if (media == null) {
-                Text("This attachment cannot be shown", color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
+                Text(stringResource(R.string.comms_this_attachment_cannot_be_shown), color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
             } else if (media.isVideo) {
                 var file by remember { mutableStateOf<File?>(null) }
                 var missing by remember { mutableStateOf(false) }
@@ -1936,14 +1924,14 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
                             VideoView(ctx).apply {
                                 setMediaController(MediaController(ctx).also { it.setAnchorView(this) })
                                 setOnPreparedListener { it.isLooping = false; start() }
-                                setOnErrorListener { _, _, _ -> Toast.makeText(ctx, "This video cannot be played", Toast.LENGTH_SHORT).show(); true }
+                                setOnErrorListener { _, _, _ -> Toast.makeText(ctx, ctx.getString(R.string.comms_video_cannot_be_played), Toast.LENGTH_SHORT).show(); true }
                                 setVideoPath(f.absolutePath)
                             }
                         },
                         modifier = Modifier.fillMaxSize().padding(vertical = 48.dp)
                     )
                 } else if (missing) {
-                    Text("The video is no longer on this phone", color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
+                    Text(stringResource(R.string.comms_the_video_is_no_longer_on), color = ClairixTheme.colors.danger, modifier = Modifier.align(Alignment.Center))
                 } else {
                     CircularProgressIndicator(color = ClairixTheme.colors.accent, modifier = Modifier.align(Alignment.Center))
                 }
@@ -1965,12 +1953,12 @@ private fun MediaViewer(m: ChatMessage, onDismiss: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    media?.let { (if (it.isVideo) "Video · ${durationLabel(it.durationMs)}" else "Photo · ${it.width}×${it.height}") + " · ${sizeLabel(it.size)}" } ?: "",
+                    media?.let { (if (it.isVideo) stringResource(R.string.comms_video, durationLabel(it.durationMs)) else stringResource(R.string.comms_photo, it.width, it.height)) + " · ${sizeLabel(it.size)}" } ?: "",
                     style = MaterialTheme.typography.monoSmall,
                     color = ClairixTheme.colors.textMuted,
                     modifier = Modifier.weight(1f)
                 )
-                GhostButton("Close", onClick = onDismiss)
+                GhostButton(stringResource(R.string.comms_close), onClick = onDismiss)
             }
             if (media != null && media.caption.isNotBlank()) {
                 Text(
@@ -2029,25 +2017,25 @@ private fun PayDialog(contact: Contact, onDismiss: () -> Unit) {
         onDismissRequest = { if (!sending) onDismiss() },
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Pay ${contactLabel(contact)}", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_pay_2, contactLabel(contact)), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    if (state.balance >= 0L) "Balance: ${state.balance} $COIN_SYMBOL on this relay" else "Balance: asking the relay…",
+                    if (state.balance >= 0L) stringResource(R.string.comms_balance_on_this_relay, state.balance, COIN_SYMBOL) else stringResource(R.string.comms_balance_asking_the_relay),
                     style = MaterialTheme.typography.monoSmall,
                     color = if (coins != null && state.balance >= 0L && coins > state.balance) ClairixTheme.colors.danger else ClairixTheme.colors.textMuted
                 )
                 OutlinedTextField(
                     value = amount, onValueChange = { v -> amount = v.filter { it.isDigit() }.take(7); error = null },
-                    label = { Text("Amount ($COIN_SYMBOL)") }, singleLine = true, enabled = !sending,
+                    label = { Text(stringResource(R.string.comms_amount, COIN_SYMBOL)) }, singleLine = true, enabled = !sending,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), colors = clairixTextFieldColors()
                 )
                 OutlinedTextField(
                     value = note, onValueChange = { note = it.take(140) },
-                    label = { Text("Note (optional, encrypted)") }, maxLines = 3, enabled = !sending, colors = clairixTextFieldColors()
+                    label = { Text(stringResource(R.string.comms_note_optional_encrypted)) }, maxLines = 3, enabled = !sending, colors = clairixTextFieldColors()
                 )
                 Text(
-                    "ClairixCoin is this relay's own currency. The relay moves the coins on your signed request; the note goes to ${contactLabel(contact)} end-to-end encrypted.",
+                    stringResource(R.string.comms_clairixcoin_is_this_relays_own_currency, contactLabel(contact)),
                     style = MaterialTheme.typography.bodySmall,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -2056,7 +2044,7 @@ private fun PayDialog(contact: Contact, onDismiss: () -> Unit) {
         },
         confirmButton = {
             GhostButton(
-                if (sending) "Paying…" else "Pay",
+                if (sending) stringResource(R.string.comms_paying) else stringResource(R.string.comms_pay),
                 onClick = {
                         val value = coins ?: return@GhostButton
                         sending = true
@@ -2064,12 +2052,12 @@ private fun PayDialog(contact: Contact, onDismiss: () -> Unit) {
                         scope.launch {
                             CommsRepository.sendPayment(contact, value, note)
                                 .onSuccess {
-                                    Toast.makeText(context, "Paid $value $COIN_SYMBOL to ${contactLabel(contact)}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.comms_paid_to, value, COIN_SYMBOL, contactLabel(contact)), Toast.LENGTH_SHORT).show()
                                     onDismiss()
                                 }
                                 .onFailure {
                                     sending = false
-                                    error = it.message ?: "Payment failed"
+                                    error = it.message ?: context.getString(R.string.comms_payment_failed)
                                 }
                         }
                     },
@@ -2077,7 +2065,7 @@ private fun PayDialog(contact: Contact, onDismiss: () -> Unit) {
                 enabled = canPay
             )
         },
-        dismissButton = { GhostButton("Cancel", onClick = onDismiss, tone = Tone.Neutral, enabled = !sending) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = onDismiss, tone = Tone.Neutral, enabled = !sending) }
     )
 }
 
@@ -2088,12 +2076,12 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
     val now = rememberTick(1_000L)
     val accept = rememberMicrophoneGate { CallManager.accept() }
     val (title, colour) = when (call.phase) {
-        CallPhase.INCOMING -> "Incoming call" to ClairixTheme.colors.safe
-        CallPhase.DIALING -> if (call.ringing) "Ringing" to ClairixTheme.colors.safe else "Calling" to ClairixTheme.colors.textSubtle
-        CallPhase.CONNECTING -> "Connecting" to ClairixTheme.colors.textSubtle
-        CallPhase.CONNECTED -> "Encrypted call" to ClairixTheme.colors.safe
-        CallPhase.RECONNECTING -> "Reconnecting" to ClairixTheme.colors.caution
-        CallPhase.ENDED -> "Call ended" to ClairixTheme.colors.textSubtle
+        CallPhase.INCOMING -> stringResource(R.string.comms_incoming_call) to ClairixTheme.colors.safe
+        CallPhase.DIALING -> if (call.ringing) stringResource(R.string.comms_ringing) to ClairixTheme.colors.safe else stringResource(R.string.comms_calling) to ClairixTheme.colors.textSubtle
+        CallPhase.CONNECTING -> stringResource(R.string.comms_connecting) to ClairixTheme.colors.textSubtle
+        CallPhase.CONNECTED -> stringResource(R.string.comms_encrypted_call) to ClairixTheme.colors.safe
+        CallPhase.RECONNECTING -> stringResource(R.string.comms_reconnecting) to ClairixTheme.colors.caution
+        CallPhase.ENDED -> stringResource(R.string.comms_call_ended) to ClairixTheme.colors.textSubtle
     }
     Column(
         modifier.fillMaxSize().padding(horizontal = 24.dp),
@@ -2106,9 +2094,9 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(4.dp))
         Text(
             formatClairixNumber(call.peer.number) + when {
-                call.peer.keyChanged -> " · Keys changed"
-                call.peer.verified -> " · verified"
-                else -> " · unverified"
+                call.peer.keyChanged -> stringResource(R.string.comms_keys_changed_2)
+                call.peer.verified -> stringResource(R.string.comms_verified_2)
+                else -> stringResource(R.string.comms_unverified_2)
             },
             style = MaterialTheme.typography.monoSmall,
             color = if (call.peer.verified && !call.peer.keyChanged) ClairixTheme.colors.textSubtle else ClairixTheme.colors.caution
@@ -2116,13 +2104,13 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(6.dp))
         Text(
             when {
-                call.phase == CallPhase.ENDED -> call.endReason?.replaceFirstChar { it.uppercase() } ?: "Ended"
+                call.phase == CallPhase.ENDED -> call.endReason?.replaceFirstChar { it.uppercase() } ?: stringResource(R.string.comms_ended)
                 call.connectedAt > 0L -> CallManager.durationText(now - call.connectedAt)
-                call.phase == CallPhase.INCOMING -> "Clairix call · not a phone call"
-                call.phase == CallPhase.DIALING && call.ringing -> "Their phone is ringing"
-                call.phase == CallPhase.DIALING -> "Reaching their phone"
-                call.phase == CallPhase.RECONNECTING -> "The connection dropped; bringing it back"
-                else -> "Connecting the encrypted audio"
+                call.phase == CallPhase.INCOMING -> stringResource(R.string.comms_clairix_call_not_a_phone_call)
+                call.phase == CallPhase.DIALING && call.ringing -> stringResource(R.string.comms_their_phone_is_ringing)
+                call.phase == CallPhase.DIALING -> stringResource(R.string.comms_reaching_their_phone)
+                call.phase == CallPhase.RECONNECTING -> stringResource(R.string.comms_the_connection_dropped_bringing_it_back)
+                else -> stringResource(R.string.comms_connecting_the_encrypted_audio)
             },
             style = MaterialTheme.typography.mono,
             color = if (call.phase == CallPhase.ENDED && call.connectedAt == 0L) ClairixTheme.colors.caution else ClairixTheme.colors.textMuted
@@ -2130,23 +2118,23 @@ internal fun InCallScreen(call: ActiveCall, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(48.dp))
         when (call.phase) {
             CallPhase.INCOMING -> Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                CallButton("Decline", Tone.Danger) { CallManager.reject() }
-                CallButton("Accept", Tone.Safe) { accept() }
+                CallButton(stringResource(R.string.comms_decline), Tone.Danger) { CallManager.reject() }
+                CallButton(stringResource(R.string.comms_accept), Tone.Safe) { accept() }
             }
             CallPhase.ENDED -> Unit
             else -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    ToggleChip(if (call.muted) "Unmute" else "Mute", call.muted) { CallManager.toggleMute() }
-                    ToggleChip("Speaker", call.speaker) { CallManager.toggleSpeaker() }
+                    ToggleChip(if (call.muted) stringResource(R.string.comms_unmute) else stringResource(R.string.comms_mute), call.muted) { CallManager.toggleMute() }
+                    ToggleChip(stringResource(R.string.comms_speaker), call.speaker) { CallManager.toggleSpeaker() }
                 }
-                CallButton("Hang up", Tone.Danger) { CallManager.hangUp() }
+                CallButton(stringResource(R.string.comms_hang_up), Tone.Danger) { CallManager.hangUp() }
             }
         }
         Spacer(Modifier.height(40.dp))
         Text(
             buildString {
-                append("End-to-end encrypted: the keys for the audio were exchanged inside your encrypted session, so the relay cannot listen or step in.")
-                if (call.relayed) append(" Audio is being forwarded by a TURN relay, which carries it but cannot decrypt it.")
+                append(stringResource(R.string.comms_end_to_end_encrypted_the_keys))
+                if (call.relayed) append(stringResource(R.string.comms_audio_is_being_forwarded_by_a))
             },
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle,
@@ -2169,6 +2157,7 @@ private fun ToggleChip(label: String, on: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit) {
+    val context = LocalContext.current
     val version by CommsRepository.version.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -2190,8 +2179,8 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
     var reporting by remember { mutableStateOf(false) }
     val scan = rememberCodeScanner { code ->
         when {
-            code == null -> error = "That is not a Clairix code"
-            code.number != c.number -> error = "That code belongs to ${formatClairixNumber(code.number)}, not this contact"
+            code == null -> error = context.getString(R.string.comms_that_is_not_a_clairix_code)
+            code.number != c.number -> error = context.getString(R.string.comms_that_code_belongs_to_not_this, formatClairixNumber(code.number))
             else -> scope.launch {
                 CommsRepository.addContactFromCode(code, name, CommsRepository.CodeSource.SCANNED_FOR_CONTACT).onFailure { error = it.message }
             }
@@ -2205,11 +2194,11 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
             onDismissRequest = { confirm = null },
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet,
-            title = { Text("${action.title} $label?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
-            text = { Text(action.explanation, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) },
+            title = { Text(stringResource(R.string.comms_contact_action_title, stringResource(action.title), label), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+            text = { Text(stringResource(action.explanation), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted) },
             confirmButton = {
                 GhostButton(
-                    action.title,
+                    stringResource(action.title),
                     onClick = {
                         confirm = null
                         scope.launch {
@@ -2224,22 +2213,21 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
                     tone = Tone.Danger
                 )
             },
-            dismissButton = { GhostButton("Cancel", onClick = { confirm = null }, tone = Tone.Neutral) }
+            dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = { confirm = null }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
         Header(contactLabel(c), onBack = onBack)
-        Text("${formatClairixNumber(c.number)} · Clairix number, not a phone number", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+        Text(stringResource(R.string.comms_clairix_number_not_a_phone_number, formatClairixNumber(c.number)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
 
         c.relay?.let { theirs ->
             ClairixCard {
-                Text("On another relay", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_on_another_relay), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(theirs, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "Everything for this contact goes to your relay, which forwards it to theirs signed as itself. Their relay sees your relay's address, never your phone's, and nothing names you as the sender. " +
-                        "Your relay sees that you write to this number on that relay. Either relay's operator can turn this off; if one has, sending says so. ClairixCoin cannot be sent across relays.",
+                    stringResource(R.string.comms_everything_for_this_contact_goes_to),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -2248,22 +2236,22 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
 
         ClairixCard {
             val (label, colour) = when {
-                c.keyChanged -> "Keys changed. Verify again" to ClairixTheme.colors.danger
-                c.verified -> "Verified" to ClairixTheme.colors.safe
-                else -> "Unverified" to ClairixTheme.colors.caution
+                c.keyChanged -> stringResource(R.string.comms_keys_changed_verify_again) to ClairixTheme.colors.danger
+                c.verified -> stringResource(R.string.comms_verified) to ClairixTheme.colors.safe
+                else -> stringResource(R.string.comms_unverified) to ClairixTheme.colors.caution
             }
             Text(label, style = MaterialTheme.typography.labelSmall, color = colour)
             Text(
-                if (c.verified && !c.keyChanged) "You scanned this contact's code or compared safety numbers, so their keys came from them, not from the relay."
-                else "Their keys came from the relay (or from their first message). A relay that lied could put itself in between. Verifying rules that out.",
+                if (c.verified && !c.keyChanged) stringResource(R.string.comms_you_scanned_this_contacts_code_or)
+                else stringResource(R.string.comms_their_keys_came_from_the_relay),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
         }
 
         ClairixCard {
-            Text("Safety number", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-            Text("Both phones show the same 60 digits for this pair. Compare them in person or over a call you trust.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            Text(stringResource(R.string.comms_safety_number), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_both_phones_show_the_same_60), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             if (safety != null) {
                 val groups = safety.split(" ")
                 Column(Modifier.fillMaxWidth().background(ClairixTheme.colors.base, ClairixShapes.Card).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2272,68 +2260,51 @@ private fun VerifyScreen(peer: String, onBack: () -> Unit, onDeleted: () -> Unit
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GhostButton("Copy", onClick = { clipboard.setSensitiveText("Safety number", safety) }, tone = Tone.Neutral)
-                    if (!c.verified || c.keyChanged) GhostButton("They match — mark verified", onClick = { scope.launch { CommsRepository.markVerified(c.number) } }, tone = Tone.Safe)
+                    GhostButton(stringResource(R.string.settings_copy), onClick = { clipboard.setSensitiveText(context.getString(R.string.comms_safety_number), safety) }, tone = Tone.Neutral)
+                    if (!c.verified || c.keyChanged) GhostButton(stringResource(R.string.comms_they_match_mark_verified), onClick = { scope.launch { CommsRepository.markVerified(c.number) } }, tone = Tone.Safe)
                 }
             } else {
-                Text("Safety number unavailable: this device has no identity", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
+                Text(stringResource(R.string.comms_safety_number_unavailable_this_device_has), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger)
             }
         }
 
         ClairixCard {
-            Text("Or scan their code", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-            Text("Their My code screen carries their keys. A matching scan verifies them in one step.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
-            SecondaryButton("Scan their code", onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
+            Text(stringResource(R.string.comms_or_scan_their_code), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_their_my_code_screen_carries_their), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+            SecondaryButton(stringResource(R.string.comms_scan_their_code), onClick = { error = null; scan() }, modifier = Modifier.fillMaxWidth())
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
 
         ClairixCard {
-            Text("Name", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_name), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it.take(40) }, singleLine = true, modifier = Modifier.weight(1f), colors = clairixTextFieldColors())
-                GhostButton("Save", onClick = { scope.launch { CommsRepository.renameContact(c.number, name) } }, enabled = name.trim() != c.name)
+                GhostButton(stringResource(R.string.settings_save), onClick = { scope.launch { CommsRepository.renameContact(c.number, name) } }, enabled = name.trim() != c.name)
             }
-            Text("Identity key ${c.ed25519.take(16)}…", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
+            Text(stringResource(R.string.comms_identity_key, c.ed25519.take(16)), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
         }
 
         ClairixCard {
-            Text("If they are bothering you", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_if_they_are_bothering_you), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
-                "Report tells your relay's operator about this number. Block stops everything they send from reaching this phone, " +
-                    "messages, calls and group messages alike, and they are not told. Delete removes them and your conversation; " +
-                    "if they write to you again it arrives as a message request.",
+                stringResource(R.string.comms_report_tells_your_relays_operator_about),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
-            GhostButton("Report", onClick = { reporting = true }, tone = Tone.Caution)
-            GhostButton("Block", onClick = { confirm = ContactAction.BLOCK }, tone = Tone.Danger)
-            GhostButton("Block and delete", onClick = { confirm = ContactAction.BLOCK_AND_DELETE }, tone = Tone.Danger)
-            GhostButton("Delete", onClick = { confirm = ContactAction.DELETE }, tone = Tone.Danger)
+            GhostButton(stringResource(R.string.comms_report), onClick = { reporting = true }, tone = Tone.Caution)
+            GhostButton(stringResource(R.string.comms_block), onClick = { confirm = ContactAction.BLOCK }, tone = Tone.Danger)
+            GhostButton(stringResource(R.string.comms_block_and_delete), onClick = { confirm = ContactAction.BLOCK_AND_DELETE }, tone = Tone.Danger)
+            GhostButton(stringResource(R.string.settings_delete), onClick = { confirm = ContactAction.DELETE }, tone = Tone.Danger)
         }
         Spacer(Modifier.height(16.dp))
     }
 }
 
 /** What the contact page can do to a contact, and what each one says before it does it. */
-private enum class ContactAction(val title: String, val explanation: String) {
-    BLOCK(
-        "Block",
-        "Nothing they send reaches this phone again: no messages, calls or group messages, and they are not told. " +
-            "While the phone is locked Clairix cannot yet tell who sent something, so a \"New Clairix message\" notice can still " +
-            "appear until you unlock; it never rings. " +
-            "The conversation stays here, read-only, as a record. Unblock them any time under Blocked in Comms settings."
-    ),
-    BLOCK_AND_DELETE(
-        "Block and delete",
-        "Nothing they send reaches this phone again, and they are not told. Their keys, the session and every message with them " +
-            "are deleted from this phone; their number stays on your blocked list until you unblock it in Comms settings. " +
-            "To report them, do it first: a report names the last envelope they sent."
-    ),
-    DELETE(
-        "Delete",
-        "Their keys, the encrypted session and every message with them are deleted from this phone. They are not blocked: " +
-            "if they write to you again, it arrives as a message request."
-    )
+private enum class ContactAction(@StringRes val title: Int, @StringRes val explanation: Int) {
+    BLOCK(R.string.comms_block, R.string.comms_block_explained),
+    BLOCK_AND_DELETE(R.string.comms_block_and_delete, R.string.comms_block_and_delete_explained),
+    DELETE(R.string.settings_delete, R.string.comms_delete_explained)
 }
 
 // ── My code ──────────────────────────────────────────────────────────────────
@@ -2358,7 +2329,7 @@ private fun InviteScreen(onBack: () -> Unit) {
         scope.launch {
             CommsRepository.createInvite()
                 .onSuccess { made = it }
-                .onFailure { error = it.message ?: "Could not make an invite" }
+                .onFailure { error = it.message ?: context.getString(R.string.comms_could_not_make_an_invite) }
             busy = false
         }
     }
@@ -2368,59 +2339,55 @@ private fun InviteScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("Invite", onBack = onBack)
+        Header(stringResource(R.string.comms_invite), onBack = onBack)
         ClairixCard {
-            Text("Invite someone to Clairix", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_invite_someone_to_clairix), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
-                "An invite lets one person get a Clairix number on your relay without the relay URL or its enrollment secret. " +
-                    "It works once and expires after seven days. They start with you as a contact, and you get a message when they join; " +
-                    "compare safety numbers with them to verify each other.",
+                stringResource(R.string.comms_an_invite_lets_one_person_get),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
             if (invite == null) {
-                PrimaryButton(if (busy) "Making invite…" else "Make an invite", enabled = !busy, loading = busy, onClick = create, modifier = Modifier.fillMaxWidth())
+                PrimaryButton(if (busy) stringResource(R.string.comms_making_invite) else stringResource(R.string.comms_make_an_invite), enabled = !busy, loading = busy, onClick = create, modifier = Modifier.fillMaxWidth())
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         }
         if (invite != null) {
             val link = invite.first.inviteLink()
             ClairixCard {
-                Text("Next to you: let them scan this", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
-                Text("In Clairix on their phone: Comms, then Scan invite.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                Text(stringResource(R.string.comms_next_to_you_let_them_scan), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_in_clairix_on_their_phone_comms), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                 if (bitmap != null) {
                     Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                        Image(bitmap.asImageBitmap(), contentDescription = "Clairix invite code", modifier = Modifier.size(260.dp).clip(ClairixShapes.Tag))
+                        Image(bitmap.asImageBitmap(), contentDescription = stringResource(R.string.comms_clairix_invite_code), modifier = Modifier.size(260.dp).clip(ClairixShapes.Tag))
                     }
                 }
             }
             ClairixCard {
-                Text("Far away: send them the link", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_far_away_send_them_the_link), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(
-                    "On a phone with Clairix the link opens it straight away; otherwise it opens a page on clairix.app with the download. " +
-                        "Anyone who gets the link can use it, so send it only to the person you mean. Works once, until $until.",
+                    stringResource(R.string.comms_on_a_phone_with_clairix_the, until.toString()),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PrimaryButton(
-                        "Share link",
+                        stringResource(R.string.comms_share_link),
                         onClick = {
-                            val text = "Join me on Clairix for end-to-end encrypted messages and calls: $link\n" +
-                                "The invite works once, until $until."
+                            val text = context.getString(R.string.comms_join_me_on_clairix_for_end, link, until.toString())
                             val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-                            runCatching { context.startActivity(Intent.createChooser(send, "Send invite").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            runCatching { context.startActivity(Intent.createChooser(send, context.getString(R.string.comms_send_invite)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GhostButton("Copy link", onClick = { clipboard.setSensitiveText("Clairix invite", link) }, tone = Tone.Neutral)
-                    GhostButton("New invite", onClick = { made = null; create() }, tone = Tone.Neutral, enabled = !busy)
+                    GhostButton(stringResource(R.string.comms_copy_link), onClick = { clipboard.setSensitiveText(context.getString(R.string.comms_clairix_invite), link) }, tone = Tone.Neutral)
+                    GhostButton(stringResource(R.string.comms_new_invite), onClick = { made = null; create() }, tone = Tone.Neutral, enabled = !busy)
                 }
             }
         }
-        Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
+        Notice(Tone.Info, NOT_A_PHONE, title = stringResource(R.string.comms_not_a_phone_number))
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -2435,14 +2402,12 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
         onDismissRequest = onDone,
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text(if (mine) "Your own invite" else "Add ${code.name.ifBlank { formatClairixNumber(code.number) }}?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(if (mine) stringResource(R.string.comms_your_own_invite) else stringResource(R.string.comms_add, code.name.ifBlank { formatClairixNumber(code.number) }), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    if (mine) "This invite is for someone who does not have Clairix yet. Send them the link."
-                    else "This phone already has a Clairix number, so the invite is not needed. You can add " +
-                        "${formatClairixNumber(code.number)} as a contact from it; the invite stays unused. A link could have been changed " +
-                        "on the way, so compare safety numbers with them, or scan their code, to verify them.",
+                    if (mine) stringResource(R.string.comms_this_invite_is_for_someone_who)
+                    else stringResource(R.string.comms_this_phone_already_has_a_clairix, formatClairixNumber(code.number)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
@@ -2451,7 +2416,7 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
         },
         confirmButton = {
             if (!mine) GhostButton(
-                "Add contact",
+                stringResource(R.string.comms_add_contact),
                 onClick = {
                     scope.launch {
                         CommsRepository.addContactFromCode(code.copy(invite = null), source = CommsRepository.CodeSource.LINK)
@@ -2461,12 +2426,13 @@ private fun AddInviterDialog(code: PairingCode, onDone: () -> Unit, onAdded: (St
                 }
             )
         },
-        dismissButton = { GhostButton(if (mine) "OK" else "Cancel", onClick = onDone, tone = Tone.Neutral) }
+        dismissButton = { GhostButton(if (mine) "OK" else stringResource(R.string.settings_cancel), onClick = onDone, tone = Tone.Neutral) }
     )
 }
 
 @Composable
 private fun MyCodeScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
     val state by CommsRepository.state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     val code = remember(state.number, state.displayName) { CommsRepository.pairingCode() }
@@ -2475,32 +2441,32 @@ private fun MyCodeScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("My code", onBack = onBack)
+        Header(stringResource(R.string.comms_my_code), onBack = onBack)
         ClairixCard {
             Text(state.number?.let { formatClairixNumber(it) } ?: "—", style = MaterialTheme.typography.monoLarge, color = ClairixTheme.colors.accent, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             if (state.displayName.isNotBlank()) Text(state.displayName, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            Text("Clairix number · ${if (state.listed) "listed" else "unlisted"}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text(stringResource(if (state.listed) R.string.comms_number_listed else R.string.comms_number_unlisted), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             if (bitmap != null) {
                 Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                    Image(bitmap.asImageBitmap(), contentDescription = "Your Clairix pairing code", modifier = Modifier.size(260.dp).clip(ClairixShapes.Tag))
+                    Image(bitmap.asImageBitmap(), contentDescription = stringResource(R.string.comms_your_clairix_pairing_code), modifier = Modifier.size(260.dp).clip(ClairixShapes.Tag))
                 }
             }
             Text(
-                "Let a contact scan this to add you with your keys pinned and verified. The code holds your relay, number and public keys only.",
+                stringResource(R.string.comms_let_a_contact_scan_this_to),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.number?.let { n -> GhostButton("Copy number", onClick = { clipboard.setSensitiveText("Clairix number", formatClairixNumber(n)) }, tone = Tone.Neutral) }
-                code?.let { c -> GhostButton("Copy code text", onClick = { clipboard.setSensitiveText("Clairix pairing code", c.encode()) }, tone = Tone.Neutral) }
+                state.number?.let { n -> GhostButton(stringResource(R.string.comms_copy_number), onClick = { clipboard.setSensitiveText(context.getString(R.string.comms_clairix_number), formatClairixNumber(n)) }, tone = Tone.Neutral) }
+                code?.let { c -> GhostButton(stringResource(R.string.comms_copy_code_text), onClick = { clipboard.setSensitiveText(context.getString(R.string.comms_clairix_pairing_code), c.encode()) }, tone = Tone.Neutral) }
             }
         }
-        Notice(Tone.Info, NOT_A_PHONE, title = "Not a phone number")
+        Notice(Tone.Info, NOT_A_PHONE, title = stringResource(R.string.comms_not_a_phone_number))
         if (myKey != null) {
             ClairixCard {
-                Text("Identity key", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_identity_key_2), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                 Text(myKey, style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textMuted)
-                Text("Generated on this phone; the private half leaves it only inside a recovery file you save yourself (Comms settings). A reinstall makes a new identity and a new number, unless you restore a recovery file at setup.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                Text(stringResource(R.string.comms_generated_on_this_phone_the_private), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -2560,113 +2526,106 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             onDismissRequest = { confirmUnpair = false },
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet,
-            title = { Text("Give up this Clairix number?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+            title = { Text(stringResource(R.string.settings_give_up_this_clairix_number), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
             text = {
                 Text(
-                    "The relay deletes your mailbox and keys, and this phone deletes its identity, contacts and messages. " +
-                        "Registering again gives a different number; contacts will have to add you afresh. A recovery file " +
-                        "saved earlier still brings back these keys, contacts and groups, under a new number that contacts are told.",
+                    stringResource(R.string.comms_the_relay_deletes_your_mailbox_and),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
                 GhostButton(
-                    "Delete everything",
+                    stringResource(R.string.comms_delete_everything),
                     onClick = { confirmUnpair = false; scope.launch { CommsRepository.unpair() } },
                     tone = Tone.Danger
                 )
             },
-            dismissButton = { GhostButton("Cancel", onClick = { confirmUnpair = false }, tone = Tone.Neutral) }
+            dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = { confirmUnpair = false }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("Comms settings", onBack = onBack)
+        Header(stringResource(R.string.comms_comms_settings), onBack = onBack)
         Text("${state.number?.let { formatClairixNumber(it) } ?: "—"} on ${state.relayUrl ?: "—"}", style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
 
         ClairixCard {
-            Text("Delivery", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_delivery), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             ToggleRow(
-                title = "Online",
+                title = stringResource(R.string.comms_online),
                 checked = state.online,
                 onCheckedChange = { CommsRepository.setOnline(it) },
-                subtitle = "Keeps a connection to the relay open in the background, with a quiet notification, so messages arrive and calls ring while Clairix is closed. " +
-                    "The relay sends a small heartbeat every two to five minutes (two while messages are moving); this phone sends no keep-alive of its own unless one is overdue. " +
-                    "Uses some battery. If Android stops the connection, Clairix tells you. While Clairix is on screen it is connected either way."
+                subtitle = stringResource(R.string.comms_keeps_a_connection_to_the_relay)
             )
             var tor by remember { mutableStateOf(TorTransport.enabled) }
             val torState by TorTransport.state.collectAsStateWithLifecycle()
             // Read now rather than at Tor's next once-a-minute look.
             LaunchedEffect(tor) { if (tor) TorTransport.refreshStatus() }
             ToggleRow(
-                title = "Connect through Tor",
+                title = stringResource(R.string.comms_connect_through_tor),
                 checked = tor,
                 onCheckedChange = { on -> tor = on; TorTransport.setEnabled(on) },
-                subtitle = "Everything Clairix says to relays goes through Tor, so no relay, this one or another, learns this " +
-                    "phone's network address, and the network it is on does not learn which relay it uses. Nothing goes out " +
-                    "directly while Tor is connecting. Slower, and uses more data. With Online off, Tor sleeps when nothing has " +
-                    "needed it for five minutes and starts again with the next request, which then waits a few seconds. Calls do " +
-                    "not go through Tor: during a call the relay's call server sees this phone's address. While Tor is on, a call " +
-                    "goes only through the relay's TURN server, and is refused when the relay offers none, so the contact never learns it."
+                subtitle = stringResource(R.string.comms_everything_clairix_says_to_relays_goes)
             )
             if (tor) {
                 val (line, tone) = when (val s = torState) {
-                    TorTransport.State.Off -> "Off" to ClairixTheme.colors.textSubtle
-                    is TorTransport.State.Starting -> "Connecting to Tor… ${s.percent}%" to ClairixTheme.colors.textMuted
-                    TorTransport.State.Ready -> "Connected through Tor" to ClairixTheme.colors.accent
-                    TorTransport.State.Asleep -> "Tor is asleep until Clairix next talks to a relay" to ClairixTheme.colors.textSubtle
-                    is TorTransport.State.Blocked -> "Tor is stuck at ${s.percent}%: ${s.reason}" to ClairixTheme.colors.danger
-                    is TorTransport.State.Failed -> "Tor did not start: ${s.reason}" to ClairixTheme.colors.danger
+                    TorTransport.State.Off -> stringResource(R.string.comms_off) to ClairixTheme.colors.textSubtle
+                    is TorTransport.State.Starting -> stringResource(R.string.comms_connecting_to_tor, s.percent) to ClairixTheme.colors.textMuted
+                    TorTransport.State.Ready -> stringResource(R.string.comms_connected_through_tor) to ClairixTheme.colors.accent
+                    TorTransport.State.Asleep -> stringResource(R.string.comms_tor_is_asleep_until_clairix_next) to ClairixTheme.colors.textSubtle
+                    is TorTransport.State.Blocked -> stringResource(R.string.comms_tor_is_stuck_at, s.percent, s.reason) to ClairixTheme.colors.danger
+                    is TorTransport.State.Failed -> stringResource(R.string.comms_tor_did_not_start, s.reason) to ClairixTheme.colors.danger
                 }
                 Text(line, style = MaterialTheme.typography.bodySmall, color = tone)
             }
             var hidePreviews by remember { mutableStateOf(CommsNotifications.hidePreviews(context)) }
             ToggleRow(
-                title = "Hide names and previews in notifications",
+                title = stringResource(R.string.comms_hide_names_and_previews_in_notifications),
                 checked = hidePreviews,
                 onCheckedChange = { on -> hidePreviews = on; CommsRepository.setHidePreviews(on) },
-                subtitle = "Notifications say only that a message, a changed safety number or a missed call is waiting, naming nobody and quoting nothing, for a phone that is sometimes in other hands while unlocked. On by default once a passcode is set. Whenever the app locks, the notifications already showing collapse to one \"unlock to read\" either way."
+                subtitle = stringResource(R.string.comms_notifications_say_only_that_a_message)
             )
             var relayOnlyChoice by remember { mutableStateOf(CommsRepository.relayOnlyCallsChoice()) }
             val relayTurn = remember { CommsRepository.relayTurnOffered() }
             ToggleRow(
-                title = "Relay-only calls",
+                title = stringResource(R.string.comms_relay_only_calls),
                 // The default is on wherever the relay offers TURN; until a call has
                 // asked, it is shown as the default it will be.
                 checked = relayOnlyChoice ?: (relayTurn != false),
                 onCheckedChange = { on -> relayOnlyChoice = on; CommsRepository.setRelayOnlyCalls(on) },
-                subtitle = "Call audio always goes through the relay's TURN server, so a contact you call, or who calls you, never learns this phone's network address, and neither does anyone holding their phone. Adds a little delay. " +
+                subtitle = stringResource(
+                    R.string.comms_relay_only_explained,
                     when (relayOnlyChoice) {
-                        true -> "You switched it on, so a call cannot connect while the relay has no TURN server."
-                        false -> "You switched it off: calls connect directly when both networks allow it, and the other phone learns this phone's address. While Tor is on, calls still go only through the TURN server."
+                        true -> stringResource(R.string.comms_you_switched_it_on_so_a)
+                        false -> stringResource(R.string.comms_you_switched_it_off_calls_connect)
                         null -> when (relayTurn) {
-                            true -> "On by default, because your relay offers a TURN server."
-                            false -> "On by default whenever your relay offers a TURN server, and it offered none on the last call. Until you choose, Clairix asks before each call you place whether to call directly, which tells the other phone this phone's address, and a call you answer connects directly. Switch it on to refuse calls until it offers one."
-                            null -> "On by default whenever your relay offers a TURN server; Clairix finds out on the first call."
+                            true -> stringResource(R.string.comms_on_by_default_because_your_relay)
+                            false -> stringResource(R.string.comms_on_by_default_whenever_your_relay)
+                            null -> stringResource(R.string.comms_on_by_default_whenever_your_relay_2)
                         }
                     }
+                )
             )
             var coverTraffic by remember { mutableStateOf(CommsRepository.coverTraffic()) }
             ToggleRow(
-                title = "Cover traffic",
+                title = stringResource(R.string.comms_cover_traffic),
                 checked = coverTraffic,
                 onCheckedChange = { on -> coverTraffic = on; CommsRepository.setCoverTraffic(on) },
-                subtitle = "While the background connection is on, sends a sealed envelope of random size to a random contact every twenty minutes or so; their phone drops it unread. To the relay and to anyone watching the network, this phone then messages its contacts at a steady rate whether or not it has anything to say. Uses a little data and battery; pauses while Low power is on (Settings > Battery); off by default."
+                subtitle = stringResource(R.string.comms_while_the_background_connection_is_on)
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Push wake-ups", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                    Text(stringResource(R.string.comms_push_wake_ups), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text(
-                        if (state.pushRegistered) "Registered with your UnifiedPush distributor. The relay pokes it when a message waits; the poke carries nothing, but the push server your distributor uses learns when one was sent."
-                        else "Install a UnifiedPush distributor (ntfy from F-Droid works) and tap Set up. No Google services are used. The push server it uses learns when something arrives for you, not what or from whom.",
+                        if (state.pushRegistered) stringResource(R.string.comms_registered_with_your_unifiedpush_distributor_the)
+                        else stringResource(R.string.comms_install_a_unifiedpush_distributor_ntfy_from),
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.textSubtle
                     )
                 }
                 GhostButton(
-                    if (state.pushRegistered) "Renew" else "Set up",
+                    if (state.pushRegistered) stringResource(R.string.comms_renew) else stringResource(R.string.comms_set_up),
                     onClick = {
                         context.findActivity()?.let { CommsRepository.registerPush(it) }
                     }
@@ -2674,40 +2633,40 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             }
             if (!notificationsGranted) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Notifications are off, so new messages and incoming calls will not show until you open Clairix.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.weight(1f))
-                    GhostButton("Allow", onClick = allowNotifications)
+                    Text(stringResource(R.string.comms_notifications_are_off_so_new_messages), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution, modifier = Modifier.weight(1f))
+                    GhostButton(stringResource(R.string.comms_allow), onClick = allowNotifications)
                 }
             } else if (!callsChannelOk) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Incoming-call notifications are switched off or set to silent, so calls do not ring or pop up. Set \"Incoming calls\" to alert.",
+                        stringResource(R.string.comms_incoming_call_notifications_are_switched_off),
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.caution,
                         modifier = Modifier.weight(1f)
                     )
-                    GhostButton("Fix", onClick = { CommsNotifications.openCallsChannelSettings(context) })
+                    GhostButton(stringResource(R.string.comms_fix), onClick = { CommsNotifications.openCallsChannelSettings(context) })
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (microphoneGranted) "Microphone: allowed for calls."
-                    else "Microphone: not allowed. Calls cannot be made or answered until it is.",
+                    if (microphoneGranted) stringResource(R.string.comms_microphone_allowed_for_calls)
+                    else stringResource(R.string.comms_microphone_not_allowed_calls_cannot_be),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (microphoneGranted) ClairixTheme.colors.textSubtle else ClairixTheme.colors.caution,
                     modifier = Modifier.weight(1f)
                 )
-                if (!microphoneGranted) GhostButton("Allow", onClick = { askMicrophone.launch(Manifest.permission.RECORD_AUDIO) })
+                if (!microphoneGranted) GhostButton(stringResource(R.string.comms_allow), onClick = { askMicrophone.launch(Manifest.permission.RECORD_AUDIO) })
             }
             val batteryFree by rememberBatteryUnrestricted()
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (batteryFree) "Battery: unrestricted. Android will not cut the background connection."
-                    else "Battery: optimised. Android may cut the background connection, and then calls do not ring.",
+                    if (batteryFree) stringResource(R.string.comms_battery_unrestricted_android_will_not_cut)
+                    else stringResource(R.string.comms_battery_optimised_android_may_cut_the),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (batteryFree) ClairixTheme.colors.textSubtle else ClairixTheme.colors.caution,
                     modifier = Modifier.weight(1f)
                 )
-                if (!batteryFree) GhostButton("Allow", onClick = { openBatterySettings(context) })
+                if (!batteryFree) GhostButton(stringResource(R.string.comms_allow), onClick = { openBatterySettings(context) })
             }
             var fullScreen by remember { mutableStateOf(CommsNotifications.canUseFullScreen(context)) }
             DisposableEffect(lifecycleOwner) {
@@ -2720,37 +2679,40 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             if (!fullScreen) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Full-screen calls: off. On a locked phone an incoming call shows only as a notification.",
+                        stringResource(R.string.comms_full_screen_calls_off_on_a),
                         style = MaterialTheme.typography.bodySmall,
                         color = ClairixTheme.colors.caution,
                         modifier = Modifier.weight(1f)
                     )
-                    GhostButton("Allow", onClick = { CommsNotifications.openFullScreenSettings(context) })
+                    GhostButton(stringResource(R.string.comms_allow), onClick = { CommsNotifications.openFullScreenSettings(context) })
                 }
             }
             Text(
-                "Relay one-time keys: ${if (state.relayOneTimeKeys >= 0) state.relayOneTimeKeys else "unknown"} · topped up on sync",
+                stringResource(
+                    R.string.comms_relay_one_time_keys,
+                    if (state.relayOneTimeKeys >= 0) state.relayOneTimeKeys.toString() else stringResource(R.string.comms_unknown)
+                ),
                 style = MaterialTheme.typography.monoSmall,
                 color = ClairixTheme.colors.textSubtle
             )
         }
 
         ClairixCard {
-            Text("Identity", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_identity), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = name, onValueChange = { name = it.take(40) },
-                    label = { Text("Name shown to contacts", style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
+                    label = { Text(stringResource(R.string.comms_name_shown_to_contacts), style = MaterialTheme.typography.bodyMedium) }, singleLine = true,
                     modifier = Modifier.weight(1f), colors = clairixTextFieldColors()
                 )
-                GhostButton("Save", onClick = { scope.launch { CommsRepository.setDisplayName(name) } }, enabled = name.trim() != state.displayName)
+                GhostButton(stringResource(R.string.settings_save), onClick = { scope.launch { CommsRepository.setDisplayName(name) } }, enabled = name.trim() != state.displayName)
             }
             ToggleRow(
-                title = "Listed number",
+                title = stringResource(R.string.comms_listed_number),
                 checked = state.listed,
                 onCheckedChange = { scope.launch { CommsRepository.setListed(it) } },
-                subtitle = if (state.listed) "Anyone on this relay who knows your number can look up your keys and message you."
-                    else "Unlisted: only people who scanned your code can reach you. Lookups by number fail.",
+                subtitle = if (state.listed) stringResource(R.string.comms_anyone_on_this_relay_who_knows)
+                    else stringResource(R.string.comms_unlisted_only_people_who_scanned_your),
                 enabled = !state.busy
             )
         }
@@ -2768,23 +2730,23 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
             ClairixCard {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("App passcode and lock", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+                        Text(stringResource(R.string.comms_app_passcode_and_lock), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                         Text(
-                            "A passcode for the app itself, biometric unlock, a duress code that wipes everything, and the version.",
+                            stringResource(R.string.comms_a_passcode_for_the_app_itself),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClairixTheme.colors.textSubtle
                         )
                     }
-                    GhostButton("Open", onClick = onAppSettings)
+                    GhostButton(stringResource(R.string.comms_open), onClick = onAppSettings)
                 }
             }
         }
 
         ClairixCard {
-            Text("About Clairix numbers", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
+            Text(stringResource(R.string.comms_about_clairix_numbers), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.caution)
             Text(NOT_A_PHONE, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             Text(
-                "Numbers are random and handed out by your relay at registration. People on different relays reach each other through their relays. A number belongs to its relay: moving to another relay gives you a new one, and your contacts' phones are told it.",
+                stringResource(R.string.comms_numbers_are_random_and_handed_out),
                 style = MaterialTheme.typography.bodyMedium,
                 color = ClairixTheme.colors.textSubtle
             )
@@ -2793,14 +2755,14 @@ private fun CommsSettingsScreen(onBack: () -> Unit, onAppSettings: (() -> Unit)?
         state.error?.let {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.weight(1f))
-                GhostButton("Dismiss", onClick = { CommsRepository.clearError() }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.comms_dismiss), onClick = { CommsRepository.clearError() }, tone = Tone.Neutral)
             }
         }
 
         DiagnosticsCard()
 
         GhostButton(
-            "Delete identity and number",
+            stringResource(R.string.settings_delete_identity_and_number),
             onClick = { confirmUnpair = true },
             tone = Tone.Danger,
             enabled = !state.busy
@@ -2833,10 +2795,10 @@ private fun BlockedCard(onOpen: (String) -> Unit) {
         )
     }
     ClairixCard {
-        Text("Blocked", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+        Text(stringResource(R.string.comms_blocked), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
         Text(
-            if (blocked.isEmpty()) "No one is blocked. Block someone from their contact page, or decline a message request."
-            else "Nothing these numbers send reaches this phone, and they are not told. Unblocking does not tell them either.",
+            if (blocked.isEmpty()) stringResource(R.string.comms_no_one_is_blocked_block_someone)
+            else stringResource(R.string.comms_nothing_these_numbers_send_reaches_this),
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle
         )
@@ -2844,14 +2806,19 @@ private fun BlockedCard(onOpen: (String) -> Unit) {
             HorizontalDivider(color = ClairixTheme.colors.border)
             Text(b.name.ifBlank { formatClairixNumber(b.number) }, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
             Text(
-                "${formatClairixNumber(b.number)} · ${if (b.relay != null) relayHost(b.relay) else "your relay"} · blocked ${dateTimeFmt.format(Date(b.ts))}",
+                stringResource(
+                    R.string.comms_blocked_line,
+                    formatClairixNumber(b.number),
+                    if (b.relay != null) relayHost(b.relay) else stringResource(R.string.comms_your_relay),
+                    dateTimeFmt.format(Date(b.ts))
+                ),
                 style = MaterialTheme.typography.monoSmall,
                 color = ClairixTheme.colors.textSubtle
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val record = kept[b.number]?.takeIf { ContactGate.matches(b, it.ed25519, it.curve25519, null, null) }
-                if (record != null) GhostButton("Open conversation", onClick = { onOpen(record.number) }, tone = Tone.Neutral)
-                GhostButton("Unblock", onClick = { unblocking = b }, tone = Tone.Accent)
+                if (record != null) GhostButton(stringResource(R.string.comms_open_conversation), onClick = { onOpen(record.number) }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.settings_unblock_2), onClick = { unblocking = b }, tone = Tone.Accent)
             }
         }
     }
@@ -2871,16 +2838,14 @@ private fun InviteRelayNotice(invite: PairingCode, listed: ListedRelay?) {
     if (listed != null) {
         Notice(
             Tone.Info,
-            "${listed.name}, on the Clairix relay list: run by ${listed.operator}, hosted by ${listed.host}.",
+            stringResource(R.string.comms_on_the_clairix_relay_list_run, listed.name, listed.operator, listed.host),
             title = relayHost(invite.relayUrl)
         )
     } else {
         Notice(
             Tone.Caution,
-            "This invite is for ${relayHost(invite.relayUrl)}, which is not on the list of relays Clairix publishes. Anyone can run a " +
-                "relay, and an invite link can name any of them. The relay cannot read your messages or tell who sent them, but it " +
-                "sees when your phone sends and receives, and from which network address unless Tor is on.",
-            title = "A relay not on Clairix's list"
+            stringResource(R.string.comms_this_invite_is_for_which_is, relayHost(invite.relayUrl)),
+            title = stringResource(R.string.comms_a_relay_not_on_clairixs_list)
         )
     }
 }
@@ -2896,30 +2861,33 @@ private fun RelayCard(busy: Boolean, relayUrl: String?, onMove: () -> Unit) {
     val until = remember(version, relayUrl) { CommsRepository.previousRelayUntil() }
     val owed = remember(version, relayUrl) { CommsRepository.moveNoticesOwed() }
     ClairixCard {
-        Text("Relay", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
+        Text(stringResource(R.string.comms_relay), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
         Text(relayHost(relayUrl), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
         Text(
-            "If this relay is blocked where you are, shut down, or no longer one you trust, move to another. You keep " +
-                "your keys, contacts and conversations and get a new number there; each contact's phone is told it and switches over.",
+            stringResource(R.string.comms_if_this_relay_is_blocked_where),
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle
         )
         previous?.let { (url, number) ->
             Text(
-                "Still collecting what is sent to your old number ${formatClairixNumber(number)} on ${relayHost(url)}, " +
-                    "whenever it can be reached, until ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(until))}.",
+                stringResource(
+                    R.string.comms_still_collecting,
+                    formatClairixNumber(number),
+                    relayHost(url),
+                    SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(until))
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = ClairixTheme.colors.textMuted
             )
         }
         if (owed > 0) {
             Text(
-                if (owed == 1) "1 contact has not been told your new number yet; Clairix keeps trying." else "$owed contacts have not been told your new number yet; Clairix keeps trying.",
+                if (owed == 1) stringResource(R.string.comms_1_contact_has_not_been_told) else stringResource(R.string.comms_contacts_have_not_been_told_your, owed),
                 style = MaterialTheme.typography.bodySmall,
                 color = ClairixTheme.colors.caution
             )
         }
-        SecondaryButton("Move to another relay", onClick = onMove, enabled = !busy, modifier = Modifier.fillMaxWidth())
+        SecondaryButton(stringResource(R.string.comms_move_to_another_relay), onClick = onMove, enabled = !busy, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -2950,9 +2918,9 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
     val here = state.relayUrl?.let { RelayClient.originOf(it) }
     val takeInvite: (PairingCode?) -> Unit = { code ->
         when {
-            code == null -> inviteError = "That is not a Clairix invite."
-            code.invite == null -> inviteError = "That's someone's contact code, not an invite. Ask them to tap Invite in Comms on their phone."
-            RelayClient.originOf(code.relayUrl) == here -> inviteError = "That invite is for the relay this phone is already on."
+            code == null -> inviteError = context.getString(R.string.comms_that_is_not_a_clairix_invite)
+            code.invite == null -> inviteError = context.getString(R.string.comms_thats_someones_contact_code_not_an)
+            RelayClient.originOf(code.relayUrl) == here -> inviteError = context.getString(R.string.comms_that_invite_is_for_the_relay)
             else -> { inviteError = null; invite = code; url = code.relayUrl }
         }
     }
@@ -2967,72 +2935,65 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
             onDismissRequest = { confirming = false },
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet,
-            title = { Text("Move to ${relayHost(target)}?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+            title = { Text(stringResource(R.string.comms_move_to, relayHost(target)), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
             text = {
                 Text(
-                    (if (goingBack) "You take up your old number ${formatClairixNumber(previous!!.second)} there again. "
-                        else "You get a new Clairix number there. ") +
-                        "Your keys, contacts and conversations stay, and every contact's phone is sent your new number and switches over. " +
-                        "Your ClairixCoin balance stays on ${relayHost(state.relayUrl)}. " +
-                        "For 30 days Clairix also collects what is still sent to your current number there, whenever that relay can be reached.",
+                    stringResource(R.string.comms_your_keys_contacts_and_conversations_stay, (if (goingBack) stringResource(R.string.comms_you_take_up_your_old_number, formatClairixNumber(previous!!.second))
+                        else stringResource(R.string.comms_you_get_a_new_clairix_number)), relayHost(state.relayUrl)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textMuted
                 )
             },
             confirmButton = {
                 GhostButton(
-                    "Move",
+                    stringResource(R.string.comms_move),
                     onClick = {
                         confirming = false
                         failure = null
                         scope.launch {
                             CommsRepository.moveTo(target, secret, invite)
                                 .onSuccess { moved = it; secret = "" }
-                                .onFailure { failure = it.message ?: "The move failed" }
+                                .onFailure { failure = it.message ?: context.getString(R.string.comms_the_move_failed) }
                         }
                     }
                 )
             },
-            dismissButton = { GhostButton("Cancel", onClick = { confirming = false }, tone = Tone.Neutral) }
+            dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = { confirming = false }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header("Move to another relay", onBack = onBack)
+        Header(stringResource(R.string.comms_move_to_another_relay), onBack = onBack)
 
         moved?.let { number ->
             StatusHero(
-                eyebrow = "Moved",
+                eyebrow = stringResource(R.string.comms_moved),
                 headline = formatClairixNumber(number),
-                body = "Your number on ${relayHost(state.relayUrl)}. Your contacts are being told; each phone switches over as the notice reaches it. " +
-                    "Your contact code has the new number in it.",
+                body = stringResource(R.string.comms_your_number_on_your_contacts_are, relayHost(state.relayUrl)),
                 tone = Tone.Accent
             )
-            PrimaryButton("Done", onClick = onBack, modifier = Modifier.fillMaxWidth())
+            PrimaryButton(stringResource(R.string.comms_done), onClick = onBack, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(16.dp))
             return@Column
         }
 
         Notice(
             Tone.Info,
-            "Your keys, contacts and conversations come with you; your number does not, since each relay hands out its own. " +
-                "Every contact is sent your new number over the encrypted session you already share, so nobody else can send it on your behalf, " +
-                "and their phones switch over by themselves. Verified contacts stay verified. ClairixCoin stays on the relay you leave. " +
-                "What contacts send to your old number before they switch is collected from the old relay whenever it can be reached, for 30 days.",
-            title = "What moves"
+            stringResource(R.string.comms_your_keys_contacts_and_conversations_come),
+            title = stringResource(R.string.comms_what_moves)
         )
 
         previous?.let { (prevUrl, prevNumber) ->
             ClairixCard {
-                Text("Move back", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_move_back), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
                 Text(
-                    "${relayHost(prevUrl)} still has your old number ${formatClairixNumber(prevNumber)}. Moving back takes it up again; no secret or invite is needed.",
+                    stringResource(R.string.comms_still_has_your_old_number_moving, relayHost(prevUrl), formatClairixNumber(prevNumber)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 SecondaryButton(
-                    if (goingBack) "Selected" else "Move back to ${relayHost(prevUrl)}",
+                    if (goingBack) stringResource(R.string.comms_selected) else stringResource(R.string.comms_move_back_to, relayHost(prevUrl)),
                     onClick = { invite = null; url = prevUrl },
                     enabled = !goingBack,
                     modifier = Modifier.fillMaxWidth()
@@ -3042,9 +3003,9 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
 
         relayList?.relays?.filter { RelayClient.originOf(it.url) != here }?.takeIf { it.isNotEmpty() }?.let { relays ->
             ClairixCard {
-                Text("Relays you can move to", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_relays_you_can_move_to), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
                 Text(
-                    "From the Clairix relay list. Clairix checks the relay still has the key the list gives it before moving there.",
+                    stringResource(R.string.comms_from_the_clairix_relay_list_clairix),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
@@ -3052,10 +3013,10 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
                     HorizontalDivider(color = ClairixTheme.colors.border)
                     Text(relay.name, style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text)
                     Text("${relay.country} · ${relay.host}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
-                    Text("Run by ${relay.operator}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
+                    Text(stringResource(R.string.comms_run_by, relay.operator), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textMuted)
                     relay.join?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) }
                     SecondaryButton(
-                        if (target == relay.url) "Selected below" else "Use this relay",
+                        if (target == relay.url) stringResource(R.string.comms_selected_below) else stringResource(R.string.comms_use_this_relay),
                         onClick = { invite = null; url = relay.url },
                         enabled = target != relay.url,
                         modifier = Modifier.fillMaxWidth()
@@ -3065,25 +3026,25 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
         }
 
         ClairixCard {
-            Text("With an invite", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            Text(stringResource(R.string.comms_with_an_invite), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
             invite?.let { code ->
                 Text(
-                    "Invited by ${code.name.ifBlank { formatClairixNumber(code.number) }} to ${relayHost(code.relayUrl)}.",
+                    stringResource(R.string.comms_invited_by_to, code.name.ifBlank { formatClairixNumber(code.number) }, relayHost(code.relayUrl)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.accent
                 )
                 InviteRelayNotice(code, relayList?.find(RelayClient.originOf(code.relayUrl) ?: code.relayUrl))
-                GhostButton("Clear the invite", onClick = { invite = null; url = "" }, tone = Tone.Neutral)
+                GhostButton(stringResource(R.string.comms_clear_the_invite), onClick = { invite = null; url = "" }, tone = Tone.Neutral)
             } ?: run {
                 Text(
-                    "Someone on the relay you want can invite you: they tap Invite in Comms. Scan the code it shows, or paste the invite they sent.",
+                    stringResource(R.string.comms_someone_on_the_relay_you_want),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SecondaryButton("Scan invite", onClick = { inviteError = null; scanInvite() }, modifier = Modifier.weight(1f))
+                    SecondaryButton(stringResource(R.string.comms_scan_invite), onClick = { inviteError = null; scanInvite() }, modifier = Modifier.weight(1f))
                     SecondaryButton(
-                        "Paste invite",
+                        stringResource(R.string.comms_paste_invite),
                         onClick = { takeInvite(clipboard.getText()?.text?.let { PairingCode.fromText(it) }) },
                         modifier = Modifier.weight(1f)
                     )
@@ -3094,31 +3055,31 @@ private fun MoveRelayScreen(onBack: () -> Unit) {
 
         if (invite == null) {
             ClairixCard {
-                Text("Or enter a relay", style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+                Text(stringResource(R.string.comms_or_enter_a_relay), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
                 OutlinedTextField(
                     value = url, onValueChange = { url = it },
-                    label = { Text("Relay URL", style = MaterialTheme.typography.bodyMedium) },
+                    label = { Text(stringResource(R.string.comms_relay_url), style = MaterialTheme.typography.bodyMedium) },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = clairixTextFieldColors()
                 )
                 if (!goingBack) {
                     OutlinedTextField(
                         value = secret, onValueChange = { secret = it },
-                        label = { Text("Enrollment secret", style = MaterialTheme.typography.bodyMedium) },
+                        label = { Text(stringResource(R.string.comms_enrollment_secret), style = MaterialTheme.typography.bodyMedium) },
                         singleLine = true, modifier = Modifier.fillMaxWidth(),
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = clairixTextFieldColors()
                     )
                 }
                 if (targetOrigin != null && targetOrigin == here) {
-                    Text("This phone is already on that relay.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution)
+                    Text(stringResource(R.string.comms_this_phone_is_already_on_that), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.caution)
                 }
             }
         }
 
         failure?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger) }
         PrimaryButton(
-            if (state.busy) "Moving…" else "Move",
+            if (state.busy) stringResource(R.string.comms_moving) else stringResource(R.string.comms_move),
             onClick = { confirming = true },
             enabled = ready && !state.busy,
             loading = state.busy,
@@ -3197,12 +3158,12 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
-        Header(group?.name ?: "Group", onBack = onBack) {
-            GhostButton("Members", onClick = onMembers, tone = Tone.Neutral)
+        Header(group?.name ?: stringResource(R.string.comms_group), onBack = onBack) {
+            GhostButton(stringResource(R.string.comms_members), onClick = onMembers, tone = Tone.Neutral)
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            "${members.size} member${if (members.size == 1) "" else "s"} · end-to-end encrypted",
+            pluralStringResource(R.plurals.comms_group_members, members.size, members.size),
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle
         )
@@ -3213,9 +3174,9 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
             if (messages.isEmpty()) {
                 item {
                     ClairixCard {
-                        Text("No messages yet", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
+                        Text(stringResource(R.string.comms_no_messages_yet), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textMuted)
                         Text(
-                            "Messages are encrypted for every member individually and sent to the relay once per member.",
+                            stringResource(R.string.comms_messages_are_encrypted_for_every_member),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClairixTheme.colors.textSubtle
                         )
@@ -3266,7 +3227,7 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 )
                                 if (isOut && msg.status == "failed") {
                                     Spacer(Modifier.width(4.dp))
-                                    Icon(Icons.Filled.Close, contentDescription = "Not sent", tint = ClairixTheme.colors.danger, modifier = Modifier.size(12.dp))
+                                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.comms_not_sent), tint = ClairixTheme.colors.danger, modifier = Modifier.size(12.dp))
                                 } else if (isOut && msg.status == "queued") {
                                     // Still owed to some members: the outbox is trying them.
                                     Spacer(Modifier.width(4.dp))
@@ -3307,10 +3268,10 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                         "${if (isTracker) "Active tracker" else "Travelling with you"}: ${topThreat.tracker?.label ?: topThreat.name}",
                         style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.danger
                     )
-                    Text("Tap to share with the group", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.comms_tap_to_share_with_the_group), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
                 }
                 GhostButton(
-                    "Share threat",
+                    stringResource(R.string.comms_share_threat),
                     onClick = {
                         scope.launch {
                             CommsRepository.shareThreats(
@@ -3320,8 +3281,7 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                                 lat = status.lat,
                                 lon = status.lon,
                                 title = topThreat.tracker?.label ?: topThreat.name,
-                                detail = if (isTracker) "Clairix has detected a possible following tracker."
-                                else "Clairix has detected a device travelling with me that does not identify itself as a tracker."
+                                detail = context.getString(if (isTracker) R.string.comms_alert_tracker else R.string.comms_alert_unidentified)
                             ).onFailure { sendError = it.message }
                         }
                     },
@@ -3335,13 +3295,13 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Message", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
+                placeholder = { Text(stringResource(R.string.comms_message), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle) },
                 maxLines = 4,
                 colors = clairixTextFieldColors()
             )
             Spacer(Modifier.width(8.dp))
             PrimaryButton(
-                "Send",
+                stringResource(R.string.comms_send),
                 onClick = {
                         val text = draft.trim()
                         if (text.isEmpty()) return@PrimaryButton
@@ -3350,7 +3310,7 @@ private fun GroupThreadScreen(groupId: String, onBack: () -> Unit, onMembers: ()
                         draft = ""
                         scope.launch {
                             CommsRepository.sendGroupMessage(groupId, toSend)
-                                .onFailure { sendError = it.message ?: "Could not send" }
+                                .onFailure { sendError = it.message ?: context.getString(R.string.comms_could_not_send) }
                         }
                     },
                 enabled = draft.isNotBlank()
@@ -3393,17 +3353,17 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
             onDismissRequest = { leaveConfirm = false },
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet,
-            title = { Text("Leave group?", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+            title = { Text(stringResource(R.string.comms_leave_group), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
             text = {
                 Text(
-                    "You will leave \"${group?.name ?: "this group"}\" and will no longer receive its messages.",
+                    stringResource(R.string.comms_leave_group_explained, group?.name ?: stringResource(R.string.comms_this_group)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )
             },
             confirmButton = {
                 GhostButton(
-                    "Leave",
+                    stringResource(R.string.comms_leave),
                     onClick = {
                         leaveConfirm = false
                         scope.launch {
@@ -3415,14 +3375,14 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
                     tone = Tone.Danger
                 )
             },
-            dismissButton = { GhostButton("Cancel", onClick = { leaveConfirm = false }, tone = Tone.Neutral) }
+            dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = { leaveConfirm = false }, tone = Tone.Neutral) }
         )
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(20.dp))
-        Header(group?.name ?: "Group", onBack = onBack) {
-            if (myRole == OrgRole.ADMIN) GhostButton("+ Add", onClick = { addMember = true }, tone = Tone.Safe)
+        Header(group?.name ?: stringResource(R.string.comms_group), onBack = onBack) {
+            if (myRole == OrgRole.ADMIN) GhostButton(stringResource(R.string.comms_add_2), onClick = { addMember = true }, tone = Tone.Safe)
         }
         Spacer(Modifier.height(4.dp))
         Text("${members.size} member${if (members.size == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
@@ -3432,11 +3392,11 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.danger, modifier = Modifier.padding(bottom = 8.dp))
         }
 
-        SectionHeader("Members")
+        SectionHeader(stringResource(R.string.comms_members))
         Spacer(Modifier.height(6.dp))
         ClairixCard {
             if (members.isEmpty()) {
-                Text("No members yet.", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                Text(stringResource(R.string.comms_no_members_yet), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     members.forEach { member ->
@@ -3459,7 +3419,7 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
                             StatusPill(member.role.name, if (member.role == OrgRole.ADMIN) Tone.Accent else Tone.Neutral)
                             if (myRole == OrgRole.ADMIN && member.number != myNumber) {
                                 GhostButton(
-                                    "Remove",
+                                    stringResource(R.string.settings_remove),
                                     onClick = {
                                         scope.launch {
                                             CommsRepository.removeGroupMember(groupId, member.number)
@@ -3476,15 +3436,16 @@ private fun OrgScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
-        SectionHeader("Actions")
+        SectionHeader(stringResource(R.string.comms_actions))
         Spacer(Modifier.height(6.dp))
-        SecondaryButton("Leave group", onClick = { leaveConfirm = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
+        SecondaryButton(stringResource(R.string.comms_leave_group_2), onClick = { leaveConfirm = true }, tone = Tone.Danger, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
 private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDismiss: () -> Unit) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val version by CommsRepository.version.collectAsStateWithLifecycle()
     val contacts by produceState(emptyList<Contact>(), version) {
@@ -3499,18 +3460,18 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = ClairixTheme.colors.surfaceRaised,
         shape = ClairixShapes.Sheet,
-        title = { Text("Add member", style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
+        title = { Text(stringResource(R.string.comms_add_member), style = MaterialTheme.typography.titleLarge, color = ClairixTheme.colors.text) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (available.isEmpty()) {
                     Text(
-                        if (contacts.isEmpty()) "Add contacts first, then add them to groups."
-                        else "All your contacts are already in this group.",
+                        if (contacts.isEmpty()) stringResource(R.string.comms_add_contacts_first_then_add_them)
+                        else stringResource(R.string.comms_all_your_contacts_are_already_in),
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClairixTheme.colors.textSubtle
                     )
                 } else {
-                    Text("Choose a contact to add:", style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
+                    Text(stringResource(R.string.comms_choose_a_contact_to_add), style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.textSubtle)
                     LazyColumn(modifier = Modifier.heightIn(max = 240.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         items(available, key = { it.number }) { c ->
                             Row(
@@ -3527,7 +3488,7 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
                                     Text(formatClairixNumber(c.number), style = MaterialTheme.typography.monoSmall, color = ClairixTheme.colors.textSubtle)
                                 }
                                 if (selected?.number == c.number) {
-                                    Icon(Icons.Filled.Check, contentDescription = "Selected", tint = ClairixTheme.colors.accent, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.comms_selected), tint = ClairixTheme.colors.accent, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
@@ -3538,7 +3499,7 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
         },
         confirmButton = {
             GhostButton(
-                if (busy) "Adding…" else "Add",
+                if (busy) stringResource(R.string.comms_adding) else stringResource(R.string.comms_add_3),
                 onClick = {
                         val c = selected ?: return@GhostButton
                         busy = true
@@ -3546,14 +3507,14 @@ private fun AddGroupMemberDialog(groupId: String, existing: List<String>, onDism
                         scope.launch {
                             CommsRepository.addGroupMember(groupId, c.number)
                                 .onSuccess { onDismiss() }
-                                .onFailure { busy = false; error = it.message ?: "Could not add member" }
+                                .onFailure { busy = false; error = it.message ?: context.getString(R.string.comms_could_not_add_member) }
                         }
                     },
                 tone = if (selected != null && !busy) Tone.Accent else Tone.Neutral,
                 enabled = selected != null && !busy
             )
         },
-        dismissButton = { GhostButton("Cancel", onClick = { if (!busy) onDismiss() }, tone = Tone.Neutral, enabled = !busy) }
+        dismissButton = { GhostButton(stringResource(R.string.settings_cancel), onClick = { if (!busy) onDismiss() }, tone = Tone.Neutral, enabled = !busy) }
     )
 }
 
@@ -3566,30 +3527,30 @@ private val logTimeFmt = SimpleDateFormat("MMM d HH:mm:ss", Locale.US)
  */
 @Composable
 private fun DiagnosticsCard() {
+    val context = LocalContext.current
     val entries by CommsLog.entries.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     ClairixCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.comms_diagnostics), style = MaterialTheme.typography.titleSmall, color = ClairixTheme.colors.text, modifier = Modifier.weight(1f))
             GhostButton(
-                "Copy",
+                stringResource(R.string.settings_copy),
                 onClick = {
                     val text = entries.joinToString("\n") { "${logTimeFmt.format(Date(it.ts))}  ${it.text}" }
-                    clipboard.setSensitiveText("Clairix comms log", "Clairix comms log\n$text")
+                    clipboard.setSensitiveText(context.getString(R.string.comms_clairix_comms_log), context.getString(R.string.comms_clairix_comms_log_2, text))
                 },
                 enabled = entries.isNotEmpty()
             )
-            GhostButton("Clear", onClick = { CommsLog.clear() }, tone = Tone.Neutral, enabled = entries.isNotEmpty())
+            GhostButton(stringResource(R.string.comms_clear), onClick = { CommsLog.clear() }, tone = Tone.Neutral, enabled = entries.isNotEmpty())
         }
         Text(
-            "What happened with the relay, calls and envelopes on this phone. No message text is kept. " +
-                "If a call or message goes missing, copy this and send it along.",
+            stringResource(R.string.comms_what_happened_with_the_relay_calls),
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle
         )
         if (entries.isEmpty()) {
-            Text("Nothing recorded yet.", style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
+            Text(stringResource(R.string.comms_nothing_recorded_yet), style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         } else {
             val shown = entries.asReversed().let { if (expanded) it else it.take(12) }
             for (e in shown) {
@@ -3600,7 +3561,7 @@ private fun DiagnosticsCard() {
                 )
             }
             if (entries.size > 12) {
-                GhostButton(if (expanded) "Show less" else "Show all ${entries.size}", onClick = { expanded = !expanded }, tone = Tone.Neutral)
+                GhostButton(if (expanded) stringResource(R.string.comms_show_less) else stringResource(R.string.comms_show_all, entries.size), onClick = { expanded = !expanded }, tone = Tone.Neutral)
             }
         }
     }

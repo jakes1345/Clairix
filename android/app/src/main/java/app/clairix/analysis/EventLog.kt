@@ -15,10 +15,12 @@ import org.json.JSONObject
  * record you can actually act on or hand to someone.
  *
  * It is capped so the file cannot grow without bound, dropping the oldest
- * entries first. Evidence the owner saved on purpose ([KEPT]) is not aged out
- * by the retention and is the last to go at the cap: an app's evidence saved
- * before it was removed cannot be collected again. It leaves only with
- * [clear] ("Clear all data", a wipe), or at the cap once nothing else is left.
+ * entries first. What the owner saved on purpose is not aged out by the
+ * retention and is the last to go at the cap ([isKept]): an app's evidence
+ * saved before it was removed ([KEPT]), and a photo kept from the camera sweep
+ * (an event with an [TimelineEvent.attachment]), neither of which can be
+ * collected again. It leaves only with [clear] ("Clear all data", a wipe), or
+ * at the cap once nothing else is left.
  */
 class EventLog(
     private val store: Store,
@@ -88,18 +90,18 @@ class EventLog(
         dropped(gone)
     }
 
-    /** The oldest event that is not [KEPT], or the oldest of all when every one is. */
+    /** The oldest event that is not kept ([isKept]), or the oldest of all when every one is. */
     private fun overflowIndex(): Int {
-        val oldestOrdinary = events.indexOfLast { it.kind !in KEPT }
+        val oldestOrdinary = events.indexOfLast { !isKept(it) }
         return if (oldestOrdinary >= 0) oldestOrdinary else events.size - 1
     }
 
-    /** Deletes events before [cutoff], other than [KEPT] ones; returns how many. */
+    /** Deletes events before [cutoff], other than kept ones ([isKept]); returns how many. */
     @Synchronized
     fun pruneOlderThan(cutoff: Long): Int {
-        val gone = events.filter { it.ts < cutoff && it.kind !in KEPT }
+        val gone = events.filter { it.ts < cutoff && !isKept(it) }
         if (gone.isEmpty()) return 0
-        events.removeAll { it.ts < cutoff && it.kind !in KEPT }
+        events.removeAll { it.ts < cutoff && !isKept(it) }
         persist()
         dropped(gone)
         return gone.size
@@ -150,5 +152,13 @@ class EventLog(
     companion object {
         /** Kinds the owner saved on purpose, which the retention does not delete. */
         val KEPT: Set<EventKind> = setOf(EventKind.EVIDENCE)
+
+        /**
+         * Saved on purpose: a [KEPT] kind, or an event with a file attached, which only
+         * "Keep a photo of this" in the camera sweep makes. The photo is the record of
+         * a room that may not be visited again, so it outlasts the retention and the
+         * cap's ordinary entries, as saved evidence does.
+         */
+        fun isKept(e: TimelineEvent): Boolean = e.kind in KEPT || e.attachment != null
     }
 }

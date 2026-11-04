@@ -29,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.clairix.security.Helplines
 import app.clairix.ui.components.ChoiceChips
@@ -79,7 +80,7 @@ internal fun GetHelpPage(onBack: (() -> Unit)? = null) {
     val content: LazyListScope.() -> Unit = {
         val b = book
         if (b == null) {
-            item(key = "§loading") { LoadingBlock("Reading the list…") }
+            item(key = "§loading") { LoadingBlock(stringResource(R.string.safety_reading_the_list)) }
         } else {
             helpContent(
                 book = b,
@@ -94,12 +95,12 @@ internal fun GetHelpPage(onBack: (() -> Unit)? = null) {
     }
 
     if (onBack == null) {
-        ToolPageList(title = "Get help", onBack = null, content = content)
+        ToolPageList(title = stringResource(R.string.settings_get_help), onBack = null, content = content)
     } else {
         BackHandler(onBack = onBack)
         // Drawn instead of the shell, like Settings: its own background, clear of the navigation bar.
         Box(Modifier.fillMaxSize().background(ClairixTheme.colors.base).navigationBarsPadding()) {
-            ToolPageList(title = "Get help", onBack = onBack, content = content)
+            ToolPageList(title = stringResource(R.string.settings_get_help), onBack = onBack, content = content)
         }
     }
 }
@@ -117,9 +118,7 @@ private fun LazyListScope.helpContent(
 
     item(key = "§intro") {
         Text(
-            "These services help people dealing with abuse or stalking, including from someone they live with. " +
-                "Some are run for women, and say so. You can talk through what you found and what to do about it " +
-                "before you remove anything.",
+            stringResource(R.string.safety_these_services_help_people_dealing_with),
             style = MaterialTheme.typography.bodyLarge,
             color = ClairixTheme.colors.textMuted
         )
@@ -127,7 +126,7 @@ private fun LazyListScope.helpContent(
 
     if (book.countries.isEmpty()) {
         item(key = "§unreadable") {
-            Notice(Tone.Danger, "The list of helplines could not be read. Reinstalling Clairix restores it.")
+            Notice(Tone.Danger, stringResource(R.string.safety_the_list_of_helplines_could_not))
         }
         return
     }
@@ -140,24 +139,24 @@ private fun LazyListScope.helpContent(
     item(key = "§country") {
         val why = when {
             shown == null -> null
-            picked != null -> "Chosen by you"
-            choice.match == Helplines.Match.SIM -> "From your SIM card"
-            choice.match == Helplines.Match.REGION -> "From the phone's region"
+            picked != null -> stringResource(R.string.safety_chosen_by_you)
+            choice.match == Helplines.Match.SIM -> stringResource(R.string.safety_from_your_sim_card)
+            choice.match == Helplines.Match.REGION -> stringResource(R.string.safety_from_the_phones_region)
             else -> null
         }
         val change: (@Composable RowScope.() -> Unit)? = if (shown != null && book.countries.size > 1) {
-            { GhostButton(if (picking) "Done" else "Change", onClick = { onPicking(!picking) }) }
+            { GhostButton(if (picking) stringResource(R.string.comms_done) else stringResource(R.string.settings_change), onClick = { onPicking(!picking) }) }
         } else {
             null
         }
-        SectionHeader(shown?.name ?: "Pick a country", supporting = why, action = change)
+        SectionHeader(shown?.name ?: stringResource(R.string.safety_pick_a_country), supporting = why, action = change)
     }
     if (shown == null) {
         item(key = "§none") {
             Notice(
                 Tone.Info,
-                choice.unmatched?.let { "No line for ${countryName(it)} is in this list yet. Pick a country below if one fits." }
-                    ?: "The phone does not say which country it is in. Pick one below."
+                choice.unmatched?.let { stringResource(R.string.safety_no_line_for_is_in_this, countryName(it)) }
+                    ?: stringResource(R.string.safety_the_phone_does_not_say_which)
             )
         }
     }
@@ -182,20 +181,18 @@ private fun LazyListScope.helpContent(
     item(key = "§traces") {
         Notice(
             Tone.Caution,
-            "A call stays in the phone's call log, a text in the messages app, a WhatsApp chat in WhatsApp and a " +
-                "web chat in the browser's history. If someone checks this phone, delete them afterwards, or use a " +
-                "phone they cannot get at. Clairix keeps no record of this page or of anything you tap on it.",
-            title = "What this leaves on the phone"
+            stringResource(R.string.safety_a_call_stays_in_the_phones),
+            title = stringResource(R.string.safety_what_this_leaves_on_the_phone)
         )
     }
 
     item(key = "§verified") {
         val date = shown?.let { Helplines.lastVerified(it) }
         Text(
-            (date?.let { "Last verified ${Helplines.formatDate(it)}, against each service's own website or an official government page. " } ?: "") +
+            (date?.let { stringResource(R.string.safety_last_verified_against_each_services_own, Helplines.formatDate(it)) } ?: "") +
                 "This list is not exhaustive: it has some countries and their national lines, and most places also " +
                 "have local services." +
-                (if (date != null) " A service can change its number or hours after that date." else ""),
+                (if (date != null) stringResource(R.string.safety_a_service_can_change_its_number) else ""),
             style = MaterialTheme.typography.bodySmall,
             color = ClairixTheme.colors.textSubtle,
             modifier = Modifier.padding(vertical = 8.dp)
@@ -211,10 +208,9 @@ private fun LazyListScope.helpContent(
 private fun DirectoryCard(d: Helplines.Directory, context: Context) {
     val c = ClairixTheme.colors
     ClairixCard(spacing = 8.dp) {
-        Text("In danger now", style = MaterialTheme.typography.titleSmall, color = Tone.Danger.color())
+        Text(stringResource(R.string.safety_in_danger_now), style = MaterialTheme.typography.titleSmall, color = Tone.Danger.color())
         Text(
-            "Call the local emergency number. From a mobile, 112 reaches the emergency services in many countries, " +
-                "but not in all of them.",
+            stringResource(R.string.safety_call_the_local_emergency_number_from),
             style = MaterialTheme.typography.bodyMedium,
             color = c.text
         )
@@ -222,12 +218,12 @@ private fun DirectoryCard(d: Helplines.Directory, context: Context) {
         Text(d.label, style = MaterialTheme.typography.titleSmall, color = c.text)
         d.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle) }
         Text(
-            "Checked ${Helplines.formatDate(d.verified)}. Clairix has not checked the lines it lists.",
+            stringResource(R.string.safety_checked_clairix_has_not_checked_the, Helplines.formatDate(d.verified)),
             style = MaterialTheme.typography.bodySmall,
             color = c.textSubtle
         )
         SecondaryButton(
-            "Open ${d.label}",
+            stringResource(R.string.shell_open, d.label),
             onClick = { open(context, Intent(Intent.ACTION_VIEW, Uri.parse(d.url)), "No app on this phone can open ${d.url}") },
             tone = Tone.Accent,
             modifier = Modifier.fillMaxWidth()
@@ -239,10 +235,10 @@ private fun DirectoryCard(d: Helplines.Directory, context: Context) {
 @Composable
 private fun EmergencyCard(e: Helplines.Emergency, context: Context) {
     ClairixCard(tone = Tone.Danger, emphasis = true, spacing = 8.dp) {
-        Text("In danger now", style = MaterialTheme.typography.titleSmall, color = Tone.Danger.color())
+        Text(stringResource(R.string.safety_in_danger_now), style = MaterialTheme.typography.titleSmall, color = Tone.Danger.color())
         e.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.text) }
         PrimaryButton(
-            "Call ${e.number}",
+            stringResource(R.string.safety_call, e.number),
             onClick = { dial(context, e.number) },
             tone = Tone.Danger,
             icon = Icons.Filled.Call,
@@ -261,7 +257,7 @@ private fun HelplineCard(line: Helplines.Line, context: Context) {
         Text(line.hours, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
         line.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = c.textSubtle) }
         SecondaryButton(
-            "Call ${line.phone}",
+            stringResource(R.string.safety_call, line.phone),
             onClick = { dial(context, line.phone) },
             tone = Tone.Accent,
             icon = Icons.Filled.Call,
@@ -269,18 +265,18 @@ private fun HelplineCard(line: Helplines.Line, context: Context) {
         )
         for (extra in line.also) {
             Text(extra.label, style = MaterialTheme.typography.bodySmall, color = c.textSubtle)
-            GhostButton("Call ${extra.phone}", onClick = { dial(context, extra.phone) }, modifier = Modifier.fillMaxWidth())
+            GhostButton(stringResource(R.string.safety_call, extra.phone), onClick = { dial(context, extra.phone) }, modifier = Modifier.fillMaxWidth())
         }
         val text = line.text
         if (text != null || line.chat.isNotEmpty()) {
             Hairline(Modifier.padding(vertical = 4.dp))
-            Text("When calling is not safe", style = MaterialTheme.typography.titleSmall, color = c.text)
+            Text(stringResource(R.string.safety_when_calling_is_not_safe), style = MaterialTheme.typography.titleSmall, color = c.text)
             if (text != null) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(text.label, style = MaterialTheme.typography.bodyMedium, color = c.textMuted)
                     text.hours?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = c.textSubtle) }
                 }
-                SecondaryButton("Send a text", onClick = { sendText(context, text) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
+                SecondaryButton(stringResource(R.string.safety_send_a_text), onClick = { sendText(context, text) }, tone = Tone.Accent, modifier = Modifier.fillMaxWidth())
             }
             for (chat in line.chat) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -288,7 +284,7 @@ private fun HelplineCard(line: Helplines.Line, context: Context) {
                     chat.hours?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = c.textSubtle) }
                 }
                 SecondaryButton(
-                    if (chat.url.startsWith("https://wa.me/")) "Open WhatsApp" else "Open chat",
+                    if (chat.url.startsWith("https://wa.me/")) stringResource(R.string.safety_open_whatsapp) else stringResource(R.string.safety_open_chat),
                     onClick = { open(context, Intent(Intent.ACTION_VIEW, Uri.parse(chat.url)), "No app on this phone can open ${chat.url}") },
                     tone = Tone.Accent,
                     modifier = Modifier.fillMaxWidth()

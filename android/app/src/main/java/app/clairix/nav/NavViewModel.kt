@@ -118,6 +118,7 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_MUTED = "muted"
         const val KEY_AVOID_CAMERAS = "avoid_cameras"
         const val KEY_WARN_CAMERAS = "warn_cameras"
+        const val KEY_SHARE_TRAFFIC = "share_traffic"
         /** Per region: when its published map was last compared with the one on the phone, and what was found. */
         const val KEY_UPDATE_CHECKED = "update_checked_"
         const val KEY_UPDATE_SEEN = "update_seen_"
@@ -206,6 +207,14 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
     private val _warnCameras = MutableStateFlow(prefs.getBoolean(KEY_WARN_CAMERAS, true))
     /** Say "plate reader ahead" while driving; the reader is shown on the map and in the banner either way. */
     val warnCameras: StateFlow<Boolean> = _warnCameras.asStateFlow()
+
+    private val _shareTraffic = MutableStateFlow(prefs.getBoolean(KEY_SHARE_TRAFFIC, true))
+    /**
+     * "Share traffic data": while navigating, anonymous speed samples, and while
+     * navigating or previewing a route, the box around it for HERE/TomTom incidents.
+     * Off, neither is sent; reports you make yourself and live speeds for the region still work.
+     */
+    val shareTraffic: StateFlow<Boolean> = _shareTraffic.asStateFlow()
 
     /** The loaded region's known plate readers, for the map. */
     val knownCameras: StateFlow<List<KnownCamera>> = session
@@ -511,6 +520,7 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
                     val navigator = Navigator(ctx, graph, router, traffic, probe)
                     navigator.muted = _muted.value
                     navigator.cameraWarnings = _warnCameras.value
+                    navigator.shareTraffic = _shareTraffic.value
                     Session(slug, graph, traffic, router, navigator, WorkZoneFeed(ctx, slug), closures, CameraFeed(ctx, slug), cameraPenalties)
                 }
                 session.value = s
@@ -933,6 +943,15 @@ class NavViewModel(app: Application) : AndroidViewModel(app) {
         _warnCameras.value = on
         prefs.edit().putBoolean(KEY_WARN_CAMERAS, on).apply()
         session.value?.navigator?.cameraWarnings = on
+    }
+
+    fun setShareTraffic(on: Boolean) {
+        _shareTraffic.value = on
+        prefs.edit().putBoolean(KEY_SHARE_TRAFFIC, on).apply()
+        val s = session.value ?: return
+        s.navigator.shareTraffic = on
+        // Off, the HERE/TomTom incidents already on the map go at once; on, they come back with the next refresh.
+        if (!on) viewModelScope.launch { s.traffic.refreshProviders(0) }
     }
 
     fun setFuelPrice(dollarsPerGal: Double) {

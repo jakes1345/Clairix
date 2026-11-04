@@ -27,7 +27,7 @@ import org.json.JSONObject
  */
 object AccountChecklist {
 
-    private const val FILE = "account_checklist.json"
+    internal const val FILE = "account_checklist.json"
 
     // Official pages, each checked to exist (a Google Account page answers a
     // signed-out visit by sending it to sign in; a help page answers with itself).

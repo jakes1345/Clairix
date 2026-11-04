@@ -140,7 +140,7 @@ class DriveService : Service() {
                 .setContentTitle(shown.title)
                 .setContentText(shown.text)
                 .setContentIntent(open)
-                .addAction(0, "Stop", stop)
+                .addAction(0, context.getString(R.string.drive_stop), stop)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)

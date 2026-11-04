@@ -112,6 +112,20 @@ class Store(
          * Nothing can read them, and one from a version that kept stores in the
          * clear is plaintext.
          */
+        /**
+         * Deletes, at once, every copy set aside of the stores named [names] in [dir]:
+         * `<name>.unreadable` and the dated `<name>.<time>.unreadable` beside it.
+         * For "Clear all data", which promises the history is gone: a set-aside
+         * timeline or location log is still that history, and one from a version that
+         * kept stores in the clear is plaintext. Returns how many went.
+         */
+        fun deleteSetAside(dir: File, names: Collection<String>): Int {
+            val gone = dir.listFiles { f ->
+                f.isFile && f.name.endsWith(SET_ASIDE_SUFFIX) && names.any { n -> f.name.startsWith("$n.") }
+            } ?: return 0
+            return gone.count { it.delete() }
+        }
+
         fun pruneSetAside(dir: File, now: Long = System.currentTimeMillis()): Int {
             val old = dir.walkTopDown().maxDepth(PRUNE_DEPTH)
                 .filter { it.isFile && it.name.endsWith(SET_ASIDE_SUFFIX) && now - it.lastModified() > SET_ASIDE_KEEP_MS }

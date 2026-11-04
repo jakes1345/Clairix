@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -51,7 +52,7 @@ internal fun PlaceMapDialog(label: String, lat: Double, lon: Double, onDismiss: 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 PlaceMapView(label = label, lat = lat, lon = lon)
                 TilesUnavailableNotice(
-                    "The place is still marked where it is.",
+                    stringResource(R.string.scan_the_place_is_still_marked_where),
                     Modifier.align(Alignment.TopCenter).padding(12.dp)
                 )
             }

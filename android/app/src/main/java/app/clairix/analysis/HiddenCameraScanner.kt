@@ -417,7 +417,7 @@ object HiddenCameraScanner {
     private const val IR_UNCONFIRMED_CAP = 0.65f
     /** A magnetic peak this far from the baseline is as strong as a magnetic hint gets. */
     private const val FULL_CONFIDENCE_UT = 200f
-    private const val STORE_FILE = "camera_sweep.json"
+    internal const val STORE_FILE = "camera_sweep.json"
     /** Writes of the sweep record are batched to at most one in this long. */
     private const val PERSIST_DELAY_MS = 1_000L
 

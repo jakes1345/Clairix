@@ -113,12 +113,13 @@ has been sent. Written 1 November 2026 against 3.0.0 Beta 8.
 
 ## 3. F-Droid (only what is possible today)
 
-- **State today:** no Clairix build can go into F-Droid's main repository.
-  Every edition declares `com.google.android.gms:play-services-location`
-  (`android/app/build.gradle.kts`), and F-Droid accepts only FOSS dependencies.
-  A build without Google Play services is planned, with no date
-  (`docs/DISTRIBUTION.md`). Do not open a merge request to fdroiddata and do
-  not file a Request For Packaging that implies the current build qualifies.
+- **State today:** the published editions declare
+  `com.google.android.gms:play-services-location`, which F-Droid does not
+  accept. The `foss` flavour (`android/app/build.gradle.kts`) is built without
+  Google Play services or Firebase, but has not been built on F-Droid's
+  servers, and the open questions in `docs/DISTRIBUTION.md` ("F-Droid") are
+  the maintainer's to settle first. Do not open a merge request to fdroiddata;
+  the maintainer submits `docs/fdroid/app.clairix.yml` when ready.
 - **Open (read only):** https://f-droid.org/docs/Submitting_to_F-Droid_Quick_Start_Guide/
 - **Account:** none for reading. GitLab later, when a qualifying build exists.
 - **Prompt:**

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Full edition only (fullSuite and fullComms). SEND_SMS lets an SOS also text the
+    Full and foss editions (app/build.gradle.kts points the foss edition at this
+    file), never the Play edition. SEND_SMS lets an SOS also text the
     one number the owner set in Settings, SOS ("Also text this number"); it is asked
     for when that option is turned on, and nothing is texted otherwise. The Play
     edition never declares it: Google Play allows SEND_SMS only to default SMS apps

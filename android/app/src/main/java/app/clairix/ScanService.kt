@@ -1183,7 +1183,7 @@ class ScanService : LifecycleService() {
         val detection = observation.detection
         if (vehicleTrips.inTrip) {
             // Drive mode on is one of the signs the journey is in the owner's car.
-            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now, driveMode = DriveService.active)
+            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now, driveMode = Tier.driveActive)
                 ?.let(::publishVehicleFinding)
         }
         maybeInterrogate(key, device, detection)
@@ -1522,8 +1522,11 @@ class ScanService : LifecycleService() {
         // When each paired accessory was first seen connected (the owner's marks stay).
         runCatching { app.clairix.analysis.AudioRouteMonitor.forget(this) }
         // The radio scanner's recordings, and any plain ones an earlier version left.
-        runCatching { ScannerRecordings.deleteEverything(this) }
+        runCatching { Tier.deleteScannerRecordings(this) }
         LocationHistory.clear(this)
+        // Copies of these stores set aside when they could not be read: the same
+        // history, kept 30 days for nobody's benefit once the owner has cleared it.
+        runCatching { Store.deleteSetAside(filesDir, CLEARED_STORE_FILES) }
         alerted.clear()
         followAlerts.clear()
         synchronized(gpsTrail) { gpsTrail.clear() }
@@ -1621,7 +1624,7 @@ class ScanService : LifecycleService() {
 
     /**
      * A filter on one device's address. The public SDK takes the address alone (the
-     * overload that also takes its type is not public at compileSdk 35), so whether a
+     * overload that also takes its type is not public at compileSdk 36), so whether a
      * controller filtering in hardware matches a device with a random address this
      * way is for a device to show; the type filters still catch every recognised
      * tracker family whatever its address.
@@ -1904,6 +1907,21 @@ class ScanService : LifecycleService() {
             (liveTrips ?: VehicleTrips(Store(context.applicationContext, TRIPS_FILE))).pruneOlderThan(cutoff)
 
         private const val CELL_FILE = "imsi_baseline.json"
+
+        /**
+         * The stores "Clear all data" empties (R.string.settings_clear_all_data_body), whose set-aside
+         * copies go with them. Settings, the unlock ledger, the owner's marks kept in
+         * other stores, and Comms stay, as the dialog says.
+         */
+        internal val CLEARED_STORE_FILES = listOf(
+            TimelineLog.FILE, CELL_FILE, TRIPS_FILE,
+            app.clairix.analysis.LocationHistory.FILE,
+            app.clairix.analysis.HiddenCameraScanner.STORE_FILE,
+            app.clairix.analysis.AccountChecklist.FILE,
+            app.clairix.analysis.CellularExposure.FILE,
+            app.clairix.analysis.StalkwareWatch.FILE,
+            app.clairix.analysis.AudioRouteMonitor.FILE,
+        )
 
         /** The live service's cell baseline, for [applyCellRetention] to work on in place; null while no service is alive. */
         @Volatile private var liveImsi: IMSICatcher? = null

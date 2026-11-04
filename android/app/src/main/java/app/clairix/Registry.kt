@@ -252,7 +252,7 @@ object Registry {
 
     /**
      * Whether the owner has acknowledged the vault-ownership notice. Seeded from
-     * [app.clairix.analysis.CardVault.hasOwnershipAck] at launch so the NFC tab can
+     * CardVault.hasOwnershipAck (src/suite) at launch so the NFC tab can
      * gate the first save on it without reading preferences on the main thread.
      */
     private val _ownershipAck = MutableStateFlow(false)
@@ -261,7 +261,7 @@ object Registry {
 
     /**
      * The UID of the tag the owner asked to record for the vault, or null. While it
-     * is set the NFC read path runs a full [app.clairix.analysis.NfcScanner.capture]
+     * is set the NFC read path runs a full NfcScanner.capture (src/suite)
      * on the next tap instead of an ordinary identify-only scan.
      */
     private val _vaultCaptureArm = MutableStateFlow<String?>(null)

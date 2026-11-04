@@ -11,10 +11,9 @@ import android.os.Process
 import android.os.SystemClock
 import androidx.core.app.NotificationManagerCompat
 import app.clairix.AppSettings
-import app.clairix.CardEmulationBridge
-import app.clairix.DriveService
 import app.clairix.ONBOARDING_DONE_KEY
 import app.clairix.Registry
+import app.clairix.Tier
 import app.clairix.ScanService
 import app.clairix.TOUR_SEEN_KEY
 import app.clairix.analysis.TlsCanary
@@ -378,10 +377,11 @@ object Wiper {
     }
 
     /**
-     * Every foreground service the app declares, in any edition (a service the
-     * running edition lacks is simply not found). Some run START_STICKY, and
-     * without stopping them Android would restart them, and the process, after it
-     * ends; and a channel a foreground service is using cannot be deleted, so a
+     * Every foreground service the shared code declares, in any edition (a
+     * service the running edition lacks is simply not found), and the ones the
+     * build's tier adds ([app.clairix.TierShell.foregroundServices]: Drive in the
+     * whole app). Some run START_STICKY, and without stopping them Android would
+     * restart them, and the process, after it ends; and a channel a foreground service is using cannot be deleted, so a
      * running mesh would leave "Offline mesh" listed in the decoy's settings.
      */
     internal val FOREGROUND_SERVICES: List<Class<out Service>> = listOf(
@@ -389,10 +389,9 @@ object Wiper {
         CommsService::class.java,
         CallService::class.java,
         MeshService::class.java,
-        DriveService::class.java,
         NavigationService::class.java,
         FakeCallRingService::class.java,
-    )
+    ) + Tier.foregroundServices
 
     private fun stopServices(app: Context) {
         for (service in FOREGROUND_SERVICES) runCatching { app.stopService(Intent(app, service)) }
@@ -454,7 +453,7 @@ object Wiper {
                 val dpm = app.getSystemService(DevicePolicyManager::class.java)
                 if (dpm?.isAdminActive(admin) == true) dpm.removeActiveAdmin(admin)
             }
-            runCatching { CardEmulationBridge.disarm(app) }
+            runCatching { Tier.disarmCardEmulation(app) }
             Registry.setEmulating(null)
         }
 
