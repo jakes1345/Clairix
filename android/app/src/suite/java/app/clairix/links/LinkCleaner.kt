@@ -79,7 +79,8 @@ object LinkCleaner {
         AMAZON to setOf("ref", "ref_", "_encoding", "psc", "content-id", "crid", "sprefix", "qid", "sr", "dib", "dib_tag"),
         setOf("aliexpress.com") to setOf("spm", "scm", "pvid", "algo_pvid", "algo_exp_id", "aff_platform", "sk", "aff_trace_key"),
         setOf("ebay.com", "ebay.co.uk", "ebay.de") to setOf("_trkparms", "_trksid", "mkcid", "mkevt", "mkrid", "campid", "toolid", "customid"),
-        setOf("medium.com") to setOf("source", "sk"),
+        // Not "sk": on Medium it is a friend link's key, which lets the reader past the paywall.
+        setOf("medium.com") to setOf("source"),
         setOf("substack.com") to setOf("r", "triedredirect", "publication_id", "post_id", "isfreemail"),
     )
 
@@ -276,7 +277,9 @@ object LinkCleaner {
                 val head = if (queryAt < 0) beforeHash else beforeHash.substring(0, queryAt)
                 val query = if (queryAt < 0) null else beforeHash.substring(queryAt + 1)
                 val rest = head.substring(schemeEnd + 3)
-                val slash = rest.indexOf('/')
+                // A browser ends the authority of an http(s) link at a backslash as at a slash, so
+                // "https://a.example\@google.com/url" goes to a.example, not Google.
+                val slash = rest.indexOfFirst { it == '/' || it == '\\' }
                 val authority = if (slash < 0) rest else rest.substring(0, slash)
                 val path = if (slash < 0) "" else rest.substring(slash)
                 val host = hostOf(authority) ?: return null

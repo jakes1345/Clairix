@@ -177,6 +177,15 @@ class LinkCleanerTest {
         assertEquals("HTTPS://WWW.YOUTUBE.COM/watch?v=1", cleaned("HTTPS://WWW.YOUTUBE.COM/watch?v=1&si=2"))
         assertEquals("https://user@example.org/p", cleaned("https://user@example.org/p?gclid=1"))
         assertEquals("http://[2001:db8::1]:8080/p", cleaned("http://[2001:db8::1]:8080/p?fbclid=1"))
+        // A backslash ends the host as a browser reads it: this goes to a.example, not to Google, so nothing is unwrapped.
+        val backslash = "https://a.example\\@www.google.com/url?q=https%3A%2F%2Fb.example%2F"
+        assertEquals(backslash, cleaned(backslash))
+    }
+
+    @Test
+    fun aMediumFriendLinkKeepsItsKey() {
+        // sk lets the reader of a friend link past the paywall; source is the tracking.
+        assertEquals("https://medium.com/@a/story-1?sk=abc123", cleaned("https://medium.com/@a/story-1?source=friends_link&sk=abc123"))
     }
 
     @Test
