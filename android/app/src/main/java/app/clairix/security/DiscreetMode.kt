@@ -81,6 +81,7 @@ object DiscreetMode {
             loaded = true
         }
         applyLauncher(app)
+        applyShareTargets(app)
         applyChannelNames(app)
     }
 
@@ -93,6 +94,7 @@ object DiscreetMode {
         val app = context.applicationContext
         load(app)
         applyLauncher(app)
+        applyShareTargets(app)
         applyChannelNames(app)
     }
 
@@ -127,6 +129,28 @@ object DiscreetMode {
                 }
             }.onFailure { Log.w(TAG, "could not switch ${entry.name}", it) }
         }
+    }
+
+    /**
+     * The suite's "Clean link" (links/LinkCleanerActivity), which other apps list under Clairix's
+     * icon in their share sheet and text-selection menu. Named here by class, since only the
+     * suite editions declare it.
+     */
+    internal const val LINK_CLEANER = "app.clairix.links.LinkCleanerActivity"
+
+    /**
+     * Switches the entries other apps show for Clairix outside the launcher ([LINK_CLEANER]) off
+     * while discreet mode is on and back to as declared once it is off, so the share sheet and the
+     * text-selection menu name nothing of Clairix's on a phone in discreet mode.
+     */
+    private fun applyShareTargets(context: Context) {
+        if (!BuildConfig.FULL_ACCESS) return
+        val pm = context.packageManager
+        val name = ComponentName(context.packageName, LINK_CLEANER)
+        val wanted = if (_state.value.on) PackageManager.COMPONENT_ENABLED_STATE_DISABLED else PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+        runCatching {
+            if (pm.getComponentEnabledSetting(name) != wanted) pm.setComponentEnabledSetting(name, wanted, PackageManager.DONT_KILL_APP)
+        }.onFailure { Log.w(TAG, "could not switch the share targets", it) }
     }
 
     /**
