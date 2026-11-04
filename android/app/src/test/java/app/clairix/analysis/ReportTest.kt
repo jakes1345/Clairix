@@ -93,7 +93,8 @@ class ReportTest {
                     packageName = "com.spy.sync", label = "System Sync", severity = Severity.HIGH, score = 9,
                     installer = null, namedInstaller = "com.android.vending", installedAt = oct3, updatedAt = oct3,
                     access = listOf("accessibility service on (reads the screen)"), permissions = listOf("read text messages"),
-                    reasons = listOf("hidden icon"), signers = listOf("AB:CD:EF"), savedAt = now
+                    reasons = listOf("hidden icon"), signers = listOf("AB:CD:EF"), savedAt = now,
+                    batteryExempt = true, requestedOnly = listOf("camera")
                 )
             )
         ),
@@ -164,6 +165,8 @@ class ReportTest {
         assertTrue("Installer it names: com.android.vending" in text)
         assertTrue("Signer SHA-256: AB:CD:EF" in text)
         assertTrue("Access      : accessibility service on (reads the screen)" in text)
+        assertTrue("Asked for, not granted: camera" in text)
+        assertTrue("Battery     : exempt (Android never pauses it in the background)" in text)
         assertTrue("Biometric tripwire: armed 2026-09-23" in text)
         assertTrue("Sleep window: 23:00 to 07:00" in text)
         assertTrue("[HIGH] installed by hand" in text)
@@ -176,6 +179,8 @@ class ReportTest {
         val app = root.getJSONObject("spyware").getJSONArray("apps").getJSONObject(0)
         assertEquals("com.spy.sync", app.getString("package"))
         assertEquals("AB:CD:EF", app.getJSONArray("signer_sha256").getString(0))
+        assertEquals("camera", app.getJSONArray("requested_not_granted").getString(0))
+        assertTrue(app.getBoolean("battery_exempt"))
         assertEquals("2026-10-03T12:00:00Z", app.getString("installed_utc"))
         assertEquals("2026-10-03T14:00:00+02:00", app.getString("installed_local"))
         val h = root.getJSONObject("header")

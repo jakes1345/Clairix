@@ -262,6 +262,8 @@ internal object ReportText {
         if (a.namedInstaller != null && a.namedInstaller != a.installer) appendLine("    Installer it names: ${a.namedInstaller}")
         appendLine("    Access      : ${a.access.ifEmpty { listOf("none of the special access Clairix checks") }.joinToString(", ")}")
         appendLine("    Permissions : ${a.permissions.ifEmpty { listOf("none of the sensitive ones Clairix checks") }.joinToString(", ")}")
+        if (a.requestedOnly.isNotEmpty()) appendLine("    Asked for, not granted: ${a.requestedOnly.joinToString(", ")}")
+        appendLine("    Battery     : ${AppEvidence.batteryText(a.batteryExempt)}")
         if (a.reasons.isNotEmpty()) appendLine("    Reasons     : ${a.reasons.joinToString("; ")}")
         appendLine("    Signer SHA-256: ${a.signers.ifEmpty { listOf("not readable") }.joinToString(", ")}")
     }

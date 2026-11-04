@@ -161,6 +161,8 @@ internal object ReportJson {
                     app.updatedAt?.let { time(this, "updated", it, t) }
                     put("access", strings(app.access))
                     put("permissions", strings(app.permissions))
+                    put("requested_not_granted", strings(app.requestedOnly))
+                    app.batteryExempt?.let { put("battery_exempt", it) }
                     put("reasons", strings(app.reasons))
                     put("signer_sha256", strings(app.signers))
                 })
