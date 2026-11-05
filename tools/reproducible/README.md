@@ -10,10 +10,11 @@ builds the full edition twice, on two machines, with no keystore in the
 environment, and `compare-builds.sh` fails unless the two builds agree: the
 debug APK entry for entry (each machine signs it with a debug key it makes for
 itself, so the signature differs by design), and the release APK, which Gradle
-writes unsigned without a keystore, byte for byte. A release build refuses to
-run until `android/asset-signing.pub` is committed, so until then the debug
-build alone is compared. The unstripped crypto library is also checked for any
-path from the build machine.
+writes unsigned without a keystore, byte for byte. (A release build refuses
+to run without `android/asset-signing.pub`. That file is committed, so both
+builds are compared; without it the workflow would compare the debug build
+alone.) The unstripped crypto library is also checked for any path from the
+build machine.
 
 ## Checking a published release
 
@@ -23,11 +24,11 @@ the release entry by entry. Signing adds `META-INF/*.SF` and `*.RSA`, rewrites
 script leaves those out and requires everything else to match.
 
 ```sh
-git checkout v3.1.0
+git checkout v3.0.0-beta.8
 (cd android && ./gradlew assembleFullSuiteRelease)
 tools/reproducible/compare-apk.sh \
     android/app/build/outputs/apk/fullSuite/release/app-full-suite-release-unsigned.apk \
-    clairix-v3.1.0.apk
+    clairix-v3.0.0-beta.8.apk
 ```
 
 You need JDK 17, the Android SDK (API 36 platform), NDK `27.2.12479018`, `cargo-ndk`

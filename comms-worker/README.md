@@ -21,9 +21,10 @@ giving them your real number or your identity key.
   the phone makes each one and the relay signs it without seeing it, so the
   relay cannot tell which account a spent token was issued to, even while it
   runs. All it keeps is a hash of each spent token, until its key is retired,
-  in a shard object that never learns an account. Never the content: envelopes are sealed to
-  the recipient's sealing key with an anonymous box, and inside that sits an
-  Olm double-ratchet message the relay could not read even if it opened the box.
+  in a shard object that never learns an account. Never the content:
+  envelopes are sealed to the recipient's sealing key with an anonymous box,
+  and inside that sits an Olm double-ratchet message the relay could not read
+  even if it opened the box.
 - Not when you were last here. A signed request leaves behind its nonce, kept
   five minutes to the minute, and nothing else: no last-seen, no last-fetched,
   no last-woken. Limits that must survive the object being evicted (invites,
@@ -42,9 +43,8 @@ giving them your real number or your identity key.
   from before 3.0.0 Beta 6 still fetch the old kind of token, random values the
   relay makes, which a relay that recorded its own answers could match to the
   account they went to; from 1 January 2027 the relay refuses that kind (see
-  "Old versions"). The first envelope
-  of a new session also carries the claim ticket of the one-time key it was
-  built on, which the relay handed to the sender's account with the key; that
+  "Old versions"). The first envelope of a new session also carries the claim
+  ticket of the one-time key it was built on, which the relay handed to the sender's account with the key; that
   envelope is linkable to that lookup, as the lookup itself already showed who
   wanted to reach whom. The relay writes none of this down: its rate limits
   are counted in memory, its log lines name no address, and Workers
@@ -146,7 +146,8 @@ The arithmetic is `voprf/`, a small Rust crate using the same `voprf` crate
 the app does, compiled to `src/voprf.wasm` and committed so the relay deploys
 without a Rust toolchain. `sh scripts/build-voprf.sh` rebuilds it (Rust 1.97.0
 with the wasm32 target), and CI fails if the committed file is not exactly
-what the source builds. Issuing 50 tokens costs the relay about 14 ms of CPU, checking one about 0.3 ms.
+what the source builds. Issuing 50 tokens costs the relay about 14 ms of
+CPU, checking one about 0.3 ms.
 
 Tokens from apps before Beta 6 (32 random bytes the relay made and stored by
 hash) are still issued and accepted until 1 January 2027 (see "Old versions").
@@ -195,8 +196,9 @@ The app generates its identity on the phone, registers it, and shows the Clairix
 number it was given. A registration is dated and must reach the relay within
 five minutes, and each of its keys may belong to one account at a time, so a
 captured registration (it carries the secret) cannot be replayed into a second
-account, and nobody can register someone else's key as their own. Two people pair by scanning each other's QR code in
-person, or by typing a listed Clairix number and then comparing safety numbers.
+account, and nobody can register someone else's key as their own. Two people
+pair by scanning each other's QR code in person, or by typing a listed Clairix
+number and then comparing safety numbers.
 
 ### How much each account may send
 
@@ -220,8 +222,9 @@ the accounts, the envelopes and the coin community are the same behind each.
 ### Mixing
 
 An envelope sent with `"mix": true` is held for a random time before it
-reaches its recipient: exponential, with a mean of four seconds, never longer than twenty
-(`MIX_MAX_MS` sets the cap; `"0"` turns mixing off). Every envelope due at
+reaches its recipient: exponential, with a mean of four seconds, never longer
+than twenty (`MIX_MAX_MS` sets the cap, and the mean stays a fifth of it;
+`"0"` turns mixing off). Every envelope due at
 the same moment is released together, in shuffled order. Someone watching
 traffic into the relay and traffic out to phones then cannot match an
 envelope going in with a delivery coming out by its timing alone, and a burst
@@ -231,16 +234,16 @@ changes, which go straight through: a call that rings four seconds late is a
 call missed, and an add followed by a remove must not arrive the other way
 round. The relay holds only what asks, so apps from before mixing, which send
 calls and SOS without saying which they are, are never delayed; the flag does
-tell the relay which envelopes are which. Everything that asks may arrive in any
-order, which the app handles: messages sort by their own time, receipts only
+tell the relay which envelopes are which. Everything that asks may arrive in
+any order, which the app handles: messages sort by their own time, receipts only
 move forward, and a photo's chunks may overtake its header.
 
 What it does not do: the relay operator still sees each envelope arrive and
 leave, so mixing guards against outside observers, not the relay. It works
 best with traffic to mix with; on a relay with a handful of quiet users the
 delay hides little. A global observer who watches both ends for weeks can
-still correlate by volume. The app's optional cover traffic (Settings, off by
-default) adds dummy envelopes to random contacts, about one every twenty
+still correlate by volume. The app's optional cover traffic (Comms settings,
+off by default) adds dummy envelopes to random contacts, about one every twenty
 minutes, which blurs volume a little but not against that observer.
 
 ### The live connection
@@ -446,8 +449,8 @@ enters its address, and leaves the enrollment secret empty. Every
 registration attempt still meets the per-address limit (ten a minute,
 counted in memory and never written down), and the only record that a
 registration came in this way is the day's count: nothing says which
-accounts did, nor from where. Past the day's number a phone without an invite or the secret is told
-to try again the next day; invites and the secret keep working. One address
+accounts did, nor from where. Past the day's number a phone without an invite
+or the secret is told to try again the next day; invites and the secret keep working. One address
 can use up a day's open registrations, so choose a number you would accept
 going to one person. While the coin is on, `COIN_INITIAL_BALANCE` is given
 to open registrations too. The project's own relay keeps open registration off.
@@ -458,8 +461,8 @@ Report, on a contact's page or on a message request in Clairix, sends
 `POST /v1/report`: the number reported, the relay it is on when that is not
 this one, a fingerprint of the newest envelope it sent (when the phone has
 one: 64 hex characters, an HMAC of the envelope's SHA-256 under a key only
-the reporting phone can make, never the hash itself) and a reason, one of `harassment`, `threats`, `spam`, `impersonation`
-or `other`. The request spends a report token and names nobody, so the relay
+the reporting phone can make, never the hash itself) and a reason, one of
+`harassment`, `threats`, `spam`, `impersonation` or `other`. The request spends a report token and names nobody, so the relay
 keeps who was reported and why, never who reported it, and never anything
 that was said, which it cannot read. The same envelope reported twice counts
 once. Reports are kept to the day, for 90 days at most, at most 500 about one
@@ -477,20 +480,19 @@ curl -X DELETE -H "X-Admin-Secret: $ADMIN_SECRET" -d '{"number":"482913605"}' ht
 ```
 
 `reports`, or the first `curl`, lists every reported number with how many
-reports there are, their reasons, the envelope fingerprints and the first and last
-day; `close`, or the second, closes the reports about one number (add
+reports there are, their reasons, the envelope fingerprints and the first and
+last day; `close`, or the second, closes the reports about one number (add
 `"relay"`, or the script's last argument, for a number on another relay) once
-it has been dealt with. A report is
-someone's word: the relay never sees the messages, and a fingerprint only
+it has been dealt with. A report is someone's word: the relay never sees the messages, and a fingerprint only
 lets a report be matched with an envelope by someone the reporter's phone
 gives that report's key. The fingerprint is not the envelope's hash because
 the person reported knows every envelope they sent and to whom: from the hash
 they could tell who reported them. A number on another relay is that relay's
 operator's to act on; this relay's operator can tell that operator the number
 and the reasons, or stop taking that relay's envelopes with `FEDERATION`.
-Do not forward the fingerprints or the days: the other relay's operator may be
-the person reported, and needs neither to act. A few attempts a minute per address are allowed, so the
-secret cannot be guessed; without `ADMIN_SECRET` the endpoint is off. What to
+Do not forward the fingerprints or the days: the other relay's operator may
+be the person reported, and needs neither to act. A few attempts a minute per
+address are allowed, so the secret cannot be guessed; without `ADMIN_SECRET` the endpoint is off. What to
 do with a report, start to finish, is [docs/ABUSE.md](../docs/ABUSE.md).
 
 ### Suspending a number
@@ -635,8 +637,8 @@ mint not who minted it (the record says "Minted by the relay"). Nor does it
 share an id with the other side's record: the payer's phone names the payment
 twice, `txid` for its own record and `credit` for the payee's, and tells the
 payee the second only inside the encrypted notice. What the two records still
-have in common is the amount and the hour. A ledger
-written by an earlier version, which named both parties and the moment, is
+have in common is the amount and the hour. A ledger written by an earlier
+version, which named both parties and the moment, is
 rewritten the first time the mailbox's coin is touched, or by the mailbox's
 daily cleanup, whichever comes first.
 
@@ -657,8 +659,8 @@ npx wrangler secret put ADMIN_SECRET   # 16+ characters; lets the operator mint 
 the Pay button only then (a relay from before this setting says nothing, and
 offers the coin, as it always did). While it is off every coin route answers 404,
 nobody can mint and new accounts start with nothing; balances and ledgers
-already there are kept (the ledgers still forget each transfer after 30 days)
-and come back if it is switched on again. Minting is
+already there are kept (the ledgers still forget each transfer after 30
+days) and come back if it is switched on again. Minting is
 `POST /v1/admin/coin/mint` with `{"to": "<Clairix number>", "amount": 50}`,
 signed like any request by a registered identity (the operator's own phone,
 say) and carrying `X-Admin-Secret`; it needs the coin on and
@@ -682,8 +684,8 @@ token** (a new report, a **report token**) that the phone fetched earlier over
 its signed channel, exactly as sends spend delivery tokens: the relay keeps
 only token hashes, in shards that never learn the account, so a traffic
 request carries no identity and a request that names one is refused. An
-account may draw 400 traffic tokens and 30 report tokens an hour, which is
-the only per-phone bound on traffic. Probes, reports and votes carry a
+account is issued 360 traffic tokens and 20 report tokens an hour, and may
+save up at most 400 and 30; that is the only per-phone bound on traffic. Probes, reports and votes carry a
 **trip pseudonym**, 16 random bytes the phone makes up when a drive begins and
 replaces every ten minutes; it lets the region's object count distinct
 vehicles and take one vote per vehicle, and reaches back to no phone.
@@ -754,8 +756,8 @@ UTC midnight. Once a provider has used 80% of its cap only tiles with nothing
 cached are fetched; a tile held back keeps serving its last result, and the
 provider then reports `"ok"` if anything was served, else `"quota"`. The
 requests arrive anonymously, each having spent a traffic token, so the relay
-cannot count per phone; what bounds one phone's share of a cap is the 400
-traffic tokens an hour its account may draw. A failing provider reports
+cannot count per phone; what bounds one phone's share of a cap is the
+traffic tokens its account may draw (360 an hour, at most 400 saved up). A failing provider reports
 `"error"`; the request itself still succeeds with whatever the other provider
 returned.
 
@@ -817,12 +819,13 @@ Signed requests carry `X-Clairix-Number`, `X-Clairix-Ts` (epoch millis, ±5 min)
 | POST | `/v1/traffic/report/vote` | `{region, trip, id, still}` → `{incident}`, null once voted away; a traffic token |
 | GET | `/v1/traffic/incidents?bbox=minLat,minLon,maxLat,maxLon` | `{now, incidents, providers: {here, tomtom}}`: HERE / TomTom incidents in a box of at most 1° × 1°; a traffic token |
 
-Each Clairix number is a Durable Object holding the keys, the queue (up to 2000
-envelopes of 64 KiB, kept 30 days) and the live sockets. Request bodies are
+Each Clairix number is a Durable Object holding the keys, the queue (up to
+2000 envelopes, kept 30 days; an envelope may be up to 72 KiB, a message
+padded to the largest 64 KiB size once it is sealed) and the live sockets. Request bodies are
 read up to 256 KiB and refused beyond it before anything else happens. A
 traffic region must be one the graph builder publishes a map for
-(`src/regions.ts`); nothing else makes the relay create an object. Incident times
-(`createdAt`, `expiresAt`) and probe times are epoch seconds.
+(`src/regions.ts`); nothing else makes the relay create an object. Incident
+times (`createdAt`, `expiresAt`) and probe times are epoch seconds.
 
 ## Development
 

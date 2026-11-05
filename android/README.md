@@ -1,13 +1,18 @@
-# Clairix — Android
+# Clairix for Android
 
-A real BLE tracker detector, written for Android in Kotlin. The tracker
-signatures are in `detect/Signatures.kt`; a device that changes its Bluetooth
-address is followed across the change by its advertisement content
-(`analysis/Identity.kt`) and by the rhythm of its radio
-(`detect/CadenceFingerprinter.kt`); and the rule below is in `analysis/Geo.kt`
-and `analysis/Persistence.kt`.
+The Clairix app, written in Kotlin, with the end-to-end crypto in Rust
+(`../comms-crypto`). This page covers the editions, how to build, sign and
+release them, the permissions the app asks for, and how the Bluetooth tracker
+detector works. What the app does for the person holding the phone, and what
+it cannot protect against, is in the root [`README.md`](../README.md).
 
-## The rule that makes it worth installing
+The tracker signatures are in `detect/Signatures.kt`. A device that changes
+its Bluetooth address is followed across the change by its advertisement
+content (`analysis/Identity.kt`) and by the rhythm of its radio
+(`detect/CadenceFingerprinter.kt`). The rule below is in `analysis/Geo.kt` and
+`analysis/Persistence.kt`.
+
+## The rule behind FOLLOWING
 
 Most tracker-detector apps flag anything they see repeatedly. That describes a
 tracker in your bumper and it equally describes a neighbour's Tile through a
@@ -15,7 +20,7 @@ wall, so those apps mostly generate false alarms and get uninstalled.
 
 This one only reports **FOLLOWING** when the same device has been heard from two
 places at least **300 m apart** (adjustable in Settings). Until then it says
-PERSISTENT and tells you which piece of evidence is missing — either you have
+PERSISTENT and tells you which piece of evidence is missing: either you have
 not travelled far enough yet, or there is no position fix to judge by.
 
 ## Editions and variants
@@ -74,7 +79,9 @@ Comms APK lists any of those classes. Their unit tests are in `src/testSuite`.
 
 ## Getting an APK without a build environment
 
-Every push builds the debug variants in CI.
+Every push that changes the app, the crypto crate or the relay list builds
+the debug variants in CI (the path filters are in
+`.github/workflows/android.yml`).
 
 1. Open the **Actions** tab on GitHub
 2. Pick the most recent **Android APK** run
@@ -93,13 +100,13 @@ any other NDK or cargo-ndk version.
 
 ```bash
 cd android
-gradle assembleFullSuiteDebug       # app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
-gradle assemblePlaySuiteDebug       # the Play edition
-gradle assembleDebug                # every debug variant
-gradle test                         # unit tests for every variant
+./gradlew assembleFullSuiteDebug    # app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
+./gradlew assemblePlaySuiteDebug    # the Play edition
+./gradlew assembleDebug             # every debug variant
+./gradlew test                      # unit tests for every variant
 ```
 
-`./gradlew` works too; CI installs Gradle itself.
+CI runs the same wrapper, so a local build and CI both use Gradle 8.14.3.
 
 ## Settings that matter for privacy
 
@@ -123,11 +130,12 @@ gradle test                         # unit tests for every variant
   it takes with it, in order, and `security/RelayFarewell.kt` how the relay is
   told when it cannot be reached at once.
 - **Settings → "Keep history for"**: 7, 30 or 90 days, or forever (30 by
-  default). The location log, the timeline, vehicle trips, the unlock ledger
-  and the map's tile and traffic caches older than that are deleted at each
-  start, every hour while scanning and once a day otherwise; the
-  cell-tower baseline keeps which towers and areas are usual and the last day
-  each was seen, the exact time for two days (`security/HistoryRetention.kt`).
+  default). The location log, the timeline, vehicle trips, the unlock ledger,
+  the radio scanner's recordings and the map's tile and traffic caches older
+  than that are deleted at each start, every hour while scanning, and once a
+  day on a system alarm even with Clairix closed. The cell-tower baseline
+  keeps which towers and areas are usual and the last day each was seen, the
+  exact time for two days (`security/HistoryRetention.kt`).
 
 ## Reproducing a build
 
@@ -223,7 +231,7 @@ To build signed release files locally:
 export ANDROID_KEYSTORE_FILE=/path/outside/the/repo/release.keystore
 export ANDROID_KEYSTORE_PASSWORD=...  ANDROID_KEY_ALIAS=...  ANDROID_KEY_PASSWORD=...
 cd android
-gradle assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
+./gradlew assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease
 # app/build/outputs/apk/fullSuite/release/app-full-suite-release.apk
 # app/build/outputs/apk/fullComms/release/app-full-comms-release.apk
 # app/build/outputs/bundle/playSuiteRelease/app-play-suite-release.aab
@@ -244,7 +252,9 @@ release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 1. Set `versionName` and raise `versionCode` in `app/build.gradle.kts`
    (3.0.0-beta.1 is versionCode 21). The workflow refuses a tag that does not
    match `versionName`. In the same commit, change the supported version in
-   `SECURITY.md` ("currently 3.0.0 Beta 9" for `3.0.0-beta.9`) and bring
+   `SECURITY.md` ("currently 3.0.0 Beta 9" for `3.0.0-beta.9`), update the
+   version note in `relays/latest.json` (the Relay list workflow fails while
+   the two disagree; see [relays/README.md](../relays/README.md)), and bring
    `docs/OPEN-ISSUES.md` up to date.
 2. Commit, then start `.github/workflows/release.yml` in one of three ways:
    push a tag `v3.0.0-beta.1`; push a branch `release/v3.0.0-beta.1` (the tag is
@@ -254,12 +264,12 @@ release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
    Emulator smoke test run that passed on the same tree (it waits for one
    still going, and fails if there is none: start one by hand on the same ref
    and re-run), and makes CycloneDX bills of materials of the app's libraries
-   and the crypto crate. Then it tests the crypto crate, builds and signs
-   `fullSuite` and `fullComms` APKs and the `playSuite` bundle, checks the Play
-   manifest has no card emulation, checks that every 64-bit native library in
+   and the crypto crate. Then it tests the crypto crate, builds and signs the
+   `fullSuite`, `fullComms` and `fossSuite` APKs and the `playSuite` bundle,
+   checks the Play manifest has no card emulation, checks that every 64-bit native library in
    them is built for 16 KB pages (`tools/android/check-16k-alignment.sh`: each
    LOAD segment 0x4000-aligned, `zipalign -c -P 16 -v 4` on the APKs), and
-   publishes a GitHub Release with the three files, the two bills of
+   publishes a GitHub Release with the four files, the two bills of
    materials, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` (the checksums signed
    by the asset signing key). A tag
    ending in `-alpha.N`, `-beta.N` or `-rc.N` is marked as a pre-release. A run
@@ -343,12 +353,12 @@ release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 | Permission | Why |
 |---|---|
 | Nearby devices (`BLUETOOTH_SCAN`) | The scan itself |
-| Precise location | Android requires it for BLE scanning and for reading your own modem's serving cell (the IMSI-catcher checks), and this app genuinely uses the fix — it is what proves a device travelled with you |
+| Precise location | Android requires it for BLE scanning and for reading your own modem's serving cell (the IMSI-catcher checks). The app also uses the fix itself: it is what proves a device travelled with you |
 | Notifications | The one alert that matters, when something crosses into confirmed-following; and the fake call's incoming-call card, which opens its screen over the lock screen |
 | Foreground service | Scanning has to continue while the screen is off, or it never accumulates enough evidence |
 | Wi-Fi state | Reads the networks in range for the Wi-Fi checks, and asks Android for a fresh Wi-Fi scan: while the scanner runs, every two minutes with the screen on or the phone moving and every ten minutes once it has settled with the screen off; with the scanner off, once a minute from the Wi-Fi tab while it is open (with the scanner on, the tab shows the scanner's results and asks for none); and once each time you tap "Scan for setup hotspots" under Hidden cameras. Android caps how often an app may ask and hands out its last results otherwise |
 | NFC | The passive HF tag sweep on the NFC tab |
-| Background location | Optional, requested only from Settings → "Resume after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning simply waits until you open the app |
+| Background location | Optional, requested only from Settings → "Resume after reboot". Android only lets a location service start at boot with "Allow all the time"; without it, scanning waits until you open the app |
 | Nearby devices (`BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE`) | Connecting to an OBD-II adapter, asking a tracker for its identifier and naming paired accessories; advertising only for the detector self-test and the offline mesh while it is on |
 | Camera | The hidden-camera sweep and scanning a contact's pairing code. No frame is saved unless the owner keeps a photo of a finding |
 | Microphone | Used during a call you place or answer, while you hold the record button for a voice note, and while the Ultrasound tool is open, when it listens for 17.5-21.5 kHz beacons. Only spectrum numbers are kept; no audio is stored or sent |
@@ -361,20 +371,21 @@ release (`tools/signing/README.md`), and `docs/KEYS.md` changes with it.
 
 Declining notifications costs you the alert and the fake call (its page says so, and
 schedules nothing until notifications and full-screen calls are allowed), not the
-detector — scanning still runs.
+detector: scanning still runs.
 
 Detection data stays on the phone, sealed on disk under a key in the phone's
 secure hardware. The app's network connections are: the Clairix relay (Comms,
 and anonymous live traffic while navigating), OpenStreetMap's tile servers and
 its Nominatim address search (the Map tab), GitHub Releases (signed offline map
 graphs, work-zone files and the plate-reader list for each map) and Cloudflare
-TURN (a call that cannot connect directly). What each one sees, and what the app can and cannot protect against,
-is in the root [`README.md`](../README.md) and at clairix.app/security.
+TURN (a call that cannot connect directly). What each one sees, and what the
+app can and cannot protect against, is in the root [`README.md`](../README.md)
+and at clairix.app/security.
 
 ## Screen on versus screen off
 
 Android suspends an *unfiltered* BLE scan once the screen goes off, and any filter
-list is also a whitelist — so a scan built to survive a pocket can only ever find
+list is also an allow list, so a scan built to survive a pocket can only ever find
 devices someone already catalogued. That is the wrong trade for the case this app
 exists for, which is the unbranded box wired into a wheel well.
 
@@ -404,8 +415,8 @@ never changes its address and is exactly what the follow check catches.
 
 ## What it cannot detect
 
-- A tracker with no Bluetooth radio — a hardwired GPS/LTE box only transmits on
-  cellular uplink, and Clairix does not listen for that. Drive mode's SDR
+- A tracker with no Bluetooth radio. A hardwired GPS/LTE box only transmits on
+  the cellular uplink, and Clairix does not listen for that. Drive mode's SDR
   support (an RTL-SDR dongle on USB, `SdrUsbDriver.kt`) decodes aircraft
   transponders (`AdsbDecoder.kt`) and plays the voice channels you set; it does
   not look for a modem's uplink. A physical search is the way to find one.
