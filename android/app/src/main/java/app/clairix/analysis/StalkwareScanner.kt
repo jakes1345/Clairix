@@ -12,6 +12,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 import android.os.UserManager
 import android.provider.Settings
@@ -71,6 +72,10 @@ object StalkwareScanner {
         val installerPackage: String?,
         /** The stalkerware list's name for it, when its package name or a signing certificate is on the list. */
         val knownAs: String? = null,
+        /** Android exempts it from battery optimisation ([AppFacts.batteryExempt]). */
+        val batteryExempt: Boolean = false,
+        /** The sensitive runtime permissions it holds granted, in plain words ([AppEvidence.grantedPermissions]). */
+        val grantedPermissions: List<String> = emptyList(),
     ) {
         val severity: Severity
             get() = when {
@@ -126,6 +131,8 @@ object StalkwareScanner {
         /** When the stalkerware list matched against was issued (Unix seconds), and how many apps it names; 0 without one. */
         val listIssued: Long = 0L,
         val listApps: Int = 0,
+        /** When each app that is not preloaded was first installed (PackageInfo.firstInstallTime), this app aside. */
+        val installs: Map<String, Long> = emptyMap(),
     ) {
         val high: List<SuspiciousApp> get() = apps.filter { it.severity == Severity.HIGH }
         val medium: List<SuspiciousApp> get() = apps.filter { it.severity == Severity.MEDIUM }
@@ -484,17 +491,65 @@ object StalkwareScanner {
      * (keyboard 4, admin 3, accessibility 3, listener 3) it reaches HIGH on its own.
      */
     internal const val IMPOSTOR_SCORE = 2
+    /**
+     * Score for an exemption from battery optimisation ([batterySignal]). Weak, and never a
+     * verdict: messengers, alarm clocks, fitness trackers, VPNs and home-automation apps ask for
+     * it too. It only strengthens an app that is already listed for something else.
+     */
+    internal const val BATTERY_EXEMPT_SCORE = 1
 
-    /** Permissions an app *requests* (`<uses-permission>`), with their weight and reason. */
-    private val SUSPECT_PERMISSIONS = linkedMapOf(
-        Manifest.permission.READ_SMS to (2 to "can read SMS (including one-time codes)"),
-        Manifest.permission.RECEIVE_SMS to (1 to "receives SMS as they arrive"),
-        Manifest.permission.READ_CALL_LOG to (2 to "can read the call log"),
-        Manifest.permission.PROCESS_OUTGOING_CALLS to (1 to "sees outgoing calls as they are placed"),
-        Manifest.permission.SYSTEM_ALERT_WINDOW to (1 to "can draw over other apps"),
-        Manifest.permission.RECORD_AUDIO to (1 to "can record audio"),
-        Manifest.permission.ACCESS_BACKGROUND_LOCATION to (1 to "can read location in the background")
+    /**
+     * A permission an app requests (`<uses-permission>`) that a monitoring app needs. [points] when
+     * it is granted, or when that is not known; [askedPoints] when the app asks for it and Android
+     * has not granted it, which says what the app wants but not what it can do. [runtime] is false
+     * for a permission Android does not grant at run time (drawing over other apps is a special
+     * access), whose grant flag says nothing. With [strangersOnly], the grant counts only for an
+     * app from outside a genuine store or with no launcher icon: half the apps on a phone may use
+     * the camera.
+     */
+    private class Suspect(
+        val points: Int,
+        val askedPoints: Int,
+        val reason: String,
+        val asked: String,
+        val runtime: Boolean = true,
+        val strangersOnly: Boolean = false,
     )
+
+    /** Permissions an app *requests*, with their weight and reason, granted or only asked for. */
+    private val SUSPECT_PERMISSIONS = linkedMapOf(
+        Manifest.permission.READ_SMS to Suspect(2, 1, "can read SMS (including one-time codes)", "to read SMS"),
+        Manifest.permission.RECEIVE_SMS to Suspect(1, 0, "receives SMS as they arrive", "to receive SMS"),
+        Manifest.permission.READ_CALL_LOG to Suspect(2, 1, "can read the call log", "to read the call log"),
+        Manifest.permission.PROCESS_OUTGOING_CALLS to Suspect(1, 0, "sees outgoing calls as they are placed", "to see outgoing calls"),
+        Manifest.permission.SYSTEM_ALERT_WINDOW to Suspect(1, 1, "can draw over other apps", "to draw over other apps", runtime = false),
+        Manifest.permission.RECORD_AUDIO to Suspect(1, 0, "can record audio", "for the microphone"),
+        Manifest.permission.ACCESS_BACKGROUND_LOCATION to Suspect(1, 0, "can read location in the background", "for location in the background"),
+        Manifest.permission.CAMERA to Suspect(1, 0, "can use the camera", "for the camera", strangersOnly = true),
+    )
+
+    /** PackageInfo.REQUESTED_PERMISSION_GRANTED, spelled out so the JVM tests need no Android stub. */
+    private const val REQUESTED_PERMISSION_GRANTED = 2
+
+    /**
+     * The members of [requested] that [flags] (PackageInfo.requestedPermissionsFlags) mark granted;
+     * null when the flags were not read, which [AppFacts.granted] takes as "not known".
+     */
+    internal fun grantedOf(requested: Array<String>?, flags: IntArray?): Set<String>? {
+        if (requested == null) return emptySet()
+        if (flags == null) return null
+        return requested.indices.filter { it < flags.size && (flags[it] and REQUESTED_PERMISSION_GRANTED) != 0 }
+            .mapTo(HashSet()) { requested[it] }
+    }
+
+    /** The signal for [perm], which [f] requests: weighed by whether Android has granted it. */
+    private fun permissionSignal(perm: String, s: Suspect, f: AppFacts, hidden: Boolean): Signal {
+        val granted = f.granted
+        val known = s.runtime && granted != null
+        if (known && perm !in granted.orEmpty()) return Signal(s.askedPoints, "asks ${s.asked}, not granted")
+        val points = if (s.strangersOnly && f.trustedOrigin && !hidden) 0 else s.points
+        return Signal(points, if (known) "${s.reason} (granted)" else s.reason)
+    }
 
     /**
      * What a keyboard requests to do its job: the microphone for voice typing and an
@@ -563,6 +618,24 @@ object StalkwareScanner {
          * install record may have been carried over an OS upgrade, which keeps only the installer.
          */
         val installedBeforeSystemBuild: Boolean = false,
+        /**
+         * Android exempts it from battery optimisation (PowerManager.isIgnoringBatteryOptimizations):
+         * Doze and App Standby never pause it, so it can keep reporting with the screen off for days.
+         */
+        val batteryExempt: Boolean = false,
+        /**
+         * The members of [requested] Android has granted, from PackageInfo.requestedPermissionsFlags
+         * ([grantedOf]); null when not known, and then every requested permission is weighed as granted.
+         */
+        val granted: Set<String>? = null,
+        /** The defaults it holds: SMS app, phone app, home screen ([DefaultRoles]). */
+        val defaultRoles: Set<DefaultRoles.Role> = emptySet(),
+        /**
+         * Signed with the publisher's own key for a name whose genuine app is also published outside
+         * every store ([OFFICIAL_SIGNERS]): Signal's APK from signal.org, say. Only the publisher's
+         * private key makes that signature, so the copy is theirs, wherever it was downloaded.
+         */
+        val officialBuild: Boolean = false,
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -573,8 +646,8 @@ object StalkwareScanner {
                 (installerPreloaded && declaredInstaller != null && declaredInstaller in genuineStores)
             )
 
-        /** Installed by something other than a genuine store; preloaded apps never are. */
-        val sideloaded: Boolean get() = !system && !fromStore
+        /** Installed by something other than a genuine store; preloaded apps and [officialBuild]s never are. */
+        val sideloaded: Boolean get() = !system && !fromStore && !officialBuild
 
         /** From the system image or a genuine store. */
         val trustedOrigin: Boolean get() = !sideloaded
@@ -583,7 +656,8 @@ object StalkwareScanner {
          * Whether its name can be taken at its word: preloaded, from a vendor store, or from an
          * open store under a name that is not a vendor's.
          */
-        val nameTrusted: Boolean get() = system || (fromStore && (installer in VENDOR_STORES || VENDOR_PREFIXES.none { name.startsWith(it) }))
+        val nameTrusted: Boolean get() = system || officialBuild ||
+            (fromStore && (installer in VENDOR_STORES || VENDOR_PREFIXES.none { name.startsWith(it) }))
     }
 
     /**
@@ -591,6 +665,29 @@ object StalkwareScanner {
      * as APKs from GitHub, so a sideloaded copy under the name is no sign of an impostor.
      */
     private val PUBLISHED_OUTSIDE_STORES = setOf("app.clairix")
+
+    /**
+     * Apps whose publisher also hands out the genuine APK from its own site, with the SHA-256 of
+     * the certificates that publisher says it signs with, uppercase hex with no separators ([hex]).
+     * A copy signed with one of them is the publisher's ([AppFacts.officialBuild]); a copy under
+     * the name signed with anything else is still an impostor.
+     *
+     * Signal (https://signal.org/android/apk/, read 4 November 2026) lists two: the 4096-bit
+     * certificate it signs with now and the 1024-bit one it rotated from. An APK signed after the
+     * rotation carries both in its signing history, and only Signal's key can put the old one there.
+     */
+    internal val OFFICIAL_SIGNERS: Map<String, Set<String>> = mapOf(
+        "org.thoughtcrime.securesms" to setOf(
+            "4BE4F6CD5BE844083E900279DC822AF65A547FECC26ABA7FF1F5203A45518CD8",
+            "29F34E5F27F211B424BC5BF9D67162C0EAFBA2DA35AF35C16416FC446276BA26",
+        ),
+    )
+
+    /** Whether [certs] include a certificate [name]'s publisher signs its own APK with ([OFFICIAL_SIGNERS]). */
+    internal fun officialBuild(name: String, certs: List<ByteArray>, signers: Map<String, Set<String>> = OFFICIAL_SIGNERS): Boolean {
+        val official = signers[name] ?: return false
+        return certs.any { hex(sha256(it)) in official }
+    }
 
     /** Every name the scanner vouches for, so a sideloaded app wearing one stands out. */
     private val KNOWN_NAMES: Set<String> by lazy {
@@ -756,12 +853,12 @@ object StalkwareScanner {
         val hidden = !f.system && !f.hasLauncher
         if (hidden) out += Signal(NO_LAUNCHER_SCORE, "has no icon in the app drawer")
 
-        for ((perm, weight) in SUSPECT_PERMISSIONS) {
+        for ((perm, suspect) in SUSPECT_PERMISSIONS) {
             if (perm !in f.requested) continue
             // Waived only for a keyboard from a store or the system image, or one the owner marked
             // as theirs, that is not an impostor.
             if (f.imeEnabled && (f.trustedOrigin || yours(f, GrantKind.KEYBOARD)) && !impostor && perm in KEYBOARD_PERMISSIONS) continue
-            out += Signal(weight.first, weight.second)
+            out += permissionSignal(perm, suspect, f, hidden)
         }
         for ((perm, weight) in SUSPECT_BINDINGS) {
             if (perm !in f.declared) continue
@@ -809,6 +906,7 @@ object StalkwareScanner {
         if (f.hiddenService) {
             out += Signal(HIDDEN_SERVICE_SCORE, "ran a background service this week without ever showing a screen")
         }
+        out += defaultRoleSignals(f)
 
         if (f.imeEnabled) {
             out += when {
@@ -825,7 +923,47 @@ object StalkwareScanner {
                 else -> Signal(IME_ENABLED_SCORE, "is an enabled keyboard (can log every keystroke, passwords included)")
             }
         }
+        // Last, so "already listed" means every other signal above.
+        batterySignal(f, out, hidden)?.let { out += it }
         return out
+    }
+
+    /**
+     * The battery-exemption signal, or null when it does not count. Many legitimate apps are
+     * exempt, so the exemption alone says nothing: it adds [BATTERY_EXEMPT_SCORE] only to an app
+     * the other [signals] already list (MEDIUM or more) and only when one of them is the kind a
+     * monitoring app shows: no icon in the app drawer ([hidden]), or a special-access grant nobody
+     * vouches for ([unvouchedGrant]). It can lift a listed app to HIGH; it never lists one.
+     *
+     * An install from outside a store is not enough: a messenger downloaded from its maker's site
+     * (Molly, Session, Threema's shop build) is installed that way, uses the microphone and the camera,
+     * and asks for the exemption to stay connected without Google's push service. Counting it
+     * would make each of them HIGH, "looks like stalkerware", with a notification.
+     */
+    internal fun batterySignal(f: AppFacts, signals: List<Signal>, hidden: Boolean): Signal? {
+        if (!f.batteryExempt) return null
+        if (signals.sumOf { it.points } < MEDIUM_SCORE) return null
+        if (!hidden && !unvouchedGrant(f)) return null
+        return Signal(BATTERY_EXEMPT_SCORE, "is exempt from battery optimisation, so Android never pauses it in the background")
+    }
+
+    /**
+     * One signal for each default (SMS app, phone app, home screen) [f] holds, when it came from
+     * outside a genuine store: being the default gives it every text, every call or every app
+     * opened, with no permission to ask for. A preloaded or store app holding one is what the
+     * phone is meant to have, and adds nothing.
+     */
+    internal fun defaultRoleSignals(f: AppFacts): List<Signal> =
+        if (!f.sideloaded) emptyList()
+        else f.defaultRoles.sortedBy { it.ordinal }.map { Signal(it.score, DefaultRoles.reason(it)) }
+
+    /** Whether [f] holds accessibility, notification access, a device admin or a keyboard that is neither known nor marked as the owner's. */
+    private fun unvouchedGrant(f: AppFacts): Boolean {
+        val settled = setOf(GrantStatus.KNOWN, GrantStatus.YOURS, GrantStatus.PRELOADED)
+        return (f.accessibilityEnabled && grantStatus(GrantKind.ACCESSIBILITY, f) !in settled) ||
+            (f.notificationListener && grantStatus(GrantKind.NOTIFICATION_LISTENER, f) !in settled) ||
+            (f.deviceAdminActive && grantStatus(GrantKind.DEVICE_ADMIN, f) !in settled) ||
+            (f.imeEnabled && grantStatus(GrantKind.KEYBOARD, f) !in settled)
     }
 
     /**
@@ -892,17 +1030,21 @@ object StalkwareScanner {
             val src = installSourceOf(pm, packageName)
             var acked = emptySet<GrantKind>()
             var match: IocMatch? = null
-            if (acknowledged.any { ackPackage(it) == packageName }) {
+            var official = false
+            val marked = acknowledged.any { ackPackage(it) == packageName }
+            if (marked || (!system && packageName in OFFICIAL_SIGNERS)) {
                 val pkg = runCatching { packageInfo(pm, packageName, PackageManager.GET_SIGNING_CERTIFICATES) }.getOrNull()
                 if (pkg != null) {
-                    acked = acknowledgedKinds(packageName, signerKey(pkg), acknowledged)
-                    if (!system) match = ioc?.match(packageName, digests(signingCertificates(pkg)))
+                    val certs = signingCertificates(pkg)
+                    if (marked) acked = acknowledgedKinds(packageName, signerKey(pkg), acknowledged)
+                    if (marked && !system) match = ioc?.match(packageName, digests(certs))
+                    if (!system) official = officialBuild(packageName, certs)
                 }
             }
             return AppFacts(
                 name = packageName, system = system, installer = src?.initiating, hasLauncher = true,
                 declaredInstaller = src?.installing, genuineStores = stores, installerPreloaded = preloaded(src?.initiating),
-                acknowledged = acked, knownStalkerware = match,
+                acknowledged = acked, knownStalkerware = match, officialBuild = official,
             )
         }
 
@@ -919,6 +1061,13 @@ object StalkwareScanner {
     }
 
     fun usageAccessIntent(): Intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+
+    /**
+     * Whether Android exempts [packageName] from battery optimisation. Any app may ask this of any
+     * package, with no permission; false when the phone will not say.
+     */
+    fun batteryExempt(power: PowerManager?, packageName: String): Boolean =
+        runCatching { power?.isIgnoringBatteryOptimizations(packageName) }.getOrNull() == true
 
     /** Opens the system's own details page for [packageName], where Uninstall lives. */
     fun appDetailsIntent(packageName: String): Intent =
@@ -948,6 +1097,9 @@ object StalkwareScanner {
         val ownerKinds = owners.associate { it.packageName to it.kind }
 
         val usageAccess = hasUsageAccess(app)
+        val power = app.getSystemService(PowerManager::class.java)
+        val rolesOf = HashMap<String, MutableSet<DefaultRoles.Role>>()
+        runCatching { DefaultRoles.holderPackages(app) }.getOrNull()?.forEach { (role, pkg) -> rolesOf.getOrPut(pkg) { HashSet() } += role }
         val (fgsPkgs, resumedPkgs) = if (usageAccess) usageSignals(app) else emptySet<String>() to emptySet()
 
         val packages = installedPackages(pm)
@@ -958,6 +1110,7 @@ object StalkwareScanner {
         val vouchedAdmins = HashSet<String>()
         val grants = HashMap<String, GrantStatus>()
         val preloadedVpns = HashSet<String>()
+        val installs = HashMap<String, Long>()
         for (pkg in packages) {
             val info = pkg.applicationInfo ?: continue
             val name = pkg.packageName
@@ -976,6 +1129,7 @@ object StalkwareScanner {
             }
             val system = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             if (vpn && system) preloadedVpns += name
+            if (!system) installs[name] = pkg.firstInstallTime
             val holdsGrant = listener || a11y || ime || admin
             // Every app that is not preloaded is matched against the list by its certificates
             // too, and the owner's marks are read against the certificate of the app holding a grant.
@@ -992,6 +1146,7 @@ object StalkwareScanner {
                 declaredInstaller = source?.installing, genuineStores = stores,
                 installerPreloaded = origins.preloaded(installer),
                 acknowledged = acked, knownStalkerware = match,
+                officialBuild = !system && officialBuild(name, certs),
             )
             if (holdsGrant) {
                 fun judge(kind: GrantKind): GrantStatus = grantStatus(kind, origin).also { grants[grantKey(kind, name)] = it }
@@ -1011,6 +1166,7 @@ object StalkwareScanner {
             val facts = origin.copy(
                 hasLauncher = name in launcherPkgs,
                 requested = pkg.requestedPermissions?.toSet() ?: emptySet(),
+                granted = grantedOf(pkg.requestedPermissions, pkg.requestedPermissionsFlags),
                 declared = declaredBindings(pkg),
                 notificationListener = listener,
                 accessibilityEnabled = a11y,
@@ -1019,6 +1175,8 @@ object StalkwareScanner {
                 deviceAdminActive = admin,
                 hiddenService = usageAccess && name in fgsPkgs && name !in resumedPkgs,
                 installedBeforeSystemBuild = installedBefore(pkg.firstInstallTime, Build.TIME),
+                batteryExempt = batteryExempt(power, name),
+                defaultRoles = rolesOf[name].orEmpty(),
             )
             val signals = assess(facts)
             val score = signals.sumOf { it.points }
@@ -1041,6 +1199,8 @@ object StalkwareScanner {
                 deviceAdminActive = admin,
                 installerPackage = installer ?: source?.installing,
                 knownAs = match?.family?.name,
+                batteryExempt = facts.batteryExempt,
+                grantedPermissions = AppEvidence.grantedPermissions(pkg.requestedPermissions, pkg.requestedPermissionsFlags),
             )
         }
 
@@ -1063,6 +1223,7 @@ object StalkwareScanner {
             ownProfile = ownProfile(app),
             listIssued = ioc?.issued ?: 0L,
             listApps = ioc?.families?.size ?: 0,
+            installs = installs,
         )
         _results.value = result
         return result

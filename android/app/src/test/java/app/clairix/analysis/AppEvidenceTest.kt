@@ -120,4 +120,26 @@ class AppEvidenceTest {
         assertTrue(e.detail.contains("Access: none of the special access Clairix checks"))
         assertTrue(e.detail.contains("Signing certificate SHA-256: not readable"))
     }
+
+    @Test
+    fun theBatteryExemptionIsRecordedOnItsOwnLine() {
+        assertTrue(evidence.copy(batteryExempt = true).timelineEvent(utc).detail
+            .contains("Battery optimisation: exempt (Android never pauses it in the background)"))
+        assertTrue(evidence.copy(batteryExempt = false).text(utc).lines().contains("Battery optimisation: not exempt"))
+        assertTrue(evidence.copy(batteryExempt = null).text(utc).lines().contains("Battery optimisation: not readable"))
+    }
+
+    @Test
+    fun whatIsOnlyAskedForIsKeptApartFromWhatIsGranted() {
+        val requested = arrayOf(
+            "android.permission.RECORD_AUDIO", "android.permission.CAMERA", "android.permission.READ_SMS", "android.permission.INTERNET",
+        )
+        val flags = intArrayOf(2, 0, 3, 2)
+        assertEquals(listOf("microphone", "read text messages"), AppEvidence.grantedPermissions(requested, flags))
+        assertEquals(listOf("camera"), AppEvidence.requestedOnlyPermissions(requested, flags))
+        assertTrue(AppEvidence.requestedOnlyPermissions(requested, null).isEmpty())
+        val e = evidence.copy(requestedOnly = listOf("camera", "read the call log")).timelineEvent(utc)
+        assertTrue(e.detail, e.detail.contains("Asked for, not granted: camera, read the call log"))
+        assertFalse(evidence.timelineEvent(utc).detail.contains("Asked for, not granted"))
+    }
 }

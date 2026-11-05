@@ -722,7 +722,13 @@ data class HealthFact(
      * or null when the row asks nothing; for example "I turned 2G off", which Android
      * gives apps no way to read.
      */
-    val answer: Answer? = null
+    val answer: Answer? = null,
+    /**
+     * The app this row is about, when [fixAction] leads to removing or replacing it (a default
+     * held by an app from outside a store): the button then asks first, as a flagged app's does
+     * ([app.clairix.FlaggedAppButton]), since that can alert whoever installed it.
+     */
+    val subject: String? = null
 ) {
     val ok: Boolean get() = severity == null
 

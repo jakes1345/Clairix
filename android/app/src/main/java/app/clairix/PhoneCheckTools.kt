@@ -441,6 +441,7 @@ private fun MarkAsMineDialog(
         shape = ClairixShapes.Sheet,
         containerColor = ClairixTheme.colors.surfaceRaised,
         title = {
+            app.clairix.security.ShieldThisWindow()
             Text(
                 if (enrolled) stringResource(R.string.scan_did_you_enrol_this_phone) else stringResource(R.string.scan_is_yours, label),
                 style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text
@@ -510,6 +511,9 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
         }
         KeyValueRow(stringResource(R.string.scan_installed), tDay(app.installTs))
         KeyValueRow(stringResource(R.string.scan_installer), app.installerPackage ?: if (app.sideloaded) stringResource(R.string.scan_unknown_sideloaded) else "—")
+        if (app.grantedPermissions.isNotEmpty()) {
+            KeyValueRow(stringResource(R.string.scan_permissions_granted), app.grantedPermissions.joinToString(", "), mono = false)
+        }
         if (app.imeEnabled) KeyValueRow(stringResource(R.string.scan_keyboard), "enabled")
         if (app.deviceAdminActive) KeyValueRow(stringResource(R.string.scan_device_admin), "active")
         if (app.reasons.isNotEmpty()) {
@@ -572,7 +576,10 @@ internal fun CertificatesPage(onBack: (() -> Unit)? = null) {
             onDismissRequest = { confirmPin = false },
             shape = ClairixShapes.Sheet,
             containerColor = ClairixTheme.colors.surfaceRaised,
-            title = { Text(stringResource(R.string.scan_pin_this_certificate), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text) },
+            title = {
+                app.clairix.security.ShieldThisWindow()
+                Text(stringResource(R.string.scan_pin_this_certificate), style = MaterialTheme.typography.titleMedium, color = ClairixTheme.colors.text)
+            },
             text = {
                 Text(
                     stringResource(R.string.scan_only_for_your_own_relay_served, pinCandidate.relayHost),

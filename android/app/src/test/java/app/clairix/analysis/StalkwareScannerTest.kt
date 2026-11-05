@@ -653,23 +653,32 @@ class StalkwareScannerTest {
     }
 
     @Test
-    fun clairixFullFromGitHubScoresFive() {
+    fun clairixFullFromGitHubScoresSix() {
         val full = clairix(installer = "com.google.android.packageinstaller", adminActive = false)
         assertEquals(
             listOf(
                 "installed from an APK file, not a store",
                 "can record audio",
                 "can read location in the background",
+                "can use the camera",
                 "declares a device admin (can resist uninstall)",
             ),
             StalkwareScanner.assess(full).map { it.reason },
         )
         // Its own name is no impostor signal: the genuine app is published outside stores.
-        assertEquals(5, score(full))
+        assertEquals(6, score(full))
         assertEquals(Severity.HIGH, severity(full))
-        // With the unlock ledger's admin switched on, 7; after a week of the scanner without the app being opened, 9.
-        assertEquals(7, score(full.copy(deviceAdminActive = true)))
-        assertEquals(9, score(full.copy(deviceAdminActive = true, hiddenService = true)))
+        // With the unlock ledger's admin switched on, 8; after a week of the scanner without the app being opened, 10.
+        assertEquals(8, score(full.copy(deviceAdminActive = true)))
+        assertEquals(10, score(full.copy(deviceAdminActive = true, hiddenService = true)))
+        // With the grant flags read and the camera and background location not granted, 4.
+        val granted = full.requested - Manifest.permission.CAMERA - Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        assertEquals(4, score(full.copy(granted = granted)))
+        // Exempt from battery optimisation, which Clairix asks for: nothing more until the admin is on,
+        // a grant the model does not vouch for in a copy from outside a store; then 9, and 11 after the week.
+        assertEquals(6, score(full.copy(batteryExempt = true)))
+        assertEquals(9, score(full.copy(deviceAdminActive = true, batteryExempt = true)))
+        assertEquals(11, score(full.copy(deviceAdminActive = true, hiddenService = true, batteryExempt = true)))
     }
 
     @Test
@@ -677,13 +686,16 @@ class StalkwareScannerTest {
         // The Play edition has no card emulation (src/fullSuite).
         val fromPlay = clairix(installer = play, adminActive = true, full = false)
         assertEquals(
-            listOf("can record audio", "can read location in the background", "device admin is active (a known app)"),
+            listOf("can record audio", "can read location in the background", "can use the camera", "device admin is active (a known app)"),
             StalkwareScanner.assess(fromPlay).map { it.reason },
         )
         assertEquals(2, score(fromPlay))
         assertEquals(Severity.LOW, severity(fromPlay))
         assertTrue(StalkwareScanner.isVouchedAdmin(fromPlay))
         assertEquals(4, score(fromPlay.copy(hiddenService = true)))
+        // The battery exemption adds nothing: its admin is known, and nothing else is of the monitoring kind.
+        assertEquals(2, score(fromPlay.copy(batteryExempt = true)))
+        assertEquals(4, score(fromPlay.copy(hiddenService = true, batteryExempt = true)))
         // It holds no listener, accessibility service or keyboard, and no list vouches for one.
         assertFalse(StalkwareScanner.isVouchedListener(fromPlay))
         assertFalse(StalkwareScanner.isVouchedAccessibility(fromPlay))
@@ -691,10 +703,15 @@ class StalkwareScannerTest {
     }
 
     @Test
-    fun clairixCommsFromGitHubScoresThree() {
+    fun clairixCommsFromGitHubScoresFour() {
         val comms = clairix(installer = "com.google.android.packageinstaller", adminActive = false, suite = false)
-        assertEquals(listOf("installed from an APK file, not a store", "can record audio"), StalkwareScanner.assess(comms).map { it.reason })
-        assertEquals(3, score(comms))
+        assertEquals(
+            listOf("installed from an APK file, not a store", "can record audio", "can use the camera"),
+            StalkwareScanner.assess(comms).map { it.reason },
+        )
+        assertEquals(4, score(comms))
         assertEquals(Severity.MEDIUM, severity(comms))
+        // Exempt from battery optimisation, which Comms asks for to stay online: still 4, medium.
+        assertEquals(4, score(comms.copy(batteryExempt = true)))
     }
 }

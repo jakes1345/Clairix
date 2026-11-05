@@ -30,6 +30,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
+import app.clairix.BuildConfig
 import app.clairix.HealthFact
 import app.clairix.PhoneHealthFinding
 import app.clairix.Registry
@@ -469,6 +470,9 @@ class PhoneHealthMonitor(private val context: Context) {
         runCatching { NetworkLeaks.facts(NetworkLeaks.read(context)) }.getOrNull()?.let { out += it }
         caFact()?.let { out += it }
         runCatching { KeyboardExposure.fact(KeyboardExposure.current(context)) }.getOrNull()?.let { out += it }
+        // The default SMS app, phone app and home screen, and where each came from. The suite only:
+        // only it can see where other apps came from (QUERY_ALL_PACKAGES).
+        if (BuildConfig.FULL_ACCESS) runCatching { DefaultRoles.fact(DefaultRoles.read(context)) }.getOrNull()?.let { out += it }
         // What the stalkerware check cannot see: apps in any other profile.
         runCatching {
             SpywareHealth.profilesFact(

@@ -61,6 +61,11 @@
          mode is on. Older releases do not know it and ignore it. -->
     <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE" />
 
+    <!-- Window shield (security/WindowShield.kt): while a Clairix screen shows, Android hides
+         every other app's overlay windows, so nothing is drawn over a warning or a button. A
+         normal permission, granted at install; Android 12 and newer. -->
+    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
@@ -185,6 +190,32 @@
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
+
+        <!--
+            Clean link (links/LinkCleanerActivity.kt): shared text (Share → Clean link) or selected
+            text (the text-selection menu) with its links cleaned of tracking parameters and
+            redirect wrappers, on the phone, with no network request. Exported, as a share target
+            must be; it reads only the text it is handed and returns nothing but, for a selection,
+            the cleaned text. Discreet mode switches it off (security/DiscreetMode.kt).
+        -->
+        <activity
+            android:name=".links.LinkCleanerActivity"
+            android:exported="true"
+            android:label="@string/link_clean_link"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Clairix">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
 
         <!-- The fake call's activity, receiver and ring service are declared in
              src/main/AndroidManifest.xml: the Comms menu carries Fake call in both

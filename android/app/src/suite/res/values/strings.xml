@@ -113,4 +113,16 @@
     <string name="drive_copy_uid">Copy UID</string>
     <!-- DriveService.kt -->
     <string name="drive_stop">Stop</string>
+    <!-- links/LinkCleanerActivity.kt -->
+    <string name="link_clean_link">Clean link</string>
+    <string name="link_no_link_found">There is no web link in what was shared, so there is nothing to clean.</string>
+    <string name="link_removed">Removed</string>
+    <string name="link_nothing_to_remove">Nothing to remove: Clairix knows of no tracking in this link.</string>
+    <string name="link_no_network">Cleaned on this phone, without opening the link or asking any server about it.</string>
+    <string name="link_copy">Copy</string>
+    <string name="link_copied">Copied</string>
+    <string name="link_open">Open</string>
+    <string name="link_share">Share</string>
+    <string name="link_replace">Replace the selected text</string>
+    <string name="link_done">Done</string>
 </resources>

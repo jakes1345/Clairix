@@ -580,6 +580,10 @@ android {
         // change in this repository. Updates are proposed by Dependabot
         // (.github/dependabot.yml, weekly), so lint reports them without failing.
         informational += "NewerVersionAvailable"
+        // GradleDependency asks Google's Maven repository the same question for
+        // AndroidX and Google libraries: on 4 November uiautomator 2.4.1 failed
+        // lintFullSuiteDebug the same way, so it is reported without failing too.
+        informational += "GradleDependency"
     }
 
     sourceSets {

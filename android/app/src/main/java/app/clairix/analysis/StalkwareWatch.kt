@@ -1,5 +1,6 @@
 package app.clairix.analysis
 
+import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -7,6 +8,7 @@ import android.content.IntentFilter
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import app.clairix.Alert
 import app.clairix.BuildConfig
 import app.clairix.EventKind
@@ -16,6 +18,7 @@ import app.clairix.Store
 import app.clairix.analysis.StalkwareScanner.GrantKind
 import app.clairix.analysis.StalkwareScanner.GrantStatus
 import app.clairix.security.PlatformAlerts
+import app.clairix.security.UnlockLedger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +32,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * Keeps the stalkerware check running without anyone opening its page: once a day (from the
@@ -42,8 +49,13 @@ import org.json.JSONObject
  * install started holds its notification until the screen has gone off and the phone has been
  * unlocked again ([HeldNotice]): whoever installed the app may still be holding the phone.
  *
- * The record (the last check's findings, and the grants the owner marked as theirs with "This is
- * mine") is a sealed [Store] in the app's private files.
+ * Each check also compares the phone's paired Bluetooth devices with the last ones seen
+ * ([BondWatch]), and a device paired while the scanner runs is raised as it happens; and an app
+ * installed within half an hour of an unlock the unlock ledger puts in the owner's sleep window
+ * ([UnlockLedger.sleepAnomalies]) is said to be, in the stalkerware alert or one of its own.
+ *
+ * The record (the last check's findings, the paired devices last seen, and the grants the owner
+ * marked as theirs with "This is mine") is a sealed [Store] in the app's private files.
  */
 object StalkwareWatch {
 
@@ -116,7 +128,14 @@ object StalkwareWatch {
      * the very first, whose findings are on screen or are the baseline: those go on the timeline
      * without a notification.
      */
-    internal fun alerts(new: Set<String>, result: StalkwareScanner.Result, label: (String) -> String, now: Long, silent: Boolean): List<Alert> {
+    internal fun alerts(
+        new: Set<String>,
+        result: StalkwareScanner.Result,
+        label: (String) -> String,
+        now: Long,
+        silent: Boolean,
+        notes: Map<String, String> = emptyMap(),
+    ): List<Alert> {
         val out = ArrayList<Alert>(2)
         val apps = result.high.filter { "app:${it.packageName}" in new }
         if (apps.isNotEmpty()) {
@@ -127,7 +146,9 @@ object StalkwareWatch {
                 apps.any { it.knownAs != null } -> "${apps.size} apps look like stalkerware, including known stalkerware"
                 else -> "${apps.size} apps look like stalkerware"
             }
-            val detail = apps.joinToString("\n") { a -> "${a.appLabel} (${a.packageName}): ${a.reasons.joinToString("; ")}." } +
+            val detail = apps.joinToString("\n") { a ->
+                "${a.appLabel} (${a.packageName}): ${a.reasons.joinToString("; ")}." + (notes[a.packageName]?.let { " It was $it." } ?: "")
+            } +
                 "\nPhone check → Stalkerware shows each one and what can be done."
             out += Alert(
                 id = "stalkerware_apps@$now", ts = now, severity = Severity.HIGH, title = title, detail = detail,
@@ -167,6 +188,111 @@ object StalkwareWatch {
         GrantKind.KEYBOARD -> "a keyboard nobody vouches for, which sees everything typed with it"
         GrantKind.DEVICE_OWNER -> "the phone's device owner, which can install and remove apps silently, hide apps, set policies and install certificates"
         GrantKind.PROFILE_OWNER -> "this profile's owner, which can install and remove apps silently, hide apps, set policies and install certificates"
+    }
+
+    // ── Installs after an unlock while the owner slept ──────────────────────
+
+    /** How soon after an unlock in the sleep window an install is taken to have come from it. */
+    internal const val AFTER_UNLOCK_MS = 30 * 60_000L
+
+    /**
+     * The apps of [installs] (package to first-install time) installed since the check at
+     * [lastCheckAt]: none before the first check, whose apps are the baseline, and never [self].
+     */
+    internal fun newInstalls(installs: Map<String, Long>, lastCheckAt: Long?, self: String): Map<String, Long> {
+        if (lastCheckAt == null) return emptyMap()
+        return installs.filter { (pkg, at) -> pkg != self && at > lastCheckAt }
+    }
+
+    /** The latest of [unlocks] at most [AFTER_UNLOCK_MS] before [installedAt], or null. */
+    internal fun unlockBefore(installedAt: Long, unlocks: List<Long>): Long? =
+        unlocks.filter { it <= installedAt && installedAt - it <= AFTER_UNLOCK_MS }.maxOrNull()
+
+    /**
+     * For each of [installs] that came within [AFTER_UNLOCK_MS] of one of [unlocks] (unlocks the
+     * unlock ledger put in the owner's sleep window), what to say about it: when it was installed
+     * and how long after that unlock. Apps with no such unlock are left out.
+     */
+    internal fun sleepInstallNotes(installs: Map<String, Long>, unlocks: List<Long>, zone: TimeZone = TimeZone.getDefault()): Map<String, String> {
+        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).apply { timeZone = zone }
+        val out = LinkedHashMap<String, String>()
+        for ((pkg, at) in installs.entries.sortedBy { it.value }) {
+            val unlock = unlockBefore(at, unlocks) ?: continue
+            val minutes = (at - unlock) / 60_000L
+            val gap = when (minutes) {
+                0L -> "less than a minute"
+                1L -> "1 minute"
+                else -> "$minutes minutes"
+            }
+            out[pkg] = "installed at ${time.format(Date(at))}, $gap after the phone was unlocked inside your sleep window (at ${time.format(Date(unlock))})"
+        }
+        return out
+    }
+
+    /**
+     * The alert for apps installed soon after an unlock while the owner slept ([notes], from
+     * [sleepInstallNotes]), other than those [alreadySaid] in this check's stalkerware alert, which
+     * carries the same words. An unlock-ledger anomaly: the safety card goes with it.
+     */
+    internal fun sleepInstallAlert(notes: Map<String, String>, alreadySaid: Set<String>, label: (String) -> String, now: Long, silent: Boolean): Alert? {
+        val rest = notes.filterKeys { it !in alreadySaid }
+        if (rest.isEmpty()) return null
+        val title = rest.keys.singleOrNull()?.let { "${label(it)} was installed after an unlock while you slept" }
+            ?: "${rest.size} apps were installed after an unlock while you slept"
+        val detail = rest.entries.joinToString("\n") { (pkg, note) -> "${label(pkg)} ($pkg) was $note." } +
+            "\nIf that was not you, someone used your phone while you slept and installed it. Look at it in Settings → Apps; " +
+            "if Phone check → Stalkerware lists it, save its evidence there before you remove anything. Change your screen lock."
+        return Alert(
+            id = "install_after_sleep@$now", ts = now, severity = Severity.HIGH, title = title, detail = detail,
+            kind = EventKind.UNLOCK_ANOMALY, dedupeKey = "install_after_sleep:" + rest.keys.sorted().joinToString(","),
+            silent = silent,
+        )
+    }
+
+    /** [sleepInstallNotes] for [installs], from the unlock ledger; empty when it holds nothing in the sleep window. */
+    private fun sleepInstallNotes(app: Context, installs: Map<String, Long>): Map<String, String> {
+        if (installs.isEmpty()) return emptyMap()
+        return runCatching {
+            UnlockLedger.init(app)
+            val since = installs.values.min() - AFTER_UNLOCK_MS
+            sleepInstallNotes(installs, UnlockLedger.sleepAnomalies(since).map { it.ts })
+        }.onFailure { Log.w(TAG, "could not read the unlock ledger", it) }.getOrDefault(emptyMap())
+    }
+
+    // ── Bluetooth pairings ──────────────────────────────────────────────────
+
+    /**
+     * Compares the phone's paired devices with the last ones seen and keeps the new list; the
+     * alert for any paired since ([BondWatch]), or null. Nothing when they cannot be read, and
+     * nothing but the list the first time.
+     */
+    private fun checkBonds(app: Context, rec: StalkwareRecord, now: Long, silent: Boolean): Alert? {
+        val current = BondWatch.read(app) ?: return null
+        val known = rec.bonds()
+        val added = BondWatch.newBonds(current, known)
+        rec.saveBonds(BondWatch.snapshot(current))
+        return BondWatch.alert(added, now, silent)
+    }
+
+    /**
+     * A device was paired while the scanner runs: raised now unless it was already known, with its
+     * notification held like an install's ([HeldNotice]), since whoever paired it is holding the phone.
+     */
+    private suspend fun onBonded(app: Context, bond: BondWatch.Bond) {
+        val alert = withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val rec = record(app)
+                val known = rec.bonds()
+                if (known != null && BondWatch.newBonds(listOf(bond), known).isEmpty()) return@withLock null
+                // Before the first look, the list now is the baseline; if it cannot be read, nothing is
+                // saved, or every device paired before would read as new at the next check.
+                val base = known ?: BondWatch.read(app)?.let(BondWatch::snapshot)
+                if (base != null) rec.saveBonds(base + BondWatch.snapshot(listOf(bond)))
+                BondWatch.alert(listOf(bond), System.currentTimeMillis(), silent = true)
+            }
+        } ?: return
+        Registry.publishAlert(alert)
+        notice(listOf(alert), alert.ts)?.let { heldNotice.hold(it, screenOn = isInteractive(app)) }
     }
 
     // ── Running a check ─────────────────────────────────────────────────────
@@ -261,6 +387,7 @@ object StalkwareWatch {
      */
     private fun checkLocked(app: Context, foreground: Boolean, held: Boolean = false): StalkwareScanner.Result {
         val rec = record(app)
+        val lastCheckAt = rec.lastCheckedAt()
         val sequence = packageSequence(app)
         val result = StalkwareScanner.scan(app, rec.acknowledged(), StalkwareIoc.current(app))
         sequence?.let { checkedAtSequence = it }
@@ -273,7 +400,12 @@ object StalkwareWatch {
         Registry.updatePhoneHealth { SpywareHealth.merge(it, SpywareHealth.appFindings(result), now) }
         val labels = HashMap<String, String>()
         val label = { pkg: String -> labels.getOrPut(pkg) { StalkwareScanner.appLabel(app, pkg) } }
-        val raisedNow = alerts(new, result, label, now, silent = true)
+        val notes = sleepInstallNotes(app, newInstalls(result.installs, lastCheckAt, app.packageName))
+        val stalkerware = alerts(new, result, label, now, silent = true, notes = notes)
+        val inStalkerwareAlert = result.high.filter { "app:${it.packageName}" in new }.mapTo(HashSet()) { it.packageName }
+        val raisedNow = stalkerware +
+            listOfNotNull(sleepInstallAlert(notes, inStalkerwareAlert, label, now, silent = true)) +
+            listOfNotNull(runCatching { checkBonds(app, rec, now, silent = true) }.onFailure { Log.w(TAG, "could not check pairings", it) }.getOrNull())
         raisedNow.forEach { Registry.publishAlert(it) }
         if (!foreground && alerted != null) {
             notice(raisedNow, now)?.let { n ->
@@ -306,7 +438,10 @@ object StalkwareWatch {
         }
     }
 
-    /** Forgets the last check's findings and what was raised ("Clear all data"); the owner's marks stay, like the trusted devices. */
+    /**
+     * Forgets the last check's findings, what was raised and the paired devices last seen ("Clear
+     * all data"); the owner's marks stay, like the trusted devices.
+     */
     fun clear(context: Context) {
         record(context).clearFindings()
         heldNotice.drop()
@@ -352,6 +487,7 @@ object StalkwareWatch {
     private var watchedBy: Context? = null
     private var packageReceiver: BroadcastReceiver? = null
     private var screenReceiver: BroadcastReceiver? = null
+    private var bondReceiver: BroadcastReceiver? = null
     /** The notification of a check an install started, until the phone has been put down and unlocked again. */
     private val heldNotice = HeldNotice()
     /** The check on its way after an install, if one is; guarded by this object, like [changed]. */
@@ -403,6 +539,24 @@ object StalkwareWatch {
             runCatching { ContextCompat.registerReceiver(context, screen, screenFilter, ContextCompat.RECEIVER_NOT_EXPORTED) }
                 .onSuccess { screenReceiver = screen }
                 .onFailure { Log.w(TAG, "could not watch the screen", it) }
+            // A device paired while the scanner runs ([BondWatch]). Android delivers this protected
+            // broadcast to a receiver registered at run time, and only while BLUETOOTH_CONNECT is held.
+            val bonds = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    if (intent?.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+                    if (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR) != BluetoothDevice.BOND_BONDED) return
+                    val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
+                    val bond = BondWatch.bond(app, device)
+                    scope.launch { runCatching { onBonded(app, bond) }.onFailure { Log.w(TAG, "could not record a pairing", it) } }
+                }
+            }
+            runCatching {
+                ContextCompat.registerReceiver(
+                    context, bonds, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+            }
+                .onSuccess { bondReceiver = bonds }
+                .onFailure { Log.w(TAG, "could not watch pairings", it) }
         }
     }
 
@@ -416,8 +570,10 @@ object StalkwareWatch {
             val owner = watchedBy ?: context
             runCatching { owner.unregisterReceiver(receiver) }
             screenReceiver?.let { r -> runCatching { owner.unregisterReceiver(r) } }
+            bondReceiver?.let { r -> runCatching { owner.unregisterReceiver(r) } }
             packageReceiver = null
             screenReceiver = null
+            bondReceiver = null
             watchedBy = null
             pending?.cancel()
             pending = null
@@ -541,6 +697,29 @@ internal class StalkwareRecord(private val store: Store) {
         }
     }
 
+    /** When the last check ran, or null before the first (or after "Clear all data"). */
+    fun lastCheckedAt(): Long? {
+        synchronized(lock) {
+            return root().optJSONObject(LAST)?.optLong("at", 0L)?.takeIf { it > 0L }
+        }
+    }
+
+    /** The paired devices' addresses at the last look ([BondWatch]), or null before the first. */
+    fun bonds(): Set<String>? {
+        synchronized(lock) {
+            val keys = root().optJSONArray(BONDS) ?: return null
+            return (0 until keys.length()).mapNotNullTo(HashSet()) { keys.optString(it).takeIf { k -> k.isNotEmpty() } }
+        }
+    }
+
+    fun saveBonds(addresses: Set<String>) {
+        synchronized(lock) {
+            root().put(BONDS, JSONArray(addresses.sorted()))
+            store.markDirty()
+            store.flush()
+        }
+    }
+
     fun saveFindings(keys: Set<String>, at: Long) {
         synchronized(lock) {
             root().put(LAST, JSONObject().put("at", at).put("keys", JSONArray(keys.sorted())))
@@ -584,7 +763,8 @@ internal class StalkwareRecord(private val store: Store) {
         synchronized(lock) {
             val last = root().remove(LAST)
             val alerted = root().remove(ALERTED)
-            if (last == null && alerted == null) return
+            val bonds = root().remove(BONDS)
+            if (last == null && alerted == null && bonds == null) return
             store.markDirty()
             store.flush()
         }
@@ -594,5 +774,6 @@ internal class StalkwareRecord(private val store: Store) {
         const val ACKS = "acks"
         const val LAST = "last"
         const val ALERTED = "alerted"
+        const val BONDS = "bonds"
     }
 }

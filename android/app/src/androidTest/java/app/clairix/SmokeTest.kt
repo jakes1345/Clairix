@@ -96,6 +96,8 @@ class SmokeTest {
     private companion object {
         /** How long a Back may take to show the screen behind on CI's emulator (see backTo). */
         const val BACK_PATIENCE_MS = 10_000L
+        /** How many pieces of on-screen text a failure message lists ([screenSummary]). */
+        const val SUMMARY_TEXTS = 40
         /**
          * System apps that show a dialog over Clairix on its behalf. Android 12
          * shows the Wi-Fi suggestion prompt from the framework itself ("android").
@@ -109,7 +111,7 @@ class SmokeTest {
     private fun text(t: String, timeout: Long = 8_000): UiObject2? = ui.waitFor(By.text(t), timeout)
 
     private fun tap(t: String, step: String = t) {
-        text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step"); return }
+        text(t) ?: run { shot("MISSING-$step"); fail("No \"$t\" on screen at: $step; ${screenSummary()}"); return }
         if (!clickFresh(By.text(t))) { shot("STALE-$step"); fail("\"$t\" kept redrawing before it could be tapped at: $step") }
         alive(step)
     }
@@ -176,6 +178,20 @@ class SmokeTest {
         }
         if (tapIfShown()) return
         shot("MISSING-$t"); fail("Could not find \"$t\" by scrolling")
+    }
+
+    /**
+     * Which app is in front and the text of every window on screen, for a failure message: CI
+     * keeps the screenshot only as an artifact, and the log is what is read first. Every
+     * package's text, so a dialog or notification over Clairix shows up too.
+     */
+    private fun screenSummary(): String {
+        val texts = runCatching {
+            ui.findAll(By.text(java.util.regex.Pattern.compile(".+"))).mapNotNull {
+                runCatching { "${it.applicationPackage}: ${it.text}" }.getOrNull()
+            }
+        }.getOrDefault(emptyList())
+        return "in front: ${device.currentPackageName}; on screen: " + texts.take(SUMMARY_TEXTS).joinToString(" | ") { it.take(60) }
     }
 
     /** What Clairix's screen says now, to tell when a swipe has stopped moving the list. */

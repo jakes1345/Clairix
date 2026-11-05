@@ -78,6 +78,7 @@ import app.clairix.security.LockScreen
 import app.clairix.security.QuickExit
 import app.clairix.analysis.PhoneHealthMonitor
 import app.clairix.analysis.SpywareHealth
+import app.clairix.analysis.StalkwareScanner
 import app.clairix.analysis.StalkwareWatch
 import app.clairix.security.BiometricTripwire
 import app.clairix.security.ScreenRecordingMonitor
@@ -234,6 +235,8 @@ class MainActivity : AppCompatActivity() {
         // positions, a conversation, the Device tab. Secure always, passcode or
         // not; the screen-recording monitor reports attempts regardless.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        // And out of reach of other apps' accessibility services and overlays (suite only).
+        app.clairix.security.WindowShield.shield(this)
         Registry.bindTrustStore(this)
 
         if (BuildConfig.FULL_ACCESS) {
@@ -1262,6 +1265,7 @@ private fun MainApp(
             containerColor = ClairixTheme.colors.surfaceRaised,
             shape = ClairixShapes.Sheet
         ) {
+            app.clairix.security.ShieldThisWindow()
             ThreatExplainerSheet(target = target, onDismiss = { explainerTarget = null })
         }
     }
@@ -2997,7 +3001,18 @@ private fun HealthFactRow(f: HealthFact, onAnswer: (String) -> Unit) {
         val answer = f.answer
         if (fix != null || answer != null) {
             Row(Modifier.padding(start = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (fix != null) GhostButton(stringResource(R.string.scan_open_settings), onClick = { openFix(context, fix) })
+                val subject = RemovalGate.subjectOf(f)
+                val scan by StalkwareScanner.results.collectAsStateWithLifecycle()
+                when {
+                    // Replacing or removing an app this row is about can alert whoever installed it: ask first.
+                    fix != null && subject != null -> FlaggedAppButton(
+                        stringResource(R.string.scan_open_settings),
+                        subject,
+                        scan?.apps?.firstOrNull { it.packageName == subject },
+                        compact = true,
+                    ) { openFix(context, fix) }
+                    fix != null -> GhostButton(stringResource(R.string.scan_open_settings), onClick = { openFix(context, fix) })
+                }
                 if (answer != null) GhostButton(answer.label, onClick = { onAnswer(answer.id) })
             }
         }
