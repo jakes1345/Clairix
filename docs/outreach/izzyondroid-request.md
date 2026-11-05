@@ -32,9 +32,9 @@ Two honest options:
 - **Size.** The Full APK is 68.8 MB. The policy's rule of thumb is about 30 MB
   per app. The request asks for an exception and gives the reason.
 - **Tags.** The policy wants tags that match `versionName`/`versionCode`. The
-  current build is `versionName` `3.0.0-beta.8`, `versionCode` 28, tag
-  `v3.0.0-beta.8`. Check the release exists and carries
-  `clairix-v3.0.0-beta.8.apk` before sending.
+  current build is `versionName` `3.0.0-beta.9`, `versionCode` 29, tag
+  `v3.0.0-beta.9`. Check the release exists and carries
+  `clairix-v3.0.0-beta.9.apk` before sending.
 - **Template.** If the repository offers an inclusion template, use it and
   fill in anything it asks that the text below does not answer.
 

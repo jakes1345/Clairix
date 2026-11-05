@@ -34,7 +34,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.8'
+        default: 'v3.0.0-beta.9'
       allow_throwaway_key:
         description: 'Build without ANDROID_KEYSTORE_BASE64, signing with a throwaway key. The files are kept as a workflow artifact only; no GitHub release is published.'
         type: boolean

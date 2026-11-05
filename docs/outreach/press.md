@@ -65,7 +65,7 @@ Paste the fact sheet below the signature, or attach it.
 | **Who made it** | <your name>, as one small independent project. No company, investors or partners |
 | **Licence** | GNU GPL version 3, with an additional permission (section 7) to combine with Google Play services libraries |
 | **Platform** | Android 12 and newer; no root, custom ROM or unlocked bootloader needed |
-| **Version** | 3.0.0 Beta 8 (every release so far is a beta) |
+| **Version** | 3.0.0 Beta 9 (every release so far is a beta) |
 | **Price** | Free; no ads |
 | **Where to get it** | GitHub Releases (https://github.com/jakes1345/Clairix/releases) and https://clairix.app/download, which lists the APK's SHA-256. Works with Obtainium. **Not** on Google Play, F-Droid or IzzyOnDroid |
 | **Users** | Unknown. The app has no analytics, so we do not know how many people use it |
