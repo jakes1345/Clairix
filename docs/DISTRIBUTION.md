@@ -1,18 +1,18 @@
 # Distribution
 
 Where Clairix can be installed from, what each channel needs, and where each
-one stands. Written 1 November 2026, F-Droid section updated 3 November 2026; correct this file whenever a channel
+one stands. Written 1 November 2026, F-Droid section updated 5 November 2026; correct this file whenever a channel
 changes. It claims no listing that does not exist.
 
 ## Where it stands
 
-| Channel | State on 1 November 2026 (the F-Droid row on 3 November) |
+| Channel | State on 1 November 2026 (the GitHub and F-Droid rows on 5 November) |
 |---|---|
-| GitHub Releases | **Live.** The only place an APK is published. Every release carries `clairix-<tag>.apk` (Clairix Full), `clairix-comms-<tag>.apk` (Clairix Comms) and the Play bundle (`.github/workflows/release.yml`). Every release so far is a beta and is marked as a pre-release. |
+| GitHub Releases | **Live.** The only place an APK is published. Every release carries `clairix-<tag>.apk` (Clairix Full), `clairix-comms-<tag>.apk` (Clairix Comms) and the Play bundle (`.github/workflows/release.yml`); from 3.0.0 Beta 9 also `clairix-foss-<tag>.apk`, the foss edition. Every release so far is a beta and is marked as a pre-release. |
 | clairix.app/download | **Live.** Links to the Full APK on GitHub Releases with its SHA-256 (`website/src/config/release.ts`). |
 | Obtainium | **Works now, needs no listing.** Obtainium reads GitHub Releases directly; /download has the link and the two settings it needs. |
 | IzzyOnDroid | **Not listed.** The inclusion request below has not been sent yet. |
-| F-Droid (main repository) | **Not submitted.** A `foss` flavour without Google Play services or Firebase now builds, and CI checks it stays that way; the rest of what a submission needs is under "F-Droid" below. |
+| F-Droid (main repository) | **Not submitted.** A `foss` flavour without Google Play services or Firebase builds, CI checks it stays that way, and from 3.0.0 Beta 9 every release publishes it signed and rebuilds it from its tag. The metadata draft, listing text and changelog are ready; what is left is the maintainer's, under "F-Droid" below. |
 | Google Play | **Not public.** The Play edition is built with every release (`clairix-play-<tag>.aab`), but `PLAY_LIVE` is `false` in `website/src/config/site.ts` and no store page exists. |
 
 GitHub is the single host of every APK. The README's adversary can compel
@@ -35,13 +35,18 @@ IzzyOnDroid and fastlane read:
   are the app's own screens drawn from test data, not photos of a phone.
 
 **With every release:** add `changelogs/<versionCode>.txt` for the new
-`versionCode` in `android/app/build.gradle.kts` (28 is 3.0.0 Beta 8), and copy
+`versionCode` in `android/app/build.gradle.kts` (29 is 3.0.0 Beta 9), and copy
 the screenshots again when the Paparazzi images are re-recorded. A channel shows
 no "what's new" for a version without its changelog file.
 
 The description describes Clairix Full, the APK a channel would list: Full and
 Comms share the application id `app.clairix`, so a store can list only one of
-them, and the Play edition is not an APK.
+them, and the Play edition is not an APK. F-Droid lists the foss edition
+instead and takes its description from
+`src/fossSuite/fastlane/metadata/android/en-US/full_description.txt` at the
+repository root, which overrides the root one for that build alone; the title,
+short description, changelogs and images are shared (see "F-Droid" below). A
+change to the description goes into both files.
 
 ## Obtainium
 
@@ -50,11 +55,11 @@ from their GitHub releases. Nothing has to be submitted. The link on /download
 is `obtainium://add/https://github.com/jakes1345/Clairix`; before adding, the
 user turns on **Include prereleases** (every release is a beta) and sets
 **Filter links by regex** to `clairix-v[^/]*\.apk$`, which matches
-`clairix-v3.0.0-beta.8.apk` and not `clairix-comms-v3.0.0-beta.8.apk` or the
-`.aab`. The repository's other releases (`keys`, `relays`, `ioc`, `workzones`,
+`clairix-v3.0.0-beta.8.apk` and not `clairix-comms-v3.0.0-beta.8.apk`,
+`clairix-foss-v<version>.apk` (from Beta 9) or the `.aab`. The repository's other releases (`keys`, `relays`, `ioc`, `workzones`,
 `maps-<region>`) carry no APK; Obtainium's "Fallback to older releases", on by
 default, skips them. Someone who wants Clairix Comms instead uses
-`clairix-comms-v[^/]*\.apk$`.
+`clairix-comms-v[^/]*\.apk$`, and the foss edition `clairix-foss-v[^/]*\.apk$`.
 
 If release file names change in `release.yml`, change the filter on /download
 (`OBTAINIUM_APK_FILTER` in `website/src/pages/download.astro`) and here.
@@ -98,7 +103,8 @@ What the request has to raise:
   anti-feature; that is their call.
 - **Pre-releases.** Every release so far is a GitHub pre-release; the request
   asks whether they will take them until 3.0.0 is out.
-- **Two APKs per release.** Their updater needs the Full edition's name pattern.
+- **Several APKs per release.** Their updater needs the Full edition's name
+  pattern; from 3.0.0 Beta 9 a release carries three APKs.
 
 The request the maintainer sends (as a new issue, with the "request for
 inclusion" template if the repository offers one; fill in anything the template
@@ -117,7 +123,9 @@ Package: app.clairix
 APK: GitHub Releases, https://github.com/jakes1345/Clairix/releases
   Name pattern for the edition to list: clairix-v<version>.apk
   (each release also carries clairix-comms-v<version>.apk, a messaging-only
-  build with the same package name, and a Play .aab; please ignore both).
+  build with the same package name, clairix-foss-v<version>.apk, the same app
+  without Google Play services, meant for F-Droid, and a Play .aab; please
+  ignore those three).
 Signing certificate SHA-256:
   471c09cd792fff0bf75724bbb8ee2d13cc674e3f51d1e1fde28a2500932a52cc
   (recorded in docs/KEYS.md, signed and published as the "keys" release)
@@ -149,7 +157,7 @@ accepts no proprietary dependency. The published editions (Full, Comms, Play)
 all declare `com.google.android.gms:play-services-location`, so none of them
 can go there.
 
-**What exists now (3 November 2026).** A third edition flavour, `foss`, next to
+**What exists now (5 November 2026).** A third edition flavour, `foss`, next to
 `full` and `play` in `android/app/build.gradle.kts`, gives two variants:
 `fossSuite` (the whole app) and `fossComms` (messaging only). It is the full
 edition without Google Play services or Firebase:
@@ -177,52 +185,95 @@ edition without Google Play services or Firebase:
   foss debug APKs (`tools/android/check-no-google-services.sh`, with its own
   tests). The foss unit tests (`src/testFoss`) check that no Play services
   class can be loaded.
-- A metadata draft for fdroiddata is in `docs/fdroid/app.clairix.yml`. It has
-  not been submitted, linted or built with `fdroid build`.
 
-The foss edition is not built by `release.yml` and not published anywhere: no
-APK of it exists outside a local or CI build.
+**Done for the submission, on the way to 3.0.0 Beta 9:**
+
+- **Version.** `versionCode` 29, `versionName` 3.0.0-beta.9: the first release
+  whose tag will carry the foss flavour.
+- **The foss APK is published and checked.** `release.yml` builds
+  `fossSuiteRelease` in the same Gradle run as the other release builds, so the
+  same signing config signs it with the release key, and publishes it as
+  `clairix-foss-<tag>.apk`, listed in `SHA256SUMS.txt` (covered by the asset
+  key's signature) and in the 16 KB alignment and one-certificate checks.
+  `verify-release.yml` rebuilds it from the tag and compares it entry by entry
+  whenever a release carries it (none before Beta 9 does).
+- **Listing text.** The foss build's description is
+  `src/fossSuite/fastlane/metadata/android/en-US/full_description.txt` at the
+  repository root. fdroidserver (`update.py`, `insert_localized_app_metadata`,
+  read on its master branch on 5 November 2026) and F-Droid's "All About
+  Descriptions, Graphics and Screenshots" page say it reads
+  `src/<buildFlavor>/fastlane/metadata/android/<locale>/` from the repository
+  root, not from the Gradle module (`android/app/src/<flavour>/...` is not
+  read), for each combination of the build's `gradle:` entries (`fossSuite`
+  here), and that a directory later in sorted order overrides the root
+  `fastlane/`. The title, short description, changelogs and images stay
+  shared. This has not been run through `fdroid update` yet.
+- **Changelog** `changelogs/29.txt`.
+- **Brand licence.** `brand/LICENSE.md` proposes CC BY-SA 4.0 for the brand
+  files and the store images (`licenses/CC-BY-SA-4.0.txt`); the maintainer
+  confirms it.
+- **Metadata draft** `docs/fdroid/app.clairix.yml`: `commit: v3.0.0-beta.9`,
+  the new version and `CurrentVersion`, `Binaries:` pointing at
+  `clairix-foss-v%v.apk`, a placeholder `AllowedAPKSigningKeys:`, a proposed
+  NonFreeNet anti-feature with its reasons, and `ioc.json.gz` as a commented
+  `scanignore` candidate.
 
 **What a submission still needs**, all of it the maintainer's:
 
-1. **A release tag that has the foss flavour.** The draft has no `commit:`
-   line until one exists (3.0.0 Beta 8 predates it).
-2. **Listing text for the foss build.** F-Droid takes the description from
-   `fastlane/metadata/android/` in the repository. `full_description.txt`
-   there is the Full edition's text: it says "This is the Full edition" and
-   that Clairix includes Google's Play services location library, which is
-   false of the foss build. The F-Droid listing needs its own description
-   (where fdroidserver looks for flavour-specific text is to be checked
-   against its documentation), without changing what the GitHub and
-   IzzyOnDroid listings, which carry the full edition, say.
-3. **A build on F-Droid's own tooling.** Run `fdroid build app.clairix` with
-   the draft in a local fdroiddata checkout (or let the merge request's CI do
-   it). The recipe has to install Rust (`comms-crypto/rust-toolchain.toml`
-   pins 1.97.0 and the three Android targets), cargo-ndk 4.1.2 and NDK r27c
-   (27.2.12479018); the Gradle build refuses any other cargo-ndk or NDK
-   (`tools/reproducible`). Whether the draft's `prebuild`/`build` lines get
-   `cargo` onto the Gradle task's `PATH` on F-Droid's builder has not been
-   tried.
-4. **Prebuilt native code in Maven libraries.** Three FOSS dependencies ship
+1. **Tag and publish 3.0.0 Beta 9**, then check the release carries
+   `clairix-foss-v3.0.0-beta.9.apk` and that `verify-release.yml` matched it.
+2. **The release certificate in the draft.** Replace the placeholder
+   `AllowedAPKSigningKeys:` with the release certificate's SHA-256 as
+   `docs/KEYS.md` records it (64 lower-case hex characters, no colons).
+   Without it F-Droid signs the app with its own key: an F-Droid install then
+   cannot be updated from GitHub or the other way round, and the app's update
+   notice sends a foss install to F-Droid for that reason.
+3. **Decide whether the foss APK stays on GitHub Releases.** It is there so
+   F-Droid can reproduce it and ship the developer's signature. Anyone can
+   install it from GitHub too, and it installs over the Full edition and the
+   Full edition over it (same package, same key). Its update notice points to
+   F-Droid's page for Clairix, which does not exist until a listing does; the
+   release notes say so. Keeping it off GitHub means F-Droid signs with its
+   own key (item 2).
+4. **Decide how the "oldest safe version" brake treats F-Droid.** Below
+   `minSafeVersionCode` in `relays/latest.json` the app stops sending
+   messages, SOS alerts excepted, until it is updated (SECURITY.md, "How fixes
+   reach people"). F-Droid builds and publishes some time after a tag (often days
+   later), and the app sends a foss install to F-Droid for its update. Raising the
+   minimum on the day of a release would stop F-Droid users from sending until
+   F-Droid catches up. Either raise it only once the fixed version is on
+   F-Droid as well (relays/README.md already asks for "everywhere people get
+   Clairix"), or change the app so a foss build is not stopped, or is stopped
+   later. Beta 9 leaves it at 27. `AutoUpdateMode: Version` in the draft, once
+   a build has passed review, shortens the lag.
+5. **Confirm the brand licence** (`brand/LICENSE.md`), or replace it.
+6. **A build on F-Droid's own tooling.** Run `fdroid lint`, `fdroid scanner`,
+   `fdroid build app.clairix` and `fdroid update` with the draft in a local
+   fdroiddata checkout (or let the merge request's CI do it). The recipe has
+   to install Rust (`comms-crypto/rust-toolchain.toml` pins 1.97.0 and the
+   three Android targets), cargo-ndk 4.1.2 and NDK r27c (27.2.12479018); the
+   Gradle build refuses any other cargo-ndk or NDK (`tools/reproducible`).
+   Whether the draft's `prebuild`/`build` lines get `cargo` onto the Gradle
+   task's `PATH` on F-Droid's builder, and whether its build fetching crates
+   from crates.io is accepted, has not been tried. `fdroid update` shows
+   whether the foss description is picked up.
+7. **Prebuilt native code in Maven libraries.** Three FOSS dependencies ship
    compiled `.so` files in their AARs: `io.getstream:stream-webrtc-android`
    (libwebrtc, for calls), `net.zetetic:sqlcipher-android` (SQLCipher) and
    `net.java.dev.jna:jna` (libjnidispatch). F-Droid's reviewers may ask for
    them to be built from source; that is theirs to decide and has not been
    asked.
-5. **Anti-features.** The likely one is NonFreeNet: with Share traffic data
-   on, the box around a route goes through the relay to HERE and TomTom for
-   incidents. The project relay runs on Cloudflare Workers (its code,
-   `comms-worker/`, is free; anyone can run a relay). F-Droid decides.
-6. **One build per listing.** `fossSuite` and `fossComms` share the package
+8. **Anti-features.** The draft proposes NonFreeNet: the project relay runs
+   on Cloudflare Workers (its code, `comms-worker/`, is free; anyone can run
+   a relay), calls may use Cloudflare's TURN service, and with Share traffic
+   data on, the box around a route goes through the relay to HERE and TomTom
+   for incidents. UpstreamNonFree (the other editions include Play services)
+   is left for the merge request. F-Droid decides.
+9. **One build per listing.** `fossSuite` and `fossComms` share the package
    name `app.clairix` and the versionCode, so a listing carries one of them;
    the draft lists `fossSuite`.
-7. **Signing.** F-Droid signs what it builds with its own key, so an F-Droid
-   install cannot be updated with the GitHub APK or the other way round (the
-   app's update notice sends a foss install to its F-Droid page for this
-   reason). F-Droid can instead publish the developer's own signed APK if its
-   build reproduces it; that needs `release.yml` to build and publish the
-   foss APK as well, which it does not, and the existing rebuild checks
-   (`tools/reproducible`, `verify-release.yml`) extended to it.
+10. **Open the merge request** to fdroiddata, raising items 7 and 8 in its
+    description, after reading F-Droid's current inclusion policy.
 
 Until a listing exists, Obtainium (and IzzyOnDroid, once it lists Clairix) is
 the route for people who use F-Droid-style clients; both take the full edition

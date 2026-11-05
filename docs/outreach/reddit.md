@@ -27,11 +27,12 @@ Never:
 - delete and repost to get another shot at the front page;
 - leave out that you are the developer.
 
-For r/degoogle specifically: every published edition includes Google's
-`play-services-location`. That audience will notice. Say it first, and say
-what happens without Play services (Android's own `LocationManager`). A build
-without the library (the `foss` flavour, for F-Droid) exists in the source but
-is not published anywhere yet.
+For r/degoogle specifically: Clairix Full, Clairix Comms and the Play edition
+include Google's `play-services-location`. That audience will notice. Say it
+first, and say what happens without Play services (Android's own
+`LocationManager`). From 3.0.0 Beta 9 every release also carries a build
+without the library, `clairix-foss-<tag>.apk` (the `foss` flavour, meant for
+F-Droid, which does not list Clairix yet).
 
 ## Message to the moderators
 

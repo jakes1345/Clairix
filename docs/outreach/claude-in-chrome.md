@@ -80,9 +80,9 @@ has been sent. Written 1 November 2026 against 3.0.0 Beta 8.
   Paste: the title and body under "Text to paste" in `izzyondroid-request.md`.
 - **Check before you press Create issue:**
   - The AI disclosure is there, unchanged.
-  - The release `v3.0.0-beta.8` exists on GitHub and carries
-    `clairix-v3.0.0-beta.8.apk`; the tag matches `versionName` `3.0.0-beta.8`
-    and `versionCode` 28.
+  - The release `v3.0.0-beta.9` exists on GitHub and carries
+    `clairix-v3.0.0-beta.9.apk`; the tag matches `versionName` `3.0.0-beta.9`
+    and `versionCode` 29.
   - The signing certificate SHA-256 matches `docs/KEYS.md`.
   - The size (68.8 MB), the `play-services-location` dependency and the
     pre-release question are all stated.

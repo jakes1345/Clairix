@@ -3,7 +3,9 @@ name: Verify a release
 # Rebuilds a published release from its tag, on a machine that never saw the
 # release being made, and requires the APKs on the release page to match the
 # rebuild, entry by entry, signature files aside (tools/reproducible). A
-# release that does not match was not built from the source it names.
+# release that does not match was not built from the source it names. The
+# foss APK (clairix-foss-<tag>.apk) is rebuilt and compared when the release
+# carries one; releases before 3.0.0 Beta 9 do not.
 #
 # Runs after release.yml publishes a release, when a release is published by
 # hand, by hand for any tag, and on changes to this workflow or the comparison
@@ -74,13 +76,22 @@ jobs:
           sparse-checkout: tools/reproducible
 
       - name: Download the published release
+        id: download
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.name }}
         run: |
           mkdir published
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published \
-            --pattern "clairix-$TAG.apk" --pattern "clairix-comms-$TAG.apk" --pattern SHA256SUMS.txt --pattern SHA256SUMS.txt.sig
+          patterns=(--pattern "clairix-$TAG.apk" --pattern "clairix-comms-$TAG.apk" --pattern SHA256SUMS.txt --pattern SHA256SUMS.txt.sig)
+          assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          if grep -qxF "clairix-foss-$TAG.apk" <<< "$assets"; then
+            patterns+=(--pattern "clairix-foss-$TAG.apk")
+            echo "foss=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No clairix-foss-$TAG.apk on this release; only the full edition and Comms are compared."
+            echo "foss=false" >> "$GITHUB_OUTPUT"
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published "${patterns[@]}"
           cd published
           sha256sum -c --ignore-missing SHA256SUMS.txt
 
@@ -120,7 +131,12 @@ jobs:
       # unsigned; signing touches only what the comparison leaves out.
       - name: Rebuild the release APKs
         working-directory: source/android
-        run: ./gradlew assembleFullSuiteRelease assembleFullCommsRelease --no-daemon --stacktrace
+        env:
+          FOSS: ${{ steps.download.outputs.foss }}
+        run: |
+          TASKS="assembleFullSuiteRelease assembleFullCommsRelease"
+          if [ "$FOSS" = true ]; then TASKS="$TASKS assembleFossSuiteRelease"; fi
+          ./gradlew $TASKS --no-daemon --stacktrace
 
       - name: Compare the full edition
         env:
@@ -137,3 +153,12 @@ jobs:
           tools-checkout/tools/reproducible/compare-apk.sh \
             source/android/app/build/outputs/apk/fullComms/release/app-full-comms-release-unsigned.apk \
             "published/clairix-comms-$TAG.apk"
+
+      - name: Compare the foss edition
+        if: steps.download.outputs.foss == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          tools-checkout/tools/reproducible/compare-apk.sh \
+            source/android/app/build/outputs/apk/fossSuite/release/app-foss-suite-release-unsigned.apk \
+            "published/clairix-foss-$TAG.apk"

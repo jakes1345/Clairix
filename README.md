@@ -610,17 +610,24 @@ this program, or any covered work, by linking or combining it with Google Play
 services libraries (or a modified version of those libraries), containing
 parts covered by the terms of the Android Software Development Kit License
 Agreement, the licensors of this program grant you additional permission to
-convey the resulting work. The full and Play editions, the ones published,
-include Google Play services' location library, used for the position fixes
+convey the resulting work. The full and Play editions include Google Play
+services' location library, used for the position fixes
 of the scanner, navigation and SOS on a phone that has Google Play services,
 unless Satellite-only positioning is on; messages and calls use no Google
 service. The foss edition (the `foss` flavour in `android/app/build.gradle.kts`,
-meant for F-Droid and not yet published anywhere) is built without it.
+meant for F-Droid, and published as `clairix-foss-<tag>.apk` on GitHub
+Releases from 3.0.0 Beta 9) is built without it.
 
 The fonts the app ships with keep their own licence, the SIL Open Font License
 1.1: Archivo ([licenses/OFL-1.1-Archivo.txt](licenses/OFL-1.1-Archivo.txt))
 and JetBrains Mono ([licenses/OFL-1.1-JetBrains-Mono.txt](licenses/OFL-1.1-JetBrains-Mono.txt)).
 Libraries the app and the relay depend on keep theirs.
+
+The logo, icons and other brand images in `brand/`, and the store icon,
+feature graphic and screenshots in `fastlane/metadata/android/`, are under the
+Creative Commons Attribution-ShareAlike 4.0 licence; [brand/LICENSE.md](brand/LICENSE.md)
+says exactly which files, and what it does not cover
+([licenses/CC-BY-SA-4.0.txt](licenses/CC-BY-SA-4.0.txt)).
 
 The stalkerware list (`android/app/src/suite/assets/ioc.json.gz`, and the
 `ioc` release the app updates it from) is adapted by `tools/ioc/convert.py`

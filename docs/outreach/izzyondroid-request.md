@@ -32,9 +32,9 @@ Two honest options:
 - **Size.** The Full APK is 68.8 MB. The policy's rule of thumb is about 30 MB
   per app. The request asks for an exception and gives the reason.
 - **Tags.** The policy wants tags that match `versionName`/`versionCode`. The
-  current build is `versionName` `3.0.0-beta.8`, `versionCode` 28, tag
-  `v3.0.0-beta.8`. Check the release exists and carries
-  `clairix-v3.0.0-beta.8.apk` before sending.
+  current build is `versionName` `3.0.0-beta.9`, `versionCode` 29, tag
+  `v3.0.0-beta.9`. Check the release exists and carries
+  `clairix-v3.0.0-beta.9.apk` before sending.
 - **Template.** If the repository offers an inclusion template, use it and
   fill in anything it asks that the text below does not answer.
 
@@ -57,7 +57,9 @@ Package: app.clairix
 APK: GitHub Releases, https://github.com/jakes1345/Clairix/releases
   Name pattern for the edition to list: clairix-v<version>.apk
   (each release also carries clairix-comms-v<version>.apk, a messaging-only
-  build with the same package name, and a Play .aab; please ignore both).
+  build with the same package name, clairix-foss-v<version>.apk, the same app
+  without Google Play services, meant for F-Droid, and a Play .aab; please
+  ignore those three).
 Signing certificate SHA-256:
   471c09cd792fff0bf75724bbb8ee2d13cc674e3f51d1e1fde28a2500932a52cc
   (recorded in docs/KEYS.md, signed and published as the "keys" release)

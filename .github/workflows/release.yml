@@ -10,10 +10,12 @@ name: Release
 # What a release carries:
 #   clairix-<tag>.apk                 full edition, whole app   (fullSuiteRelease)
 #   clairix-comms-<tag>.apk           full edition, comms only  (fullCommsRelease)
+#   clairix-foss-<tag>.apk            foss edition, whole app   (fossSuiteRelease): no Google Play
+#                                     services or Firebase; for F-Droid to check its own build against
 #   clairix-play-<tag>.aab            Play edition bundle for the Play Console (playSuiteRelease)
 #   sbom-android-<tag>.cdx.json       CycloneDX bill of materials: the Java and Kotlin libraries
 #   sbom-comms-crypto-<tag>.cdx.json  CycloneDX bill of materials: the Rust crates in the crypto library
-#   SHA256SUMS.txt                    SHA-256 of each of the five
+#   SHA256SUMS.txt                    SHA-256 of each of the six
 #
 # Nothing is signed until the Android APK workflow has passed on the commit
 # (job checks), an Emulator smoke test run has passed on the same tree (job
@@ -34,7 +36,7 @@ on:
       tag:
         description: 'Release tag (e.g. v3.0.0-beta.1)'
         required: true
-        default: 'v3.0.0-beta.8'
+        default: 'v3.0.0-beta.9'
       allow_throwaway_key:
         description: 'Build without ANDROID_KEYSTORE_BASE64, signing with a throwaway key. The files are kept as a workflow artifact only; no GitHub release is published.'
         type: boolean
@@ -311,7 +313,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || 'android' }}
         run: |
           echo "NDK: $ANDROID_NDK_HOME"
-          ./gradlew assembleFullSuiteRelease assembleFullCommsRelease bundlePlaySuiteRelease \
+          ./gradlew assembleFullSuiteRelease assembleFullCommsRelease assembleFossSuiteRelease bundlePlaySuiteRelease \
             --no-daemon --stacktrace
 
       # The Play edition must not declare card emulation. This reads every
@@ -388,6 +390,7 @@ jobs:
           mkdir -p "$OUT"
           cp android/app/build/outputs/apk/fullSuite/release/app-full-suite-release.apk "$OUT/clairix-${TAG}.apk"
           cp android/app/build/outputs/apk/fullComms/release/app-full-comms-release.apk "$OUT/clairix-comms-${TAG}.apk"
+          cp android/app/build/outputs/apk/fossSuite/release/app-foss-suite-release.apk "$OUT/clairix-foss-${TAG}.apk"
           cp android/app/build/outputs/bundle/playSuiteRelease/app-play-suite-release.aab "$OUT/clairix-play-${TAG}.aab"
           cp "$RUNNER_TEMP/sbom/clairix-android.cdx.json" "$OUT/sbom-android-${TAG}.cdx.json"
           cp "$RUNNER_TEMP/sbom/comms-crypto.cdx.json" "$OUT/sbom-comms-crypto-${TAG}.cdx.json"
@@ -402,7 +405,7 @@ jobs:
           # at the first upload, which is to be this same release key (android/README.md,
           # "Cutting a release" step 5a).
           keytool -printcert -jarfile "$OUT/clairix-play-${TAG}.aab"
-          (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-play-${TAG}.aab" \
+          (cd "$OUT" && sha256sum "clairix-${TAG}.apk" "clairix-comms-${TAG}.apk" "clairix-foss-${TAG}.apk" "clairix-play-${TAG}.aab" \
             "sbom-android-${TAG}.cdx.json" "sbom-comms-crypto-${TAG}.cdx.json" > SHA256SUMS.txt)
           cat "$OUT/SHA256SUMS.txt"
 
@@ -417,7 +420,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
           OUT=android/app/build/outputs/release-files
-          tools/android/check-16k-alignment.sh "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk" "$OUT/clairix-play-${TAG}.aab"
+          tools/android/check-16k-alignment.sh "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk" "$OUT/clairix-foss-${TAG}.apk" "$OUT/clairix-play-${TAG}.aab"
 
       # At the first Play upload this release key is enrolled in Play App Signing
       # ("Use an existing key", android/README.md "Cutting a release" step 5a), so
@@ -431,7 +434,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
           OUT=android/app/build/outputs/release-files
-          tools/android/check-bundle-signer.sh "$OUT/clairix-play-${TAG}.aab" "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk"
+          tools/android/check-bundle-signer.sh "$OUT/clairix-play-${TAG}.aab" "$OUT/clairix-${TAG}.apk" "$OUT/clairix-comms-${TAG}.apk" "$OUT/clairix-foss-${TAG}.apk"
 
       # The checksum file is signed with the asset signing key (tools/signing),
       # whose public half is committed as android/asset-signing.pem, so a
@@ -464,7 +467,65 @@ jobs:
               echo "version if you rely on Clairix every day and don't want surprises."
               echo
             fi
-            echo "### What's new in Beta 8: harder to flood, safer invites, a release you can check"
+            echo "### What's new in Beta 9: a stalkerware check that weighs more, and a safer way to act on it"
+            echo
+            echo "- **The stalkerware scan weighs more of what an app can do.** It tells permissions"
+            echo "  Android granted from ones an app only asked for, counts a battery-optimisation"
+            echo "  exemption beside the signs a monitoring app shows (never on its own), and reads"
+            echo "  who holds your default SMS app, phone app and home screen; Phone check has a row"
+            echo "  for those three. It runs every day and after installs, matches apps against a"
+            echo "  published list of known stalkerware (Echap's Stalkerware Indicators), says when a"
+            echo "  device or work-profile owner manages the phone, and no longer flags an app for"
+            echo "  where it was installed from alone. Signal installed from signal.org is recognised"
+            echo "  by Signal's signing key instead of being called an impostor."
+            echo "- **A safety step before removing a flagged app.** Removing or switching off an app"
+            echo "  can alert whoever installed it. Before its settings open, Clairix now says so,"
+            echo "  offers to save evidence first and to contact a helpline, and asks you to"
+            echo "  continue. Findings about trackers and stalkerware lead with the same advice."
+            echo "- **Watching the hours you sleep.** A Bluetooth device newly paired, or an app"
+            echo "  installed soon after an unlock while you were asleep, is reported, its alert held"
+            echo "  until you next unlock the phone."
+            echo "- **Shielded from other apps.** On Android 14 and newer, only accessibility tools"
+            echo "  such as TalkBack can read Clairix's screens; on Android 12 and newer, other apps'"
+            echo "  overlays are hidden while Clairix is open. (Clairix Comms is unchanged.)"
+            echo "- **Evidence you can hand over.** The evidence report exports as text or JSON, is"
+            echo "  dated and signed by a key kept in the phone's Keystore, and covers apps with"
+            echo "  spy-level access, phone integrity, unlocks while you slept and the camera sweep."
+            echo "  It now includes the battery exemption and what each app asked for but was not"
+            echo "  granted."
+            echo "- **Clean link.** Share a link to Clairix, or select it and choose Clean link, and"
+            echo "  it removes tracking parameters and unwraps redirect links, on the phone, with no"
+            echo "  network request. (Not in Clairix Comms.)"
+            echo "- **Comms:** block someone, keep first messages from strangers as message requests,"
+            echo "  and report a number to its relay (never what was written). Save a recovery file,"
+            echo "  protected by a recovery code, to get your number and contacts back on a new phone"
+            echo "  if yours is lost."
+            echo "- **Discreet mode.** Neutral notifications and lock screen, a disguised launcher"
+            echo "  entry (Compass or Notes) and a quick exit; plus a checklist of who else can see"
+            echo "  this phone (accounts, location sharing, Find My Device and more)."
+            echo "- **Lock and wipe.** Setup offers a passcode; wrong codes slow a guesser down and"
+            echo "  wipe only if you chose that. The duress passcode now leaves a decoy instead of a"
+            echo "  blank, freshly wiped app."
+            echo "- **SOS:** an optional text message to one number and an emergency-call button, and"
+            echo "  SOS alerts and group messages that could not be delivered are retried for each"
+            echo "  member."
+            echo "- **Battery:** a low-power mode (automatic below 20 %), a Battery page in Settings,"
+            echo "  and Comms no longer pings the relay every 45 seconds."
+            echo "- **Positions without Google.** On a phone without Google Play services, positions"
+            echo "  come from Android's own location service, a Satellite-only switch keeps them to"
+            echo "  GPS alone, and mock locations are never trusted."
+            echo "- **A build without Google Play services.** \`clairix-foss-${TAG}.apk\` is the Full"
+            echo "  edition built without Google's location library or Firebase: the build meant for"
+            echo "  F-Droid, published here so F-Droid can check its own build against it."
+            echo "- **Fixes:** a message is no longer sent twice when the phone locks between the"
+            echo "  relay accepting it and the app marking it sent; a send whose answer from the relay"
+            echo "  was lost is retried with the same encrypted envelope instead of being encrypted"
+            echo "  again. The Comms APK no longer carries the scanner, NFC or card-vault code at all."
+            echo "- **Relay operators:** run this release's relay. It adds message reports, account"
+            echo "  suspension and the adaptive heartbeat this version asks for."
+            echo "- The COMMS database is upgraded once, on first start (version 13)."
+            echo
+            echo "### What was new in Beta 8: harder to flood, safer invites, a release you can check"
             echo
             echo "- **Nobody can fill your mailbox against your contacts.** Your phone gives each"
             echo "  contact a pass, inside your encrypted messages, and gives your relay the key it"
@@ -671,9 +732,10 @@ jobs:
             echo "|---|---|"
             echo "| \`clairix-${TAG}.apk\` | **The Full edition.** The whole app, including the Card Vault and ClairixCoin. Most people want this one. |"
             echo "| \`clairix-comms-${TAG}.apk\` | **Clairix Comms.** Only the encrypted messages, calls, groups and SOS: the scanner and tools are not reachable and none of their permissions are requested, and the Drive radio scanner, NFC reader, card vault and card emulation are not in the file at all. For people you want to be able to reach but not hand the full toolkit. Installing the Full edition over it later keeps the number, contacts and messages. |"
+            echo "| \`clairix-foss-${TAG}.apk\` | **The foss edition.** The Full edition built without Google Play services or Firebase: positions come from Android's own location service. It is the build F-Droid is to publish, here so F-Droid can check that its build from the source matches, and it is signed with the same key as the Full edition, so either installs over the other. Clairix is not on F-Droid yet, and this edition's update notice points there; most people want \`clairix-${TAG}.apk\`. |"
             echo "| \`clairix-play-${TAG}.aab\` | The bundle for the Play Console, signed with the same key as the APKs. Phones can't install this file directly. |"
-            echo "| \`sbom-android-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Java and Kotlin library in the three files above, with its version. |"
-            echo "| \`sbom-comms-crypto-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Rust crate in the encryption library the three files carry, with its version. |"
+            echo "| \`sbom-android-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Java and Kotlin library in the four files above, with its version. |"
+            echo "| \`sbom-comms-crypto-${TAG}.cdx.json\` | Bill of materials (CycloneDX): every Rust crate in the encryption library the four files carry, with its version. |"
             echo "| \`SHA256SUMS.txt\` | Checksums to confirm your download is intact. |"
             echo "| \`SHA256SUMS.txt.sig\` | Signature over the checksums by the Clairix asset signing key, so a swapped release cannot come with matching checksums. |"
             echo
@@ -755,6 +817,7 @@ jobs:
           files: |
             android/app/build/outputs/release-files/clairix-${{ steps.tag.outputs.name }}.apk
             android/app/build/outputs/release-files/clairix-comms-${{ steps.tag.outputs.name }}.apk
+            android/app/build/outputs/release-files/clairix-foss-${{ steps.tag.outputs.name }}.apk
             android/app/build/outputs/release-files/clairix-play-${{ steps.tag.outputs.name }}.aab
             android/app/build/outputs/release-files/sbom-android-${{ steps.tag.outputs.name }}.cdx.json
             android/app/build/outputs/release-files/sbom-comms-crypto-${{ steps.tag.outputs.name }}.cdx.json

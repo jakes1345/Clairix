@@ -71,7 +71,7 @@ older versions; the date is two months after Beta 7 and Beta 8 were published.
 
 ## What is supported
 
-Only the newest release, currently 3.0.0 Beta 8, and `main`. Fixes are not
+Only the newest release, currently 3.0.0 Beta 9, and `main`. Fixes are not
 backported to earlier betas.
 
 ## In scope
