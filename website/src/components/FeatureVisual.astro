@@ -302,9 +302,20 @@ const routeNodes = [[132, 318], [262, 236], [404, 150], [528, 60]];
     z-index: 3;
     align-self: center;
   }
-  /* With a real screenshot, the artwork steps back. */
+  /* With a real screenshot, the artwork steps back and the frame grows to fit the whole
+     phone, clear of the captions, instead of cutting the screen off at a fixed ratio. */
+  .fv:has(.fv-shot) {
+    position: relative;
+    aspect-ratio: auto;
+  }
   .fv:has(.fv-shot) .fv-art {
+    position: absolute;
+    inset: 0;
     opacity: 0.35;
+  }
+  .fv .fv-shot {
+    width: min(240px, 56%);
+    margin-block: 64px;
   }
 
   /* Shared strokes */
