@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Fails if Google Play services or Firebase is in the foss edition, the one built for
-# F-Droid, whose main repository accepts no proprietary dependency. Two kinds of input:
+# Fails if Google Play services, Firebase or the Google Play Billing library is in the
+# foss edition, the one built for F-Droid, whose main repository accepts no proprietary
+# dependency. (Billing is the Play edition's alone: Supporter purchases, docs/SUPPORTER.md.)
+# Two kinds of input:
 #
 #   tools/android/check-no-google-services.sh --deps FILE.txt ... --apk FILE.apk ...
 #
 # --deps  output of `./gradlew :app:dependencies --configuration <variant>RuntimeClasspath`:
-#         no com.google.android.gms or com.google.firebase artifact may appear in it. It must
+#         no com.google.android.gms, com.google.firebase or com.android.billingclient
+#         artifact may appear in it. It must
 #         also list at least one artifact, so a misspelt configuration (which prints "No
 #         dependencies") cannot pass.
-# --apk   an APK: no class under com/google/android/gms or com/google/firebase in any
-#         classes*.dex, and no play-services-* or firebase-* file packaged. A file with no
+# --apk   an APK: no class under com/google/android/gms, com/google/firebase or
+#         com/android/billingclient in any classes*.dex, and no play-services-*,
+#         firebase-* or billing file packaged. A file with no
 #         classes*.dex fails: a check that examined nothing proves nothing.
 #
 # Exit 0 when everything is clean, 1 when something is not, 2 on bad usage.
@@ -22,9 +26,9 @@ usage() {
 [ $# -eq 0 ] && usage
 command -v unzip > /dev/null || { echo "::error::unzip is not installed" >&2; exit 2; }
 
-ARTIFACTS='com\.google\.android\.gms:|com\.google\.firebase:'
-CLASSES='Lcom/google/android/gms/|Lcom/google/firebase/'
-FILES='(^|/)(play-services-[^/]*|firebase-[^/]*)\.properties$|^com/google/android/gms/|^com/google/firebase/'
+ARTIFACTS='com\.google\.android\.gms:|com\.google\.firebase:|com\.android\.billingclient:'
+CLASSES='Lcom/google/android/gms/|Lcom/google/firebase/|Lcom/android/billingclient/'
+FILES='(^|/)(play-services-[^/]*|firebase-[^/]*|billing[^/]*)\.properties$|^com/google/android/gms/|^com/google/firebase/|^com/android/billingclient/'
 
 mode=""
 checked=0

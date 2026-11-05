@@ -639,6 +639,14 @@ dependencies {
     "fullImplementation"("com.google.android.gms:play-services-location:21.3.0")
     "playImplementation"("com.google.android.gms:play-services-location:21.3.0")
 
+    // Google Play Billing, for Clairix Supporter (docs/SUPPORTER.md), in the Play
+    // edition only: PlaySupporterBilling (src/play). The full and foss editions
+    // have a no-op instead (src/full, which foss shares), and
+    // tools/android/check-no-google-services.sh fails the build if this library
+    // reaches the foss edition. Play requires version 8 or newer for updates
+    // from 31 August 2026.
+    "playImplementation"("com.android.billingclient:billing:8.3.0")
+
     // Hidden-camera sweep — CameraX drives the torch-on lens-glint analyser and the
     // front-camera IR-illuminator view. Frames are read from the Y plane in process
     // and never stored or transmitted.
