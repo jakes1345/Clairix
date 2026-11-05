@@ -27,6 +27,9 @@ GMS_DEPS = CLEAN_DEPS + """+--- com.google.android.gms:play-services-location:21
 
 FIREBASE_DEPS = CLEAN_DEPS + "+--- com.google.firebase:firebase-messaging:24.0.0\n"
 
+# The Play edition's billing library (Supporter purchases) must never reach the foss edition.
+BILLING_DEPS = CLEAN_DEPS + "+--- com.android.billingclient:billing:8.3.0\n"
+
 EMPTY_DEPS = """
 fossSuiteReleaseRuntimeClasspath - Runtime classpath of '/fossSuiteRelease'.
 No dependencies
@@ -66,6 +69,19 @@ def test_a_google_artifact_fails(tmp_path, deps):
     result = run("--deps", write(tmp_path, "deps.txt", deps))
     assert result.returncode == 1
     assert "com.google." in result.stdout
+
+
+def test_the_play_billing_library_fails(tmp_path):
+    result = run("--deps", write(tmp_path, "deps.txt", BILLING_DEPS))
+    assert result.returncode == 1
+    assert "com.android.billingclient:billing" in result.stdout
+    dex = DEX_CLEAN + b"Lcom/android/billingclient/api/BillingClient;\x00"
+    result = run("--apk", apk(tmp_path, "b.apk", {"classes.dex": dex}))
+    assert result.returncode == 1
+    assert "Lcom/android/billingclient/api/BillingClient;" in result.stdout
+    result = run("--apk", apk(tmp_path, "c.apk", {"classes.dex": DEX_CLEAN, "billing.properties": b"version=8.3.0\n"}))
+    assert result.returncode == 1
+    assert "billing.properties" in result.stdout
 
 
 def test_an_empty_configuration_fails(tmp_path):
