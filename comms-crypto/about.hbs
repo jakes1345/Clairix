@@ -29,6 +29,7 @@ in the app's list.
 | CameraX, by the Android Open Source Project | Apache-2.0; the libyuv code in it BSD-3-Clause |
 | Kotlin standard library and kotlinx.coroutines, by JetBrains | Apache-2.0 |
 | Google Play services location | Android Software Development Kit License (developer.android.com/studio/terms) |
+| Google Play Billing 8.3.0 (Google Play edition only, for Clairix Supporter) | Android Software Development Kit License (developer.android.com/studio/terms) |
 | osmdroid 6.1.20 | Apache-2.0 |
 | OkHttp 4.12.0 and Okio, by Square | Apache-2.0 |
 | SQLCipher for Android 4.17.0, by Zetetic | SQLCipher Community Edition License (BSD-style) |
