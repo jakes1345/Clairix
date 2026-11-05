@@ -104,6 +104,11 @@ These rules apply when you do:
    tell it does not copy code that you could not submit yourself. A tool is
    not a person and cannot certify anything, so a commit signed off only by a
    tool fails the check.
+
+   The maintainer's own pull requests are the exception: one the repository
+   owner opens from a branch of this repository (not a fork) is not checked,
+   because the maintainer answers for every change they merge, including what a
+   tool wrote for them. Every other contributor signs off as above.
 3. **A tool may be the commit's author.** Some tools commit under their own
    name (Claude Code commits as `Claude <noreply@anthropic.com>`). That
    records truthfully who wrote the change and is allowed, but the commit

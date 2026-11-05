@@ -8,6 +8,10 @@ name: DCO
 # The rule starts with the first pull request opened against a base that already
 # has this workflow: the pull request that adds it, and commits made before it
 # existed, are not checked.
+# The maintainer's own pull requests, opened by the repository owner from a
+# branch of this repository (not a fork), are not checked either: the
+# maintainer answers for what they merge, including what a tool wrote for them
+# (CONTRIBUTING.md, "Code written with AI tools", item 2).
 # Nothing from the pull request runs: the job only reads commit messages.
 on:
   pull_request:
@@ -31,7 +35,12 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
           OPENED_BY_APP: ${{ github.event.pull_request.user.type == 'Bot' }}
+          OPENED_BY_OWNER: ${{ github.event.pull_request.user.login == github.repository_owner && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
+          if [ "$OPENED_BY_OWNER" = true ]; then
+            echo "Opened by the repository owner from a branch of this repository: the maintainer answers for it by merging, so its commits are not checked (CONTRIBUTING.md)."
+            exit 0
+          fi
           if ! git cat-file -e "$BASE:.github/workflows/dco.yml" 2>/dev/null; then
             echo "The base of this pull request has no sign-off rule yet (this pull request adds it), so its commits are not checked; every pull request after it is."
             exit 0
