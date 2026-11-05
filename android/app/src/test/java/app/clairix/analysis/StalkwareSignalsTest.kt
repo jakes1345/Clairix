@@ -100,6 +100,66 @@ class StalkwareSignalsTest {
         assertNull(StalkwareScanner.batterySignal(f.copy(batteryExempt = false), listOf(StalkwareScanner.Signal(5, "x")), hidden = true))
     }
 
+    // ── Steady uploads ────────────────────────────────────────────────────────
+
+    private val uploads = DataUsage.Summary(List(DataUsage.DAYS) { DataUsage.Day(100_000L, 2_000_000L) })
+    private val uploadReason = "keeps sending more than it receives"
+
+    private fun uploadSignal(f: AppFacts) = StalkwareScanner.assess(f).firstOrNull { it.reason.startsWith(uploadReason) }
+
+    @Test
+    fun steadyUploadsAloneAreNeverAVerdict() {
+        // A hidden, sideloaded backup tool that does nothing else: uploads do not list it.
+        val sideloaded = AppFacts("com.example.backup", system = false, installer = "com.android.packageinstaller", hasLauncher = true, dataUsage = uploads)
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE, score(sideloaded))
+        assertNull(uploadSignal(sideloaded))
+        // A store app that uploads (a photo library) never gets the signal, listed or not.
+        val store = AppFacts(
+            "com.example.photos", system = false, installer = play, hasLauncher = true, dataUsage = uploads,
+            requested = setOf(Manifest.permission.READ_SMS, Manifest.permission.READ_CALL_LOG),
+        )
+        assertTrue(score(store) >= 3)
+        assertNull(uploadSignal(store))
+    }
+
+    @Test
+    fun steadyUploadsStrengthenAListedAppThatHides() {
+        val hiddenSideload = AppFacts(rogue, system = false, installer = null, hasLauncher = false)
+        assertEquals(Severity.MEDIUM, severity(hiddenSideload))
+        val uploading = hiddenSideload.copy(dataUsage = uploads)
+        assertEquals(score(hiddenSideload) + StalkwareScanner.STEADY_UPLOAD_SCORE, score(uploading))
+        assertEquals(Severity.HIGH, severity(uploading))
+        assertTrue(uploadSignal(uploading)!!.reason.contains("sending on 7 of them"))
+        // Downloading more than it uploads: nothing.
+        val viewer = hiddenSideload.copy(dataUsage = DataUsage.Summary(List(DataUsage.DAYS) { DataUsage.Day(9_000_000L, 2_000_000L) }))
+        assertNull(uploadSignal(viewer))
+    }
+
+    @Test
+    fun aMessengerFromItsMakersSiteThatSendsALotStaysMedium() {
+        // Its owner sends videos all week: the reason is shown, but it does not make the app HIGH.
+        val perms = setOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        val messenger = AppFacts(
+            "com.example.messenger", system = false, installer = "com.google.android.packageinstaller", hasLauncher = true,
+            requested = perms, granted = perms, batteryExempt = true, dataUsage = uploads,
+        )
+        assertEquals(Severity.MEDIUM, severity(messenger))
+        assertEquals(0, uploadSignal(messenger)?.points)
+        // Listed at 3, it adds its point and stays MEDIUM.
+        val lesser = messenger.copy(requested = setOf(Manifest.permission.RECORD_AUDIO), granted = setOf(Manifest.permission.RECORD_AUDIO))
+        assertEquals(StalkwareScanner.SIDELOAD_SCORE + 1, score(lesser.copy(dataUsage = null)))
+        assertEquals(1, uploadSignal(lesser)?.points)
+        assertEquals(Severity.MEDIUM, severity(lesser))
+    }
+
+    @Test
+    fun theUploadSignalIsJudgedOnTheOtherSignalsAlone() {
+        val f = AppFacts(rogue, system = false, installer = null, hasLauncher = true, dataUsage = uploads)
+        assertNull(StalkwareScanner.dataSignal(f, listOf(StalkwareScanner.Signal(2, "x")), hidden = true))
+        assertEquals(1, StalkwareScanner.dataSignal(f, listOf(StalkwareScanner.Signal(3, "x")), hidden = true)?.points)
+        assertNull(StalkwareScanner.dataSignal(f.copy(dataUsage = null), listOf(StalkwareScanner.Signal(5, "x")), hidden = true))
+    }
+
     // ── Granted or only asked for ─────────────────────────────────────────────
 
     private val sms = setOf(Manifest.permission.READ_SMS, Manifest.permission.READ_CALL_LOG, Manifest.permission.RECORD_AUDIO)

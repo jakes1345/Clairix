@@ -532,7 +532,9 @@ With the unlock ledger's admin switched on it is 8, and 10 if the scanner then
 ran for a week without the app being opened. The battery exemption adds 1
 only to an app already listed that hides its icon or holds access the model
 does not vouch for, which for Clairix Full is the unlock ledger's admin: 9
-with it on and exempt, 11 after the week. The Comms edition comes to 4, listed as medium. The
+with it on and exempt, 11 after the week. Steady uploads, read from
+Android's traffic counters, are weighed the same way as the battery
+exemption, so the numbers above are without them. The Comms edition comes to 4, listed as medium. The
 Play edition comes to 2, below the 3 at which an app is listed, or 4 after a
 week unopened; its device admin is known to the model, since it comes from a
 store. Other scanners weigh these things differently. A unit test reads

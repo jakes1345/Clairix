@@ -144,6 +144,17 @@ internal object ReportJson {
         time(this, "ts", tag.ts, t)
     }
 
+    /** One app's last week of traffic: totals, then each 24-hour window, oldest first. */
+    private fun dataJson(u: DataUsage.Summary) = JSONObject().apply {
+        put("days", DataUsage.DAYS)
+        put("sent_bytes", u.tx)
+        put("received_bytes", u.rx)
+        put("days_sent_on", u.uploadDays)
+        put("steady_uploader", u.steadyUploader)
+        put("per_day", JSONArray().also { a -> u.days.forEach { d -> a.put(JSONObject().put("sent_bytes", d.tx).put("received_bytes", d.rx)) } })
+        put("source", DataUsage.CAVEAT)
+    }
+
     private fun strings(list: List<String>) = JSONArray().also { a -> list.forEach { a.put(it) } }
 
     private fun spywareJson(s: SpywareSection, t: ReportTime) = JSONObject().apply {
@@ -163,6 +174,7 @@ internal object ReportJson {
                     put("permissions", strings(app.permissions))
                     put("requested_not_granted", strings(app.requestedOnly))
                     app.batteryExempt?.let { put("battery_exempt", it) }
+                    app.dataUsage?.let { put("data_usage", dataJson(it)) }
                     put("reasons", strings(app.reasons))
                     put("signer_sha256", strings(app.signers))
                 })

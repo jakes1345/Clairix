@@ -23,6 +23,7 @@ import app.clairix.analysis.AudioRouteMonitor
 import app.clairix.analysis.CaAudit
 import app.clairix.analysis.CaAuditScanner
 import app.clairix.analysis.CaPage
+import app.clairix.analysis.DataUsage
 import app.clairix.analysis.StalkwareScanner
 import app.clairix.analysis.StalkwareWatch
 import app.clairix.analysis.TlsCanary
@@ -513,6 +514,10 @@ private fun SuspiciousAppCard(app: StalkwareScanner.SuspiciousApp, context: Cont
         KeyValueRow(stringResource(R.string.scan_installer), app.installerPackage ?: if (app.sideloaded) stringResource(R.string.scan_unknown_sideloaded) else "—")
         if (app.grantedPermissions.isNotEmpty()) {
             KeyValueRow(stringResource(R.string.scan_permissions_granted), app.grantedPermissions.joinToString(", "), mono = false)
+        }
+        app.dataUsage?.let { usage ->
+            KeyValueRow(stringResource(R.string.scan_data_last_week), DataUsage.text(usage), mono = false)
+            Text(DataUsage.CAVEAT, style = MaterialTheme.typography.bodySmall, color = ClairixTheme.colors.textSubtle)
         }
         if (app.imeEnabled) KeyValueRow(stringResource(R.string.scan_keyboard), "enabled")
         if (app.deviceAdminActive) KeyValueRow(stringResource(R.string.scan_device_admin), "active")

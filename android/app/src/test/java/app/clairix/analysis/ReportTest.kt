@@ -94,7 +94,8 @@ class ReportTest {
                     installer = null, namedInstaller = "com.android.vending", installedAt = oct3, updatedAt = oct3,
                     access = listOf("accessibility service on (reads the screen)"), permissions = listOf("read text messages"),
                     reasons = listOf("hidden icon"), signers = listOf("AB:CD:EF"), savedAt = now,
-                    batteryExempt = true, requestedOnly = listOf("camera")
+                    batteryExempt = true, requestedOnly = listOf("camera"),
+                    dataUsage = DataUsage.Summary(List(DataUsage.DAYS) { DataUsage.Day(100_000L, 2_000_000L) })
                 )
             )
         ),
@@ -167,6 +168,7 @@ class ReportTest {
         assertTrue("Access      : accessibility service on (reads the screen)" in text)
         assertTrue("Asked for, not granted: camera" in text)
         assertTrue("Battery     : exempt (Android never pauses it in the background)" in text)
+        assertTrue("Data, 7 days: sent 14.0 MB and received 700.0 kB in 7 days, sending on 7 of them" in text)
         assertTrue("Biometric tripwire: armed 2026-09-23" in text)
         assertTrue("Sleep window: 23:00 to 07:00" in text)
         assertTrue("[HIGH] installed by hand" in text)
@@ -181,6 +183,10 @@ class ReportTest {
         assertEquals("AB:CD:EF", app.getJSONArray("signer_sha256").getString(0))
         assertEquals("camera", app.getJSONArray("requested_not_granted").getString(0))
         assertTrue(app.getBoolean("battery_exempt"))
+        val data = app.getJSONObject("data_usage")
+        assertEquals(14_000_000L, data.getLong("sent_bytes"))
+        assertTrue(data.getBoolean("steady_uploader"))
+        assertEquals(7, data.getJSONArray("per_day").length())
         assertEquals("2026-10-03T12:00:00Z", app.getString("installed_utc"))
         assertEquals("2026-10-03T14:00:00+02:00", app.getString("installed_local"))
         val h = root.getJSONObject("header")

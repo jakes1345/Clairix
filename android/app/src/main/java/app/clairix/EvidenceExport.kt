@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.AppEvidence
 import app.clairix.analysis.CaAuditScanner
 import app.clairix.analysis.CameraSection
+import app.clairix.analysis.DataUsage
 import app.clairix.analysis.HiddenCameraScanner
 import app.clairix.analysis.KeystoreReportSigner
 import app.clairix.analysis.Report
@@ -153,8 +154,9 @@ internal object EvidenceExport {
     /** The evidence for every app the stalkerware check flags or does not vouch for, read fresh. */
     private fun spyware(app: Context): SpywareSection {
         val r = StalkwareScanner.results.value ?: StalkwareScanner.scan(app)
+        val traffic = if (r.usageAccessGranted) runCatching { DataUsage.read(app) }.getOrNull() else null
         val apps = SafetyFirst.evidencePackages(r).map { pkg ->
-            AppEvidence.collect(app, pkg, r.apps.firstOrNull { it.packageName == pkg })
+            AppEvidence.collect(app, pkg, r.apps.firstOrNull { it.packageName == pkg }, traffic = traffic)
         }
         return SpywareSection(r.scannedAt, apps)
     }

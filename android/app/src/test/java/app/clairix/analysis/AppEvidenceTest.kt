@@ -130,6 +130,15 @@ class AppEvidenceTest {
     }
 
     @Test
+    fun theWeeksTrafficIsRecordedWithWhereTheCountsComeFrom() {
+        val usage = DataUsage.Summary(List(DataUsage.DAYS) { DataUsage.Day(100_000L, 2_000_000L) })
+        val line = evidence.copy(dataUsage = usage).text(utc).lines().first { it.startsWith("Data, last 7 days: ") }
+        assertTrue(line.contains("sent 14.0 MB and received 700.0 kB in 7 days, sending on 7 of them"))
+        assertTrue(line.contains("blocks of an hour or two"))
+        assertTrue(evidence.text(utc).lines().any { it.startsWith("Data, last 7 days: not readable") })
+    }
+
+    @Test
     fun whatIsOnlyAskedForIsKeptApartFromWhatIsGranted() {
         val requested = arrayOf(
             "android.permission.RECORD_AUDIO", "android.permission.CAMERA", "android.permission.READ_SMS", "android.permission.INTERNET",

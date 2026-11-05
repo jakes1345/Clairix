@@ -264,6 +264,7 @@ internal object ReportText {
         appendLine("    Permissions : ${a.permissions.ifEmpty { listOf("none of the sensitive ones Clairix checks") }.joinToString(", ")}")
         if (a.requestedOnly.isNotEmpty()) appendLine("    Asked for, not granted: ${a.requestedOnly.joinToString(", ")}")
         appendLine("    Battery     : ${AppEvidence.batteryText(a.batteryExempt)}")
+        appendLine("    Data, ${DataUsage.DAYS} days: ${AppEvidence.dataText(a.dataUsage)}")
         if (a.reasons.isNotEmpty()) appendLine("    Reasons     : ${a.reasons.joinToString("; ")}")
         appendLine("    Signer SHA-256: ${a.signers.ifEmpty { listOf("not readable") }.joinToString(", ")}")
     }
