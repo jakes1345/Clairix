@@ -35,7 +35,7 @@ IzzyOnDroid and fastlane read:
   are the app's own screens drawn from test data, not photos of a phone.
 
 **With every release:** add `changelogs/<versionCode>.txt` for the new
-`versionCode` in `android/app/build.gradle.kts` (28 is 3.0.0 Beta 8), and copy
+`versionCode` in `android/app/build.gradle.kts` (29 is 3.0.0 Beta 9), and copy
 the screenshots again when the Paparazzi images are re-recorded. A channel shows
 no "what's new" for a version without its changelog file.
 

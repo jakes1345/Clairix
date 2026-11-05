@@ -1,9 +1,9 @@
 {
   "type": "clairix-latest",
   "version": 1,
-  "issued": 1793503400,
-  "versionCode": 28,
-  "versionName": "3.0.0-beta.8",
+  "issued": 1793852227,
+  "versionCode": 29,
+  "versionName": "3.0.0-beta.9",
   "minSafeVersionCode": 27,
-  "notes": "Beta 8 stops a stranger filling your mailbox and makes invites safer. Versions before Beta 7 let a crafted link take over a verified contact."
+  "notes": "Beta 9 weighs more signals in the stalkerware scan, asks before you remove a flagged app, and stops a message being sent twice. Before Beta 7, a crafted link could take over a verified contact."
 }

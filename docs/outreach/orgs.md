@@ -187,7 +187,7 @@ Glad to talk on a call if that's easier.
 
 Route: the application itself goes through https://apply.opentech.fund/. A
 draft is in `docs/audit/OTF-SECURITY-LAB-APPLICATION.md`; update it from Beta 7
-to Beta 8 and fill in the items it lists before submitting. Use this email
+to Beta 9 and fill in the items it lists before submitting. Use this email
 only for a question first, to hello@opentech.fund. Lead with the Comms side:
 OTF funds internet-freedom tools.
 
