@@ -102,6 +102,12 @@ Clairix asks your phone for its position for the tracker scanner, navigation, an
 
 The GPS check also asks Android for a position from Wi-Fi and cell towers, to compare with the satellites; turn "Cross-check GPS against Wi-Fi/cell position" off in Settings and it is not asked for. With "Satellite-only positioning" on in Settings, Clairix asks only the satellite receiver, asks for no Wi-Fi or cell position at all, and the cross-check is off with it.
 
+### 2.12 Clairix Supporter
+
+Clairix Supporter is optional (terms, section 4). When you redeem a code, your phone sends the relay the code and a batch of blinded values, on a request that carries no account and no number. The relay keeps a hash (SHA-256) of each code it made and whether it has been used, and nothing else about it: not who it was made for, not when it was used, not by whom. It answers with credentials it signs without seeing them, so when your phone later spends one, the relay cannot tell which code, purchase or phone it came from. The relay still sees the internet address each request comes from (with Tor on in Clairix, Tor's), and does not keep it.
+
+In the Google Play edition you can buy Supporter through Google Play. Google handles the payment under its own privacy policy and knows which Google account bought it; the Google Play Billing library in that edition also sends Google its own diagnostics. Your phone then sends the relay the purchase token Google Play gave it, again on a request that names no account; the relay asks Google whether the purchase is real, keeps a hash of the token so that it is used only once, and does not keep what Google answers. The other editions contain no billing code.
+
 ## 3. What we do not do
 
 - We do not sell your data.

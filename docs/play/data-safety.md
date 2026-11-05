@@ -45,8 +45,8 @@ row says so, so that it can be revisited if Google's reading differs.
 | App activity → Installed apps | No: read on the phone only | No | — | — | — | 5: "Nothing about your apps leaves the phone" (and section 1) |
 | Contacts | No: Comms contacts stay on the phone; the phone's contact list is never read | No | — | — | — | 1: "Your Comms encryption keys, contacts and message history"; 3: "We do not collect your name, email address, phone number or contact list." |
 | Personal info → Name, Email address, Phone number | No | No | — | — | — | 3, as above |
-| App info and performance (crash logs, diagnostics) | No | No | — | — | — | 3: "There is no analytics SDK, advertising SDK or crash reporter in the app." |
-| Financial info | No (ClairixCoin is not in the Play edition) | No | — | — | — | 2.4: "ClairixCoin is in Clairix Full" |
+| App info and performance (crash logs, diagnostics) | No from Clairix's own code. The Google Play Billing library (Supporter purchases, Play edition only) sends Google its own diagnostics: answer for it as Google's SDK index says on the day | No | — | — | — | 3: "There is no analytics SDK, advertising SDK or crash reporter in the app."; 2.12: "the Google Play Billing library in that edition also sends Google its own diagnostics" |
+| Financial info → Purchase history | Yes, only when the user buys Clairix Supporter in Google Play: the purchase token goes to the relay, which asks Google whether it is real and keeps a hash of it so it is exchanged once; not linked to the Clairix number (ClairixCoin is not in the Play edition) | No | No (the hash is kept) | Optional | App functionality | 2.12: "keeps a hash of the token so that it is used only once, and does not keep what Google answers" |
 | Web browsing, Health and fitness, Calendar, Files and docs | No | No | — | — | — | Nothing in section 2 |
 
 Notes:
