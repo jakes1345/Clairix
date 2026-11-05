@@ -32,7 +32,11 @@ internal object ReportJson {
         phoneSections(root, input, range, t)
         input.trustStore?.let { root.put("trust_store", trustJson(it, t)) }
         root.put("cameras", camerasJson(input, range, t))
-        root.put("timeline", JSONArray().also { a -> input.timeline.filter { range.contains(it.ts) }.forEach { a.put(eventJson(it, input, t)) } })
+        input.chain?.let { root.put("timeline_chain", chainJson(it)) }
+        root.put("timeline", JSONArray().also { a ->
+            input.timeline.withIndex().filter { range.contains(it.value.ts) }
+                .forEach { (i, e) -> a.put(eventJson(e, input, t).also { o -> input.timelineLinks.getOrNull(i)?.let { o.put("chain", linkJson(it)) } }) }
+        })
         return root
     }
 
@@ -100,6 +104,8 @@ internal object ReportJson {
             ReportSigning.fingerprint(it)?.let { fp -> put("public_key_sha256", fp.replace(" ", "")) }
         }
         h.signing.unavailable?.let { put("signature_unavailable", it) }
+        if (h.signing.attestation.isNotEmpty()) put("key_attestation_chain", strings(h.signing.attestation))
+        h.signing.attestationNote?.let { put("key_attestation", it) }
     }
 
     private fun statusJson(input: ReportInput) = JSONObject().apply {
@@ -144,6 +150,17 @@ internal object ReportJson {
         time(this, "ts", tag.ts, t)
     }
 
+    /** One app's last week of traffic: totals, then each 24-hour window, oldest first. */
+    private fun dataJson(u: DataUsage.Summary) = JSONObject().apply {
+        put("days", DataUsage.DAYS)
+        put("sent_bytes", u.tx)
+        put("received_bytes", u.rx)
+        put("days_sent_on", u.uploadDays)
+        put("steady_uploader", u.steadyUploader)
+        put("per_day", JSONArray().also { a -> u.days.forEach { d -> a.put(JSONObject().put("sent_bytes", d.tx).put("received_bytes", d.rx)) } })
+        put("source", DataUsage.CAVEAT)
+    }
+
     private fun strings(list: List<String>) = JSONArray().also { a -> list.forEach { a.put(it) } }
 
     private fun spywareJson(s: SpywareSection, t: ReportTime) = JSONObject().apply {
@@ -163,6 +180,7 @@ internal object ReportJson {
                     put("permissions", strings(app.permissions))
                     put("requested_not_granted", strings(app.requestedOnly))
                     app.batteryExempt?.let { put("battery_exempt", it) }
+                    app.dataUsage?.let { put("data_usage", dataJson(it)) }
                     put("reasons", strings(app.reasons))
                     put("signer_sha256", strings(app.signers))
                 })
@@ -246,6 +264,20 @@ internal object ReportJson {
             }
         })
     }
+
+    private fun chainJson(v: TimelineChain.Verification) = JSONObject().apply {
+        put("head", v.head)
+        put("entries", v.entries)
+        put("intact", v.intact)
+        put("problems", strings(v.problems))
+        put("removed_by_retention", v.removedByRetention)
+        put("genesis", TimelineChain.GENESIS)
+        put("hash", "SHA-256 over the previous hash, a newline, then seq, id, kind, ts, title, detail, severity, lat, lon " +
+            "and attachment, each as name=length:value and a newline (name=- when absent), in UTF-8, as lower-case hex")
+        put("about", TimelineChain.WHAT_IT_PROVES)
+    }
+
+    private fun linkJson(l: TimelineChain.Link) = JSONObject().put("seq", l.seq).put("prev", l.prev).put("hash", l.hash)
 
     private fun eventJson(e: TimelineEvent, input: ReportInput, t: ReportTime) = JSONObject().apply {
         put("id", e.id); put("kind", e.kind.name)

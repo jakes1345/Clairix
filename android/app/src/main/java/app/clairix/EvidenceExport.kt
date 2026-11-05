@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.clairix.analysis.AppEvidence
 import app.clairix.analysis.CaAuditScanner
 import app.clairix.analysis.CameraSection
+import app.clairix.analysis.DataUsage
 import app.clairix.analysis.HiddenCameraScanner
 import app.clairix.analysis.KeystoreReportSigner
 import app.clairix.analysis.Report
@@ -132,12 +133,15 @@ internal object EvidenceExport {
      * this process. Blocking; call off the main thread.
      */
     private fun input(app: Context, range: ReportRange): ReportInput {
-        val timeline = runCatching { TimelineLog.get(app).snapshot() }.getOrElse { Registry.timeline.value }
+        val chained = runCatching { TimelineLog.get(app).chainedAndVerified() }.getOrNull()
+        val timeline = chained?.first?.map { it.first } ?: Registry.timeline.value
         val full = BuildConfig.FULL_ACCESS
         return ReportInput(
             status = Registry.status.value,
             detections = Registry.detections.value,
             timeline = timeline,
+            timelineLinks = chained?.first?.map { it.second }.orEmpty(),
+            chain = chained?.second,
             cell = Registry.cell.value,
             nfc = Registry.nfc.value,
             wifi = Registry.wifi.value,
@@ -153,8 +157,9 @@ internal object EvidenceExport {
     /** The evidence for every app the stalkerware check flags or does not vouch for, read fresh. */
     private fun spyware(app: Context): SpywareSection {
         val r = StalkwareScanner.results.value ?: StalkwareScanner.scan(app)
+        val traffic = if (r.usageAccessGranted) runCatching { DataUsage.read(app) }.getOrNull() else null
         val apps = SafetyFirst.evidencePackages(r).map { pkg ->
-            AppEvidence.collect(app, pkg, r.apps.firstOrNull { it.packageName == pkg })
+            AppEvidence.collect(app, pkg, r.apps.firstOrNull { it.packageName == pkg }, traffic = traffic)
         }
         return SpywareSection(r.scannedAt, apps)
     }

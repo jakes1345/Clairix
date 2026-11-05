@@ -60,7 +60,12 @@ data class AppEvidence(
      * Sensitive runtime permissions the app asks for that were not granted when this was saved:
      * what it wants, apart from what it can do ([permissions]).
      */
-    val requestedOnly: List<String> = emptyList()
+    val requestedOnly: List<String> = emptyList(),
+    /**
+     * What it sent and received over the last week by Android's traffic counters ([DataUsage]);
+     * null when they could not be read (no usage access). Recorded as counts, never as a verdict.
+     */
+    val dataUsage: DataUsage.Summary? = null
 ) {
 
     /** The timeline entry: one line of detail, which is how the evidence report prints it. */
@@ -88,6 +93,7 @@ data class AppEvidence(
         add("Permissions granted" to permissions.ifEmpty { listOf("none of the sensitive ones Clairix checks") }.joinToString(", "))
         if (requestedOnly.isNotEmpty()) add("Asked for, not granted" to requestedOnly.joinToString(", "))
         add("Battery optimisation" to batteryText(batteryExempt))
+        add("Data, last ${DataUsage.DAYS} days" to dataText(dataUsage))
         if (reasons.isNotEmpty()) add("Reasons" to reasons.joinToString("; "))
         add("Signing certificate SHA-256" to signers.ifEmpty { listOf("not readable") }.joinToString(", "))
         add("Saved" to stamp(savedAt, zone))
@@ -138,6 +144,11 @@ data class AppEvidence(
             null -> "not readable"
         }
 
+        /** What the evidence says about the app's traffic: the counts and where they come from, or why there are none. */
+        internal fun dataText(usage: DataUsage.Summary?): String =
+            if (usage == null) "not readable (Clairix needs usage access, or Android kept no count for it)"
+            else "${DataUsage.text(usage)} (${DataUsage.CAVEAT})"
+
         /** PackageInfo.REQUESTED_PERMISSION_GRANTED, spelled out so the JVM tests need no Android stub. */
         private const val GRANTED = 2
 
@@ -180,13 +191,16 @@ data class AppEvidence(
          * Reads what the phone says about [packageName] now, adding the scan's
          * verdict and reasons from [flagged]. Each part is read on its own, so
          * an app uninstalled meanwhile still yields its name, the reasons and the
-         * time. PackageManager and Settings reads; call off the main thread.
+         * time. [traffic], every app's last week of traffic by user id ([DataUsage.read]), is read
+         * once by a caller collecting several apps; without it the scan's own count is used.
+         * PackageManager and Settings reads; call off the main thread.
          */
         fun collect(
             context: Context,
             packageName: String,
             flagged: StalkwareScanner.SuspiciousApp?,
-            now: Long = System.currentTimeMillis()
+            now: Long = System.currentTimeMillis(),
+            traffic: Map<Int, DataUsage.Summary>? = null
         ): AppEvidence {
             val app = context.applicationContext
             val pm = app.packageManager
@@ -210,7 +224,8 @@ data class AppEvidence(
                 savedAt = now,
                 batteryExempt = runCatching {
                     app.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)
-                }.getOrNull()
+                }.getOrNull(),
+                dataUsage = info?.applicationInfo?.uid?.let { traffic?.get(it) } ?: flagged?.dataUsage
             )
         }
 

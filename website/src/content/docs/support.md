@@ -141,6 +141,10 @@ openssl dgst -sha256 -verify key.pem -signature sig.der body.txt
 
 For a JSON report, saved as report.json, the first command is `head -n 1 report.json | sed -e 's/^{"report"://' -e 's/,$//' | tr -d '\n' > body.txt` and the rest are the same; the report lists them under `integrity`. The second command prints the hash at the end of the report, the fourth the key fingerprint, and the last "Verified OK" when not one character of the report was changed after the phone wrote it. Compare the fingerprint with the one the phone shows to know the key is that phone's. Wiping or reinstalling Clairix makes a new key. A check says nothing about who held the phone.
 
+A key made by a Clairix newer than 3.0.0-beta.8, on a phone that supports key attestation, also comes with the certificates the Keystore keeps for it: the report gives them in base64 (`key_attestation_chain` in the JSON) and says whether the first is for the report's key and whether each is signed by the next. Clairix does not compare the last one with Google's published attestation roots or revocation list, which needs the internet; you can. A key made earlier has none, and the report says so.
+
+The report also carries the timeline's chain head: every timeline entry stores the SHA-256 of the entry written before it, and the JSON report gives each entry's `seq`, `prev` and `hash` and how the hash is made (`timeline_chain`). Keep the head, and a later copy of the same entries can be checked for anything changed, removed or moved after this export. It does not prove when an entry was written, and someone in control of the phone could have rewritten the whole timeline before the export.
+
 ## Report a bug
 
 The quickest way is **Report a problem** in Settings → About: it opens your mail app on a message to support@clairix.app with the Clairix version, phone model and Android version filled in, and nothing else. You write the rest and send it yourself. Or write to support@clairix.app with:

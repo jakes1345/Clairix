@@ -3,6 +3,8 @@ package app.clairix.analysis
 import java.security.KeyFactory
 import java.security.MessageDigest
 import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import java.util.Locale
@@ -20,6 +22,12 @@ interface ReportSigner {
 
     /** A signature over [data] with [algorithm]; DER-encoded for ECDSA. */
     fun sign(data: ByteArray): ByteArray
+
+    /**
+     * The key's attestation certificate chain, DER, the key's own certificate first: public data
+     * the Keystore keeps with the key. Empty when there is none to give.
+     */
+    fun attestationChain(): List<ByteArray> = emptyList()
 }
 
 /**
@@ -51,11 +59,43 @@ object ReportSigning {
         sha256Hex(Base64.getDecoder().decode(publicKey)).chunked(4).joinToString(" ")
     }.getOrNull()
 
-    /** The key the header prints, read from [signer]; never throws. */
+    /** The key the header prints, read from [signer], with its attestation chain when it has one; never throws. */
     fun key(signer: ReportSigner?): SigningKey {
         if (signer == null) return SigningKey(ALGORITHM, null, "no signing key on this phone")
-        return runCatching { SigningKey(signer.algorithm, base64(signer.publicKey())) }
-            .getOrElse { SigningKey(signer.algorithm, null, reason(it)) }
+        return runCatching {
+            val public = signer.publicKey()
+            val chain = runCatching { signer.attestationChain() }.getOrDefault(emptyList())
+            SigningKey(signer.algorithm, base64(public), attestation = chain.map(::base64), attestationNote = attestationNote(chain, public))
+        }.getOrElse { SigningKey(signer.algorithm, null, reason(it)) }
+    }
+
+    /**
+     * The challenge the report key is made with ([KeystoreReportSigner]). Not secret and not fresh:
+     * the attestation it brings shows where the key was made, not when the report was.
+     */
+    val ATTESTATION_CHALLENGE: ByteArray = "clairix report signing key".toByteArray(Charsets.UTF_8)
+
+    /**
+     * What the report key's attestation [chain] (DER, the key's own certificate first) shows, for a
+     * key whose public half is [publicKey]: whether the secure hardware attests it, as which security
+     * level, whether each certificate is signed by the next, and what was not checked. Never throws.
+     */
+    fun attestationNote(chain: List<ByteArray>, publicKey: ByteArray): String {
+        if (chain.size < 2) {
+            return "none. This key was made without attestation (before Clairix asked for it, or this phone cannot " +
+                "attest), so nothing here shows that it is held in secure hardware."
+        }
+        return runCatching {
+            val factory = CertificateFactory.getInstance("X.509")
+            val certs = chain.map { factory.generateCertificate(it.inputStream()) as X509Certificate }
+            val r = KeyAttestation.assess(certs, ATTESTATION_CHALLENGE, strongBox = false)
+            val forThisKey = certs[0].publicKey.encoded.contentEquals(publicKey)
+            "${certs.size} certificates (base64 in the JSON report). The first is ${if (forThisKey) "" else "NOT "}for this " +
+                "report's public key and says the key was made in ${r.description.attestationSecurityLevel.label}; each " +
+                "certificate is ${if (r.brokenLink == null && r.rootSelfSigned) "" else "NOT "}signed by the next. Root " +
+                "certificate SHA-256 ${r.rootSha256}. Clairix did not compare it with Google's attestation roots or " +
+                "revocation list, which needs the internet; whoever checks this report can."
+        }.getOrElse { "${chain.size} certificates (base64 in the JSON report) that Clairix could not read (${reason(it)})." }
     }
 
     /** Hashes [body] and signs it with [signer] when the header has its key; never throws. */

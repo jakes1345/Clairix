@@ -238,6 +238,13 @@ object CommsRepository {
 
     /** One outbox flush at a time, so a queued message is never encrypted and sent twice. */
     private val outboxLock = Mutex()
+    /** One-to-one sends the relay took whose "sent" a seal kept out of the database; under [outboxLock]. */
+    private val sentUnrecorded = UnrecordedSends { Vault.sealed.value }
+    /** The same for group outbox rows: SOS rows under [sosOutboxLock], the rest under [groupOutboxLock]. */
+    private val sosUnrecorded = UnrecordedSends { Vault.sealed.value }
+    private val groupUnrecorded = UnrecordedSends { Vault.sealed.value }
+    /** Envelopes sealed for a send whose answer may have been lost, resent as they are; see [deliver]. */
+    private val sealedForRetry = SealedEnvelopes(SEALED_RETRY_MS)
     /**
      * The same for the group outbox's SOS rows, apart from everything else so
      * an SOS never waits behind a photo going out or a group text to two
@@ -265,6 +272,8 @@ object CommsRepository {
     @Volatile private var retryBackoffMs = RETRY_MIN_MS
     private const val RETRY_MIN_MS = 5_000L
     private const val RETRY_MAX_MS = 5 * 60_000L
+    /** How long an envelope sealed for a retry is kept: the outbox's back-off tops out at five minutes. */
+    private const val SEALED_RETRY_MS = 15 * 60_000L
     /** A key refresh after tokens came for keys not yet pinned: half a minute to five minutes later, at random. */
     private const val KEY_REFRESH_MIN_MS = 30_000L
     private const val KEY_REFRESH_SPREAD_MS = 270_000
@@ -1153,6 +1162,7 @@ object CommsRepository {
     suspend fun unpair() = withContext(NonCancellable + Dispatchers.IO) {
         lock.withLock {
             setBusy(true)
+            sealedForRetry.clear()
             // Signed now, while the identity exists: if the relay has not confirmed the
             // deletion in the few seconds below, it waits in a file and is tried again
             // for a day (security/RelayFarewell.kt), so an offline phone does not leave
@@ -1950,17 +1960,21 @@ object CommsRepository {
         outboxLock.withLock {
             // The inviter hears which invite was used before anything else from this phone.
             val waitingFor = flushJoinedLocked()
-            for (m in store.queued()) {
-                if (m.peer == waitingFor) continue
+            // Sends a seal cut off from their "sent" are recorded before the queue is read.
+            sentUnrecorded.replay()
+            for (m in outboxQueue(waitingFor)) {
                 // A contact who moved while the queue was read is found under their new number.
                 val contact = store.contact(m.peer) ?: store.message(m.id)?.peer?.let { store.contact(it) }
                 if (contact == null) {
                     store.setStatus(m.id, "failed", "Contact removed")
                     continue
                 }
-                val outcome = if (m.isMedia) deliverMedia(contact, m) else deliver(contact, CommsWire.message(m.id, m.ts, m.body, m.ttl))
+                val outcome = if (m.isMedia) deliverMedia(contact, m) else deliver(contact, CommsWire.message(m.id, m.ts, m.body, m.ttl), retryKey = m.id)
                 when (outcome) {
-                    Deliver.Sent -> { store.markSentIfQueued(m.id); retryBackoffMs = RETRY_MIN_MS }
+                    Deliver.Sent -> {
+                        retryBackoffMs = RETRY_MIN_MS
+                        sentUnrecorded.record(m.id) { store.markSentIfQueued(m.id) }
+                    }
                     is Deliver.Failed -> {
                         CommsLog.add("Message to ${formatClairixNumber(contact.number)} failed: ${outcome.reason}")
                         store.setStatus(m.id, "failed", outcome.reason)
@@ -1998,6 +2012,16 @@ object CommsRepository {
     }
 
     /**
+     * The one-to-one queue as [flushOutbox] goes through it: nothing for
+     * [waitingFor] yet, nothing whose send is still to be recorded, and
+     * nothing more once the phone has locked.
+     */
+    private fun outboxQueue(waitingFor: String?): Sequence<ChatMessage> =
+        store.queued().asSequence()
+            .takeWhile { !Vault.sealed.value }
+            .filter { it.peer != waitingFor && !sentUnrecorded.has(it.id) }
+
+    /**
      * Sends a queued photo or video: its header, then every chunk in order. A
      * network failure part-way leaves the message queued and remembers how far
      * it got, so the retry sends only the rest; the recipient drops any chunk
@@ -2014,7 +2038,7 @@ object CommsRepository {
             if (done < 0) {
                 progress(0)
                 val header = CommsWire.mediaHeader(m.id, m.ts, body.mime, body.width, body.height, body.durationMs, bytes.size.toLong(), total, body.caption, body.thumbB64, m.ttl)
-                when (val d = deliver(contact, header)) {
+                when (val d = deliver(contact, header, retryKey = "${m.id}#h")) {
                     Deliver.Sent -> { done = 0; synchronized(mediaSent) { mediaSent[m.id] = 0 } }
                     else -> return d
                 }
@@ -2023,7 +2047,7 @@ object CommsRepository {
                 val from = done * CommsWire.MEDIA_CHUNK_BYTES
                 val to = minOf(from + CommsWire.MEDIA_CHUNK_BYTES, bytes.size)
                 val data = java.util.Base64.getEncoder().encodeToString(bytes.copyOfRange(from, to))
-                when (val d = deliver(contact, CommsWire.mediaChunk(m.id, done, data))) {
+                when (val d = deliver(contact, CommsWire.mediaChunk(m.id, done, data), retryKey = "${m.id}#$done")) {
                     Deliver.Sent -> {
                         done++
                         synchronized(mediaSent) { mediaSent[m.id] = done }
@@ -2066,7 +2090,7 @@ object CommsRepository {
      * to avoid blocking unrelated envelope processing (including ICE candidates) for up
      * to 25 seconds while a network call completes.
      */
-    private suspend fun deliver(contact: Contact, payload: JSONObject): Deliver {
+    private suspend fun deliver(contact: Contact, payload: JSONObject, retryKey: String? = null): Deliver {
         val type = CommsWire.type(payload)
         // A call being set up and an SOS skip the relay's mixing delay.
         val urgent = type in URGENT_TYPES
@@ -2079,12 +2103,14 @@ object CommsRepository {
         // Encryption runs under the lock; anything it needs from the network (a
         // bundle to start a session, the contact's current sealing prekey) is
         // fetched without it, once each, and encryption tried again.
+        // A send tried before, whose answer may have been lost: the same envelope again.
+        if (retryKey != null) resendSealed(contact, retryKey, urgent, alert, forSos)?.let { return it }
         var bundle: RelayClient.Bundle? = null
         var prekeyFetched = false
         while (true) {
             when (val p = lock.withLock { prepareLocked(contact, payload, bundle) }) {
                 is Prepared.Ready -> {
-                    val sent = transmit(contact, p.envelope, urgent, alert, forSos)
+                    val sent = transmitKeeping(contact, p.envelope, retryKey, urgent, alert, forSos)
                     // Format 2 refused past the relay's cutoff: their keys may bring a prekey to seal it in format 3.
                     if (sent !is Deliver.Failed ||
                         !LegacyEnvelope.lookUpPrekeyAndRetry(sent.status, store.prekey(contact.number) != null, prekeyFetched)
@@ -2119,6 +2145,30 @@ object CommsRepository {
                 }
             }
         }
+    }
+
+    /**
+     * Sends again the envelope [sealedForRetry] holds for [retryKey], if any.
+     * Null when there is none, or when the relay refused it as it was (an old
+     * format past its cutoff, say): the caller then seals the payload afresh.
+     */
+    /**
+     * [transmit], keeping [envelope] under [retryKey] (when there is one) for
+     * as long as the send stays unsettled, so a retry sends the same bytes.
+     */
+    private fun transmitKeeping(contact: Contact, envelope: ByteArray, retryKey: String?, urgent: Boolean, alert: String?, forSos: Boolean): Deliver {
+        if (retryKey == null) return transmit(contact, envelope, urgent, alert, forSos)
+        sealedForRetry.keep(retryKey, contact.number, envelope)
+        val sent = transmit(contact, envelope, urgent, alert, forSos)
+        if (sent !is Deliver.Offline) sealedForRetry.forget(retryKey)
+        return sent
+    }
+
+    private fun resendSealed(contact: Contact, retryKey: String, urgent: Boolean, alert: String?, forSos: Boolean): Deliver? {
+        val held = sealedForRetry.take(retryKey, contact.number) ?: return null
+        val sent = transmit(contact, held, urgent, alert, forSos)
+        if (sent !is Deliver.Offline) sealedForRetry.forget(retryKey)
+        return if (sent is Deliver.Failed) null else sent
     }
 
     /**
@@ -3188,6 +3238,9 @@ object CommsRepository {
     }
 
     private suspend fun passGroupOutbox(kinds: Set<GroupOutbox.Kind>, batch: String?, everyone: Boolean): List<GroupOutbox.Row> {
+        // Rows a seal kept from their outcome are brought up to date before any is read.
+        val unrecorded = unrecordedFor(kinds)
+        unrecorded.replay()
         val now = System.currentTimeMillis()
         // What ran out of time is settled first, and held rows go to whoever the roster now confirms.
         var rows = groupRows(kinds).map { r ->
@@ -3209,14 +3262,15 @@ object CommsRepository {
         var offline = false
         var backoff = false
         var retryAfter = Long.MAX_VALUE
-        for (row in due) {
+        // Nothing more goes out once the phone has locked.
+        for (row in due.asSequence().takeWhile { !Vault.sealed.value }) {
             val quiet = memoryRows.has(row)
             when (val t = tryRow(row, quiet)) {
                 is Tried.Drop -> dropRow(row, t.why)
                 is Tried.Done -> {
                     val o = t.outcome
                     val next = GroupOutbox.after(row, o, System.currentTimeMillis())
-                    saveRow(next)
+                    unrecorded.record("${row.id}/${row.recipient}") { saveRow(next) }
                     if (!quiet) logRow(row, next, o)
                     if (o is GroupOutbox.Outcome.Offline) {
                         offline = true
@@ -3233,6 +3287,10 @@ object CommsRepository {
         settleGroupRows(after, kinds)
         return batchRows
     }
+
+    /** The kept writes for the outbox lock that guards [kinds]. */
+    private fun unrecordedFor(kinds: Set<GroupOutbox.Kind>): UnrecordedSends =
+        if (GroupOutbox.Kind.SOS in kinds) sosUnrecorded else groupUnrecorded
 
     /**
      * Held rows once the roster may have changed ([GroupOutbox.release]):
@@ -3313,7 +3371,7 @@ object CommsRepository {
         val contact = groupRecipient(row.recipient, key) ?: return Tried.Done(GroupOutbox.Outcome.Failed(GroupOutbox.NOT_A_CONTACT))
         if (!isGroupMember(contact, key)) return Tried.Done(GroupOutbox.Outcome.Failed(GroupOutbox.NOT_THE_MEMBER))
         val payload = CommsWire.parse(row.payload) ?: return Tried.Done(GroupOutbox.Outcome.Failed("its record on this phone is unreadable"))
-        val outcome = when (val d = deliver(contact, payload)) {
+        val outcome = when (val d = deliver(contact, payload, retryKey = "g:${row.id}/${row.recipient}")) {
             Deliver.Sent -> GroupOutbox.Outcome.Sent
             is Deliver.Failed -> GroupOutbox.Outcome.Failed(d.reason)
             is Deliver.TooLarge -> GroupOutbox.Outcome.Failed(d.reason)

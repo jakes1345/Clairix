@@ -76,6 +76,8 @@ object StalkwareScanner {
         val batteryExempt: Boolean = false,
         /** The sensitive runtime permissions it holds granted, in plain words ([AppEvidence.grantedPermissions]). */
         val grantedPermissions: List<String> = emptyList(),
+        /** What it sent and received over the last week, when usage access let Clairix read it ([DataUsage]). */
+        val dataUsage: DataUsage.Summary? = null,
     ) {
         val severity: Severity
             get() = when {
@@ -497,6 +499,12 @@ object StalkwareScanner {
      * it too. It only strengthens an app that is already listed for something else.
      */
     internal const val BATTERY_EXEMPT_SCORE = 1
+    /**
+     * Score for an app from outside a genuine store, or without an icon, that keeps sending more
+     * than it receives ([dataSignal]). Like the battery exemption, it only strengthens an app
+     * already listed for something else.
+     */
+    internal const val STEADY_UPLOAD_SCORE = 1
 
     /**
      * A permission an app requests (`<uses-permission>`) that a monitoring app needs. [points] when
@@ -636,6 +644,8 @@ object StalkwareScanner {
          * private key makes that signature, so the copy is theirs, wherever it was downloaded.
          */
         val officialBuild: Boolean = false,
+        /** Its last week of traffic ([DataUsage]); null without usage access or when Android had no count for it. */
+        val dataUsage: DataUsage.Summary? = null,
     ) {
         /** The installer it claims is not the app that ran the install, and that app is not preloaded. */
         val spoofedInstaller: Boolean get() = InstallSource(installer, declaredInstaller).spoofed && !installerPreloaded
@@ -925,7 +935,30 @@ object StalkwareScanner {
         }
         // Last, so "already listed" means every other signal above.
         batterySignal(f, out, hidden)?.let { out += it }
+        dataSignal(f, out, hidden)?.let { out += it }
         return out
+    }
+
+    /**
+     * The steady-upload signal, or null when it does not count. An app with no icon in the app drawer
+     * ([hidden]) or from outside a genuine store that sent more than it received, at least
+     * [DataUsage.HEAVY_BYTES], on most days of the last week ([DataUsage.Summary.steadyUploader]) is
+     * doing what a monitoring app does with what it collects; so is a backup app or a messenger
+     * whose owner sends a lot of videos. So it is weighed like the battery exemption: only for an app
+     * the other [signals] already list (MEDIUM or more), never listing one on its own.
+     *
+     * It adds [STEADY_UPLOAD_SCORE] to an app that hides its icon or holds access nobody vouches for.
+     * For an app whose only other kind of signal is where it came from (a messenger from its maker's
+     * site), the reason is still shown but adds nothing that would lift it to HIGH.
+     */
+    internal fun dataSignal(f: AppFacts, signals: List<Signal>, hidden: Boolean): Signal? {
+        val usage = f.dataUsage ?: return null
+        if (!usage.steadyUploader || !(hidden || f.sideloaded)) return null
+        val score = signals.sumOf { it.points }
+        if (score < MEDIUM_SCORE) return null
+        val reason = "keeps sending more than it receives (${DataUsage.text(usage)})"
+        val points = if (hidden || unvouchedGrant(f)) STEADY_UPLOAD_SCORE else minOf(STEADY_UPLOAD_SCORE, HIGH_SCORE - 1 - score).coerceAtLeast(0)
+        return Signal(points, reason)
     }
 
     /**
@@ -1101,6 +1134,7 @@ object StalkwareScanner {
         val rolesOf = HashMap<String, MutableSet<DefaultRoles.Role>>()
         runCatching { DefaultRoles.holderPackages(app) }.getOrNull()?.forEach { (role, pkg) -> rolesOf.getOrPut(pkg) { HashSet() } += role }
         val (fgsPkgs, resumedPkgs) = if (usageAccess) usageSignals(app) else emptySet<String>() to emptySet()
+        val traffic = if (usageAccess) runCatching { DataUsage.read(app) }.getOrNull().orEmpty() else emptyMap()
 
         val packages = installedPackages(pm)
         val stores = origins.stores
@@ -1177,6 +1211,7 @@ object StalkwareScanner {
                 installedBeforeSystemBuild = installedBefore(pkg.firstInstallTime, Build.TIME),
                 batteryExempt = batteryExempt(power, name),
                 defaultRoles = rolesOf[name].orEmpty(),
+                dataUsage = traffic[info.uid],
             )
             val signals = assess(facts)
             val score = signals.sumOf { it.points }
@@ -1201,6 +1236,7 @@ object StalkwareScanner {
                 knownAs = match?.family?.name,
                 batteryExempt = facts.batteryExempt,
                 grantedPermissions = AppEvidence.grantedPermissions(pkg.requestedPermissions, pkg.requestedPermissionsFlags),
+                dataUsage = facts.dataUsage,
             )
         }
 

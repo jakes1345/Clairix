@@ -211,4 +211,96 @@ class EventLogTest {
         log.record(event("c", 3_000L, EventKind.EVIDENCE))
         assertEquals(listOf("c", "b"), log.snapshot().map { it.id })
     }
+
+    // ── The hash chain ────────────────────────────────────────────────────────
+
+    @Test
+    fun everyEntryIsChainedInTheOrderWrittenAndTheChainSurvivesAReopen() {
+        val log = EventLog(store())
+        log.record(event("a", 1_000L))
+        log.record(event("c", 3_000L))
+        log.record(event("b", 2_000L)) // written last, dated in between
+        val chained = log.chained()
+        assertEquals(listOf("c", "b", "a"), chained.map { it.first.id })
+        assertEquals(listOf(2L, 3L, 1L), chained.map { it.second!!.seq })
+        assertEquals(TimelineChain.GENESIS, chained.last().second!!.prev)
+        assertTrue(log.verify().intact)
+        log.flush()
+        val reopened = EventLog(store())
+        assertTrue(reopened.verify().problems.toString(), reopened.verify().intact)
+        assertEquals(log.verify().head, reopened.verify().head)
+        reopened.record(event("d", 4_000L))
+        assertTrue(reopened.verify().intact)
+    }
+
+    @Test
+    fun theRetentionAndTheCapLeaveTheChainIntact() {
+        val log = EventLog(store(), cap = 3)
+        log.record(event("evidence", 1_000L, EventKind.EVIDENCE))
+        for (i in 2..6) log.record(event("e$i", i * 1_000L))
+        log.record(event("late", 500L)) // goes at once, over the cap
+        assertEquals(1, log.pruneOlderThan(5_500L))
+        val v = log.verify()
+        assertTrue(v.problems.toString(), v.intact)
+        assertEquals(5, v.removedByRetention)
+        log.flush()
+        assertTrue(EventLog(store(), cap = 3).verify().intact)
+    }
+
+    @Test
+    fun clearingStartsTheChainAgain() {
+        val log = EventLog(store())
+        log.record(event("a", 1_000L))
+        log.clear()
+        assertEquals(TimelineChain.GENESIS, log.verify().head)
+        log.record(event("b", 2_000L))
+        assertEquals(1L, log.chained().single().second!!.seq)
+        assertTrue(log.verify().intact)
+    }
+
+    @Test
+    fun aTimelineFromBeforeTheChainIsChainedOldestFirstAndNothingIsLost() {
+        store().replace(
+            org.json.JSONObject().put(
+                "events", org.json.JSONArray()
+                    .put(org.json.JSONObject().put("id", "new").put("kind", "PLATFORM").put("ts", 3_000L).put("title", "n").put("detail", "").put("severity", "LOW"))
+                    .put(org.json.JSONObject().put("id", "mid").put("kind", "SOMETHING_NEWER").put("ts", 2_000L).put("title", "m").put("detail", "").put("severity", "LOW"))
+                    .put(org.json.JSONObject().put("id", "old").put("kind", "EVIDENCE").put("ts", 1_000L).put("title", "o").put("detail", "x").put("severity", "HIGH"))
+            )
+        )
+        val log = EventLog(store())
+        assertEquals(listOf("new", "mid", "old"), log.snapshot().map { it.id })
+        assertEquals(listOf(3L, 2L, 1L), log.chained().map { it.second!!.seq })
+        assertTrue(log.verify().intact)
+        // Written straight back: a reopen reads the same chain, and the kind this build does not know is kept as written.
+        val raw = file.readText()
+        val reopened = EventLog(store())
+        assertEquals(log.verify().head, reopened.verify().head)
+        assertTrue(reopened.verify().intact)
+        assertTrue(raw.isNotEmpty())
+    }
+
+    @Test
+    fun anEntryChangedOrRemovedInTheFileIsFound() {
+        val log = EventLog(store())
+        for (i in 1..4) log.record(event("e$i", i * 1_000L))
+        log.flush()
+        val root = store().load { org.json.JSONObject() }
+        val events = root.getJSONArray("events")
+        // Change one entry's detail, as an edit of the file would.
+        events.getJSONObject(1).put("detail", "edited")
+        store().replace(root)
+        val changed = EventLog(store()).verify()
+        assertFalse(changed.intact)
+        assertTrue(changed.problems.toString(), changed.problems.any { it.contains("was changed after it was written") })
+        // Put the detail back and remove another entry instead; the chain record stays as it was.
+        val root2 = org.json.JSONObject(root.toString())
+        val arr = root2.getJSONArray("events")
+        arr.getJSONObject(1).put("detail", "")
+        arr.remove(2)
+        store().replace(root2)
+        val removed = EventLog(store()).verify()
+        assertFalse(removed.intact)
+        assertTrue(removed.problems.toString(), removed.problems.any { it.contains("missing or out of order") })
+    }
 }
