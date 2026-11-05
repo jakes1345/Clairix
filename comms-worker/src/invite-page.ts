@@ -105,3 +105,28 @@ export function invitePage(): string {
 </body>
 </html>`;
 }
+
+/**
+ * The Content-Security-Policy for [invitePage]: nothing may load or run except
+ * the page's own one `<style>` and one `<script>`, named by hash, and nothing
+ * may frame the page. The page puts text from the URL fragment into the DOM
+ * only as text, so this is a second line, not the first: a future edit that
+ * slips in a script, an inline handler or a remote resource is refused by the
+ * browser instead of running.
+ */
+export async function invitePageCsp(html: string = invitePage()): Promise<string> {
+  const hash = async (tag: "style" | "script"): Promise<string> => {
+    const found = [...html.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g"))];
+    if (found.length !== 1) throw new Error(`the invite page must have exactly one inline <${tag}>`);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(found[0]?.[1] ?? ""));
+    return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}'`;
+  };
+  return [
+    "default-src 'none'",
+    `script-src ${await hash("script")}`,
+    `style-src ${await hash("style")}`,
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}

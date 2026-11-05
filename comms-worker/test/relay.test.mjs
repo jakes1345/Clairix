@@ -1809,3 +1809,18 @@ test("open registration still meets the per-address limit every registration doe
   assert.equal(statuses[10], 429);
   assert.equal((await registration(relay, { ip: "192.0.2.41" })).status, 201);
 });
+
+test("the invite page is served with a CSP that names its own script and style and forbids framing", async () => {
+  const { invitePage, invitePageCsp } = await import("../src/invite-page.ts");
+  const res = await makeRelay().call("GET", "/i");
+  assert.equal(res.status, 200);
+  const csp = res.headers.get("content-security-policy");
+  assert.equal(csp, await invitePageCsp(invitePage()));
+  assert.match(csp, /default-src 'none'/);
+  assert.match(csp, /script-src 'sha256-[A-Za-z0-9+/]+=*'/);
+  assert.match(csp, /style-src 'sha256-[A-Za-z0-9+/]+=*'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.equal(res.headers.get("x-frame-options"), "DENY");
+  // An edit that adds a second inline script would no longer be covered: refuse to build the policy.
+  await assert.rejects(invitePageCsp("<script>a</script><script>b</script><style>c</style>"));
+});
