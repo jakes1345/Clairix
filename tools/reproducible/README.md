@@ -50,4 +50,6 @@ both `clairix-v3.0.0-beta.7.apk` and `clairix-comms-v3.0.0-beta.7.apk` entry
 for entry, signature files aside. `.github/workflows/verify-release.yml` now
 does the same for every release as it is published: it rebuilds the tag on a
 runner that never saw the release made, checks `SHA256SUMS.txt` and its
-signature, and fails unless both APKs match.
+signature, and fails unless both APKs match, and the foss APK
+(`clairix-foss-<tag>.apk`, `assembleFossSuiteRelease`) too on releases that
+carry one, from 3.0.0 Beta 9.

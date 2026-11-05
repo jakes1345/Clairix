@@ -610,12 +610,13 @@ this program, or any covered work, by linking or combining it with Google Play
 services libraries (or a modified version of those libraries), containing
 parts covered by the terms of the Android Software Development Kit License
 Agreement, the licensors of this program grant you additional permission to
-convey the resulting work. The full and Play editions, the ones published,
-include Google Play services' location library, used for the position fixes
+convey the resulting work. The full and Play editions include Google Play
+services' location library, used for the position fixes
 of the scanner, navigation and SOS on a phone that has Google Play services,
 unless Satellite-only positioning is on; messages and calls use no Google
 service. The foss edition (the `foss` flavour in `android/app/build.gradle.kts`,
-meant for F-Droid and not yet published anywhere) is built without it.
+meant for F-Droid, and published as `clairix-foss-<tag>.apk` on GitHub
+Releases from 3.0.0 Beta 9) is built without it.
 
 The fonts the app ships with keep their own licence, the SIL Open Font License
 1.1: Archivo ([licenses/OFL-1.1-Archivo.txt](licenses/OFL-1.1-Archivo.txt))

@@ -28,7 +28,7 @@ dimensions (`edition` first, then `tier`, so a variant reads `<edition><Tier>`):
 | `fullSuite` | Full | The whole app, including the Card Vault with NFC card emulation and ClairixCoin | `clairix-<tag>.apk` on GitHub Releases and clairix.app |
 | `fullComms` | Full | Clairix Comms: encrypted messages, calls, groups and SOS, with the duress phrase, fake call and Wipe Clairix; no scanner | `clairix-comms-<tag>.apk` on GitHub Releases |
 | `playSuite` | Play | The whole app **without** card emulation, the Card Vault or ClairixCoin | `clairix-play-<tag>.aab`, for the Play Console (the listing is not public yet) |
-| `fossSuite` | Foss | The full edition's whole app **without** Google Play services or Firebase | Nowhere yet: meant for F-Droid, not submitted (`docs/DISTRIBUTION.md`, "F-Droid") |
+| `fossSuite` | Foss | The full edition's whole app **without** Google Play services or Firebase | `clairix-foss-<tag>.apk` on GitHub Releases from 3.0.0 Beta 9, so F-Droid can check its build against it; meant for F-Droid, not submitted (`docs/DISTRIBUTION.md`, "F-Droid") |
 | `fossComms` | Foss | Clairix Comms, the same without Google Play services | Nowhere yet |
 
 There is no `playComms`: the comms-only build is never published on Play.
