@@ -68,6 +68,7 @@ import {
   verifyFederated,
   WRITTEN_TO_DAYS,
 } from "./federation";
+import { mintCodes, redeemCode, redeemPlay, supporterInfo, supporterTokens } from "./supporter";
 import { BLIND_BATCH_MAX, TOKEN_EPOCH_MS, checkBlindToken, epochExpiry, epochOf, issueBlind, tokenPublicKey } from "./tokens";
 import { INCIDENTS_NAME, IncidentCache } from "./incidents";
 import { parseBBoxParam } from "./incidents-logic";
@@ -192,6 +193,20 @@ export { IncidentCache, Mailbox, Traffic };
  * one through:
  *   POST   /v1/federate/send   {to, envelope, claim?, mix?, pass?} → as /v1/send (signed by the forwarding relay)
  *   POST   /v1/federate/lookup {number, pin?, claim}           → as /v1/lookup   (likewise)
+ * Supporter (supporter.ts, docs/SUPPORTER.md). No identity on any of these; one that names an account is refused.
+ * Nothing about an account changes: a code or purchase buys blind "supporter" credentials, and each credential
+ * buys one batch of ordinary blind delivery tokens beyond the hourly allowance:
+ *   POST   /v1/supporter/redeem {code, blinded}            → {kind: "supporter", epoch, key, evaluated, proof, expiresAt}:
+ *                                                            up to 52 credentials for an unused code (404 unknown,
+ *                                                            409 used); a few tries a minute per address, in memory
+ *   POST   /v1/supporter/play  {productId, purchaseToken, blinded} → as redeem, for a Google Play purchase the relay
+ *                                                            has checked with Google; each purchase once. 404 unless
+ *                                                            PLAY_VERIFY is on and configured
+ *   POST   /v1/supporter/tokens {blinded}                  → {kind: "delivery", ...}: up to 100 delivery tokens; spends
+ *                                                            the Supporter credential in X-Clairix-Token
+ *   POST   /v1/admin/supporter/codes {count}               → {codes}: mints 1-500 codes; X-Admin-Secret must match
+ *                                                            CODES_ADMIN_SECRET (off while unset). The relay keeps
+ *                                                            only each code's SHA-256 and whether it was used
  * Cron (every 10 minutes): WZDx work zones from WZDX_FEEDS into every known region.
  */
 export default {
@@ -251,6 +266,13 @@ async function route(request: Request, env: Env): Promise<Response> {
       // (tokens.ts). The same for every caller: a phone checks the proof that
       // comes with its tokens against these.
       tokens: await blindTokenKeys(env),
+      // The key Supporter credentials are issued under, this year and next
+      // (supporter.ts), the same for every caller, and whether Play purchases
+      // are checked here.
+      supporter: await supporterInfo(env).catch((e) => {
+        console.error("supporter key unavailable", e);
+        return null;
+      }),
       // Whether this relay offers ClairixCoin (on unless COIN=off): the app
       // hides the balance and the Pay button when this is false.
       coin: coinOn(env),
@@ -299,7 +321,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     return fileReport(env, request, bodyText);
   }
 
+  // ── Supporter (supporter.ts; docs/SUPPORTER.md): no identity ──────────
+  if (path === "/v1/supporter/redeem") return redeemCode(env, request, bodyText);
+  if (path === "/v1/supporter/tokens") return supporterTokens(env, request, bodyText);
+  if (path === "/v1/supporter/play") return redeemPlay(env, request, bodyText);
+
   // ── The operator, with the admin secret and no identity ───────────────
+  if (path === "/v1/admin/supporter/codes") return mintCodes(env, request, bodyText);
   if (path === "/v1/admin/reports") {
     return adminReports(env, request, bodyText);
   }

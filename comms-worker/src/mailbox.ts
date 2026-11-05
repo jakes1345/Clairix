@@ -853,6 +853,47 @@ export class Mailbox extends DurableObject<Env> {
     return true;
   }
 
+  // ── Supporter codes and Play purchases ("scode:"/"splay:" shards; supporter.ts) ──
+  //
+  // Each holds hashes and a used flag, and nothing else: not the code, not
+  // who it was minted for, not when, and nothing about who redeemed it.
+
+  /** Records freshly minted code hashes as unused; a hash already held is left as it is. */
+  async addSupporterCodes(hashes: string[]): Promise<void> {
+    const fresh: Record<string, boolean> = {};
+    for (const h of hashes) if ((await this.ctx.storage.get<boolean>(`code:${h}`)) === undefined) fresh[`code:${h}`] = false;
+    if (Object.keys(fresh).length > 0) await this.ctx.storage.put(fresh);
+  }
+
+  /**
+   * Uses the code with this hash up. One object handles one call at a time,
+   * so two phones racing with the same code cannot both have it.
+   */
+  async useSupporterCode(hash: string): Promise<"ok" | "unknown" | "used"> {
+    const used = await this.ctx.storage.get<boolean>(`code:${hash}`);
+    if (used === undefined) return "unknown";
+    if (used) return "used";
+    await this.ctx.storage.put(`code:${hash}`, true);
+    return "ok";
+  }
+
+  /** Gives a code back when the credentials it was used for could not be issued. */
+  async releaseSupporterCode(hash: string): Promise<void> {
+    if ((await this.ctx.storage.get<boolean>(`code:${hash}`)) === true) await this.ctx.storage.put(`code:${hash}`, false);
+  }
+
+  /** Marks the Play purchase with this hash as exchanged; false when it was before. */
+  async usePlayPurchase(hash: string): Promise<boolean> {
+    if ((await this.ctx.storage.get<boolean>(`play:${hash}`)) !== undefined) return false;
+    await this.ctx.storage.put(`play:${hash}`, true);
+    return true;
+  }
+
+  /** Gives a Play purchase back when its credentials could not be issued. */
+  async releasePlayPurchase(hash: string): Promise<void> {
+    await this.ctx.storage.delete(`play:${hash}`);
+  }
+
   /** Spends the token with this hash. False when it is unknown, expired or already spent. */
   async redeemToken(hash: string): Promise<boolean> {
     const key = `t:${hash}`;
