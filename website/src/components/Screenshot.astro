@@ -26,6 +26,10 @@ interface Props {
 }
 
 const { src, alt = '', eager = false, class: className } = Astro.props;
+
+// Never ask for a width larger than the source: the build would upscale it.
+const widths = src ? [280, 420, 560].filter((w) => w <= src.width) : [];
+if (src && !widths.includes(src.width) && src.width < 560) widths.push(src.width);
 ---
 
 {
@@ -34,7 +38,7 @@ const { src, alt = '', eager = false, class: className } = Astro.props;
       <Image
         src={src}
         alt={alt}
-        widths={[280, 420, 560]}
+        widths={widths}
         sizes="(max-width: 700px) 60vw, 280px"
         loading={eager ? 'eager' : 'lazy'}
         decoding="async"
