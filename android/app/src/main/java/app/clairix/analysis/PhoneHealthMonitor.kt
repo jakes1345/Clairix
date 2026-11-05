@@ -369,6 +369,18 @@ class PhoneHealthMonitor(private val context: Context) {
             else -> HealthFact("vb", "Integrity", "Verified boot", vbState)
         }
 
+        // The same questions put to the secure hardware (key attestation), which a system lying about
+        // its boot properties cannot answer for it. Suite only, with the other phone checks.
+        if (BuildConfig.FULL_ACCESS) {
+            val propsUnlocked = when {
+                unlocked -> true
+                flashLocked == "1" || vbmetaState == "locked" || vbState == "green" -> false
+                else -> null
+            }
+            val attested = KeyAttestation.current(context) { runCatching { scanAndPublish() } }
+            out += attested?.let { KeyAttestation.fact(it, propsUnlocked) } ?: KeyAttestation.checking()
+        }
+
         val selinux = selinuxMode()
         out += when (selinux) {
             "Enforcing" -> HealthFact("selinux", "Integrity", "SELinux", "Enforcing")
