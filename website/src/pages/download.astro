@@ -33,7 +33,7 @@ const compare: { row: string; play: string; full: string }[] = [
     full: 'Yes, unless the operator of the relay switches it off. A non-monetary token that members of the same relay can pass to one another. The relay keeps each balance and the amount and hour of each transfer for 30 days, never who paid whom; the note attached to a transfer is end-to-end encrypted. It cannot be bought or cashed out.',
   },
   { row: 'Distribution and updates', play: PLAY_LIVE ? 'Google Play, automatic' : 'Google Play once published, automatic', full: 'This page or GitHub Releases, by hand or through Obtainium' },
-  { row: 'Price', play: 'Free', full: 'Free' },
+  { row: 'Price', play: 'Free. Optional Clairix Supporter, bought in the app or redeemed with a code, covers relay costs', full: 'Free. Optional Clairix Supporter, redeemed with a code, covers relay costs' },
 ];
 
 // Whether one edition installs over the other depends on the key Google Play signs its APKs
@@ -101,7 +101,7 @@ const requirements: { icon: IconName; title: string; body: string }[] = [
             <>
               <p class="muted">
                 The Play edition is the version most people should install. It updates automatically, it is reviewed by Google,
-                and it is the edition this site describes. Every feature is free.
+                and it is the edition this site describes. Every safety feature is free; Supporter, if you choose it, covers relay costs.
               </p>
               <PlayButton size="lg" label="Download free on Google Play" />
             </>
@@ -109,7 +109,7 @@ const requirements: { icon: IconName; title: string; body: string }[] = [
             <>
               <p class="muted">
                 The Play edition is on its way. Once it is out it will update automatically and will be the version most people
-                should install. Every feature will be free.
+                should install. Every safety feature will be free.
               </p>
               <span class="btn btn--lg cham cham--oct" aria-disabled="true">
                 Coming soon to Google Play

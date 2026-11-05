@@ -107,7 +107,7 @@ const faqs: { q: string; a: string }[] = [
   { q: 'Will it alert me every time an AirTag is nearby?', a: 'No. A tracker in the next apartment or a stranger’s bag on the train is not a threat and would train you to ignore alerts. Clairix only confirms a tracker as following you after it has been heard with you, more than once, at places far apart over real time, and only when your own position shows you travelled between them. Devices that are merely around are listed quietly, without an alarm, and any other device that does travel with you is reported once, when the journey ends, as travelling with you rather than as a tracker.' },
   { q: 'Does Clairix track my location?', a: 'The tracker scanner uses your location to tell whether a device is moving with you, and your location history and GPS track stay on your phone; they are never sent. Your position, or the area around it, leaves the phone in these cases: when you press SOS or type your duress phrase (end-to-end encrypted, to the members of your groups; and, only if you turn on "Also text this number", as an unencrypted text to that one number, never for the duress phrase); with Comms set up and "Share traffic data" on (the default), as anonymous speed samples with road-segment positions while you navigate, and as the box around the route you drive or look at, which the relay passes to HERE and TomTom for incidents; the roads of the routes you look at, for their usual speeds; incident reports you make; the map tiles you view; and an online address search, only when you choose one. Where your phone works a position out from Wi-Fi and cell towers, Google Play services or the phone’s own location service sends those identifiers to its provider, unless Satellite-only positioning is on. <a href="/security#egress">Every destination.</a>' },
   { q: 'Why does it need so many permissions?', a: 'Because the threats live in different radios. Bluetooth for trackers and the offline mesh, location to confirm movement and check GPS, camera for the lens sweep, Wi-Fi for fake hotspots, phone state for cell towers, microphone for calls and the ultrasound check. Each permission is asked for only when you open the feature that needs it, and you can skip scanning entirely and use Clairix just to talk.' },
-  { q: 'Is Clairix free?', a: 'Yes, every feature is free.' },
+  { q: 'Is Clairix free?', a: 'Yes. Every safety feature is free and always will be. An optional Clairix Supporter tier covers what the relay costs for people who send a lot of photos and videos, and organisations can buy codes to hand out.' },
   { q: 'Does Clairix work on iPhone?', a: 'No. Clairix is built for Android 12 and newer. Much of what it does, such as scanning for Bluetooth trackers in the background or inspecting installed apps, is not possible for third-party apps on iOS.' },
   { q: 'Is Clairix a replacement for calling for help?', a: 'No. If you believe you are in danger, contact local emergency services. Clairix is a private channel to the people you trust and a detection aid.' },
 ];
@@ -333,7 +333,7 @@ const jsonLd = [softwareApplication, faqPage(faqs.map((f) => ({ q: f.q, a: toPla
             <span>Know what’s</span>
             <span>watching<em>.</em></span>
           </h2>
-          <p class="lede">Every feature, free. No ads, no analytics, nothing to sign up for.</p>
+          <p class="lede">Every safety feature, free. No ads, no analytics, nothing to sign up for.</p>
           <div class="btn-row">
             <PlayButton size="lg" />
           </div>
