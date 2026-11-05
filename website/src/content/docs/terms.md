@@ -22,7 +22,14 @@ You may register through an invite from an existing user. Each account may creat
 
 ## 4. Price
 
-Every feature of Clairix is currently provided free of charge. We may introduce paid features in the future. If we do, we will publish the terms that apply to them before they take effect, and nothing you already have on your phone will be taken away.
+Every safety feature of Clairix is free of charge and will stay free: the spyware check, Phone check, alerts, evidence and reports, helplines, SOS, the duress phrase, Clean link and ordinary encrypted messaging. Nothing you already have on your phone will be taken away.
+
+**Clairix Supporter** is optional. It covers what it costs to carry messages through the Clairix relay, and lifts only limits that exist because of that cost: it lets you send larger photos and videos, and send more messages in an hour than the free allowance. It changes nothing else. You can get it in two ways:
+
+- **A code.** An organisation (a shelter or support service, for example) or the project may give you a code. A code works once, on the relay it was made for, and needs no account, payment card or email. Whoever holds an unused code can redeem it, so keep it as you would cash. A code that has been redeemed cannot be redeemed again or replaced.
+- **Google Play.** In the Google Play edition, where it is offered, you can buy it as an in-app purchase called "Clairix Supporter". Payment, refunds and receipts are handled by Google under Google Play's terms; the price is the one Google Play shows you before you pay.
+
+Redeeming a code or a purchase gives your phone a number of single-use credentials. Each one adds a batch of messages beyond the hourly allowance when you need it, and while your phone holds at least one, it can send the larger files. Credentials are kept only on your phone, cannot be recovered if the phone or the app is wiped, and expire one to two years after they are issued. How the relay is kept from linking a code or purchase to your Clairix number is described in the [design note](https://github.com/jakes1345/Clairix/blob/main/docs/SUPPORTER.md).
 
 ## 5. Acceptable use
 

@@ -1944,4 +1944,38 @@
     <string name="drive_turn_by_turn_running">Turn-by-turn guidance is running</string>
     <string name="safety_fake_incoming_call">Incoming call</string>
     <string name="comms_name_unverified">%1$s (unverified)</string>
+    <!-- Settings → Supporter (SupporterSettings.kt, docs/SUPPORTER.md). Plain words: no nudging, no shame. -->
+    <string name="supporter_title">Supporter</string>
+    <string name="supporter_redeem_a_code">Redeem a code</string>
+    <string name="supporter_open">Open Supporter</string>
+    <string name="supporter_row_free">Every safety feature is free. Have a code? Enter it here.</string>
+    <string name="supporter_row_supporter">This phone is a Supporter.</string>
+    <plurals name="supporter_status_yes">
+        <item quantity="one">This phone is a Supporter. %1$d credential left.</item>
+        <item quantity="other">This phone is a Supporter. %1$d credentials left.</item>
+    </plurals>
+    <string name="supporter_status_no">This phone is not a Supporter. Nothing else changes.</string>
+    <string name="supporter_what_it_is">Supporter covers what it costs to carry messages through the relay. It lets this phone send photos and videos up to 10 MB instead of 5 MB, and keep sending when it has used up its messages for the hour: each credential adds 100 more.</string>
+    <string name="supporter_safety_free">Every safety feature is free and stays free: the spyware check, Phone check, alerts, evidence, helplines, SOS and ordinary messages work the same either way.</string>
+    <string name="supporter_redeem_explainer">If an organisation or someone else gave you a code, type it here. It needs no account, no card and no email.</string>
+    <string name="supporter_code_label">Code</string>
+    <string name="supporter_redeem">Redeem</string>
+    <plurals name="supporter_redeemed">
+        <item quantity="one">Done. %1$d credential was added to this phone.</item>
+        <item quantity="other">Done. %1$d credentials were added to this phone.</item>
+    </plurals>
+    <string name="supporter_needs_comms">Set up Comms first: a code is redeemed with your relay.</string>
+    <string name="supporter_privacy">Your relay learns that a code was used, not which phone used it, and cannot connect it to your number or your messages later. Connect through Tor first if you do not want it to see your internet address either.</string>
+    <string name="supporter_error_typo">That code does not look right. Check each group of four.</string>
+    <string name="supporter_error_unknown">Your relay does not know this code. Codes work only with the relay they were made for.</string>
+    <string name="supporter_error_used">This code has already been used.</string>
+    <string name="supporter_error_too_many">Too many tries. Wait a minute and try again.</string>
+    <string name="supporter_error_key">Your relay answered in a way this phone could not check, so nothing was added. Try again later.</string>
+    <string name="supporter_error_network">Your relay could not be reached. Try again later.</string>
+    <string name="supporter_google_play">Google Play</string>
+    <string name="supporter_play_explainer">You can also buy Clairix Supporter through Google Play. Google will know your Google account bought it; your relay will not know which phone it is for.</string>
+    <string name="supporter_buy">Buy Clairix Supporter</string>
+    <string name="supporter_buy_price">Buy Clairix Supporter (%1$s)</string>
+    <string name="supporter_purchase_working">Finishing with your relay…</string>
+    <string name="supporter_purchase_pending">The payment has not cleared yet. It will finish by itself once it does.</string>
 </resources>

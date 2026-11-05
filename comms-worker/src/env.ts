@@ -126,6 +126,31 @@ export interface Env {
    * either; or comma-separated origins.
    */
   FEDERATION?: string;
+  /**
+   * Optional secret: protects POST /v1/admin/supporter/codes, which mints
+   * Supporter codes (docs/SUPPORTER.md). Set by the operator with `wrangler
+   * secret put CODES_ADMIN_SECRET`; 16 characters at least. Unset: nobody
+   * can mint, and codes minted before still redeem.
+   */
+  CODES_ADMIN_SECRET?: string;
+  /**
+   * Optional: "on" lets POST /v1/supporter/play exchange a Google Play
+   * purchase for Supporter credentials, once the relay has checked the
+   * purchase with Google (PLAY_PACKAGE_NAME and GOOGLE_PLAY_SERVICE_ACCOUNT
+   * must be set too). Unset or anything else: off, and the route answers 404.
+   */
+  PLAY_VERIFY?: string;
+  /** Optional: the Play edition's application id, e.g. "app.clairix", for the purchase check. */
+  PLAY_PACKAGE_NAME?: string;
+  /**
+   * Optional secret: the JSON key file of a Google Cloud service account that
+   * Play Console has given access to the app's orders ("View financial
+   * data"), as Google hands it out. The relay signs its own requests for an
+   * access token with it. Only read while PLAY_VERIFY is on.
+   */
+  GOOGLE_PLAY_SERVICE_ACCOUNT?: string;
+  /** Optional: "on" accepts Play's test purchases (licence testers) as well as real ones. Off by default. */
+  PLAY_ALLOW_TEST_PURCHASES?: string;
 }
 
 /** A JSON response with the headers every API reply carries. */
@@ -151,7 +176,7 @@ export class HttpError extends Error {
   }
 }
 
-export function requireSecret(env: Env, name: "ENROLL_SECRET" | "ADMIN_SECRET"): string {
+export function requireSecret(env: Env, name: "ENROLL_SECRET" | "ADMIN_SECRET" | "CODES_ADMIN_SECRET"): string {
   const value = env[name];
   if (typeof value !== "string" || value.length === 0) {
     throw new HttpError(503, `Relay secret ${name} is not configured`);

@@ -16,6 +16,11 @@
 #                        other relays with. Unset, the relay makes its own on first use and keeps
 #                        it in its "relay-identity" object; set it (`npm run relay-key`) only to
 #                        choose the key yourself. FEDERATION=off stops forwarding either way.
+#   CODES_ADMIN_SECRET   Optional: lets the operator mint Supporter codes (POST /v1/admin/supporter/codes;
+#                        docs/SUPPORTER.md). 16+ characters, chosen by the operator; unset, nobody can mint
+#   GOOGLE_PLAY_SERVICE_ACCOUNT  Optional, with PLAY_VERIFY below: the JSON key file of the Google Cloud
+#                        service account Play Console lets read the app's orders. The relay checks a Play
+#                        purchase with Google before exchanging it for Supporter credentials
 #
 # Plain variables (may go in [vars] below):
 #   COIN                 Optional: "off" switches ClairixCoin off (no balances shown, no payments,
@@ -56,6 +61,11 @@
 #                        in cannot be paired with deliveries out by timing alone. Only envelopes sent
 #                        with "mix": true are held; the app leaves it off call set-up, SOS and group
 #                        changes, and apps older than mixing never send it. "0" turns mixing off.
+#   PLAY_VERIFY          Optional: "on" turns on POST /v1/supporter/play (Google Play purchases exchanged
+#                        for Supporter credentials); needs PLAY_PACKAGE_NAME and GOOGLE_PLAY_SERVICE_ACCOUNT.
+#                        Unset: off, and nothing is ever asked of Google
+#   PLAY_PACKAGE_NAME    The Play edition's application id, "app.clairix"
+#   PLAY_ALLOW_TEST_PURCHASES  Optional: "on" accepts Play licence testers' purchases too; off by default
 #   FEDERATION           Which other relays may forward to this one: "open" (default; any relay,
 #                        within per-relay limits), "off", or comma-separated https origins
 #   RELAY_ORIGIN         The https address other relays should reach this one at, when requests

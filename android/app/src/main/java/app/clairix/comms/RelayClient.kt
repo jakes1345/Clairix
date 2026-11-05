@@ -87,6 +87,16 @@ class RelayClient(
      * certificate authority involved. See [onionOrigin].
      */
     private val onion: () -> String? = { null },
+    /**
+     * Supporter credentials (docs/SUPPORTER.md): blind tokens of the relay's
+     * "supporter" kind, had for a code or a purchase on a request that names
+     * nobody, each spent (again naming nobody) for one batch of delivery
+     * tokens beyond the hourly allowance. What [app.clairix.supporter.Entitlement]
+     * counts. Not cleared with the other pools: they were paid for.
+     */
+    private val supporterCredentials: TokenPool = MemoryTokenPool(),
+    /** The Supporter keys seen per relay and year, kept apart from [tokenKeys] so their fortnightly turnover never pushes a year's key out. */
+    private val supporterKeys: TokenKeyPins = MemoryTokenKeyPins(),
 ) {
 
     /** The alternate address requests go to since the registered one stopped answering, if any. */
@@ -148,7 +158,18 @@ class RelayClient(
     /** The keys a relay issues blind tokens under in [epoch], kind (wire name) to base64url. */
     data class TokenKeys(val epoch: Long, val keys: Map<String, String>)
 
-    data class Info(val version: Int, val alternates: List<String>, val tokens: TokenKeys? = null, val onion: String? = null, val coin: Boolean = false)
+    data class Info(
+        val version: Int,
+        val alternates: List<String>,
+        val tokens: TokenKeys? = null,
+        val onion: String? = null,
+        val coin: Boolean = false,
+        /** What the relay offers Supporters (docs/SUPPORTER.md), or null when it offers nothing. */
+        val supporter: SupporterOffer? = null,
+    )
+
+    /** A relay's Supporter terms, from GET /: credentials per code, delivery tokens per credential, and whether it checks Play purchases. */
+    data class SupporterOffer(val credentialsPerCode: Int, val tokensPerCredential: Int, val play: Boolean)
 
     /**
      * The relay's description of itself: its API version, the other addresses it
@@ -177,7 +198,8 @@ class RelayClient(
                 val nextEpoch = next?.optLong("epoch", -1L) ?: -1L
                 if (nextKeys != null && nextEpoch == tokens.epoch + 1 && tokenKeys.get(origin, nextEpoch) == null) tokenKeys.put(origin, nextEpoch, nextKeys)
             }
-            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }), CoinRules.offered(json))
+            val supporter = pinSupporterKey(origin, json.optJSONObject("supporter"))
+            Info(json.optInt("version", 0), urls, tokens, onionOrigin(json.optString("onion").takeIf { it.isNotEmpty() }), CoinRules.offered(json), supporter)
         }
     }
 
@@ -756,6 +778,130 @@ class RelayClient(
     private fun b64url(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     private fun fromB64url(s: String): ByteArray = Base64.getUrlDecoder().decode(s)
 
+    // ── Supporter (docs/SUPPORTER.md) ─────────────────────────────────────
+
+    /**
+     * Pins the relay's Supporter key for this year and the next, as [info]
+     * pins the token keys: the first seen for a year is the one credentials
+     * are checked against, so a relay cannot give one phone (or one code) a
+     * key of its own and recognise its credentials by it.
+     */
+    private fun pinSupporterKey(origin: String, o: JSONObject?): SupporterOffer? {
+        if (o == null || o.optInt("version") != 1) return null
+        val epoch = o.optLong("epoch", -1L)
+        val key = o.optString("key")
+        if (!plausibleSupporterEpoch(epoch) || key.isEmpty()) return null
+        if (supporterKeys.get(origin, epoch) == null) supporterKeys.put(origin, epoch, mapOf(SUPPORTER to key))
+        val next = o.optJSONObject("next")
+        val nextKey = next?.optString("key").orEmpty()
+        if (next?.optLong("epoch", -1L) == epoch + 1 && nextKey.isNotEmpty() && supporterKeys.get(origin, epoch + 1) == null) {
+            supporterKeys.put(origin, epoch + 1, mapOf(SUPPORTER to nextKey))
+        }
+        return SupporterOffer(
+            o.optInt("credentialsPerCode", SUPPORTER_CREDENTIALS_PER_CODE).coerceIn(1, SUPPORTER_CREDENTIALS_PER_CODE),
+            o.optInt("tokensPerCredential", BLIND_TOKENS_MAX).coerceIn(1, BLIND_TOKENS_MAX),
+            o.optBoolean("play", false),
+        )
+    }
+
+    private fun plausibleSupporterEpoch(epoch: Long): Boolean {
+        val mine = System.currentTimeMillis() / SUPPORTER_EPOCH_MS
+        return epoch in (mine - 1)..(mine + 1)
+    }
+
+    /** Supporter credentials held, unexpired. */
+    fun supporterCredentialCount(nowMs: Long = System.currentTimeMillis()): Int = supporterCredentials.size(nowMs)
+
+    /**
+     * Exchanges a Supporter [code] (already checked with [app.clairix.supporter.SupporterCode])
+     * for credentials: on a request of its own that names nobody, as a send
+     * is, so the relay learns a code was used and nothing about whose phone.
+     * Returns how many credentials were added.
+     */
+    fun redeemSupporterCode(code: String): Int = exchangeForCredentials("/v1/supporter/redeem", JSONObject().put("code", code))
+
+    /** Exchanges a Google Play purchase the same way; the relay asks Google whether it is real. */
+    fun redeemPlayPurchase(productId: String, purchaseToken: String): Int =
+        exchangeForCredentials("/v1/supporter/play", JSONObject().put("productId", productId).put("purchaseToken", purchaseToken))
+
+    private fun exchangeForCredentials(path: String, body: JSONObject): Int {
+        val relay = base() ?: throw RelayException("Not registered with a relay")
+        val origin = pinOrigin(relay)
+        // The key is read on a request that names nobody before the first
+        // redemption; usually it was pinned long before, by an ordinary [info].
+        val offer = info().supporter ?: throw RelayException("This relay does not offer Supporter", 404)
+        val blinds = List(offer.credentialsPerCode) { tokenBlind() }
+        body.put("blinded", JSONArray(blinds.map { b64url(it.blinded) }))
+        val json = anonymousPost(path, null, body)
+        val made = finishBlind(json, blinds, SUPPORTER) { epoch ->
+            if (plausibleSupporterEpoch(epoch)) supporterKeys.get(origin, epoch)?.get(SUPPORTER) else null
+        }
+        parsed { supporterCredentials.add(made, json.getLong("expiresAt")) }
+        return made.size
+    }
+
+    /**
+     * Spends one Supporter credential, naming nobody, for a batch of
+     * ordinary delivery tokens beyond the hourly allowance. Returns how many
+     * delivery tokens were added: 0 with no credential, or while this phone
+     * has not pinned the current epoch's delivery key (spending one then
+     * could only end in a refused batch). The caller decides when: never
+     * straight after the signed fetch that found the allowance spent.
+     */
+    fun topUpWithSupporterCredential(): Int {
+        val relay = base() ?: return 0
+        val origin = pinOrigin(relay)
+        if (tokenKeys.get(origin, relayNow() / TOKEN_EPOCH_MS) == null) return 0
+        val credential = supporterCredentials.take(System.currentTimeMillis()) ?: return 0
+        val blinds = List(BLIND_TOKENS_MAX) { tokenBlind() }
+        val json = try {
+            anonymousPost("/v1/supporter/tokens", credential, JSONObject().put("blinded", JSONArray(blinds.map { b64url(it.blinded) })))
+        } catch (e: RelayException) {
+            // Refused (spent, expired, another relay's): gone for good. Not
+            // answered: the relay may never have seen it, so it is kept.
+            if (e.code != 401 && e.code != 403 && e.code != 400) supporterCredentials.add(listOf(credential), supporterExpiry(credential))
+            throw e
+        }
+        val made = finishBlind(json, blinds, TokenKind.DELIVERY.wire) { epoch ->
+            if (plausibleEpoch(epoch)) tokenKeys.get(origin, epoch)?.get(TokenKind.DELIVERY.wire) else null
+        }
+        parsed { tokens.add(made, json.getLong("expiresAt")) }
+        return made.size
+    }
+
+    /** When a credential stops being accepted: the end of the year after its own (comms-worker/src/tokens.ts epochExpiry). */
+    private fun supporterExpiry(credential: String): Long =
+        ((credential.split('.').getOrNull(1)?.toLongOrNull() ?: 0L) + 2) * SUPPORTER_EPOCH_MS
+
+    /** One POST that names nobody, with [token] in X-Clairix-Token when given, on a connection of its own. */
+    private fun anonymousPost(path: String, token: String?, body: JSONObject): JSONObject {
+        val relay = base() ?: throw RelayException("Not registered with a relay")
+        val request = Request.Builder().url(relay + path).header("Accept", "application/json").post(body.toString().toRequestBody(JSON))
+        if (token != null) request.header("X-Clairix-Token", token)
+        return execute(request, anonymousClient(ANONYMOUS_TIMEOUT_SEC))
+    }
+
+    /**
+     * Unblinds an issue of [what], refusing it unless its proof holds against
+     * the key [pinned] gives for its epoch (null: not pinned, or an epoch this
+     * phone's clock does not agree with).
+     */
+    private fun finishBlind(json: JSONObject, blinds: List<uniffi.clairix_comms_crypto.BlindedToken>, what: String, pinned: (Long) -> String?): List<String> {
+        val epoch = parsed { json.getLong("epoch") }
+        val key = parsed { json.getString("key") }
+        val expected = pinned(epoch)
+            ?: throw RelayException("This phone has not seen the relay's $what key for epoch $epoch from a request that names nobody; refused", TOKEN_KEY_MISMATCH)
+        if (expected != key) throw RelayException("The relay issued $what under a key it does not give everyone; refused", TOKEN_KEY_MISMATCH)
+        val evaluated = parsed { json.getJSONArray("evaluated").let { a -> (0 until a.length()).map { fromB64url(a.getString(it)) } } }
+        if (evaluated.isEmpty() || evaluated.size > blinds.size) throw RelayException("The relay's $what answer is malformed", MALFORMED)
+        val outputs = try {
+            tokenFinalize(blinds.take(evaluated.size), evaluated, parsed { fromB64url(json.getString("proof")) }, fromB64url(key))
+        } catch (e: uniffi.clairix_comms_crypto.CryptoException) {
+            throw RelayException("The relay's $what did not prove out against its published key; refused", TOKEN_KEY_MISMATCH).apply { initCause(e) }
+        }
+        return outputs.mapIndexed { i, out -> "2.$epoch.${b64url(blinds[i].input)}.${b64url(out)}" }
+    }
+
     /** Forgets every token of every kind (the phone is unpairing). */
     fun clearTokens() {
         tokens.clear()
@@ -1193,6 +1339,15 @@ class RelayClient(
         const val UNSAFE_VERSION = -7
         /** A token epoch: 14 days, as the relay's (comms-worker/src/tokens.ts TOKEN_EPOCH_MS). */
         const val TOKEN_EPOCH_MS = 14L * 24 * 60 * 60_000
+        /** A Supporter key's epoch: a year, as the relay's (comms-worker/src/tokens.ts SUPPORTER_EPOCH_MS). */
+        const val SUPPORTER_EPOCH_MS = 365L * 24 * 60 * 60_000
+        /** The relay's name for the Supporter credential kind. */
+        const val SUPPORTER = "supporter"
+        /** Credentials asked for per code at most (comms-worker/src/supporter.ts SUPPORTER_CREDENTIALS_PER_CODE). */
+        const val SUPPORTER_CREDENTIALS_PER_CODE = 52
+        /** The most blinded elements the relay evaluates in one request (comms-worker/src/tokens.ts BLIND_BATCH_MAX). */
+        const val BLIND_TOKENS_MAX = 100
+        private const val ANONYMOUS_TIMEOUT_SEC = 20L
         /** Envelopes the relay returns per inbox fetch (Mailbox.inbox's limit). */
         const val INBOX_PAGE = 200
         /** An envelope's sender asks a locked phone to ring for it (comms-worker Alert). */

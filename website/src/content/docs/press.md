@@ -6,7 +6,7 @@ Clairix is a personal security app for Android. It finds hidden cameras, Bluetoo
 
 ### 100 words
 
-Clairix is a personal security app for Android built for everyday situations: a rental that might have a camera, a bag that might have an AirTag in it, a phone that an ex might have put spyware on. It sweeps a room for lens reflections and infrared, confirms a tracker as following only when it has moved with you, scores apps for stalkerware behaviour, and watches Wi-Fi and cell towers for the signs of interception. End-to-end encrypted messages and calls use the Olm double ratchet with sealed envelopes. Detection data never leaves the phone. Every feature is free.
+Clairix is a personal security app for Android built for everyday situations: a rental that might have a camera, a bag that might have an AirTag in it, a phone that an ex might have put spyware on. It sweeps a room for lens reflections and infrared, confirms a tracker as following only when it has moved with you, scores apps for stalkerware behaviour, and watches Wi-Fi and cell towers for the signs of interception. End-to-end encrypted messages and calls use the Olm double ratchet with sealed envelopes. Detection data never leaves the phone. Every safety feature is free, and an optional Clairix Supporter tier covers what the relay costs to run.
 
 ### 250 words
 
@@ -31,7 +31,7 @@ Clairix is free to use and requires Android 12 or newer.
 | **Platform** | Android 12 and newer |
 | **Distribution** | Direct APK from clairix.app and GitHub Releases (public beta), package `app.clairix`; a Google Play edition is in preparation |
 | **Current version** | 3.0.0 Beta 8 |
-| **Price** | Free. Every feature. |
+| **Price** | Free. Every safety feature, always. Optional Clairix Supporter covers relay costs (larger photos and videos, more messages an hour); organisations can buy codes to hand out. |
 | **Developer** | Clairix, an independent project |
 | **Category** | Tools / personal security |
 | **Languages** | English |

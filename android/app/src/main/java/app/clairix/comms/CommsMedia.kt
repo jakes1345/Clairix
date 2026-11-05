@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import app.clairix.supporter.Entitlement
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Base64
@@ -23,15 +24,27 @@ import java.util.Base64
  * This is also where a picked image is made small enough to send: scaled to
  * at most [MAX_IMAGE_EDGE] on its long side and re-encoded as JPEG at
  * [JPEG_QUALITY], with the camera's orientation applied. Videos are sent as
- * they are, up to [MAX_BYTES]; transcoding them is out of scope for a relay
+ * they are, up to [sendLimitBytes]; transcoding them is out of scope for a relay
  * that carries 64 KB envelopes.
  */
 object CommsMedia {
 
     const val MAX_IMAGE_EDGE = 1920
     const val JPEG_QUALITY = 80
-    /** The largest file that may be sent; [CommsWire.MEDIA_CHUNK_BYTES] chunks of it. */
-    const val MAX_BYTES = 5L * 1024 * 1024
+    /**
+     * The largest file accepted from a contact, and the most anyone sends: a
+     * Supporter's limit ([Entitlement.SUPPORTER_MEDIA_MAX_BYTES]), so what one
+     * sends reaches everyone on this version or later. What this install may
+     * send is [sendLimitBytes]. [CommsWire.MEDIA_CHUNK_BYTES] chunks of it.
+     */
+    const val MAX_BYTES = Entitlement.SUPPORTER_MEDIA_MAX_BYTES
+
+    /**
+     * The largest file this install sends: 5 MB, or 10 MB for a Supporter
+     * (docs/SUPPORTER.md). The larger file costs the relay more envelopes;
+     * the sender's delivery tokens pay for them either way.
+     */
+    fun sendLimitBytes(): Long = Entitlement.mediaSendLimitBytes()
     /** The most envelopes one file may take; follows from the two limits above. */
     val MAX_CHUNKS: Int = ((MAX_BYTES + CommsWire.MEDIA_CHUNK_BYTES - 1) / CommsWire.MEDIA_CHUNK_BYTES).toInt()
     private const val THUMB_EDGE = 240
@@ -171,19 +184,20 @@ object CommsMedia {
         val out = ByteArrayOutputStream()
         upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
         val bytes = out.toByteArray()
-        if (bytes.size > MAX_BYTES) throw IllegalArgumentException("That image is too large to send even after compression")
+        if (bytes.size > sendLimitBytes()) throw IllegalArgumentException("That image is too large to send even after compression")
         val thumb = thumbnail(upright)
         return Prepared(bytes, "image/jpeg", upright.width, upright.height, 0L, thumb)
     }
 
     /**
      * Reads the video at [uri] as it is, with a frame for its thumbnail. Throws
-     * [IllegalArgumentException] when it is bigger than [MAX_BYTES] or unreadable.
+     * [IllegalArgumentException] when it is bigger than [sendLimitBytes] or unreadable.
      */
     fun prepareVideo(context: Context, uri: Uri): Prepared {
         val resolver = context.contentResolver
+        val limit = sendLimitBytes()
         val size = runCatching { resolver.openAssetFileDescriptor(uri, "r")?.use { it.length } }.getOrNull() ?: -1L
-        if (size > MAX_BYTES) throw IllegalArgumentException(tooBig(size))
+        if (size > limit) throw IllegalArgumentException(tooBig(size, limit))
         val bytes = resolver.openInputStream(uri)?.use { input ->
             val buffer = ByteArrayOutputStream(if (size > 0) size.toInt() else 1 shl 20)
             val chunk = ByteArray(64 * 1024)
@@ -192,7 +206,7 @@ object CommsMedia {
                 val n = input.read(chunk)
                 if (n < 0) break
                 total += n
-                if (total > MAX_BYTES) throw IllegalArgumentException(tooBig(total))
+                if (total > limit) throw IllegalArgumentException(tooBig(total, limit))
                 buffer.write(chunk, 0, n)
             }
             buffer.toByteArray()
@@ -220,8 +234,8 @@ object CommsMedia {
         return Prepared(bytes, mime, width, height, duration, thumb)
     }
 
-    private fun tooBig(size: Long): String =
-        "That video is ${size / (1024 * 1024)} MB; the most that can be sent is ${MAX_BYTES / (1024 * 1024)} MB. Trim it or pick a shorter clip."
+    private fun tooBig(size: Long, limit: Long): String =
+        "That video is ${size / (1024 * 1024)} MB; the most that can be sent is ${limit / (1024 * 1024)} MB. Trim it or pick a shorter clip."
 
     /** A JPEG at most [THUMB_EDGE] on its long side, small enough for the header envelope. */
     private fun thumbnail(source: Bitmap): String {

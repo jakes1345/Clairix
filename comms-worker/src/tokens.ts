@@ -26,6 +26,20 @@ import { type TokenKind, base64url } from "./comms-logic";
 
 /** A key lives one epoch; tokens of the epoch before are still accepted, so a token is good for 14 to 28 days. */
 export const TOKEN_EPOCH_MS = 14 * 24 * 60 * 60_000;
+/**
+ * Supporter credentials (supporter.ts) live a year an epoch: one redeemed at
+ * any moment is good for one to two years, and every credential issued in a
+ * year shares one key, so the key says nothing about when, or for which code
+ * or purchase, it was issued.
+ */
+export const SUPPORTER_EPOCH_MS = 365 * 24 * 60 * 60_000;
+
+/**
+ * What a blind token is for: the kinds an account draws over the signed
+ * channel (TokenKind), or a Supporter credential, which no account is ever
+ * issued: it is had only for a code or a purchase, anonymously.
+ */
+export type BlindKind = TokenKind | "supporter";
 /** Most blinded elements evaluated in one request (the module's own limit). */
 export const BLIND_BATCH_MAX = 100;
 /** The object that keeps the token secret when TOKEN_KEY is not set (shared with federation's relay seed). */
@@ -58,16 +72,21 @@ function buffer(w: VoprfExports): Uint8Array {
   return new Uint8Array(w.memory.buffer, w.buffer(), w.buffer_len());
 }
 
-export function epochOf(now: number): number {
-  return Math.floor(now / TOKEN_EPOCH_MS);
+/** How long a key of [kind] lives. */
+export function epochMsOf(kind: BlindKind): number {
+  return kind === "supporter" ? SUPPORTER_EPOCH_MS : TOKEN_EPOCH_MS;
+}
+
+export function epochOf(now: number, kind: BlindKind = "delivery"): number {
+  return Math.floor(now / epochMsOf(kind));
 }
 
 /** When a token of [epoch] stops being accepted: the end of the epoch after it. */
-export function epochExpiry(epoch: number): number {
-  return (epoch + 2) * TOKEN_EPOCH_MS;
+export function epochExpiry(epoch: number, kind: BlindKind = "delivery"): number {
+  return (epoch + 2) * epochMsOf(kind);
 }
 
-function info(kind: TokenKind, epoch: number): Uint8Array {
+function info(kind: BlindKind, epoch: number): Uint8Array {
   return new TextEncoder().encode(`clairix-token-v2|${kind}|${epoch}`);
 }
 
@@ -91,7 +110,7 @@ async function secret(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">): Promise<Uint8Arr
 const publicKeys = new Map<string, string>();
 
 /** The public key for [kind] in [epoch], base64url: what GET / publishes and phones check proofs against. */
-export async function tokenPublicKey(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, kind: TokenKind, epoch: number): Promise<string> {
+export async function tokenPublicKey(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, kind: BlindKind, epoch: number): Promise<string> {
   const s = await secret(env);
   const id = `${base64url(s).slice(0, 8)}|${kind}|${epoch}`;
   const known = publicKeys.get(id);
@@ -120,9 +139,9 @@ export interface BlindIssue {
  * [kind] in the current epoch, with one proof over them all. Null when an
  * element is not a valid point: the caller answers 400.
  */
-export async function issueBlind(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, kind: TokenKind, blinded: Uint8Array[], now = Date.now()): Promise<BlindIssue | null> {
+export async function issueBlind(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, kind: BlindKind, blinded: Uint8Array[], now = Date.now()): Promise<BlindIssue | null> {
   if (blinded.length === 0 || blinded.length > BLIND_BATCH_MAX) throw new Error("blinded batch out of range");
-  const epoch = epochOf(now);
+  const epoch = epochOf(now, kind);
   const key = await tokenPublicKey(env, kind, epoch);
   const s = await secret(env);
   const w = voprf();
@@ -154,11 +173,11 @@ export interface SpentBlindToken {
  * input. Null when not; the caller still has to record it as spent, which is
  * what stops it being used twice.
  */
-export async function checkBlindToken(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, kind: TokenKind, token: string, now = Date.now()): Promise<SpentBlindToken | null> {
+export async function checkBlindToken(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, kind: BlindKind, token: string, now = Date.now()): Promise<SpentBlindToken | null> {
   const m = BLIND_TOKEN_RE.exec(token);
   if (!m) return null;
   const epoch = Number(m[1]);
-  const current = epochOf(now);
+  const current = epochOf(now, kind);
   if (epoch !== current && epoch !== current - 1) return null;
   const input = base64ToBytes(m[2]!);
   const output = base64ToBytes(m[3]!);
@@ -176,5 +195,5 @@ export async function checkBlindToken(env: Pick<Env, "TOKEN_KEY" | "MAILBOX">, k
   b.set(input, 32 + i.length);
   b.set(output, 32 + i.length + input.length);
   if (w.verify(i.length, input.length) !== 0) return null;
-  return { hash: await sha256Hex(`${kind}|${epoch}|${m[2]}`), expiresAt: epochExpiry(epoch) };
+  return { hash: await sha256Hex(`${kind}|${epoch}|${m[2]}`), expiresAt: epochExpiry(epoch, kind) };
 }

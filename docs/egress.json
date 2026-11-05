@@ -60,6 +60,15 @@
       ]
     },
     {
+      "row": "Google Play, to check a Supporter purchase, via the relay",
+      "from": "relay",
+      "hosts": [
+        "oauth2.googleapis.com",
+        "androidpublisher.googleapis.com"
+      ],
+      "note": "Only when the operator turns PLAY_VERIFY on (off by default), and only for a Supporter purchase made in the Google Play edition; docs/SUPPORTER.md."
+    },
+    {
       "row": "Cloudflare TURN/STUN",
       "from": "both",
       "hosts": [
@@ -134,6 +143,7 @@
   },
   "not_fetched": {
     "schemas.xmlsoap.org": "XML namespace in the ONVIF discovery message the network sweep sends on the local Wi-Fi.",
+    "www.googleapis.com": "The OAuth scope name the relay asks Google for (https://www.googleapis.com/auth/androidpublisher); an identifier, never fetched.",
     "www.onvif.org": "XML namespace in the ONVIF discovery message.",
     "www.w3.org": "XML namespace (SOAP envelope) in the ONVIF discovery message."
   }

@@ -82,15 +82,19 @@ class SmokeTest {
             ui.find(By.res("$controller:id/permission_allow_foreground_only_button"))?.click()
             ui.find(By.res("$controller:id/permission_allow_button"))?.click()
         }
-        val current = device.currentPackageName
-        if (current != pkg && current in SYSTEM_PROMPTS) {
-            shot("system-prompt-$step")
+        // Answered up to a few times: on Android 13 the Wi-Fi suggestion dialog was
+        // still in front after one answer (4547e44), whether it came back or took
+        // longer than five seconds to go.
+        repeat(PROMPT_TRIES) {
+            val current = device.currentPackageName
+            if (current == pkg || current !in SYSTEM_PROMPTS) return@repeat
+            shot("system-prompt-$step-$it")
             val allow = ui.find(By.pkg(current).text(ALLOW)) ?: ui.find(By.pkg(current).clickable(true).text(ALLOW))
             if (allow != null) allow.click() else device.pressBack()
-            ui.waitHas(By.pkg(pkg).depth(0), 5_000)
+            ui.waitHas(By.pkg(pkg).depth(0), PROMPT_WAIT_MS)
             device.waitForIdle(2_000)
         }
-        if (device.currentPackageName != pkg) { shot("LEFT-$step"); fail("Clairix left the foreground at: $step (now ${device.currentPackageName})") }
+        if (device.currentPackageName != pkg) { shot("LEFT-$step"); fail("Clairix left the foreground at: $step (now ${device.currentPackageName})\n${screenSummary()}") }
     }
 
     private companion object {
@@ -98,6 +102,9 @@ class SmokeTest {
         const val BACK_PATIENCE_MS = 10_000L
         /** How many pieces of on-screen text a failure message lists ([screenSummary]). */
         const val SUMMARY_TEXTS = 40
+        /** How many times a system prompt over Clairix is answered before it counts as leaving, and how long each answer may take. */
+        const val PROMPT_TRIES = 3
+        const val PROMPT_WAIT_MS = 10_000L
         /**
          * System apps that show a dialog over Clairix on its behalf. Android 12
          * shows the Wi-Fi suggestion prompt from the framework itself ("android").

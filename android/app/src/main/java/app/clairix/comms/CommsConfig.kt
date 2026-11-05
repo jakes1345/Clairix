@@ -368,12 +368,12 @@ class StoredTokenPool(context: Context, private val key: String = "tokens") : Me
  * across restarts so a key first seen days ago is still the one checked. Not
  * secret: they are public keys every caller of the relay sees.
  */
-class StoredTokenKeyPins(context: Context) : MemoryTokenKeyPins() {
+class StoredTokenKeyPins(context: Context, private val key: String = KEY) : MemoryTokenKeyPins() {
 
     private val prefs = context.applicationContext.getSharedPreferences("comms_tokens", Context.MODE_PRIVATE)
 
     init {
-        prefs.getString(KEY, null)?.let { stored ->
+        prefs.getString(key, null)?.let { stored ->
             // Sealed under the Keystore key: the pins name the relay and show
             // which epochs this phone was active in. One kept in the clear by
             // an earlier version is read once and sealed on the next change.
@@ -383,11 +383,13 @@ class StoredTokenKeyPins(context: Context) : MemoryTokenKeyPins() {
     }
 
     override fun changed() {
-        prefs.edit().putString(KEY, Base64.encodeToString(KeystoreBox.encryptString(encode()), Base64.NO_WRAP)).apply()
+        prefs.edit().putString(key, Base64.encodeToString(KeystoreBox.encryptString(encode()), Base64.NO_WRAP)).apply()
     }
 
-    private companion object {
-        const val KEY = "token_keys"
+    companion object {
+        private const val KEY = "token_keys"
+        /** Where the relay's Supporter keys (docs/SUPPORTER.md) are pinned. */
+        const val SUPPORTER_KEY = "supporter_keys"
     }
 }
 
