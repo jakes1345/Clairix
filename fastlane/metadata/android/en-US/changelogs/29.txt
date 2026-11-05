@@ -1,0 +1,6 @@
+3.0.0 Beta 9
+- Stalkerware scan weighs what an app was granted, battery exemptions and who holds your SMS, phone and home apps.
+- A safety step before removing a flagged app; alerts for pairings and installs after an unlock while you slept.
+- Comms: block, message requests, reports and a recovery file.
+- Discreet mode, low-power mode and a Clean link share option.
+- A message is no longer sent twice, or encrypted again on a retry.
