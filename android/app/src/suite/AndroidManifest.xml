@@ -217,6 +217,32 @@
             </intent-filter>
         </activity>
 
+        <!--
+            Check a bug report (bugreport/BugReportActivity.kt): the zip Android makes under
+            Developer options → Take bug report, shared to Clairix, read on the phone for which
+            apps used the microphone, camera and location, with no network request and no copy
+            kept. Android's own share sends it as application/vnd.android.bugreport, alone or with
+            its screenshot (SEND_MULTIPLE); a zip saved elsewhere comes as application/zip.
+            Exported, as a share target must be; it reads only the file it is handed. Discreet mode
+            switches it off (security/DiscreetMode.kt).
+        -->
+        <activity
+            android:name=".bugreport.BugReportActivity"
+            android:exported="true"
+            android:label="@string/bugreport_check"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Clairix">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.android.bugreport" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+        </activity>
+
         <!-- The fake call's activity, receiver and ring service are declared in
              src/main/AndroidManifest.xml: the Comms menu carries Fake call in both
              editions. -->

@@ -248,6 +248,10 @@ internal fun StalkerwarePage(onBack: (() -> Unit)? = null) {
                 }
             }
             accessSections(r, context, onMine)
+            // A second look from the system's own records: the suite's "Check a bug report" share target.
+            item(key = "§bugreport") {
+                Notice(Tone.Neutral, stringResource(R.string.scan_bug_report_how), title = stringResource(R.string.scan_bug_report_title))
+            }
         }
     }
 }

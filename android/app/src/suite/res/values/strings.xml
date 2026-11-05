@@ -125,4 +125,21 @@
     <string name="link_share">Share</string>
     <string name="link_replace">Replace the selected text</string>
     <string name="link_done">Done</string>
+    <!-- bugreport/BugReportActivity.kt -->
+    <string name="bugreport_check">Check a bug report</string>
+    <string name="bugreport_title">Bug report: microphone, camera, location</string>
+    <string name="bugreport_switch_off_title">Switch Developer options off again</string>
+    <string name="bugreport_switch_off_developer_options">Taking a bug report needed Developer options, and while they are on, Phone check counts them as a risk: they open debugging that someone with the phone in hand could use. Once you are done here, switch them off (%1$s).</string>
+    <string name="bugreport_open_developer_options">Open Developer options</string>
+    <string name="bugreport_nothing_shared">Nothing was shared. Take a bug report (Developer options → Take bug report), then share it from its notification and choose Check a bug report.</string>
+    <string name="bugreport_reading">Reading the bug report on this phone…</string>
+    <string name="bugreport_not_read">Could not read it</string>
+    <string name="bugreport_offline">Read on this phone only: nothing was uploaded, and Clairix keeps no copy. The bug report itself holds a great deal about this phone, so delete it from wherever it was saved once you are done.</string>
+    <string name="bugreport_file">File</string>
+    <string name="bugreport_taken">Taken</string>
+    <string name="bugreport_no_use_found">The report names no app using it.</string>
+    <string name="bugreport_last_at">Last at %1$s</string>
+    <string name="bugreport_no_time">No time given</string>
+    <string name="bugreport_what_it_shows">Times are as the bug report writes them, in this phone\'s clock. A report covers only what the phone still remembered when it was taken, often a few days, and an app listed here may have a good reason (a messenger, maps, the camera app). It shows use, not who is behind it.</string>
+    <string name="bugreport_could_not_read">What Clairix could not read</string>
 </resources>

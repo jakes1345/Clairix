@@ -1305,6 +1305,8 @@
     <string name="scan_installer">Installer</string>
     <string name="scan_permissions_granted">Granted</string>
     <string name="scan_data_last_week">Data</string>
+    <string name="scan_bug_report_title">A second look: a bug report</string>
+    <string name="scan_bug_report_how">Android keeps its own records of which apps recently used the microphone, the camera and location, and a bug report includes them. To see them: switch on Developer options, choose Take bug report, wait for its notification, share it and pick Check a bug report. Clairix reads it on the phone and sends nothing anywhere. Switch Developer options off again afterwards, because Phone check counts them as a risk.</string>
     <string name="scan_unknown_sideloaded">unknown (sideloaded)</string>
     <string name="scan_keyboard">Keyboard</string>
     <string name="scan_device_admin">Device admin</string>

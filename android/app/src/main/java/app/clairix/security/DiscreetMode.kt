@@ -139,18 +139,29 @@ object DiscreetMode {
     internal const val LINK_CLEANER = "app.clairix.links.LinkCleanerActivity"
 
     /**
-     * Switches the entries other apps show for Clairix outside the launcher ([LINK_CLEANER]) off
+     * The suite's "Check a bug report" (bugreport/BugReportActivity), which the share sheet lists
+     * for a bug-report zip. Named by class for the same reason.
+     */
+    internal const val BUG_REPORT = "app.clairix.bugreport.BugReportActivity"
+
+    /** Every entry other apps show for Clairix outside the launcher. */
+    private val SHARE_TARGETS = listOf(LINK_CLEANER, BUG_REPORT)
+
+    /**
+     * Switches the entries other apps show for Clairix outside the launcher ([SHARE_TARGETS]) off
      * while discreet mode is on and back to as declared once it is off, so the share sheet and the
      * text-selection menu name nothing of Clairix's on a phone in discreet mode.
      */
     private fun applyShareTargets(context: Context) {
         if (!BuildConfig.FULL_ACCESS) return
         val pm = context.packageManager
-        val name = ComponentName(context.packageName, LINK_CLEANER)
         val wanted = if (_state.value.on) PackageManager.COMPONENT_ENABLED_STATE_DISABLED else PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
-        runCatching {
-            if (pm.getComponentEnabledSetting(name) != wanted) pm.setComponentEnabledSetting(name, wanted, PackageManager.DONT_KILL_APP)
-        }.onFailure { Log.w(TAG, "could not switch the share targets", it) }
+        for (target in SHARE_TARGETS) {
+            val name = ComponentName(context.packageName, target)
+            runCatching {
+                if (pm.getComponentEnabledSetting(name) != wanted) pm.setComponentEnabledSetting(name, wanted, PackageManager.DONT_KILL_APP)
+            }.onFailure { Log.w(TAG, "could not switch $target", it) }
+        }
     }
 
     /**
