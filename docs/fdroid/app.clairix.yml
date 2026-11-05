@@ -9,6 +9,22 @@
 # and versionCode, so one F-Droid listing can carry only one of the two; the suite is the
 # one listed.
 
+# Proposed; F-Droid's reviewers decide which apply.
+AntiFeatures:
+  # The project relay is a Cloudflare Worker (its code, comms-worker/, is free, and
+  # anyone can run a relay and point the app at it); calls can be relayed through
+  # Cloudflare's TURN service (rtc.live.cloudflare.com), whose credentials the relay
+  # fetches; with Share traffic data on (Drive route options, on by default), the relay
+  # asks HERE and TomTom for incidents around a route. docs/egress.json lists every
+  # destination. Map tiles come from OpenStreetMap's tile server unless a signed setting
+  # names another; OpenStreetMap's is not a non-free service.
+  NonFreeNet:
+    en-US: The project's relay runs on Cloudflare Workers and calls may use Cloudflare's TURN service; with Share traffic data on, the relay asks HERE and TomTom for traffic incidents. You can run your own relay.
+  # Not proposed, to raise in the merge request instead: UpstreamNonFree (the other
+  # editions on GitHub Releases include Google Play services' location library; this
+  # flavour is upstream's own build without it), and the prebuilt native libraries in
+  # three FOSS Maven dependencies (docs/DISTRIBUTION.md, "F-Droid").
+
 Categories:
   - Security
   - Connectivity
@@ -22,21 +38,29 @@ AutoName: Clairix
 
 RepoType: git
 Repo: https://github.com/jakes1345/Clairix.git
+# Developer-signed reproducible builds: release.yml publishes clairix-foss-<tag>.apk,
+# signed with the release key, from v3.0.0-beta.9 on, and verify-release.yml checks it
+# is built from its tag. F-Droid builds the same tag, compares, and on a match publishes
+# the developer's APK, so F-Droid and GitHub installs update each other.
+Binaries: https://github.com/jakes1345/Clairix/releases/download/v%v/clairix-foss-v%v.apk
 
-# F-Droid reads the listing text, icon and screenshots from fastlane/metadata/android/
-# in the repository on its own. The text there now is the Full edition's: its
-# full_description.txt says "This is the Full edition" and that Clairix includes Google's
-# Play services location library, which is false of this build. The foss listing needs
-# its own text before submission (docs/DISTRIBUTION.md, "F-Droid", item 2).
+# F-Droid reads the listing from the repository on its own. The title, short
+# description, changelogs, icon, feature graphic and screenshots come from
+# fastlane/metadata/android/ (shared with the Full edition, and true of both). The
+# description comes from src/fossSuite/fastlane/metadata/android/en-US/full_description.txt
+# at the repository root, which overrides the Full edition's full_description.txt:
+# fdroidserver reads src/<buildFlavor>/fastlane/ for each combination of the build's
+# `gradle:` entries ("fossSuite" here), and a later directory in sorted order wins
+# (fdroidserver/update.py, insert_localized_app_metadata). Rename that directory if the
+# `gradle:` line below changes.
 
 Builds:
   # versionName and versionCode must be those of android/app/build.gradle.kts at the
-  # tag built. 3.0.0-beta.8 (28) is the current version, but its tag predates the foss
-  # flavour; no release tag carries it yet, so this entry has no `commit:` line and
-  # cannot be built until one does. Add `commit: v<that version>` and set the two
-  # fields (and CurrentVersion below) to match before submitting.
-  - versionName: 3.0.0-beta.8
-    versionCode: 28
+  # tag built. v3.0.0-beta.9 is the first tag with the foss flavour; it does not exist
+  # until the maintainer tags the release, and this entry cannot be built before then.
+  - versionName: 3.0.0-beta.9
+    versionCode: 29
+    commit: v3.0.0-beta.9
     subdir: android/app
     sudo:
       - apt-get update
@@ -57,8 +81,25 @@ Builds:
     build:
       - source $HOME/.cargo/env
     ndk: r27c
+    # Candidate, not yet needed: `fdroid scanner` has not been run. If it flags the
+    # bundled stalkerware list (data, made by tools/ioc/convert.py from Echap's CC BY 4.0
+    # list and published as the signed `ioc` release), either list it here or have the
+    # build regenerate it from tools/ioc/:
+    # scanignore:
+    #   - android/app/src/suite/assets/ioc.json.gz
 
+# MAINTAINER FILLS THIS IN before submitting: the SHA-256 of the release signing
+# certificate, 64 lower-case hex characters with no colons, as docs/KEYS.md records it
+# and as `apksigner verify --print-certs` prints it for a published APK ("Signer #1
+# certificate SHA-256 digest"). It is the public certificate's digest, not a secret.
+# Without it F-Droid cannot accept the developer's signature; `fdroid lint` refuses the
+# placeholder, so it cannot be submitted by mistake.
+AllowedAPKSigningKeys: 'MAINTAINER: release certificate SHA-256 goes here'
+
+# None while F-Droid's reviewers settle the recipe. Once a build has passed,
+# `AutoUpdateMode: Version` lets F-Droid pick up each new tag by itself, which shortens
+# the time an F-Droid install lags behind a release (docs/DISTRIBUTION.md, "F-Droid").
 AutoUpdateMode: None
 UpdateCheckMode: Tags ^v[0-9.]+(-beta\.[0-9]+)?$
-CurrentVersion: 3.0.0-beta.8
-CurrentVersionCode: 28
+CurrentVersion: 3.0.0-beta.9
+CurrentVersionCode: 29
