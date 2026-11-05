@@ -37,7 +37,7 @@ import {
 import { HttpError, base64ToBytes, json, jsonText, normaliseNumber, randomNumber, requireSecret, secretEquals, sha256Hex, timingSafeEqual, type Env } from "./env";
 import { KNOWN_REGIONS } from "./regions";
 import { INVITE_TTL_MS, Mailbox, MAX_ENVELOPE_B64, SUSPENDED, type CoinTx, type Profile, type SignedKey } from "./mailbox";
-import { invitePage } from "./invite-page";
+import { invitePage, invitePageCsp } from "./invite-page";
 import {
   FED_CLAIMS_BURST,
   FED_CLAIMS_PER_HOUR,
@@ -289,9 +289,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && path === "/i") {
-    return new Response(invitePage(), {
+    const page = invitePage();
+    return new Response(page, {
       headers: {
         "content-type": "text/html; charset=utf-8",
+        "content-security-policy": await invitePageCsp(page),
+        "x-frame-options": "DENY",
         "cache-control": "public, max-age=3600",
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
