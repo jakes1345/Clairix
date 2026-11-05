@@ -57,7 +57,9 @@ Package: app.clairix
 APK: GitHub Releases, https://github.com/jakes1345/Clairix/releases
   Name pattern for the edition to list: clairix-v<version>.apk
   (each release also carries clairix-comms-v<version>.apk, a messaging-only
-  build with the same package name, and a Play .aab; please ignore both).
+  build with the same package name, clairix-foss-v<version>.apk, the same app
+  without Google Play services, meant for F-Droid, and a Play .aab; please
+  ignore those three).
 Signing certificate SHA-256:
   471c09cd792fff0bf75724bbb8ee2d13cc674e3f51d1e1fde28a2500932a52cc
   (recorded in docs/KEYS.md, signed and published as the "keys" release)
