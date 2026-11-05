@@ -423,3 +423,53 @@ class UnrecordedSends(private val sealed: () -> Boolean) {
     @Synchronized
     fun has(key: String): Boolean = key in pending
 }
+
+/**
+ * Envelopes already sealed for a send that may have reached the relay.
+ *
+ * When the relay's answer is lost (a timeout after it stored the envelope),
+ * the send counts as not done and is tried again. Sealing again would take a
+ * new ratchet step and make a second, different envelope the recipient would
+ * have to open before dropping it by message id. Instead the retry sends the
+ * same bytes, which the recipient drops unopened (it keeps a digest of every
+ * envelope it has seen) and which cost no ratchet step.
+ *
+ * Kept in memory only, for at most [ttlMs]: long enough for the outbox's
+ * retries, well inside how long a recipient's sealing prekey stays current.
+ * A send that settles (sent, refused, too large) forgets its envelope.
+ */
+class SealedEnvelopes(private val ttlMs: Long, private val clock: () -> Long = System::currentTimeMillis) {
+
+    private class Held(val peer: String, val envelope: ByteArray, val at: Long)
+
+    private val held = HashMap<String, Held>()
+
+    /** The envelope sealed for [key] to [peer], if one is held and still fresh. */
+    @Synchronized
+    fun take(key: String, peer: String): ByteArray? {
+        val h = held[key] ?: return null
+        if (h.peer != peer || clock() - h.at > ttlMs) {
+            held.remove(key)
+            return null
+        }
+        return h.envelope
+    }
+
+    /** Keeps [envelope], sealed for [key] to [peer], for a retry. */
+    @Synchronized
+    fun keep(key: String, peer: String, envelope: ByteArray) {
+        val now = clock()
+        held.values.removeAll { now - it.at > ttlMs }
+        held[key] = Held(peer, envelope, now)
+    }
+
+    @Synchronized
+    fun forget(key: String) {
+        held.remove(key)
+    }
+
+    @Synchronized
+    fun clear() {
+        held.clear()
+    }
+}
