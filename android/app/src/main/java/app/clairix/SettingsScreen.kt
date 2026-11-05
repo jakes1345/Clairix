@@ -413,6 +413,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
         return
     }
 
+    // Settings > Supporter: redeem a code; in the Play edition, buy it (SupporterSettings.kt).
+    var showSupporter by rememberSaveable { mutableStateOf(false) }
+    if (showSupporter) {
+        BackHandler { showSupporter = false }
+        Column(Modifier.fillMaxSize().background(c.base).navigationBarsPadding()) {
+            SupporterPage(onBack = { showSupporter = false })
+        }
+        return
+    }
+
     // This screen replaces the whole tab tree, so it does not inherit the insets
     // applied around the tabs and keeps clear of the system bars itself.
     Column(Modifier.fillMaxSize().background(c.base)) {
@@ -944,6 +954,11 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                     )
                 }
             }
+
+            // ── Supporter ────────────────────────────────────────────────────
+            //
+            // Relay-cost limits only (docs/SUPPORTER.md); nothing above asks.
+            supporterItems(onOpen = { showSupporter = true })
 
             // ── About ────────────────────────────────────────────────────────
 
