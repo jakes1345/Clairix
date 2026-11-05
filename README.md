@@ -620,6 +620,12 @@ The fonts the app ships with keep their own licence, the SIL Open Font License
 and JetBrains Mono ([licenses/OFL-1.1-JetBrains-Mono.txt](licenses/OFL-1.1-JetBrains-Mono.txt)).
 Libraries the app and the relay depend on keep theirs.
 
+The logo, icons and other brand images in `brand/`, and the store icon,
+feature graphic and screenshots in `fastlane/metadata/android/`, are under the
+Creative Commons Attribution-ShareAlike 4.0 licence; [brand/LICENSE.md](brand/LICENSE.md)
+says exactly which files, and what it does not cover
+([licenses/CC-BY-SA-4.0.txt](licenses/CC-BY-SA-4.0.txt)).
+
 The stalkerware list (`android/app/src/suite/assets/ioc.json.gz`, and the
 `ioc` release the app updates it from) is adapted by `tools/ioc/convert.py`
 from [Stalkerware Indicators of Compromise](https://github.com/AssoEchap/stalkerware-indicators),
