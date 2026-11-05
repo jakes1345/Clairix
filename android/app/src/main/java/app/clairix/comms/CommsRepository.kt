@@ -275,6 +275,9 @@ object CommsRepository {
     /** How long an envelope sealed for a retry is kept: the outbox's back-off tops out at five minutes. */
     private const val SEALED_RETRY_MS = 15 * 60_000L
     /** A key refresh after tokens came for keys not yet pinned: half a minute to five minutes later, at random. */
+    private const val SUPPORTER_TOPUP_MIN_MS = 60_000L
+    private const val SUPPORTER_TOPUP_SPREAD_MS = 240_000
+    private const val HTTP_TOO_MANY = 429
     private const val KEY_REFRESH_MIN_MS = 30_000L
     private const val KEY_REFRESH_SPREAD_MS = 270_000
     private const val RECEIPT_BATCH = 100
@@ -364,7 +367,12 @@ object CommsRepository {
             transportRefused = { transportKeys.setPublished(false) },
             // Through Tor, the relay is reached at its onion address when it has one.
             onion = { if (TorTransport.enabled) relayOnion() else null },
+            supporterCredentials = StoredTokenPool(appContext, "supporter"),
+            supporterKeys = StoredTokenKeyPins(appContext, StoredTokenKeyPins.SUPPORTER_KEY),
         )
+        // What Settings and the media limit ask: whether this install holds a
+        // Supporter credential. Nothing else makes it a Supporter.
+        app.clairix.supporter.Entitlement.bind { now -> relay.supporterCredentialCount(now) }
         // Only the mailbox there is asked for, and only while the vault is open.
         previousRelay = RelayClient({ if (Vault.sealed.value) null else identities.get() }, { config.previousRelay }, { config.previousNumber })
         claims = StoredPendingClaims(appContext)
@@ -1915,7 +1923,7 @@ object CommsRepository {
             if (!config.isRegistered) throw RelayException("Not registered with a relay")
             store.contact(peer) ?: throw RelayException("Unknown contact")
             if (media.bytes.isEmpty()) throw IllegalArgumentException("The file is empty")
-            if (media.bytes.size > CommsMedia.MAX_BYTES) throw IllegalArgumentException("The file is too large to send")
+            if (media.bytes.size > CommsMedia.sendLimitBytes()) throw IllegalArgumentException("The file is too large to send")
             val id = UUID.randomUUID().toString()
             val chunks = (media.bytes.size + CommsWire.MEDIA_CHUNK_BYTES - 1) / CommsWire.MEDIA_CHUNK_BYTES
             val body = MediaBody(
@@ -2323,10 +2331,53 @@ object CommsRepository {
         if (!config.isRegistered) return 0
         return runCatching { relay.topUpTokens() }
             .onFailure {
-                if ((it as? RelayException)?.code == RelayClient.KEYS_PENDING) scheduleKeyRefresh()
+                val code = (it as? RelayException)?.code
+                if (code == RelayClient.KEYS_PENDING) scheduleKeyRefresh()
                 else CommsLog.add("Could not fetch delivery tokens: ${it.message}")
+                // The hourly allowance is spent: a Supporter credential buys more.
+                if (code == HTTP_TOO_MANY) scheduleSupporterTopUp()
             }
             .getOrDefault(0)
+    }
+
+    private var supporterTopUpJob: Job? = null
+
+    /**
+     * Spends one Supporter credential for a batch of delivery tokens
+     * (docs/SUPPORTER.md), at a random moment a minute or more after the
+     * signed fetch that found the allowance spent: straight after it, the
+     * relay could match the anonymous spend to the account just refused.
+     * Nothing happens without a credential; one at a time.
+     */
+    private fun scheduleSupporterTopUp() {
+        if (supporterTopUpJob?.isActive == true || relay.supporterCredentialCount() == 0) return
+        supporterTopUpJob = scope.launch {
+            delay(SUPPORTER_TOPUP_MIN_MS + SecureRandom().nextInt(SUPPORTER_TOPUP_SPREAD_MS))
+            runCatching { relay.topUpWithSupporterCredential() }
+                .onSuccess { got -> if (got > 0) { flushOutbox(); flushReceipts() } }
+                .onFailure { CommsLog.add("Could not use a Supporter credential: ${it.message}") }
+        }
+    }
+
+    /** Redeems a Supporter code (Settings → Supporter); returns how many credentials it brought. */
+    suspend fun redeemSupporterCode(code: String): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!config.isRegistered) throw RelayException("Set up Comms first: the code is redeemed with your relay")
+            relay.redeemSupporterCode(code)
+        }
+    }
+
+    /** Exchanges a Google Play purchase for credentials (the Play edition's SupporterBilling); how many it brought. */
+    suspend fun redeemPlayPurchase(productId: String, purchaseToken: String): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!config.isRegistered) throw RelayException("Set up Comms first: the purchase is exchanged with your relay")
+            relay.redeemPlayPurchase(productId, purchaseToken)
+        }
+    }
+
+    /** What the relay offers Supporters, read on a request that names nobody; null when it offers nothing or cannot be reached. */
+    suspend fun supporterOffer(): RelayClient.SupporterOffer? = withContext(Dispatchers.IO) {
+        if (!config.isRegistered) null else runCatching { relay.info().supporter }.getOrNull()
     }
 
     private var keyRefreshJob: Job? = null

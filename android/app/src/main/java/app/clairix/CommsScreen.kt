@@ -1873,7 +1873,7 @@ private fun AttachMenu(onDismiss: () -> Unit, onGallery: () -> Unit, onPhoto: ()
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    stringResource(R.string.comms_photos_are_resized_to_at_most, CommsMedia.MAX_IMAGE_EDGE, CommsMedia.MAX_BYTES / (1024 * 1024)),
+                    stringResource(R.string.comms_photos_are_resized_to_at_most, CommsMedia.MAX_IMAGE_EDGE, CommsMedia.sendLimitBytes() / (1024 * 1024)),
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClairixTheme.colors.textSubtle
                 )

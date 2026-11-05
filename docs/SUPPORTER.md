@@ -14,8 +14,8 @@ evidence files names the entitlement API.
 |---|---|---|---|
 | Delivery tokens | the hourly allowance (1000 an hour by default, `DELIVERY_TOKENS_PER_HOUR`) | the same, plus 100 more for each Supporter credential spent | relay, `SUPPORTER_TOKENS_PER_CREDENTIAL` |
 | Credentials per code or purchase | | 52 (about one a week for a year) | relay, `SUPPORTER_CREDENTIALS_PER_CODE` |
-| A photo or video sent | 5 MB | 10 MB | app, `CommsMedia.MAX_BYTES` / `Entitlement.SUPPORTER_MEDIA_MAX_BYTES` |
-| A photo or video received | 10 MB, for everyone | | app, `CommsMedia.RECEIVE_MAX_BYTES` |
+| A photo or video sent | 5 MB | 10 MB | app, `Entitlement.FREE_MEDIA_MAX_BYTES` / `SUPPORTER_MEDIA_MAX_BYTES`, read through `CommsMedia.sendLimitBytes()` |
+| A photo or video received | 10 MB, for everyone | | app, `CommsMedia.MAX_BYTES` |
 
 Clairix has no linked devices, so there is no device limit to lift.
 
@@ -104,6 +104,14 @@ itself), exactly like the other kinds: no new key is made or configured.
   redeem it. An abuser who finds the card can try it; if it was used, the
   relay says so ("already used"), which tells them it was redeemed somewhere,
   not where or by whom.
+- **A lost answer.** The relay marks a code used before it answers. If the
+  answer never reaches the phone (the connection drops at that moment), the
+  code reads as used and its credentials are lost; the operator can mint a
+  replacement. Making a retry idempotent would mean keeping something per
+  redemption beside the used flag, which this design avoids.
+- **Older versions.** Apps from before Supporter accept photos and videos up
+  to 5 MB, so a Supporter's 10 MB video does not reach a contact who has not
+  updated.
 - **The organisation's list.** If a shelter writes down which person got which
   code, the shelter can be asked for it. The relay cannot add to that
   anything about the number.
