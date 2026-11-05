@@ -133,12 +133,15 @@ internal object EvidenceExport {
      * this process. Blocking; call off the main thread.
      */
     private fun input(app: Context, range: ReportRange): ReportInput {
-        val timeline = runCatching { TimelineLog.get(app).snapshot() }.getOrElse { Registry.timeline.value }
+        val chained = runCatching { TimelineLog.get(app).chainedAndVerified() }.getOrNull()
+        val timeline = chained?.first?.map { it.first } ?: Registry.timeline.value
         val full = BuildConfig.FULL_ACCESS
         return ReportInput(
             status = Registry.status.value,
             detections = Registry.detections.value,
             timeline = timeline,
+            timelineLinks = chained?.first?.map { it.second }.orEmpty(),
+            chain = chained?.second,
             cell = Registry.cell.value,
             nfc = Registry.nfc.value,
             wifi = Registry.wifi.value,

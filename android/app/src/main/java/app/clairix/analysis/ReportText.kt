@@ -38,6 +38,7 @@ internal object ReportText {
             unlocksBlock(input.unlocks, range, t)
             trustBlock(input.trustStore, t)
             camerasBlock(input, range, t)
+            chainBlock(input.chain)
             timelineBlock(input, range, t)
         }.let(::defuse)
     }
@@ -79,6 +80,7 @@ internal object ReportText {
         } else {
             appendLine("  Signature  : none, the signing key was not available (${key.unavailable ?: "unknown reason"})")
         }
+        key.attestationNote?.let { appendLine("  Key attestation: $it") }
         appendLine()
     }
 
@@ -358,6 +360,26 @@ internal object ReportText {
             appendLine("    ${t.text(e.ts)}  ${indented(e.title, "      ")}")
             appendLine("      ${input.photos[e.id]?.let { "File: $it, shared with this report" } ?: "Kept, but it could not be opened on this phone"}")
         }
+        appendLine()
+    }
+
+    private fun StringBuilder.chainBlock(v: TimelineChain.Verification?) {
+        appendLine("TIMELINE CHAIN")
+        if (v == null) {
+            appendLine("  The timeline's hash chain could not be read for this report.")
+            appendLine()
+            return
+        }
+        appendLine("  Entries : ${v.entries}, the whole timeline, not only this period")
+        appendLine("  Head    : ${v.head} (SHA-256 of the newest entry written)")
+        val removed = if (v.removedByRetention > 0) "; ${plural(v.removedByRetention, "entry")} removed by the retention or the cap, as recorded" else ""
+        if (v.intact) {
+            appendLine("  Check   : intact$removed")
+        } else {
+            appendLine("  Check   : BROKEN$removed")
+            for (p in v.problems) appendLine("    - ${indented(p, "      ")}")
+        }
+        appendLine("  ${TimelineChain.WHAT_IT_PROVES} Each entry's link is in the JSON report.")
         appendLine()
     }
 

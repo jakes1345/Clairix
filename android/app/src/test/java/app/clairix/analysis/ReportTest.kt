@@ -425,4 +425,69 @@ class ReportTest {
         )
         assertNull(Report.timelineFooter(0))
     }
+
+    // ── The timeline's chain and the key's attestation ───────────────────────
+
+    @Test
+    fun theReportCarriesTheChainHeadItsCheckAndEachEntrysLink() {
+        val e = TimelineEvent("a@1", EventKind.PLATFORM, oct3, "A", "", Severity.LOW)
+        val content = EventLog.contentOf(e)
+        val link = TimelineChain.Link(1, TimelineChain.GENESIS, TimelineChain.hash(TimelineChain.GENESIS, 1, content))
+        val v = TimelineChain.verify(listOf(link to content), emptyMap(), link.hash)
+        val chained = input(timeline = listOf(e)).copy(timelineLinks = listOf(link), chain = v)
+        val text = Report.toText(header(), chained, ReportRange(), signer)
+        assertTrue("TIMELINE CHAIN" in text)
+        assertTrue("Head    : ${link.hash}" in text)
+        assertTrue("Check   : intact" in text)
+        assertTrue("It does not prove when an entry was written" in text)
+        val root = JSONObject(Report.toJson(header(), chained, ReportRange(), signer)).getJSONObject("report")
+        val c = root.getJSONObject("timeline_chain")
+        assertEquals(link.hash, c.getString("head"))
+        assertTrue(c.getBoolean("intact"))
+        assertEquals(TimelineChain.GENESIS, c.getString("genesis"))
+        val first = root.getJSONArray("timeline").getJSONObject(0).getJSONObject("chain")
+        assertEquals(link.hash, first.getString("hash"))
+        assertEquals(1L, first.getLong("seq"))
+        // A broken chain says so, with what broke.
+        val broken = chained.copy(chain = v.copy(problems = listOf("entry #1 (a@1) was changed after it was written")))
+        val brokenText = Report.toText(header(), broken, ReportRange(), signer)
+        assertTrue("Check   : BROKEN" in brokenText)
+        assertTrue("- entry #1 (a@1) was changed after it was written" in brokenText)
+    }
+
+    @Test
+    fun aKeyWithoutAttestationSaysSo() {
+        val text = Report.toText(header(), input(), ReportRange(), signer)
+        assertTrue("Key attestation: none. This key was made without attestation" in text)
+        val h = JSONObject(Report.toJson(header(), input(), ReportRange(), signer)).getJSONObject("report").getJSONObject("header")
+        assertFalse(h.has("key_attestation_chain"))
+        assertTrue(h.getString("key_attestation").startsWith("none."))
+    }
+
+    @Test
+    fun anAttestedKeyCarriesItsChainAndWhatItShows() {
+        val kp = { KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair() }
+        val key = kp()
+        val root = kp()
+        val description = DerWriter.keyDescription(ReportSigning.ATTESTATION_CHALLENGE, level = 2)
+        val chain = listOf(
+            DerWriter.certificate("Key", "Root", key.public, root.private, description, serial = 2),
+            DerWriter.certificate("Root", "Root", root.public, root.private, serial = 1),
+        ).map { it.encoded }
+        val attested = object : ReportSigner by JvmSigner(key) {
+            override fun attestationChain(): List<ByteArray> = chain
+        }
+        val signing = ReportSigning.key(attested)
+        assertEquals(2, signing.attestation.size)
+        val note = signing.attestationNote!!
+        assertTrue(note, note.contains("The first is for this report's public key"))
+        assertTrue(note, note.contains("StrongBox"))
+        assertTrue(note, note.contains("each certificate is signed by the next"))
+        assertTrue(note, note.contains("did not compare it with Google's attestation roots"))
+        // A chain for some other key says that too.
+        val other = ReportSigning.attestationNote(chain, kp().public.encoded)
+        assertTrue(other, other.contains("NOT for this report's public key"))
+        val root2 = JSONObject(Report.toJson(header(attested), input(), ReportRange(), attested)).getJSONObject("report").getJSONObject("header")
+        assertEquals(2, root2.getJSONArray("key_attestation_chain").length())
+    }
 }

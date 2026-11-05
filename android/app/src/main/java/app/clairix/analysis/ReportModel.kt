@@ -78,7 +78,18 @@ data class ReportRange(val from: Long? = null, val to: Long? = null) {
  * The key the report is signed with, as the header prints it: the algorithm and
  * the public key (SubjectPublicKeyInfo, DER, base64), or why there is none.
  */
-data class SigningKey(val algorithm: String, val publicKey: String?, val unavailable: String? = null)
+data class SigningKey(
+    val algorithm: String,
+    val publicKey: String?,
+    val unavailable: String? = null,
+    /**
+     * The key's attestation certificate chain from the Android Keystore, base64 DER, the key's own
+     * certificate first; empty when it has none (a key made before Clairix asked for attestation).
+     */
+    val attestation: List<String> = emptyList(),
+    /** What that chain shows, in words ([ReportSigning.attestationNote]). */
+    val attestationNote: String? = null,
+)
 
 /** What the REPORT block says about the report, the app, the phone and the settings in force. */
 data class ReportHeader(
@@ -148,7 +159,11 @@ data class ReportInput(
      * event it belongs to. A photo on an event in the range that is not here was
      * kept but could not be opened.
      */
-    val photos: Map<String, String> = emptyMap()
+    val photos: Map<String, String> = emptyMap(),
+    /** Each [timeline] event's place in the hash chain, in the same order; null for one without a link. */
+    val timelineLinks: List<TimelineChain.Link?> = emptyList(),
+    /** The chain checked at export ([TimelineChain.verify]); null when the timeline could not be read. */
+    val chain: TimelineChain.Verification? = null
 )
 
 /**

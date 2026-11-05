@@ -32,7 +32,11 @@ internal object ReportJson {
         phoneSections(root, input, range, t)
         input.trustStore?.let { root.put("trust_store", trustJson(it, t)) }
         root.put("cameras", camerasJson(input, range, t))
-        root.put("timeline", JSONArray().also { a -> input.timeline.filter { range.contains(it.ts) }.forEach { a.put(eventJson(it, input, t)) } })
+        input.chain?.let { root.put("timeline_chain", chainJson(it)) }
+        root.put("timeline", JSONArray().also { a ->
+            input.timeline.withIndex().filter { range.contains(it.value.ts) }
+                .forEach { (i, e) -> a.put(eventJson(e, input, t).also { o -> input.timelineLinks.getOrNull(i)?.let { o.put("chain", linkJson(it)) } }) }
+        })
         return root
     }
 
@@ -100,6 +104,8 @@ internal object ReportJson {
             ReportSigning.fingerprint(it)?.let { fp -> put("public_key_sha256", fp.replace(" ", "")) }
         }
         h.signing.unavailable?.let { put("signature_unavailable", it) }
+        if (h.signing.attestation.isNotEmpty()) put("key_attestation_chain", strings(h.signing.attestation))
+        h.signing.attestationNote?.let { put("key_attestation", it) }
     }
 
     private fun statusJson(input: ReportInput) = JSONObject().apply {
@@ -258,6 +264,20 @@ internal object ReportJson {
             }
         })
     }
+
+    private fun chainJson(v: TimelineChain.Verification) = JSONObject().apply {
+        put("head", v.head)
+        put("entries", v.entries)
+        put("intact", v.intact)
+        put("problems", strings(v.problems))
+        put("removed_by_retention", v.removedByRetention)
+        put("genesis", TimelineChain.GENESIS)
+        put("hash", "SHA-256 over the previous hash, a newline, then seq, id, kind, ts, title, detail, severity, lat, lon " +
+            "and attachment, each as name=length:value and a newline (name=- when absent), in UTF-8, as lower-case hex")
+        put("about", TimelineChain.WHAT_IT_PROVES)
+    }
+
+    private fun linkJson(l: TimelineChain.Link) = JSONObject().put("seq", l.seq).put("prev", l.prev).put("hash", l.hash)
 
     private fun eventJson(e: TimelineEvent, input: ReportInput, t: ReportTime) = JSONObject().apply {
         put("id", e.id); put("kind", e.kind.name)
