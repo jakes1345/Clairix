@@ -38,8 +38,8 @@ is already on Cloudflare.
 `public/_headers` sets the Content-Security-Policy (self only), HSTS, `nosniff`,
 `Referrer-Policy: strict-origin-when-cross-origin`, a Permissions-Policy that denies camera,
 microphone and geolocation, and a one-year immutable cache for the hashed files in `/_astro/`.
-`public/_redirects` holds the short links (`/play`, `/full`, `/delete`, `/disclosure`,
-`/egress`) and `/pricing` to `/`.
+`public/_redirects` holds the short links (`/full`, `/delete`, `/disclosure`, `/egress`)
+and sends `/pricing` to `/`.
 
 The CSP has no `'unsafe-inline'`. Keep it that way: no inline `<script>` (other than
 JSON-LD), no `style=""` attributes, no `define:vars`. Astro bundles component scripts and
@@ -49,9 +49,9 @@ styles into files under `/_astro/`.
 
 | Path | Contents |
 |---|---|
-| `src/config/release.ts` | Clairix Full version, APK URL, SHA-256, release notes, Open Collective URL |
+| `src/config/release.ts` | Clairix Full version, APK URL, SHA-256, release notes, checksum list and its signature, Open Collective URL |
 | `src/config/site.ts` | Navigation, footer, per-page titles, descriptions and Open Graph lines |
-| `src/content/docs/*.md` | Security, Support, Press, Privacy, Terms, Legal-process and Delete-account copy |
+| `src/content/docs/*.md` | Security, Support, Press, Advocates, Privacy, Terms, Legal-process and Delete-account copy |
 | `src/content/features/*.md` | One file per feature section on /features |
 | `src/pages/` | One file per page; `index.astro` holds the home page copy |
 | `src/lib/icons.ts` | The Clairix icon set (24 px grid, chamfered) |
@@ -69,15 +69,19 @@ Edit `src/config/release.ts`:
 
 ```ts
 export const release = {
-  version: '2.7.0',
-  apkUrl: 'https://…/clairix-full-2.7.0.apk',
+  version: '3.0.0 Beta 8',
+  apkUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.8/clairix-v3.0.0-beta.8.apk',
   sha256: '<64 hex characters of that exact file>',
-  releaseNotesUrl: 'https://…',
-};
+  releaseNotesUrl: 'https://github.com/jakes1345/Clairix/releases/tag/v3.0.0-beta.8',
+  sumsUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.8/SHA256SUMS.txt',
+  sigUrl: 'https://github.com/jakes1345/Clairix/releases/download/v3.0.0-beta.8/SHA256SUMS.txt.sig',
+} as const;
 ```
 
 Until both `apkUrl` (HTTPS) and a well-formed `sha256` are set, /download shows
-"Coming with the first beta" instead of a download button or checksum. The Open Collective
+"Coming with the first beta" instead of a download button or checksum. Without
+`sumsUrl` the page leaves out the checksum-list check, and without `sigUrl` it
+says the list is not signed yet. The Open Collective
 link (`funding.openCollectiveUrl`) appears in the footer and on /support only once it is set.
 
 ## Adding app screenshots
@@ -98,7 +102,8 @@ generates responsive WebP sizes at build time.
 
 ## The theme easter egg
 
-The footer "Signal" control (and clicking the big mark in the home hero) switches the site
-between the four brand themes: Acid, Infrared, Hazard and Volt. The choice is stored in
+The footer "Signal" control switches the site between the four brand themes: Acid,
+Infrared, Hazard and Volt. (The big mark in the home hero cycles them too, but the hero
+screenshot now covers it, so on the home page it is hidden.) The choice is stored in
 `localStorage` under `clx-theme` (wrapped in try/catch) and restored before first paint by
 `public/theme-init.js`. The logo files are never recoloured; per the brand book they stay Acid.

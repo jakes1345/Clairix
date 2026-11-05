@@ -32,19 +32,19 @@ Also read:
 
 | Part | Language | Where | Size |
 |---|---|---|---|
-| End-to-end crypto: identity, sessions, sealed envelopes, blind tokens, mesh tags | Rust (vodozemac, UniFFI) | `comms-crypto/src/lib.rs` | 2,733 lines |
-| Recovery file: the identity saved under a recovery code | Rust (Argon2id, ChaCha20-Poly1305) | `comms-crypto/src/recovery.rs` | 669 lines |
+| End-to-end crypto: identity, sessions, sealed envelopes, blind tokens, mesh tags | Rust (vodozemac, UniFFI) | `comms-crypto/src/lib.rs` | 2,756 lines |
+| Recovery file: the identity saved under a recovery code | Rust (Argon2id, ChaCha20-Poly1305) | `comms-crypto/src/recovery.rs` | 681 lines |
 | Tor client and local SOCKS proxy | Rust (Arti) | `comms-crypto/src/tor.rs` | 455 lines |
-| Relay: accounts, mailboxes, tokens, federation | TypeScript (Cloudflare Workers, Durable Objects) | `comms-worker/src/` | 6,996 lines (4,756 in the messaging files: `index.ts`, `mailbox.ts`, `federation.ts`, `comms-logic.ts`, `tokens.ts`, `auth.ts`) |
-| App messaging: protocol, storage, transport | Kotlin | `android/app/src/main/java/app/clairix/comms/` | 19,187 lines |
-| App on-device protection: lock, wipe, duress | Kotlin | `android/app/src/main/java/app/clairix/security/` | 6,635 lines |
+| Relay: accounts, mailboxes, tokens, federation | TypeScript (Cloudflare Workers, Durable Objects) | `comms-worker/src/` | 7,481 lines (4,847 in the messaging files: `index.ts`, `mailbox.ts`, `federation.ts`, `comms-logic.ts`, `tokens.ts`, `auth.ts`) |
+| App messaging: protocol, storage, transport | Kotlin | `android/app/src/main/java/app/clairix/comms/` | 19,577 lines |
+| App on-device protection: lock, wipe, duress | Kotlin | `android/app/src/main/java/app/clairix/security/` | 6,766 lines |
 
 ## Who to talk to
 
 security@clairix.app. The maintainers can walk an auditor through the code,
-answer questions during the engagement, and turn findings around quickly; the
-repository's CI builds and tests every change on five Android versions (12 to 16) against
-two real relays, so a fix can be shown working the same day.
+answer questions during the engagement, and turn findings around quickly. The
+repository's CI builds and tests every change on five Android versions (12 to
+16) against two real relays, so a fix can be shown working the same day.
 
 ## Licence
 

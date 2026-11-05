@@ -188,7 +188,7 @@ Optional:
 | `CADDY_DEBUG` | `off` | `on`: Caddy's debug log and an access log, to find out why a certificate does not come. The access log writes down addresses: turn it off again. |
 | `BACKUP` | on | `off` runs with no backups and no lease: a lost disk is a new relay. |
 
-Every relay setting in the main README (`FEDERATION`, `MIX_MAX_MS`,
+Every relay setting in the relay's [README](../README.md) (`FEDERATION`, `MIX_MAX_MS`,
 `DELIVERY_TOKENS_PER_HOUR`, `COIN`, `COIN_INITIAL_BALANCE`, `ADMIN_SECRET`,
 `OPEN_REGISTRATION`, `OPEN_REGISTRATION_PER_DAY`, ...)
 works here too, as an environment variable. `RELAY_ORIGIN` defaults to

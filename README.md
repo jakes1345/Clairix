@@ -19,9 +19,9 @@ just as plainly, what it cannot do.
 | What you want to do | How Clairix helps |
 |---|---|
 | Find a hidden camera | Point the phone around the room and it spots the glint a lens throws back when it can see you |
-| Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers, and says FOLLOWING only once one away from its owner has been heard at places far apart while your own position shows you travelled between them; anything else that does the same is reported as travelling with you, not as a tracker |
+| Know if someone is tracking you | Watches for AirTags, Tiles and similar trackers. It says FOLLOWING only once a tracker away from its owner has been heard at places far apart, and your own position shows you travelled between them. Anything else that does the same is reported as travelling with you, not as a tracker |
 | Catch a fake cell tower | Learns the towers that are normal for the places you go and warns when one breaks the rules |
-| Check for spyware | Scans every app on the phone and flags anything that can read your screen, your passwords or your microphone, matches every app that is not part of the phone's own system against a public list of known stalkerware by package name and signing certificate, says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. It runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
+| Check for spyware | Flags any app that can read your screen, your passwords or your microphone. Every app that is not part of the phone's own system is matched against a public list of known stalkerware, by package name and signing certificate. It also says when the phone is managed by someone, and checks the phone itself: installed certificates, proxies, USB debugging, patch level. The check runs at boot, after each update, once a day while Clairix is in use or scanning, and after each install while the scanner runs, and says what is new |
 | Spot a fake Wi-Fi | Detects hotspots set up to impersonate the ones your phone already trusts |
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online. United States only for now: the 50 states, DC and Puerto Rico. A route takes a position every second; below 15 % with no charger, traffic and reports slow to every 5 minutes |
@@ -32,7 +32,7 @@ just as plainly, what it cannot do.
 | Know what your Bluetooth gives away | Shows what a roadside or in-store sensor can log: the phone's name (renamed to the model in one tap if it is yours), whether it is discoverable, and which paired accessories keep one address for life and were connected on your drives |
 | See your car's health | Connects to the car over Bluetooth OBD and shows live engine data and trip history |
 | Track aircraft nearby | Plug in an SDR stick and list nearby aircraft from their ADS-B broadcasts, with callsign, altitude, speed and heading (a list, not map markers) |
-| Listen to a scanner | The same stick scans the channels you add and plays them; transmissions are recorded only when you turn recording on, sealed on the phone like its other records. The stick runs on the phone's battery, and below 15 % with no charger drive mode stops it until the phone charges |
+| Listen to a scanner | The same stick scans the channels you add and plays them; transmissions are recorded only when you turn recording on, sealed on the phone like its other records. The stick runs on the phone's battery: below 15 % with no charger, drive mode stops it until the phone charges or is back at 20 % |
 
 ---
 
@@ -79,28 +79,30 @@ radio scanner's recordings, the whole Comms database (contacts, messages,
 groups), the Comms settings, keys and saved cards are sealed on disk under
 keys in the phone's secure hardware, so a copy of the app's files is
 ciphertext. (Recordings made by earlier versions were plain audio; the
-Scanner card offers to encrypt or delete any that are left.) The app lock
-can wipe after a run of wrong passcodes (a number you pick when you set it;
-until you do, none; the limit of 3 that earlier versions set without asking
-is paused until you confirm it) and then closes. A separate duress passcode,
-typed on the lock screen, wipes at
-once and leaves a decoy: the lock screen says "Wrong passcode" as it does
-for any wrong guess, goes blank for a moment while Clairix restarts behind
-it and is back, and from then on that code opens Clairix, empty (no history,
-contacts or Clairix number, first run done). The "Wipe Clairix" page (Comms
-menu, or Settings) wipes on demand; a wipe deletes the keys first, so cutting it
-short leaves only ciphertext. Locking collapses every message notification
-into "Unlock to read" and every alert (a tracker, a cell anomaly, a
-phone-security warning) into one "Unlock to see alerts", stops read receipts,
-disarms a card armed for NFC readers, and hides the app from accessibility
-services as well as the eye; it locks the moment the screen goes off. An alert
-names what it found only while Clairix is unlocked and only if you turn "Show
-alert details in notifications" on (it is off by default), and the ongoing
-scanner, drive-mode, mesh and navigation notifications say only that they run.
-On a locked phone the alert and connection notifications do not appear at all,
-message notifications show only that something came (previews are hidden by
-default), and every screen is kept out of screenshots and the recents
-thumbnail. History
+Scanner card offers to encrypt or delete any that are left.)
+
+The app lock can wipe Clairix after a run of wrong passcodes, at a limit you
+pick when you set the passcode; Clairix then closes. There is no limit until
+you pick one; the limit of 3 that earlier versions set without asking is
+paused until you confirm it. A separate duress passcode, typed on the lock screen, wipes at
+once and leaves a decoy. The lock screen says "Wrong passcode" as it does for
+any wrong guess, goes blank for a moment while Clairix restarts behind it, and
+comes back. From then on that code opens Clairix, empty: no history, contacts
+or Clairix number, first run done. The "Wipe Clairix" page (Comms menu, or
+Settings) wipes on demand. A wipe deletes the keys first, so cutting it short
+leaves only ciphertext.
+
+Locking collapses every message notification into "Unlock to read" and every
+alert (a tracker, a cell anomaly, a phone-security warning) into one "Unlock
+to see alerts". It also stops read receipts, disarms a card armed for NFC
+readers, and hides the app from accessibility services as well as the eye.
+Clairix locks the moment the screen goes off. An alert names what it found
+only while Clairix is unlocked, and only if you turn "Show alert details in
+notifications" on (it is off by default). The ongoing scanner, drive-mode,
+mesh and navigation notifications say only that they run. On a locked phone
+the alert and connection notifications do not appear at all, message
+notifications show only that something came (previews are hidden by default),
+and every screen is kept out of screenshots and the recents thumbnail. History
 older than the retention you choose (30 days by default) is deleted, so there
 is less to give up in the first place.
 
@@ -117,10 +119,9 @@ the job that signs them runs apart from the one that builds them. Each map's
 release names the extract, its MD5 and its dates, and the commit it was built
 from, so a published graph can be traced to what it was made from. Every
 workflow action is pinned to a commit. The app trusts only the system's
-certificate authorities, never a
-certificate someone installed on the phone, and refuses cleartext; the
-Certificates page can pin the relay's key so that a certificate from a
-compelled authority is refused too.
+certificate authorities, never a certificate someone installed on the phone,
+and refuses cleartext. The Certificates page can pin the relay's key so that
+a certificate from a compelled authority is refused too.
 
 **Where you go.** Routing runs from map files on the phone, so directions
 keep working with no connection, and so does searching for a road: the map's
@@ -176,14 +177,15 @@ Read this part twice.
   call set-up, SOS and group membership changes skip the wait. That is a
   single mixing relay, not a mix network: the relay itself still sees every
   envelope arrive and leave, on a quiet relay there is little to mix with,
-  and someone watching both ends for weeks can still correlate by volume. The relay's
-  operator, or the platform under it, could capture live requests and see the
-  address each one came from. The relay writes none of this down; what the
-  platform keeps (Cloudflare's edge, for the project's relay) is under the
-  platform's own policy, which we cannot check. From 3.0.0 Beta 6 the tokens a send
-  spends are blind (RFC 9497, as Privacy Pass): the phone makes each one and
-  the relay signs it without seeing it, so not even a relay that recorded
-  every request can tell which account a send's token came from. If your IP address matters, use Tor or a VPN. A call hands your
+  and someone watching both ends for weeks can still correlate by volume.
+  The relay's operator, or the platform under it, could capture live requests
+  and see the address each one came from. The relay writes none of this down;
+  what the platform keeps (Cloudflare's edge, for the project's relay) is
+  under the platform's own policy, which we cannot check. From 3.0.0 Beta 6
+  the tokens a send spends are blind (RFC 9497, as in Privacy Pass): the phone
+  makes each one and the relay signs it without seeing it, so not even a
+  relay that recorded every request can tell which account a send's token
+  came from. If your IP address matters, use Tor or a VPN. A call hands your
   address to the contact's phone, answered or not, unless "Relay-only calls"
   is on, which it is by default whenever your relay offers a TURN server.
 - **Relays.** Anyone can run a relay (comms-worker), and a contact on
@@ -191,9 +193,9 @@ Read this part twice.
   to your relay, which forwards it to theirs signed with its own key, so
   their relay sees your relay's address and never your phone's. Relays do
   this out of the box (an operator can turn it off); the contact's page says
-  which relay they are on. An order can shut a relay down or make it refuse you;
-  it cannot make it read your messages, and people on other relays are not
-  affected. The operator can publish other addresses the same relay answers
+  which relay they are on. An order can shut a relay down or make it refuse
+  you. It cannot make it read your messages, and people on other relays are
+  not affected. The operator can publish other addresses the same relay answers
   at, and the app falls back to them when the first is blocked (unless you
   have pinned the relay's key, in which case only the pinned address is
   used). With no network at all, the offline mesh carries texts and SOS
@@ -243,13 +245,13 @@ Read this part twice.
 Per Clairix number: the public keys; envelopes waiting for the phone, deleted
 when collected or after 30 days, each marked if it came without a contact's
 pass; the pass key your contacts' passes are made with; a UnifiedPush endpoint
-if you set one;
-unused invite codes for 7 days; the hashes of the old kind of token, which
-apps from before Beta 6 fetch, for about 14 days while unspent; the hashes of
-spent blind tokens, so none is spent twice, until the key they were made with
-is retired, 14 to 28 days; a note that each key belongs to that number, so nobody else can
-register it. For traffic: anonymous speed samples for 2 hours, learned
-road-segment positions for 30 days, incidents until they expire. For
+if you set one; unused invite codes for 7 days; the hashes of the old kind of
+token, which apps from before Beta 6 fetch, for about 14 days while unspent;
+the hashes of spent blind tokens, so none is spent twice, until the key they
+were made with is retired, 14 to 28 days; a note that each key belongs to that
+number, so nobody else can register it. For traffic: anonymous speed samples
+for 2 hours, learned road-segment positions for 30 days, incidents until they
+expire. For
 ClairixCoin, in Clairix Full on a relay that offers it: the balance, until
 the account is deleted, and for each transfer you make or receive its id, the
 amount, the hour and whether it came in or went out, the 100 most recent and
@@ -346,8 +348,8 @@ maintainer on the live service, not in this repository.
   that limit is paused, wrong passcodes bring the lockout, and Clairix asks
   after your next unlock. Wrong passcodes count as a run, wherever Clairix
   asks for the passcode, until the right passcode or biometric unlock proves
-  it is you. Once you are in, it tells you when a wrong
-  passcode was entered while you were away. The passcode is never stored;
+  it is you. Once you are in, it tells you when a wrong passcode was entered
+  while you were away. The passcode is never stored;
   only a verifier made with a hardware key is.
 - **Get help.** In Settings and the Comms menu: helplines for abuse and
   stalking in the country of your SIM card, or the phone's region, or any
@@ -395,11 +397,11 @@ maintainer on the live service, not in this repository.
 - **Keep history for** (Settings, with Export and Clear): 7, 30 or 90 days,
   or forever. 30 by default. The location log, the timeline, vehicle trips,
   the unlock ledger, the radio scanner's recordings and the map's tile and
-  traffic caches older than that are deleted, once a day even with Clairix closed. The cell-tower baseline is
-  kept: which towers and areas are usual and the last day each was seen (the
-  exact time for two days), and one not seen for three times the period is
-  forgotten (never, with forever). An exported evidence
-  report is deleted from the phone after a day.
+  traffic caches older than that are deleted, once a day even with Clairix
+  closed. The cell-tower baseline is kept: which towers and areas are usual
+  and the last day each was seen (the exact time for two days). One not seen
+  for three times the period is forgotten (never, with forever). An exported
+  evidence report is deleted from the phone after a day.
 - **Satellite-only positioning** (Settings → Location): off by
   default. On, every position fix comes from the satellite receiver alone
   and Clairix asks for no Wi-Fi/cell position, so no location service
@@ -480,7 +482,7 @@ maintainer on the live service, not in this repository.
 - **Ultrasound** (Scan → Ultrasound): on demand only, never in the background.
   Nothing is recorded; the microphone feeds a spectrum and the spectrum is
   thrown away.
-- **Resume scanning after reboot** needs "Allow all the time" location;
+- **Resume after reboot** (Settings) needs "Allow all the time" location;
   without it, scanning waits until you open the app.
 
 ---
@@ -534,8 +536,8 @@ only to an app already listed that hides its icon or holds access the model
 does not vouch for, which for Clairix Full is the unlock ledger's admin: 9
 with it on and exempt, 11 after the week. Steady uploads, read from
 Android's traffic counters, are weighed the same way as the battery
-exemption, so the numbers above are without them. The Comms edition comes to 4, listed as medium. The
-Play edition comes to 2, below the 3 at which an app is listed, or 4 after a
+exemption, so the numbers above are without them. The Comms edition comes to
+4, listed as medium. The Play edition comes to 2, below the 3 at which an app is listed, or 4 after a
 week unopened; its device admin is known to the model, since it comes from a
 store. Other scanners weigh these things differently. A unit test reads
 Clairix's own manifests (`src/main`, `src/suite`, `src/fullSuite`), feeds
@@ -547,8 +549,10 @@ these numbers.
 ## How to build it
 
 **You need:** [Android Studio](https://developer.android.com/studio) or the
-Android SDK and NDK with JDK 17, and [Rust](https://rustup.rs) with
-`cargo-ndk` for the crypto crate in `comms-crypto`.
+Android SDK with JDK 17, NDK `27.2.12479018`, and [Rust](https://rustup.rs)
+with `cargo-ndk` `4.1.2` for the crypto crate in `comms-crypto`. The build
+stops on any other NDK or `cargo-ndk` version; rustup picks up the Rust
+version from `comms-crypto/rust-toolchain.toml`.
 
 ```bash
 git clone https://github.com/jakes1345/Clairix
@@ -557,23 +561,24 @@ cd Clairix/android
 # app/build/outputs/apk/fullSuite/debug/app-full-suite-debug.apk
 ```
 
-Every push also builds the debug APKs in CI (Actions → Android APK →
-`clairix-debug-apk`), and builds the app twice on two machines, failing
-unless the two builds agree. Editions, variants, release
-signing and how to cut a release are in
+Every push that touches the app or the crypto crate also builds the debug
+APKs in CI (Actions → Android APK → `clairix-debug-apk`), and builds the app
+twice on two machines, failing unless the two builds agree. Editions,
+variants, release signing and how to cut a release are in
 [`android/README.md`](android/README.md), which also says how to check a
 published release against the source; the relay is in
 [`comms-worker/README.md`](comms-worker/README.md); the crypto crate in
 [`comms-crypto`](comms-crypto).
 
-**Before the first release** the asset signing key has to exist:
-`python3 tools/signing/keygen.py` writes `android/asset-signing.pub` and
-`android/asset-signing.pem` (commit both) and prints the secret for the
-`ASSET_SIGNING_KEY` secret, which belongs in the `release` and `assets`
-environments ([`docs/PROCESS.md`](docs/PROCESS.md)). Without them, release
-builds and the maps and work-zones workflows fail on purpose. How changes
-reach main and how a release is checked before it is signed are in
-[`docs/PROCESS.md`](docs/PROCESS.md).
+**The asset signing key**, which signs the release checksums, the maps and
+the app's other downloads, already exists: its public half is committed as
+`android/asset-signing.pub` and `android/asset-signing.pem`, its secret half
+is the `ASSET_SIGNING_KEY` secret, and [`docs/KEYS.md`](docs/KEYS.md) records
+it. Replacing it takes `tools/signing/keygen.py --force` and a new
+app release ([`tools/signing/README.md`](tools/signing/README.md)). Without
+the key, release builds and the maps and work-zones workflows fail on
+purpose. How changes reach main and how a release is checked before it is
+signed are in [`docs/PROCESS.md`](docs/PROCESS.md).
 
 ## Requirements
 
