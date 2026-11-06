@@ -447,8 +447,10 @@ def test_manifest_round_trip_and_recorded_digest():
 
 def test_main_reports_usage_and_publishes_with_the_token_from_the_environment(gh, tmp_path, monkeypatch):
     paths = sample(tmp_path)
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
+    # main() falls back to these, and a GitHub Actions runner sets them: without this the
+    # "no repository named" call below finds GITHUB_REPOSITORY and publishes instead.
+    for var in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_API_URL", "GITHUB_STEP_SUMMARY"):
+        monkeypatch.delenv(var, raising=False)
     assert pub.main(["--repo", REPO, "--tag", TAG, "--api", gh.base, *paths]) == 2
     monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
     assert pub.main(["--tag", TAG, "--api", gh.base, *paths]) == 2  # no repository named
