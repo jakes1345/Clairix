@@ -30,7 +30,7 @@ Clairix is free to use and requires Android 12 or newer.
 | **Website** | https://clairix.app |
 | **Platform** | Android 12 and newer |
 | **Distribution** | Direct APK from clairix.app and GitHub Releases (public beta), package `app.clairix`; a Google Play edition is in preparation |
-| **Current version** | 3.0.0 Beta 8 |
+| **Current version** | 3.0.0 Beta 9 |
 | **Price** | Free. Every safety feature, always. Optional Clairix Supporter covers relay costs (larger photos and videos, more messages an hour); organisations can buy codes to hand out. |
 | **Developer** | Clairix, an independent project |
 | **Category** | Tools / personal security |
