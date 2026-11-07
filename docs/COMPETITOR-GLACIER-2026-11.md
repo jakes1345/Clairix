@@ -126,9 +126,24 @@ Named customers: Honeywell Aerospace (testimonial). Reseller: UltiSat (2025). No
   hard-code `console.glacier.chat` for login and password reset, so at least the account flow is
   identifiable.
 - **Policy changelog.** The enterprise policy has one logged change (2025-01-14, VPN declaration for Google
-  Play). The consumer policy is dated 2026-06-15 initial, 2026-10-27 latest. The viral claim that retention
-  was quietly added after launch could not be checked: archive.org was unreachable from the tool. The current
-  policy does disclose call metadata retention.
+  Play).
+- **Consumer policy history (checked in the Wayback Machine, six snapshots).** The viral claim is
+  substantially true:
+  - **2026-06-15 (pre-launch, waitlist):** "Glacier does not store, retain, or archive any logs, to include
+    DNS queries, IP addresses, or any other personally identifiable network activity." No calling section,
+    no Twilio.
+  - **2026-07-24 (public launch):** the blanket no-logs sentence was narrowed to "any DNS or VPN activity
+    logs." Added a calling section: "call metadata (numbers, timestamps, duration) and voicemail messages
+    including audio recordings ... retained only as long as needed," and added Twilio as a processor.
+  - **2026-09-24:** added NextDNS as a processor and changed the query counter to a "24 hour" count.
+  - **2026-10-27/28:** added concrete retention (48 hours in carrier systems, up to 7 days on Glacier's),
+    a government-request table (all zero for 2026-07-14 to 2026-10-24), links to the iOS source and the
+    calling whitepaper, and a visible update history. That history itself lists the July 24 change as
+    "Public media launch. Added updated language for Glacier Calling."
+  
+  Fairness: calling did not exist before launch, so some of this is new-feature disclosure rather than a
+  reversal. But the broad "no logs" promise that was on the page before launch was replaced, and no notice of
+  that was given until the Oct 27 history.
 - **Entity and terms.** Enterprise terms: Maryland law, Anne Arundel County courts, liability capped at $100.
 
 **More code observations** (public repos, read only)
@@ -152,6 +167,6 @@ Named customers: Honeywell Aerospace (testimonial). Reseller: UltiSat (2025). No
 Server-side code, altOS internals, the Android release configuration, TLS behaviour of live Glacier
 hosts, the CEO's identity, and Security App LLC's registration. `docs.glacier.chat` did not resolve and
 three Notion help pages (app changelog, install guide, Guardian navigation) would not render. G2, ZoomInfo,
-Crunchbase, USPTO and Dark Reading returned 403 to the fetch tool, and archive.org was blocked, so
-historical policy versions were not compared. Funding (ZoomInfo: $6.1M) is unconfirmed. Criticism of the
+Crunchbase, USPTO and Dark Reading returned 403 to the fetch tool. Wayback snapshots of the consumer policy
+were compared (above); the enterprise legal page and glacier.chat pages were not. Funding (ZoomInfo: $6.1M) is unconfirmed. Criticism of the
 consumer app from Leah Files and Candace Owens is partisan commentary, not testing.
