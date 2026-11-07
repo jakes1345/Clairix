@@ -87,9 +87,71 @@ Named customers: Honeywell Aerospace (testimonial). Reseller: UltiSat (2025). No
 6. **Watch list.** Glacier's pricing, any audit it publishes, and whether its "quantum-safe" claim ever
    names a real PQ algorithm.
 
+## Second pass (2026-11-07): more findings
+
+**Company and people**
+- **Trademark.** Glacier Security Inc. filed an intent-to-use application for GLACIER on 2026-01-09
+  (USPTO serial 99585796, mobile software for cybersecurity and secure messaging). It is pending, not
+  registered. Source: uspto.report.
+- **Alex White** (CTO): per the consumer launch release, M.S. from Johns Hopkins and a B.A. from Davenport;
+  decorations listed include the National Intelligence Meritorious Unit Citation. Not independently verified.
+- **Shawn Ryan.** Crunchbase lists him as co-founder (May 2026). His own show episode discloses no stake and
+  says only that he "partnered with some of the developers." Whether he has equity is unconfirmed. Security
+  App LLC's state of formation and agent were not found, and its legal link to Glacier Security Inc. is not
+  stated.
+- **Team.** The site names no staff besides the founders; every post is bylined "Team Glacier." LinkedIn
+  lists 11-50 employees. No CEO name was found (directories show initials only).
+
+**Partnerships and demos**
+- **RSA, 2023-04-26:** previewed a suite "powered by Quantinuum's quantum hardened keys" (booth N 5176).
+  Quantinuum's product is a random-number source (Quantum Origin Onboard, June 2023). That does not make
+  X25519 or WireGuard post-quantum. No Fornetix link appears outside the whitepaper's one mention.
+- **Honeywell, AUSA 2023:** GoSecure Comms "with Glacier Mobility Suite," aimed at military logistics and
+  drones. Honeywell's own press pages did not mention it.
+- **T-REX 2024 (Camp Atterbury, Army/RDER, posted 2024-09-03):** the GoSecure Kit ran encrypted calls and
+  messages over satellite and cellular, live tracking, and a compromised-device playbook (quarantine, alert,
+  wipe). Result stated only as "resilient and reliable"; no metrics.
+- **Security Hub (2022):** no MDM needed; checks compromise, OS update status, screen lock, biometrics and
+  whether the VPN is on. In the iOS code the report carries a device id, device model, app and OS versions,
+  a compromised flag with detail, lock settings and VPN state. That matches the "no messages or location"
+  claim but is still device-identifying.
+- **Desktop client** (Mac and Windows beta, 2026-01-14): chat and files, no name, phone or email required.
+
+**Docs and policy**
+- **Public FAQ** (Notion "Security and Trust", read in a browser): says Glacier "cannot read or decrypt any
+  messages," uses OMEMO, and that external calls are TLS to Glacier then unencrypted to the phone network.
+  It says per-message keys encrypt with AES-GCM, while the whitepaper lists AES-CBC for messages and GCM for
+  files. The two documents disagree.
+- **Domains.** The FAQ says Glacier avoids domain names tied to Glacier Security Inc. The public clients
+  hard-code `console.glacier.chat` for login and password reset, so at least the account flow is
+  identifiable.
+- **Policy changelog.** The enterprise policy has one logged change (2025-01-14, VPN declaration for Google
+  Play). The consumer policy is dated 2026-06-15 initial, 2026-10-27 latest. The viral claim that retention
+  was quietly added after launch could not be checked: archive.org was unreachable from the tool. The current
+  policy does disclose call metadata retention.
+- **Entity and terms.** Enterprise terms: Maryland law, Anne Arundel County courts, liability capped at $100.
+
+**More code observations** (public repos, read only)
+- Android sends its JWT only to an allow-list of Glacier API hosts and fails closed if the host list is
+  unknown. WireGuard runs through the Go backend VPN service. No WebView or JavaScript bridges. Most exported
+  components are inherited from upstream Conversations (links, share, backup import).
+- The iOS API-header file carries a "Created by OpenAI" header, so at least some code was AI-assisted. Both
+  repos each show a single squashed commit by one developer, so there is no public history to review.
+
+**Independent and competitor views**
+- **Deniable** (a competing vendor, so biased) says Glacier's published docs are silent on duress PINs,
+  hidden vaults and plausible deniability, and that a seizing inspector could see other profiles. It says
+  altOS is a custom AOSP build on Pixels and that it is unclear whether altOS is published. Unverified.
+- **User reviews of the consumer app:** about 4.2-4.3 stars from roughly 300 ratings. Complaints: sign-in
+  loop, hard cancellation, VPN dropping after reboot, no SMS on burner numbers at launch. Android was "coming
+  soon" at launch. Guardian on Android has about 1,700 installs by a third-party estimate.
+- **No independent audit, pen-test report or security-researcher write-up of Glacier turned up.**
+
 ## Not checked
 
 Server-side code, altOS internals, the Android release configuration, TLS behaviour of live Glacier
-hosts, and the CEO's identity. `docs.glacier.chat` did not resolve. Funding figures (ZoomInfo: $6.1M)
-are unconfirmed. Some criticism of the consumer app (Leah Files, Candace Owens) is partisan commentary,
-not testing.
+hosts, the CEO's identity, and Security App LLC's registration. `docs.glacier.chat` did not resolve and
+three Notion help pages (app changelog, install guide, Guardian navigation) would not render. G2, ZoomInfo,
+Crunchbase, USPTO and Dark Reading returned 403 to the fetch tool, and archive.org was blocked, so
+historical policy versions were not compared. Funding (ZoomInfo: $6.1M) is unconfirmed. Criticism of the
+consumer app from Leah Files and Candace Owens is partisan commentary, not testing.
