@@ -167,6 +167,14 @@ Read this part twice.
   satellite receiver alone, at the cost of slower fixes and often none
   indoors. A phone without Google Play services uses Android's own location
   service.
+- **A future quantum computer reading what was recorded today.** Every key
+  agreement in Clairix (the sealed envelope, the Olm session inside it, call
+  media, Tor) uses elliptic-curve Diffie-Hellman, which a large enough quantum
+  computer could break. A state that keeps the envelopes it can reach (the
+  relay's host, the network) and later has such a machine could read them. The
+  messages are not protected against that yet. A hybrid X25519 plus ML-KEM seal
+  is designed (`docs/PQ-SEALING-DESIGN.md`) and not built; call media would
+  still need separate work.
 - **Traffic analysis.** Anyone watching the network sees that your phone
   talks to the relay and when. Envelopes are padded to a few fixed sizes, and
   "Cover traffic" (Comms settings, off by default) sends envelopes nobody
