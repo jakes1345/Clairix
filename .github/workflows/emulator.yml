@@ -764,22 +764,48 @@ jobs:
           # have (POST_NOTIFICATIONS before 13); the test checks each is refused.
           grant() { for p in "$@"; do "$ADB" shell pm grant app.clairix "$p" > /dev/null 2>&1 || true; done; }
           revoke() { for p in "$@"; do "$ADB" shell pm revoke app.clairix "$p" > /dev/null 2>&1 || true; done; }
+          # A walk that ends with no verdict from the test at all (neither
+          # "OK (" nor "FAILURES!!!") and no crash of Clairix in the log lost
+          # the emulator, not the app: on the Android 14 image a walk ran twice
+          # as long as the others and the next bare adb call then exited 255
+          # with no message (run 42386479033, the sixth of ten walks). The
+          # device is waited for as after boot and that walk is done once more
+          # from the same starting state; a walk the test itself fails, or one
+          # that crashes the app, is not repeated.
           walk() {
-            "$ADB" logcat -c
-            set +e
-            timeout 600 "$ADB" shell am instrument -w -r \
-              -e class app.clairix.PermissionsDeniedDeviceTest -e permissions denied -e denied "$2" -e label "$1" \
-              app.clairix.test/androidx.test.runner.AndroidJUnitRunner > "../denied-$1.txt"
-            set -e
-            cat "../denied-$1.txt" >> ../denied.txt
-            "$ADB" logcat -d > ../logcat-denied-run.txt
-            cat ../logcat-denied-run.txt >> ../logcat-denied.txt
-            "$ADB" pull /sdcard/Android/data/app.clairix/files/denied ../screens/denied/ > /dev/null 2>&1 || true
-            if grep -A1 "FATAL EXCEPTION" ../logcat-denied-run.txt | grep -q "Process: app.clairix"; then
-              echo "::error::Clairix crashed with $1 refused; see logcat-denied.txt"
-              grep -A 30 "FATAL EXCEPTION" ../logcat-denied-run.txt | head -80
-              exit 1
-            fi
+            attempt=1
+            while :; do
+              "$ADB" logcat -c || true
+              set +e
+              timeout 600 "$ADB" shell am instrument -w -r \
+                -e class app.clairix.PermissionsDeniedDeviceTest -e permissions denied -e denied "$2" -e label "$1" \
+                app.clairix.test/androidx.test.runner.AndroidJUnitRunner > "../denied-$1.txt"
+              set -e
+              cat "../denied-$1.txt" >> ../denied.txt
+              "$ADB" logcat -d > ../logcat-denied-run.txt || : > ../logcat-denied-run.txt
+              cat ../logcat-denied-run.txt >> ../logcat-denied.txt
+              "$ADB" pull /sdcard/Android/data/app.clairix/files/denied ../screens/denied/ > /dev/null 2>&1 || true
+              if grep -A1 "FATAL EXCEPTION" ../logcat-denied-run.txt | grep -q "Process: app.clairix"; then
+                echo "::error::Clairix crashed with $1 refused; see logcat-denied.txt"
+                grep -A 30 "FATAL EXCEPTION" ../logcat-denied-run.txt | head -80
+                exit 1
+              fi
+              if grep -Eq "^(OK \(|FAILURES!!!)" "../denied-$1.txt"; then break; fi
+              if [ "$attempt" -ge 2 ]; then
+                cat "../denied-$1.txt"
+                echo "::error::The denied-permissions run ($1) ended with no result twice; the emulator was lost, see denied-$1.txt"
+                exit 1
+              fi
+              echo "::warning::The denied-permissions run ($1) ended with no result; waiting for the emulator and running it again"
+              ready || { echo "::error::The emulator did not answer again after the $1 walk"; exit 1; }
+              "$ADB" shell pm clear app.clairix > /dev/null || { echo "::error::The app could not be reset for the $1 walk"; exit 1; }
+              # shellcheck disable=SC2086
+              grant $PERMS
+              # shellcheck disable=SC2046
+              revoke $(echo "$2" | tr ',' ' ')
+              : > "../denied-$1.txt"
+              attempt=$((attempt + 1))
+            done
             if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" "../denied-$1.txt"; then echo "::error::The denied-permissions run ($1) was skipped"; exit 1; fi
             grep -q "^OK (1 test)" "../denied-$1.txt" || { cat "../denied-$1.txt"; echo "::error::The app failed with $1 refused; see denied.txt"; exit 1; }
           }
