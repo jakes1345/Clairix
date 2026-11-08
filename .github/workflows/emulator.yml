@@ -476,21 +476,52 @@ jobs:
         timeout-minutes: 20
         run: |
           ADB="$ANDROID_HOME/platform-tools/adb"
-          "$ADB" logcat -c
-          set +e
-          timeout 1100 "$ADB" shell am instrument -w -r \
-            -e class app.clairix.comms.SoakTest -e soakMinutes 8 \
-            -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
-            -e secret e2e-enrollment-secret-0123456789 \
-            app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../soak.txt
-          set -e
-          "$ADB" logcat -d > ../logcat-soak.txt
-          grep "SoakTest" ../logcat-soak.txt | tail -20 || true
-          if grep -A1 "FATAL EXCEPTION" ../logcat-soak.txt | grep -q "Process: app.clairix"; then
-            echo "::error::Clairix crashed during the soak test; see logcat-soak.txt"
-            grep -A 30 "FATAL EXCEPTION" ../logcat-soak.txt | head -80
-            exit 1
-          fi
+          # "INSTRUMENTATION_ABORTED: System has crashed" is the emulator's
+          # system_server dying (its watchdog, or the GNSS HAL; smoke (33) on
+          # a5025a2, round 30 of the soak), not Clairix: no FATAL EXCEPTION
+          # names the app. The framework is waited for as after boot and the
+          # soak is run once more from a cleared app; anything else, or a
+          # second system crash, is left to the checks below.
+          attempt=1
+          while :; do
+            "$ADB" logcat -c
+            set +e
+            timeout 1100 "$ADB" shell am instrument -w -r \
+              -e class app.clairix.comms.SoakTest -e soakMinutes 8 \
+              -e relayA http://127.0.0.1:8787 -e relayB http://127.0.0.1:8788 \
+              -e secret e2e-enrollment-secret-0123456789 \
+              app.clairix.test/androidx.test.runner.AndroidJUnitRunner | tee ../soak.txt
+            set -e
+            "$ADB" logcat -d > ../logcat-soak.txt || : > ../logcat-soak.txt
+            grep "SoakTest" ../logcat-soak.txt | tail -20 || true
+            if grep -A1 "FATAL EXCEPTION" ../logcat-soak.txt | grep -q "Process: app.clairix"; then
+              echo "::error::Clairix crashed during the soak test; see logcat-soak.txt"
+              grep -A 30 "FATAL EXCEPTION" ../logcat-soak.txt | head -80
+              exit 1
+            fi
+            if [ "$attempt" -lt 2 ] && grep -q "INSTRUMENTATION_ABORTED: System has crashed" ../soak.txt; then
+              echo "::warning::The emulator's system crashed during the soak test; waiting for it and running the soak again"
+              cp ../soak.txt ../soak-system-crash.txt
+              cp ../logcat-soak.txt ../logcat-soak-system-crash.txt
+              timeout 300 "$ADB" wait-for-device || { echo "::error::The emulator did not come back after its system crashed"; exit 1; }
+              up=""
+              for _ in $(seq 1 90); do
+                if [ "$(timeout 10 "$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] \
+                   && timeout 10 "$ADB" shell am get-started-user-state 0 2>/dev/null | grep -q RUNNING_UNLOCKED \
+                   && timeout 10 "$ADB" shell pm path android > /dev/null 2>&1; then up=1; break; fi
+                sleep 2
+              done
+              [ -n "$up" ] || { echo "::error::The emulator's framework did not answer again after its system crashed"; exit 1; }
+              "$ADB" reverse tcp:8787 tcp:8787
+              "$ADB" reverse tcp:8788 tcp:8788
+              "$ADB" shell pm clear app.clairix > /dev/null || true
+              "$ADB" shell input keyevent KEYCODE_WAKEUP
+              "$ADB" shell input keyevent 82
+              attempt=$((attempt + 1))
+              continue
+            fi
+            break
+          done
           grep -q "^OK (1 test)" ../soak.txt || { echo "::error::The soak test failed; see soak.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../soak.txt; then echo "::error::The soak test was skipped"; exit 1; fi
 
@@ -850,7 +881,9 @@ jobs:
             tor.txt
             logcat-tor.txt
             soak.txt
+            soak-system-crash.txt
             logcat-soak.txt
+            logcat-soak-system-crash.txt
             relaymove.txt
             logcat-relaymove.txt
             relay-a.log
