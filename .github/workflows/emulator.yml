@@ -251,13 +251,6 @@ jobs:
             echo 'disk.dataPartition.size=4096M' >> "$CFG"
           fi
           grep '^disk.dataPartition.size' "$CFG"
-          # No GPS hardware. The emulated GNSS HAL (gnss@2.0-service.ranchu)
-          # deadlocks in native_stop_measurement_collection when the app's
-          # foreground state changes, and the watchdog then kills system_server
-          # ("System has crashed", adb 255, "app did not come up"). Without the
-          # device there is no HAL to hang.
-          sed -i '/^hw.gps=/d' "$CFG"
-          echo 'hw.gps=no' >> "$CFG"
           df -h "$ANDROID_AVD_HOME" | tail -1
           "$ANDROID_HOME/emulator/emulator" -list-avds | tee avds.txt
           grep -qx smoke avds.txt || { echo "::error::The emulator cannot see the AVD just created"; ls -la "$ANDROID_AVD_HOME" "$HOME/.android" || true; exit 1; }
