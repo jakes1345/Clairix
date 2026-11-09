@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application") version "8.13.2" apply false
-    id("org.jetbrains.kotlin.android") version "2.2.10" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
+    id("org.jetbrains.kotlin.android") version "2.4.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.21" apply false
     // Paparazzi 1.3.x copies android.os.Build's fields from its own layoutlib
     // and fails on the API 36 android.jar (a field it does not have);
     // 2.0.0-alpha02 is the first with an API 36 layoutlib and the last that
