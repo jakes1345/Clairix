@@ -720,10 +720,10 @@ dependencies {
 val robolectricRuntime: Configuration by configurations.creating
 val robolectricTarget: Configuration by configurations.creating
 dependencies {
-    robolectricRuntime("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
+    robolectricRuntime("org.robolectric:android-all-instrumented:17-robolectric-16653203-i7")
     // The SDK Robolectric reads the app's resources against, whichever SDK the
     // tests run on: the target, or the newest it knows when the target is newer.
-    robolectricTarget("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7")
+    robolectricTarget("org.robolectric:android-all-instrumented:17-robolectric-16653203-i7")
 }
 val robolectricJars = layout.buildDirectory.dir("robolectric-jars")
 // Links into Gradle's cache, not copies: the two jars are about 300 MB.
