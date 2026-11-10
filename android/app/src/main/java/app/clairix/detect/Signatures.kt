@@ -1,6 +1,9 @@
 package app.clairix.detect
 
 import android.bluetooth.le.ScanRecord
+import androidx.core.util.forEach
+import androidx.core.util.isEmpty
+import androidx.core.util.size
 import app.clairix.Threat
 import app.clairix.TrackerType
 
@@ -61,9 +64,9 @@ internal class Advert(
 
         private fun manufacturer(record: ScanRecord): Map<Int, ByteArray> {
             val blocks = record.manufacturerSpecificData ?: return emptyMap()
-            if (blocks.size() == 0) return emptyMap()
-            val out = HashMap<Int, ByteArray>(blocks.size())
-            for (i in 0 until blocks.size()) blocks.valueAt(i)?.let { out[blocks.keyAt(i)] = it }
+            if (blocks.isEmpty()) return emptyMap()
+            val out = HashMap<Int, ByteArray>(blocks.size)
+            blocks.forEach { company, payload -> payload?.let { out[company] = it } }
             return out
         }
 
