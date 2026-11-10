@@ -645,7 +645,7 @@ dependencies {
     // tools/android/check-no-google-services.sh fails the build if this library
     // reaches the foss edition. Play requires version 8 or newer for updates
     // from 31 August 2026.
-    "playImplementation"("com.android.billingclient:billing:8.3.0")
+    "playImplementation"("com.android.billingclient:billing:9.1.0")
 
     // Hidden-camera sweep — CameraX drives the torch-on lens-glint analyser and the
     // front-camera IR-illuminator view. Frames are read from the Y plane in process
