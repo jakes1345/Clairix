@@ -110,4 +110,32 @@ class FollowAlertPolicyTest {
         assertNull(policy.onJourneyEnd(t0))
         assertEquals(Decision.ANNOUNCE, policy.onVerdict(follower("tag", "Apple AirTag", Threat.CRITICAL)))
     }
+
+    private fun tire(key: String, wheel: Int) = follower(key, "TPMS$wheel", Threat.HIGH).copy(
+        tracker = Signatures.TIRE_SENSOR,
+        tire = app.clairix.detect.TirePressure.Reading(app.clairix.detect.TirePressure.Format.VALVE_CAP, "8$wheel:EA:CA:00:00:0$wheel", wheel = wheel)
+    )
+
+    @Test
+    fun tireSensorsAreHeldAndSummedUpAsPossiblyTheOwnersCar() {
+        val policy = FollowAlertPolicy()
+        for (w in 1..4) assertEquals(Decision.HOLD, policy.onVerdict(tire("t$w", w)))
+        val summary = policy.onJourneyEnd(t0 + 25 * 60_000L)!!
+        assertEquals(4, summary.count)
+        assertEquals("4 tire pressure sensors travelled with you", summary.title)
+        assertTrue(summary.detail, "mark your car's tires as yours" in summary.detail)
+        // A tire sensor is on a wheel: no search of the car is suggested.
+        assertFalse(summary.detail, "OBD-II" in summary.detail)
+    }
+
+    @Test
+    fun aTireSensorAmongOtherRidersIsNamedAsOne() {
+        val policy = FollowAlertPolicy()
+        policy.onVerdict(follower("a", "Pixel 8", Threat.HIGH))
+        policy.onVerdict(tire("t1", 1))
+        val summary = policy.onJourneyEnd(t0 + 25 * 60_000L)!!
+        assertEquals("2 devices travelled with you", summary.title)
+        assertTrue(summary.detail, "OBD-II" in summary.detail)
+        assertTrue(summary.detail, "One of them is a tire pressure sensor" in summary.detail)
+    }
 }

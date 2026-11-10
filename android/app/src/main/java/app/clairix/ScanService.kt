@@ -77,6 +77,7 @@ import app.clairix.detect.DultSchedule
 import app.clairix.detect.KarmaCanary
 import app.clairix.detect.ScreenOffWatch
 import app.clairix.detect.Signatures
+import app.clairix.detect.TirePressure
 import app.clairix.detect.SurveillanceHardware
 import app.clairix.detect.VehicleTrips
 import app.clairix.nav.CameraFeed
@@ -1122,6 +1123,9 @@ class ScanService : LifecycleService() {
             return
         }
         val tracked = advert?.let { Signatures.match(it) }
+        // A tire sensor's fixed ID, wheel and pressure, shown on its row; the formats
+        // with no ID in their payload are known by the address they were heard on.
+        val tire = if (tracked === Signatures.TIRE_SENSOR) advert?.let { TirePressure.read(it, address) } else null
         val txPower = record?.txPowerLevel?.takeIf { it != Int.MIN_VALUE }
 
         // Identification is display-only and resolved here, once per packet, from the
@@ -1138,7 +1142,8 @@ class ScanService : LifecycleService() {
             manufacturer = BleNames.manufacturer(record),
             services = BleNames.services(record),
             radio = BleNames.radio(this, device),
-            addressKind = BleNames.addressKind(device, address)
+            addressKind = BleNames.addressKind(device, address),
+            tire = tire
         )
 
         // A recognised tracker is announced the moment it is confirmed; an unidentified
@@ -1183,7 +1188,10 @@ class ScanService : LifecycleService() {
         val detection = observation.detection
         if (vehicleTrips.inTrip) {
             // Drive mode on is one of the signs the journey is in the owner's car.
-            vehicleTrips.sight(key, address, detection.name, detection.tracker, fingerprint, now, driveMode = Tier.driveActive)
+            vehicleTrips.sight(
+                key, address, detection.name, detection.tracker, fingerprint, now, driveMode = Tier.driveActive,
+                ownTiresMarked = Registry.trustBook.value.hasTires
+            )
                 ?.let(::publishVehicleFinding)
         }
         maybeInterrogate(key, device, detection)

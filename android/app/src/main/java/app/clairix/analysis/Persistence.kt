@@ -8,6 +8,7 @@ import app.clairix.TrackerType
 import app.clairix.detect.BleNames
 import app.clairix.detect.DultResult
 import app.clairix.detect.Signatures
+import app.clairix.detect.TirePressure
 import kotlin.math.max
 import kotlin.math.min
 
@@ -101,6 +102,8 @@ class Tracker(
         var addressKind: String? = null
         var rssi = 0
         var tracker: TrackerType? = null
+        /** The latest tire sensor reading, for a Bluetooth tire pressure sensor. */
+        var tire: TirePressure.Reading? = null
         /**
          * When a near-owner reading of this device gave way to a separated one, or 0.
          * The moment its owner's phone dropped out of range — which, for a tag that was
@@ -197,6 +200,7 @@ class Tracker(
             separatedAt = earliest(separatedAt, other.separatedAt)
             criticalReported = criticalReported || other.criticalReported
             if (dult == null || (other.dult?.answered == true && dult?.answered != true)) dult = other.dult
+            if (other.tire != null && (tire == null || other.lastSeen >= lastSeen)) tire = other.tire
             if (other.lastSeen >= lastSeen) {
                 rssi = other.rssi
                 approxMetres = other.approxMetres
@@ -273,7 +277,9 @@ class Tracker(
         radio: String = "BLE",
         addressKind: String? = null,
         /** The phone's own odometer ([LocationTrack.travelledM]) at this sighting. */
-        travelledM: Double = 0.0
+        travelledM: Double = 0.0,
+        /** What a Bluetooth tire sensor said in this packet, when it is one. */
+        tire: TirePressure.Reading? = null
     ): Observation {
         val entry = entries.getOrPut(key) {
             Entry(key).apply { firstSeen = now }
@@ -317,6 +323,7 @@ class Tracker(
 
         advertisedName?.let { entry.advertisedName = it }
         manufacturer?.let { entry.manufacturer = it }
+        tire?.let { entry.tire = it }
         if (services.isNotEmpty() && entry.services.size < MAX_SERVICES) entry.services.addAll(services)
         if (radio != "Unknown") entry.radio = radio
         addressKind?.let { entry.addressKind = it }
@@ -432,7 +439,8 @@ class Tracker(
         addressKind = entry.addressKind,
         dult = entry.dult,
         separatedAt = entry.separatedAt,
-        resolvedAt = entry.resolvedAt
+        resolvedAt = entry.resolvedAt,
+        tire = entry.tire
     )
 
     /**
