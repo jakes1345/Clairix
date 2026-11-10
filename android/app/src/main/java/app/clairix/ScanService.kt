@@ -1142,9 +1142,9 @@ class ScanService : LifecycleService() {
             manufacturer = BleNames.manufacturer(record),
             services = BleNames.services(record),
             radio = BleNames.radio(this, device),
-            addressKind = BleNames.addressKind(device, address),
-            tire = tire
+            addressKind = BleNames.addressKind(device, address)
         )
+        tire?.let { tracker.noteTire(key, it) }
 
         // A recognised tracker is announced the moment it is confirmed; an unidentified
         // co-traveller is held for one notice when the journey ends (FollowAlertPolicy).

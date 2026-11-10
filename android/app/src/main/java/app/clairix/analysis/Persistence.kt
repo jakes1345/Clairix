@@ -277,9 +277,7 @@ class Tracker(
         radio: String = "BLE",
         addressKind: String? = null,
         /** The phone's own odometer ([LocationTrack.travelledM]) at this sighting. */
-        travelledM: Double = 0.0,
-        /** What a Bluetooth tire sensor said in this packet, when it is one. */
-        tire: TirePressure.Reading? = null
+        travelledM: Double = 0.0
     ): Observation {
         val entry = entries.getOrPut(key) {
             Entry(key).apply { firstSeen = now }
@@ -323,7 +321,6 @@ class Tracker(
 
         advertisedName?.let { entry.advertisedName = it }
         manufacturer?.let { entry.manufacturer = it }
-        tire?.let { entry.tire = it }
         if (services.isNotEmpty() && entry.services.size < MAX_SERVICES) entry.services.addAll(services)
         if (radio != "Unknown") entry.radio = radio
         addressKind?.let { entry.addressKind = it }
@@ -491,6 +488,15 @@ class Tracker(
         val into = entries.getOrPut(intoKey) { Entry(intoKey) }
         into.absorb(from, certain, indistinguishable)
         return true
+    }
+
+    /**
+     * Keeps what a Bluetooth tire sensor said in its latest packet, on the device [key]
+     * names once [observe] has seen it; a packet with no reading leaves the last one.
+     */
+    @Synchronized
+    fun noteTire(key: String, reading: TirePressure.Reading) {
+        entries[key]?.tire = reading
     }
 
     @Synchronized

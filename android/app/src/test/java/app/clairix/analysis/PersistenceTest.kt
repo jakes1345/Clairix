@@ -456,12 +456,13 @@ class PersistenceTest {
         // Twelve minutes along a road, then a packet carrying a reading.
         tracker.ride("tire", t0, 12, 170.0, Signatures.TIRE_SENSOR)
         val at = t0 + 12 * 60_000L + 45_000L
-        val d = tracker.observe(
+        val observed = tracker.observe(
             key = "tire", address = "tire", rssi = -70, tracker = Signatures.TIRE_SENSOR,
-            approxMetres = null, rotations = 0, addresses = 1, fix = null, hasPosition = true, now = at,
-            tire = front.copy(pressureKpa = 242.0)
+            approxMetres = null, rotations = 0, addresses = 1, fix = null, hasPosition = true, now = at
         ).detection
-        assertTrue(d.following)
+        assertTrue(observed.following)
+        tracker.noteTire("tire", front.copy(pressureKpa = 242.0))
+        val d = tracker.snapshot(at).single { it.key == "tire" }
         // Moving with you, it is a vehicle near yours or your own: HIGH, held for the
         // journey's notice, never the CRITICAL of a tag away from its owner.
         assertEquals(Threat.HIGH, d.threat)
