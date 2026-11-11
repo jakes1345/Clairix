@@ -96,20 +96,53 @@ const SLD_SUFFIXES = new Set([
 ]);
 
 /**
- * The registrable domain (eTLD+1) of a valid relay origin.
- * Rate-limit buckets keyed on this value cannot be bypassed by wildcard DNS:
- * every subdomain of "attacker.com" maps to "attacker.com".
+ * Shared-hosting platforms where many independent operators each own a
+ * subdomain.  Treating one of these as a registrable domain would collapse
+ * all tenants into one rate-limit bucket, arbitrarily throttling legitimate
+ * relays.  When the computed eTLD+1 matches here, registrableDomain() returns
+ * null and the caller falls back to the per-origin bucket only.
+ *
+ * Not exhaustive — the goal is to avoid false throttling on the platforms most
+ * likely to host a Clairix relay.  An attacker using a shared-hosting subdomain
+ * still faces the per-origin limit (120 req/min), which is the original defence.
  */
-export function registrableDomain(origin: string): string {
+const SHARED_HOSTING_SUFFIXES = new Set([
+  "workers.dev", "pages.dev",          // Cloudflare
+  "vercel.app", "now.sh",              // Vercel
+  "netlify.app",                       // Netlify
+  "github.io", "gitlab.io",            // GitHub / GitLab Pages
+  "fly.dev",                           // Fly.io
+  "railway.app",                       // Railway
+  "render.com", "onrender.com",        // Render
+  "web.app", "firebaseapp.com",        // Firebase / Google
+  "amazonaws.com",                     // AWS S3 / Elastic Beanstalk
+  "azurewebsites.net", "azurefd.net",  // Azure
+  "appspot.com",                       // Google App Engine
+]);
+
+/**
+ * The registrable domain (eTLD+1) of a valid relay origin, or null when the
+ * host is under a known shared-hosting suffix where bucketing would collapse
+ * independent tenants.  Callers that receive null should skip the domain bucket
+ * and rely on the per-origin bucket only.
+ *
+ * Rate-limit buckets keyed on the non-null return value cannot be bypassed by
+ * wildcard DNS: every subdomain of "attacker.com" maps to "attacker.com".
+ */
+export function registrableDomain(origin: string): string | null {
   const o = relayOrigin(origin);
   const host = o ? new URL(o).hostname : origin.toLowerCase();
   const labels = host.split(".");
-  if (labels.length < 2) return host;
+  if (labels.length < 2) return null;
   const last2 = `${labels[labels.length - 2]}.${labels[labels.length - 1]}`;
+  let domain: string;
   if (SLD_SUFFIXES.has(last2) && labels.length >= 3) {
-    return `${labels[labels.length - 3]}.${last2}`;
+    domain = `${labels[labels.length - 3]}.${last2}`;
+  } else {
+    domain = last2;
   }
-  return last2;
+  if (SHARED_HOSTING_SUFFIXES.has(domain)) return null;
+  return domain;
 }
 
 /**
