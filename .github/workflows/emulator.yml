@@ -560,26 +560,26 @@ jobs:
           grep -q "^OK (4 tests)" ../relaymove.txt || { echo "::error::The relay move tests failed; see relaymove.txt"; exit 1; }
           if grep -Eq "INSTRUMENTATION_STATUS_CODE: -(3|4)([^0-9]|$)" ../relaymove.txt; then echo "::error::Relay move tests were skipped"; exit 1; fi
 
-      # The app over the real Tor network (Arti on the phone, through its own
-      # SOCKS proxy): requests come out of Tor, the listed relay answers with
-      # its listed key, the app keeps working with relay B reachable only at
-      # its onion address, and with Tor on but its proxy gone nothing goes out.
-      - name: Run the Tor tests
+      # The onion test needs relay B's onion service to be found on the Tor
+      # network. On 9b2e3d0 (Android 12) the phone could not reach it for
+      # five minutes ("SOCKS: Host unreachable") with nothing to say whether
+      # the service or the phone was at fault. So the runner first reaches
+      # the onion itself through its own Tor (SocksPort on 127.0.0.1 only,
+      # not reachable from the emulator); when it cannot, Tor is told to
+      # publish the service again (SIGHUP) and is given more time. Only an
+      # onion the runner can reach is handed to the phone's test.
+      # This wait is its own step with its own limit: inside the Tor tests'
+      # 25 minutes, three 12-minute rounds could never finish, so on main
+      # (8e599a8, Android 13) and PR 91 (Android 15 AOSP) the step was cut off
+      # at 25 minutes in round 3, with no error saying the onion was at fault
+      # and no time left for the phone's own test.
+      - name: Wait for relay B's onion on the Tor network
         working-directory: android
-        timeout-minutes: 25
+        timeout-minutes: 20
         run: |
-          ADB="$ANDROID_HOME/platform-tools/adb"
-          # The onion test needs relay B's onion service to be found on the Tor
-          # network. On 9b2e3d0 (Android 12) the phone could not reach it for
-          # five minutes ("SOCKS: Host unreachable") with nothing to say whether
-          # the service or the phone was at fault. So the runner first reaches
-          # the onion itself through its own Tor (SocksPort on 127.0.0.1 only,
-          # not reachable from the emulator); when it cannot, Tor is told to
-          # publish the service again (SIGHUP) and is given more time. Only an
-          # onion the runner can reach is handed to the phone's test.
           reached=""
           for round in 1 2 3; do
-            for _ in $(seq 1 18); do
+            for _ in $(seq 1 9); do
               if curl -sf --max-time 30 --socks5-hostname 127.0.0.1:9152 "$RELAY_B_ONION/" > /dev/null; then reached=1; break; fi
               sleep 10
             done
@@ -590,6 +590,16 @@ jobs:
           tail -n 20 ../tor-onion.log || true
           [ -n "$reached" ] || { echo "::error::Relay B's onion service could not be reached on the Tor network from the runner itself, so the phone's onion test could not be run; see tor-onion.log"; exit 1; }
           echo "relay B's onion answers on the Tor network"
+
+      # The app over the real Tor network (Arti on the phone, through its own
+      # SOCKS proxy): requests come out of Tor, the listed relay answers with
+      # its listed key, the app keeps working with relay B reachable only at
+      # its onion address, and with Tor on but its proxy gone nothing goes out.
+      - name: Run the Tor tests
+        working-directory: android
+        timeout-minutes: 25
+        run: |
+          ADB="$ANDROID_HOME/platform-tools/adb"
           "$ADB" logcat -c
           set +e
           timeout 1400 "$ADB" shell am instrument -w -r \
