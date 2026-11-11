@@ -79,6 +79,52 @@ export const FED_CLAIMS_BURST = 120;
  */
 export const WRITTEN_TO_DAYS = 90;
 
+/**
+ * Common second-level TLD suffixes: when a hostname ends in one of these the
+ * registrable domain is the three right-most labels, not two.
+ * Used only for rate-limit bucketing — completeness matters less than the
+ * ability to prevent wildcard-DNS Sybil attacks (e.g. *.attacker.com).
+ */
+const SLD_SUFFIXES = new Set([
+  "co.uk", "org.uk", "me.uk", "net.uk", "ltd.uk", "plc.uk",
+  "co.jp", "or.jp", "ne.jp", "ac.jp",
+  "com.au", "net.au", "org.au", "edu.au",
+  "co.nz", "net.nz", "org.nz",
+  "co.in", "net.in", "org.in",
+  "com.br", "net.br", "org.br",
+  "co.za", "net.za", "org.za",
+]);
+
+/**
+ * The registrable domain (eTLD+1) of a valid relay origin.
+ * Rate-limit buckets keyed on this value cannot be bypassed by wildcard DNS:
+ * every subdomain of "attacker.com" maps to "attacker.com".
+ */
+export function registrableDomain(origin: string): string {
+  const o = relayOrigin(origin);
+  const host = o ? new URL(o).hostname : origin.toLowerCase();
+  const labels = host.split(".");
+  if (labels.length < 2) return host;
+  const last2 = `${labels[labels.length - 2]}.${labels[labels.length - 1]}`;
+  if (SLD_SUFFIXES.has(last2) && labels.length >= 3) {
+    return `${labels[labels.length - 3]}.${last2}`;
+  }
+  return last2;
+}
+
+/**
+ * Lookups allowed from all origins sharing the same registrable domain, per
+ * minute. Five times the per-origin limit covers up to five legitimate relays
+ * under one domain while capping a wildcard-DNS Sybil farm at this ceiling.
+ */
+export const FED_LOOKUPS_PER_DOMAIN_PER_MINUTE = 600;
+export const FED_LOOKUPS_PER_DOMAIN_BURST = 1_200;
+
+/** The object that holds per-registrable-domain federation rate limits. */
+export async function federationDomainObjectName(domain: string): Promise<string> {
+  return `fed-dom:${(await sha256Hex(domain)).slice(0, 32)}`;
+}
+
 export type FederationPolicy = { mode: "off" } | { mode: "open" } | { mode: "allow"; origins: Set<string> };
 
 /**
