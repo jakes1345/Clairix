@@ -80,12 +80,21 @@ export const FED_CLAIMS_BURST = 120;
 export const WRITTEN_TO_DAYS = 90;
 
 /**
- * Common second-level TLD suffixes: when a hostname ends in one of these the
- * registrable domain is the three right-most labels, not two.
- * Used only for rate-limit bucketing — completeness matters less than the
- * ability to prevent wildcard-DNS Sybil attacks (e.g. *.attacker.com).
+ * Two-label suffixes where the registrable domain is the three right-most
+ * labels, not two.  Includes both ICANN country-code second-level TLDs
+ * (co.uk, com.au, …) and PSL private-section platform domains
+ * (workers.dev, github.io, …) where each tenant owns a single subdomain.
+ *
+ * Adding platform entries here gives each tenant (tenant1.workers.dev,
+ * tenant2.workers.dev) its own rate-limit bucket, so wildcard-DNS Sybil
+ * attacks on custom TLDs are blocked while independent platform tenants
+ * are not falsely throttled against each other.
+ *
+ * Used only for rate-limit bucketing — completeness matters less than
+ * correct eTLD+1 for the platforms most likely to host a Clairix relay.
  */
 const SLD_SUFFIXES = new Set([
+  // ICANN country-code second-level TLDs
   "co.uk", "org.uk", "me.uk", "net.uk", "ltd.uk", "plc.uk",
   "co.jp", "or.jp", "ne.jp", "ac.jp",
   "com.au", "net.au", "org.au", "edu.au",
@@ -93,56 +102,36 @@ const SLD_SUFFIXES = new Set([
   "co.in", "net.in", "org.in",
   "com.br", "net.br", "org.br",
   "co.za", "net.za", "org.za",
-]);
-
-/**
- * Shared-hosting platforms where many independent operators each own a
- * subdomain.  Treating one of these as a registrable domain would collapse
- * all tenants into one rate-limit bucket, arbitrarily throttling legitimate
- * relays.  When the computed eTLD+1 matches here, registrableDomain() returns
- * null and the caller falls back to the per-origin bucket only.
- *
- * Not exhaustive — the goal is to avoid false throttling on the platforms most
- * likely to host a Clairix relay.  An attacker using a shared-hosting subdomain
- * still faces the per-origin limit (120 req/min), which is the original defence.
- */
-const SHARED_HOSTING_SUFFIXES = new Set([
+  // PSL private-section platform domains (tenant-per-subdomain pattern)
   "workers.dev", "pages.dev",          // Cloudflare
   "vercel.app", "now.sh",              // Vercel
   "netlify.app",                       // Netlify
   "github.io", "gitlab.io",            // GitHub / GitLab Pages
   "fly.dev",                           // Fly.io
   "railway.app",                       // Railway
-  "render.com", "onrender.com",        // Render
+  "onrender.com",                      // Render
   "web.app", "firebaseapp.com",        // Firebase / Google
-  "amazonaws.com",                     // AWS S3 / Elastic Beanstalk
   "azurewebsites.net", "azurefd.net",  // Azure
   "appspot.com",                       // Google App Engine
 ]);
 
 /**
- * The registrable domain (eTLD+1) of a valid relay origin, or null when the
- * host is under a known shared-hosting suffix where bucketing would collapse
- * independent tenants.  Callers that receive null should skip the domain bucket
- * and rely on the per-origin bucket only.
- *
- * Rate-limit buckets keyed on the non-null return value cannot be bypassed by
- * wildcard DNS: every subdomain of "attacker.com" maps to "attacker.com".
+ * The registrable domain (eTLD+1) of a valid relay origin.
+ * Rate-limit buckets keyed on this value cannot be bypassed by wildcard DNS:
+ * every subdomain of "attacker.com" maps to "attacker.com", and each
+ * tenant on a shared platform gets their own bucket (e.g. two distinct
+ * workers.dev subdomains produce two distinct keys, not one shared key).
  */
-export function registrableDomain(origin: string): string | null {
+export function registrableDomain(origin: string): string {
   const o = relayOrigin(origin);
   const host = o ? new URL(o).hostname : origin.toLowerCase();
   const labels = host.split(".");
-  if (labels.length < 2) return null;
+  if (labels.length < 2) return host;
   const last2 = `${labels[labels.length - 2]}.${labels[labels.length - 1]}`;
-  let domain: string;
   if (SLD_SUFFIXES.has(last2) && labels.length >= 3) {
-    domain = `${labels[labels.length - 3]}.${last2}`;
-  } else {
-    domain = last2;
+    return `${labels[labels.length - 3]}.${last2}`;
   }
-  if (SHARED_HOSTING_SUFFIXES.has(domain)) return null;
-  return domain;
+  return last2;
 }
 
 /**
