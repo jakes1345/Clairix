@@ -584,6 +584,11 @@ android {
         // AndroidX and Google libraries: on 4 November uiautomator 2.4.1 failed
         // lintFullSuiteDebug the same way, so it is reported without failing too.
         informational += "GradleDependency"
+        // AndroidGradlePluginVersion looks up the newest Gradle release the same
+        // way: on 12 November Gradle 8.14.7 came out and the baselined "8.14.6"
+        // message no longer matched, failing every build. Moving the wrapper is a
+        // deliberate change of its own, so it is reported without failing.
+        informational += "AndroidGradlePluginVersion"
     }
 
     sourceSets {
