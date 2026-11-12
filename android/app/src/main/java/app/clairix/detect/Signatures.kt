@@ -1,6 +1,9 @@
 package app.clairix.detect
 
 import android.bluetooth.le.ScanRecord
+import androidx.core.util.forEach
+import androidx.core.util.isEmpty
+import androidx.core.util.size
 import app.clairix.Threat
 import app.clairix.TrackerType
 
@@ -35,7 +38,12 @@ internal class Advert(
     /** The advertising flags byte, or -1 when the advertisement has none. */
     val flags: Int = -1,
     /** The advertised name, when there is one. */
-    val name: String? = null
+    val name: String? = null,
+    /**
+     * Every manufacturer-specific block, company id to the bytes after it. Read for the
+     * tire sensors ([TirePressure]), whose layouts sit under ids that are not their makers'.
+     */
+    val manufacturer: Map<Int, ByteArray> = emptyMap()
 ) {
     companion object {
         fun of(record: ScanRecord): Advert {
@@ -49,8 +57,17 @@ internal class Advert(
                 dult = record.getServiceData(DULT_UUID),
                 google = record.getServiceData(EDDYSTONE_UUID),
                 flags = record.advertiseFlags,
-                name = record.deviceName
+                name = record.deviceName,
+                manufacturer = manufacturer(record)
             )
+        }
+
+        private fun manufacturer(record: ScanRecord): Map<Int, ByteArray> {
+            val blocks = record.manufacturerSpecificData ?: return emptyMap()
+            if (blocks.isEmpty()) return emptyMap()
+            val out = HashMap<Int, ByteArray>(blocks.size)
+            blocks.forEach { company, payload -> payload?.let { out[company] = it } }
+            return out
         }
 
         /** The four hex digits a 16-bit UUID occupies in its 128-bit form, as a number. */
@@ -171,6 +188,15 @@ object Signatures {
         "Proximity beacon. Usually retail analytics, occasionally repurposed for tracking."
     )
 
+    val TIRE_SENSOR = TrackerType(
+        "tire_sensor", "Tire pressure sensor (TPMS)", "Valve-cap or factory Bluetooth sensor", Threat.MEDIUM,
+        "A tire pressure sensor that talks over Bluetooth: a valve-cap kit, or one of the few factory systems " +
+            "that use Bluetooth. It broadcasts the same ID for its whole life to anyone listening, but it does not " +
+            "report where it is to anybody. One that keeps turning up wherever you go is on a vehicle that keeps " +
+            "going there too, or on your own car: if it is yours, mark your car's set as yours. Most factory tire " +
+            "sensors use 315 or 433 MHz radio instead, which a phone cannot hear."
+    )
+
     val IBEACON = TrackerType(
         "ibeacon", "iBeacon", "Apple format / generic", Threat.MEDIUM,
         "Proximity beacon in Apple's iBeacon format. Shops and museums fix them to walls; cheap " +
@@ -277,6 +303,10 @@ object Signatures {
         advert.dult?.let { data ->
             if (data.size >= 2 && (data[1].toInt() and 0x01) == 0) return DULT_TRACKER
         }
+
+        // Tire sensors, before the service table: their shapes are specific (see
+        // [TirePressure]), and the valve-cap kit's company id is TomTom's.
+        if (TirePressure.read(advert) != null) return TIRE_SENSOR
 
         val shorts = advert.shorts
         if (0xFEED in shorts || 0xFEEC in shorts || 0xFD84 in shorts) return TILE

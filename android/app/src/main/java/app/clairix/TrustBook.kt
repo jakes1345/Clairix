@@ -33,11 +33,19 @@ internal class TrustBook private constructor(val devices: List<Device>) {
         /** When the trust lapses, or 0 for never. */
         val until: Long = 0L,
         /** What it was called when it was marked, for the Settings list. */
-        val label: String? = null
+        val label: String? = null,
+        /** One of the owner's own car's tire pressure sensors ([trustTires]). */
+        val tire: Boolean = false
     )
 
     /** Every trusted address, of every device. */
     val addresses: Set<String> = devices.flatMapTo(HashSet()) { it.addresses }
+
+    /**
+     * The owner has marked their own car's tire sensors. From then on a tire sensor that
+     * keeps turning up is another vehicle's ([app.clairix.detect.VehicleTrips]).
+     */
+    val hasTires: Boolean = devices.any { it.tire }
 
     /** The device [address] belongs to, if it is trusted. */
     fun device(address: String): Device? = devices.firstOrNull { address in it.addresses }
@@ -51,6 +59,17 @@ internal class TrustBook private constructor(val devices: List<Device>) {
         val rest = devices.filterNot { address in it.addresses }
         val until = if (rotating) now + ROTATING_TRUST_MS else 0L
         return TrustBook(rest + Device(listOf(address), now, until, label))
+    }
+
+    /**
+     * Marks each of [sensors] (address to label) as one of the owner's own car's tire
+     * pressure sensors, for good: a tire sensor keeps its ID for life. Each is a device
+     * of its own, so one can be taken back without the rest.
+     */
+    fun trustTires(sensors: Map<String, String?>, now: Long): TrustBook {
+        if (sensors.isEmpty()) return this
+        val rest = devices.filterNot { d -> d.addresses.any { it in sensors } }
+        return TrustBook(rest + sensors.map { (address, label) -> Device(listOf(address), now, 0L, label, tire = true) })
     }
 
     /**
@@ -86,6 +105,7 @@ internal class TrustBook private constructor(val devices: List<Device>) {
                 put("since", d.since)
                 if (d.until != 0L) put("until", d.until)
                 d.label?.let { put("label", it) }
+                if (d.tire) put("tire", true)
             })
         }
         return array.toString()
@@ -128,7 +148,8 @@ internal class TrustBook private constructor(val devices: List<Device>) {
                             addresses = addresses,
                             since = o.optLong("since", 0L),
                             until = o.optLong("until", 0L),
-                            label = if (o.has("label")) o.optString("label") else null
+                            label = if (o.has("label")) o.optString("label") else null,
+                            tire = o.optBoolean("tire", false)
                         )
                     )
                 }
