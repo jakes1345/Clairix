@@ -89,6 +89,7 @@ import app.clairix.security.HistoryRetention
 import app.clairix.security.UnlockLedger
 import app.clairix.detect.BleNames
 import app.clairix.detect.KarmaTrap
+import app.clairix.detect.TirePressure
 import app.clairix.detect.VehicleTrips
 import app.clairix.comms.CallManager
 import app.clairix.comms.CallPhase
@@ -1755,6 +1756,11 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                 valueColor = if (d.services.isEmpty()) c.textSubtle else c.textMuted
             )
             KeyValueRow(stringResource(R.string.scan_address), BleNames.formatMac(d.address) + (d.addressKind?.let { " · $it" } ?: ""))
+            d.tire?.let { tire ->
+                KeyValueRow(stringResource(R.string.scan_tire_sensor_id), tire.sensorId)
+                val reading = tire.summary()
+                if (reading.isNotEmpty()) KeyValueRow(stringResource(R.string.scan_tire_reading), reading)
+            }
         }
 
         SectionHeader(stringResource(R.string.scan_observation))
@@ -1816,21 +1822,46 @@ private fun DetectionDetail(d: Detection, trusted: Boolean, onShowExplainer: (()
                 )
             }
             val rotating = TrustBook.rotating(d)
-            SecondaryButton(
-                stringResource(R.string.scan_mark_as_mine),
-                onClick = { Registry.trust(d.address, label = d.name, rotating = rotating) },
-                tone = Tone.Safe,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                if (rotating) {
-                    stringResource(R.string.scan_marking_it_as_yours_removes_it)
-                } else {
-                    stringResource(R.string.scan_marking_it_as_yours_removes_it_2)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = c.textSubtle
-            )
+            if (d.tire != null) {
+                // A car's own Bluetooth tire sensors ride along on every drive: marked as a
+                // set, with each kept as its own device so one can be taken back alone.
+                val everything by Registry.detections.collectAsStateWithLifecycle()
+                val trustedNow by Registry.trusted.collectAsStateWithLifecycle()
+                val set = remember(d, everything, trustedNow) { TirePressure.sameVehicle(d, everything, trustedNow) }
+                val labels = LinkedHashMap<String, String?>()
+                for (s in set) {
+                    val wheel = s.tire?.wheel
+                    labels[s.address] =
+                        if (wheel != null) stringResource(R.string.scan_tire_label_wheel, wheel) else stringResource(R.string.scan_tire_label)
+                }
+                SecondaryButton(
+                    pluralStringResource(R.plurals.scan_mark_my_car_tires, set.size, set.size),
+                    onClick = { Registry.trustTires(labels) },
+                    tone = Tone.Safe,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    stringResource(R.string.scan_marking_tires_as_yours, set.joinToString(", ") { it.tire?.sensorId ?: it.address }),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSubtle
+                )
+            } else {
+                SecondaryButton(
+                    stringResource(R.string.scan_mark_as_mine),
+                    onClick = { Registry.trust(d.address, label = d.name, rotating = rotating) },
+                    tone = Tone.Safe,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    if (rotating) {
+                        stringResource(R.string.scan_marking_it_as_yours_removes_it)
+                    } else {
+                        stringResource(R.string.scan_marking_it_as_yours_removes_it_2)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSubtle
+                )
+            }
         }
     }
 }
