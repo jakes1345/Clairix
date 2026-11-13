@@ -43,10 +43,14 @@ import {
   FED_CLAIMS_PER_HOUR,
   FED_LOOKUPS_BURST,
   FED_LOOKUPS_PER_MINUTE,
+  FED_LOOKUPS_PER_DOMAIN_BURST,
+  FED_LOOKUPS_PER_DOMAIN_PER_MINUTE,
   FED_SENDS_BURST,
   FED_SENDS_PER_MINUTE,
   FED_SENDS_PER_TARGET_BURST,
   FED_SENDS_PER_TARGET_PER_MINUTE,
+  federationDomainObjectName,
+  FEDERATION_HEADERS,
   federationObjectName,
   federationPolicy,
   fetchRelayKey,
@@ -60,6 +64,7 @@ import {
   noteWrittenTo,
   parseFederated,
   policyName,
+  registrableDomain,
   RELAY_KEY_REFETCH_MS,
   RELAY_KEY_TTL_MS,
   relayKey,
@@ -360,6 +365,15 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
     const allowed = await other.rateOk("fed-lookup", FED_LOOKUPS_PER_MINUTE, FED_LOOKUPS_BURST);
     if (!allowed.ok) throw new HttpError(429, "Too many lookups from your relay; try again in a minute", allowed.retryAfter);
+    // Per-registrable-domain cap: prevents wildcard-DNS Sybil attacks where
+    // *.attacker.com generates unlimited fresh per-origin buckets.
+    // Platform tenants (tenant.workers.dev, tenant.github.io, …) each get
+    // their own 3-label bucket key so they are not throttled against each other.
+    const rawOrigin = request.headers.get(FEDERATION_HEADERS.origin) ?? "";
+    const domain = registrableDomain(rawOrigin);
+    const domainBox = env.MAILBOX.get(env.MAILBOX.idFromName(await federationDomainObjectName(domain)));
+    const domainAllowed = await domainBox.rateOk("fed-lookup", FED_LOOKUPS_PER_DOMAIN_PER_MINUTE, FED_LOOKUPS_PER_DOMAIN_BURST);
+    if (!domainAllowed.ok) throw new HttpError(429, "Too many lookups from your relay domain; try again shortly", domainAllowed.retryAfter);
     const body = parseLookupBody(bodyText, isLoopbackDev(request));
     return answerLookup(env, body.target, body.pin, body.claim, async () => body.oneTime && (await other.federatedClaimOk(FED_CLAIMS_PER_HOUR, FED_CLAIMS_BURST)));
   }
