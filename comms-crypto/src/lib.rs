@@ -2130,6 +2130,44 @@ mod tests {
         assert_eq!(bob.decrypt(longer).unwrap().plaintext, vec![b'y'; 900]);
     }
 
+    /// True when `needle` occurs anywhere in `haystack`.
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn no_envelope_carries_the_plaintext() {
+        // A competitor's secure messenger once shipped a group path that could send in the
+        // clear. Here every send goes through `encrypt`, so check what comes out of it: a
+        // distinctive payload must not appear in any envelope, whether the envelope starts
+        // a session, answers one, or is one of many in a row.
+        let marker: &[u8] = b"CLEARTEXT-CANARY-7f3a9c-do-not-send";
+        let (alice, bob) = paired();
+        for round in 0..4 {
+            let env = alice.encrypt(peer_keys(&bob), marker.to_vec()).unwrap();
+            assert!(!contains_bytes(&env, marker), "round {round}: the payload is in the envelope");
+            // Not even a stretch of it: a block cipher run in a broken mode leaks fragments.
+            assert!(!contains_bytes(&env, &marker[..12]), "round {round}: a fragment is in the envelope");
+            assert_eq!(bob.decrypt(env).unwrap().plaintext, marker.to_vec());
+            // Bob's reply ratchets the session; his envelopes are clean too.
+            let reply = bob.encrypt(peer_keys(&alice), marker.to_vec()).unwrap();
+            assert!(!contains_bytes(&reply, marker), "round {round}: the reply carries the payload");
+            alice.decrypt(reply).unwrap();
+        }
+    }
+
+    #[test]
+    fn encrypting_without_a_session_fails_instead_of_sending_in_the_clear() {
+        // Two identities that have never met: no session, no keys exchanged. The only
+        // acceptable answers are an error or ciphertext, never the payload itself.
+        let marker: &[u8] = b"CLEARTEXT-CANARY-no-session";
+        let (alice, bob) = (Identity::create(), Identity::create());
+        match alice.encrypt(peer_keys(&bob), marker.to_vec()) {
+            Err(_) => {}
+            Ok(env) => assert!(!contains_bytes(&env, marker), "sent in the clear with no session"),
+        }
+    }
+
     #[test]
     fn an_unsigned_sender_hint_is_rejected() {
         let (alice, bob) = paired_v2();
