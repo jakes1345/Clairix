@@ -97,6 +97,12 @@ class VehicleTrips(private val store: Store) {
     private val tripAccessories = HashMap<String, String>()
     /** Something on this trip showed it was in the owner's car: a car kit connected, or Drive mode on. */
     private var tripOwnCar = false
+    /**
+     * The owner has marked their own car's tire sensors as theirs, as of the latest
+     * sighting. Those never reach this class, so a tire sensor that does is another
+     * vehicle's; see [tireFinding].
+     */
+    private var ownTiresMarked = false
     private val history = ArrayList<Trip>()
 
     init {
@@ -179,7 +185,8 @@ class VehicleTrips(private val store: Store) {
      * this device qualifies for the trip and has already qualified on enough earlier
      * trips to make the total [TRIPS_TO_ALERT]; null in every other case, including
      * when no trip is under way. [driveMode] says Drive mode is on, which shows the trip
-     * is in the owner's car.
+     * is in the owner's car. [ownTiresMarked] says the owner has marked their car's
+     * tire sensors as theirs ([app.clairix.TrustBook.hasTires]).
      */
     fun sight(
         key: String,
@@ -188,11 +195,13 @@ class VehicleTrips(private val store: Store) {
         tracker: TrackerType?,
         fingerprint: String?,
         now: Long,
-        driveMode: Boolean = false
+        driveMode: Boolean = false,
+        ownTiresMarked: Boolean = false
     ): Finding? {
         synchronized(lock) {
             if (tripStart == 0L) return null
             if (driveMode) tripOwnCar = true
+            this.ownTiresMarked = ownTiresMarked
             val entry = seen.getOrPut(key) {
                 if (seen.size >= MAX_SEEN) return null
                 Seen(address).apply { first = now }
@@ -210,7 +219,7 @@ class VehicleTrips(private val store: Store) {
             val byAddress = earlierTrips { it.addresses.contains(entry.address) }
             if (byAddress + 1 >= TRIPS_TO_ALERT) {
                 entry.reported = true
-                return addressFinding(entry, byAddress + 1, now, tripOwnCar, search = true)
+                return findingFor(entry, byAddress + 1, now, tripOwnCar, search = true)
             }
             val signature = signatureOf(entry) ?: return null
             val bySignature = earlierTrips { it.signatures.contains(signature) }
@@ -220,6 +229,44 @@ class VehicleTrips(private val store: Store) {
             }
             return null
         }
+    }
+
+    /** The finding for a device on [trips] trips: a tire sensor's own ([tireFinding]), or [addressFinding]. */
+    private fun findingFor(entry: Seen, trips: Int, now: Long, ownCar: Boolean, search: Boolean): Finding =
+        if (entry.tracker?.id == Signatures.TIRE_SENSOR.id) tireFinding(entry, trips, now, ownCar)
+        else addressFinding(entry, trips, now, ownCar, search)
+
+    /**
+     * A tire pressure sensor on [trips] trips. In the owner's own car that is, far more
+     * often than not, one of its own wheels, so until the owner has marked their car's
+     * sensors it is not raised as something planted in the vehicle: it asks whether the
+     * car has Bluetooth tire sensors, and says what it means if it does not. Once the
+     * owner has marked their own set, those never get here, so this one belongs to
+     * another vehicle that has been near theirs on separate drives, which is how a car that keeps turning up shows itself; that is raised a
+     * notch higher and phrased that way.
+     */
+    private fun tireFinding(entry: Seen, trips: Int, now: Long, ownCar: Boolean): Finding {
+        val drives = if (ownCar) "drives" else "journeys"
+        return if (ownTiresMarked) Finding(
+            id = "$TIRE_PREFIX${entry.address}@$now",
+            severity = Severity.HIGH,
+            title = "Another vehicle's tire sensor has been near you on $trips $drives",
+            detail = "The tire pressure sensor ${entry.address} was heard for the length of $trips separate $drives. " +
+                "Your own car's sensors are marked as yours, so this one is on " +
+                "another vehicle: the same vehicle has been near you each time. It may be someone who makes the same " +
+                "trips, or a vehicle following you. Note when and where you were, and look for the same vehicle.",
+            dedupeKey = "$TIRE_PREFIX${entry.address}"
+        ) else Finding(
+            id = "$TIRE_PREFIX${entry.address}@$now",
+            severity = Severity.MEDIUM,
+            title = "A tire pressure sensor has been on $trips of your $drives",
+            detail = "The tire pressure sensor ${entry.address} was heard for the length of $trips separate $drives. " +
+                "If your car has Bluetooth tire sensors (valve-cap sensors, or a factory system that uses Bluetooth), " +
+                "this is most likely one of its own wheels: open it under Trackers and mark your car's tires as yours, " +
+                "so they stop being counted and any other vehicle's sensor stands out. If your car has none, the same " +
+                "vehicle has been near you on each of these $drives.",
+            dedupeKey = "$TIRE_PREFIX${entry.address}"
+        )
     }
 
     /**
@@ -311,7 +358,7 @@ class VehicleTrips(private val store: Store) {
                 signatureOf(entry)?.let(signatures::add)
                 if (entry.reported) continue
                 val byAddress = earlierTrips { it.addresses.contains(entry.address) } + 1
-                if (byAddress >= TRIPS_TO_ALERT) findings.add(addressFinding(entry, byAddress, now, ownCar, search = false))
+                if (byAddress >= TRIPS_TO_ALERT) findings.add(findingFor(entry, byAddress, now, ownCar, search = false))
             }
             history.add(Trip(start, now, addresses, signatures, startLat, startLon, HashMap(tripAccessories)))
             while (history.size > MAX_TRIPS) history.removeAt(0)
@@ -351,6 +398,10 @@ class VehicleTrips(private val store: Store) {
     /** "airtag|3f9a…" for an identified tracker; generic devices have no rotation-proof signature. */
     private fun signatureOf(entry: Seen): String? {
         val tracker = entry.tracker ?: return null
+        // A tire sensor keeps its address for life, and every unit of a kit sends the
+        // same advertisement shape, so a shared signature would only ever say "a tire
+        // sensor of this kind", which every car with that kit has.
+        if (tracker.id == Signatures.TIRE_SENSOR.id) return null
         val fingerprint = entry.fingerprint ?: return null
         return "${tracker.id}|$fingerprint"
     }
@@ -438,6 +489,9 @@ class VehicleTrips(private val store: Store) {
          * explanation below for those rows ([coTravellerEvent]).
          */
         const val JOURNEYS_PREFIX = "journeys@"
+
+        /** Start of the dedupe key of a tire sensor's finding ([tireFinding]). */
+        const val TIRE_PREFIX = "tire@"
 
         /** Whether a timeline row with [eventId] is a co-traveller finding from trip memory. */
         fun coTravellerEvent(eventId: String): Boolean = eventId.startsWith(JOURNEYS_PREFIX)

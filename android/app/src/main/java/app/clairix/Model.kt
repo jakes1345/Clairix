@@ -1,6 +1,7 @@
 package app.clairix
 
 import app.clairix.detect.DultResult
+import app.clairix.detect.TirePressure
 
 enum class Threat { NONE, LOW, MEDIUM, HIGH, CRITICAL }
 
@@ -67,7 +68,12 @@ data class Detection(
      * counts as on you anywhere (the Trackers hero, the hub, the map); it stays on the
      * list, the timeline and the evidence report. See [app.clairix.analysis.Tracker.resolve].
      */
-    val resolvedAt: Long = 0L
+    val resolvedAt: Long = 0L,
+    /**
+     * The latest reading of a Bluetooth tire pressure sensor: its fixed ID, wheel,
+     * pressure and temperature. Null for anything that is not one.
+     */
+    val tire: TirePressure.Reading? = null
 ) {
     val identified: Boolean get() = tracker != null
 

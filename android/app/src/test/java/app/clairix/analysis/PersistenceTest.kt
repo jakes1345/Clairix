@@ -446,4 +446,37 @@ class PersistenceTest {
             10.0, -15.0, 25.0, -5.0, 0.0, 20.0, -20.0, 10.0, -10.0, 30.0
         )
     }
+
+    @Test
+    fun aTireSensorThatRidesAlongIsATravellerNotARecognisedTrackerAndKeepsItsLatestReading() {
+        val tracker = Tracker()
+        val front = app.clairix.detect.TirePressure.Reading(
+            app.clairix.detect.TirePressure.Format.VALVE_CAP, "80:EA:CA:10:8A:78", wheel = 1, pressureKpa = 230.0
+        )
+        // Twelve minutes along a road, then a packet carrying a reading.
+        tracker.ride("tire", t0, 12, 170.0, Signatures.TIRE_SENSOR)
+        val at = t0 + 12 * 60_000L + 45_000L
+        val observed = tracker.observe(
+            key = "tire", address = "tire", rssi = -70, tracker = Signatures.TIRE_SENSOR,
+            approxMetres = null, rotations = 0, addresses = 1, fix = null, hasPosition = true, now = at
+        ).detection
+        assertTrue(observed.following)
+        tracker.noteTire("tire", front.copy(pressureKpa = 242.0))
+        val d = tracker.snapshot(at).single { it.key == "tire" }
+        // Moving with you, it is a vehicle near yours or your own: HIGH, held for the
+        // journey's notice, never the CRITICAL of a tag away from its owner.
+        assertEquals(Threat.HIGH, d.threat)
+        assertEquals(242.0, d.tire!!.pressureKpa!!, 1e-9)
+        assertEquals("80:EA:CA:10:8A:78", d.tire!!.sensorId)
+
+        // A packet with no reading (a scan response) does not blank out the last one,
+        // and a merge carries it onto the surviving key.
+        tracker.observe(
+            key = "tire", address = "tire", rssi = -70, tracker = Signatures.TIRE_SENSOR,
+            approxMetres = null, rotations = 0, addresses = 1, fix = null, hasPosition = true, now = at + 30_000L
+        )
+        tracker.merge("tire", "other", certain = true)
+        val merged = tracker.snapshot(at + 60_000L).single { it.key == "other" }
+        assertEquals(242.0, merged.tire!!.pressureKpa!!, 1e-9)
+    }
 }

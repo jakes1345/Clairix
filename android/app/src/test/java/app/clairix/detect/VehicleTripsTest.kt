@@ -231,4 +231,54 @@ class VehicleTripsTest {
         reopened.clear()
         assertTrue(reopened.accessoryUse().isEmpty())
     }
+
+    private val tireSensor = "80:EA:CA:10:8A:78"
+
+    @Test
+    fun theOwnersOwnTireSensorsAreNotReportedAsPlantedInTheCar() {
+        // A car with Bluetooth tire sensors takes them on every drive.
+        val vt = trips()
+        assertTrue(drive(vt, home, listOf(tireSensor), ownCar = true, tracker = Signatures.TIRE_SENSOR, fingerprint = "fp").isEmpty())
+        assertTrue(drive(vt, work, listOf(tireSensor), ownCar = true, tracker = Signatures.TIRE_SENSOR, fingerprint = "fp").isEmpty())
+        val finding = drive(vt, home, listOf(tireSensor), ownCar = true, tracker = Signatures.TIRE_SENSOR, fingerprint = "fp").single()
+        assertEquals(Severity.MEDIUM, finding.severity)
+        assertEquals("${VehicleTrips.TIRE_PREFIX}$tireSensor", finding.dedupeKey)
+        assertTrue(finding.title, finding.title.contains("A tire pressure sensor has been on 3 of your drives"))
+        assertTrue(finding.detail, finding.detail.contains("mark your car's tires as yours"))
+        assertFalse(finding.detail.contains("OBD-II"))
+        assertFalse(finding.coTraveller)
+    }
+
+    @Test
+    fun onceTheOwnersTiresAreMarkedAnotherTireSensorOnThreeDrivesIsAnotherVehicle() {
+        val vt = trips()
+        val others = "80:EA:CA:77:77:77"
+        fun drive(from: Pair<Double, Double>): VehicleTrips.Finding? {
+            var found: VehicleTrips.Finding? = null
+            vt.beginTrip(now, from.first, from.second)
+            vt.noteAccessory(carKit, "Civic", car = true)
+            repeat(4) {
+                found = found ?: vt.sight(others, others, "TPMS1", Signatures.TIRE_SENSOR, "fp", now, ownTiresMarked = true)
+                now += 60_000L
+            }
+            now += 20 * 60_000L
+            vt.endTrip(now)
+            now += 8 * 3600_000L
+            return found
+        }
+        assertNull(drive(home))
+        assertNull(drive(work))
+        val finding = drive(home)!!
+        assertEquals(Severity.HIGH, finding.severity)
+        assertTrue(finding.title, finding.title.startsWith("Another vehicle's tire sensor has been near you on 3 drives"))
+    }
+
+    @Test
+    fun tireSensorsOfOneKitDoNotAddUpByTheirSharedAdvertisementShape() {
+        // Three different cars with the same kit on three drives: three addresses, one shape.
+        val vt = trips()
+        drive(vt, home, listOf("80:EA:CA:00:00:01"), ownCar = true, tracker = Signatures.TIRE_SENSOR, fingerprint = "kit")
+        drive(vt, work, listOf("80:EA:CA:00:00:02"), ownCar = true, tracker = Signatures.TIRE_SENSOR, fingerprint = "kit")
+        assertTrue(drive(vt, home, listOf("80:EA:CA:00:00:03"), ownCar = true, tracker = Signatures.TIRE_SENSOR, fingerprint = "kit").isEmpty())
+    }
 }

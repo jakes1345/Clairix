@@ -156,4 +156,26 @@ class TrustBookTest {
         assertFalse(TrustBook.rotating(d(Signatures.GPS_BLE)))
         assertFalse(TrustBook.rotating(d(null)))
     }
+
+    @Test
+    fun aCarsTireSensorsAreMarkedForGoodEachOnItsOwnAndSurviveASave() {
+        val tires = mapOf("80:EA:CA:00:00:01" to "My car's tire sensor, wheel 1", "81:EA:CA:00:00:02" to "My car's tire sensor, wheel 2")
+        val book = TrustBook.EMPTY.trust(a, "Watch", rotating = false, now = t0).trustTires(tires, t0)
+        assertTrue(book.hasTires)
+        assertEquals(3, book.devices.size)
+        assertTrue(book.devices.filter { it.tire }.all { it.until == 0L && it.addresses.size == 1 })
+        assertTrue(book.expire(t0 + 365L * 24 * 3600_000L).hasTires)
+
+        val reloaded = TrustBook.from(book.toJson(), emptySet())
+        assertTrue(reloaded.hasTires)
+        assertEquals("My car's tire sensor, wheel 2", reloaded.device("81:EA:CA:00:00:02")!!.label)
+        assertFalse(reloaded.device(a)!!.tire)
+
+        // One taken back alone; the other stays the owner's.
+        val one = reloaded.untrust("80:EA:CA:00:00:01")
+        assertNull(one.device("80:EA:CA:00:00:01"))
+        assertTrue(one.hasTires)
+        assertFalse(one.untrust("81:EA:CA:00:00:02").hasTires)
+        assertFalse(TrustBook.EMPTY.hasTires)
+    }
 }

@@ -896,6 +896,15 @@
     <string name="scan_once_you_have_found_and_removed">Once you have found and removed it. It stops counting as on you and stays in the timeline and the evidence report; if it is heard again after an hour away, Clairix watches it afresh.</string>
     <string name="scan_mark_as_mine">Mark as mine</string>
     <string name="scan_marking_it_as_yours_removes_it">Marking it as yours removes it from the threat level. This device changes its Bluetooth address: Clairix keeps it as yours across a change only when it can prove it is the same device, which it cannot for a tracker tag (two of one make look alike), and asks you again after 24 hours. You can undo this here or in Settings.</string>
+    <string name="scan_tire_sensor_id">Tire sensor ID</string>
+    <string name="scan_tire_reading">Tire reading</string>
+    <string name="scan_tire_label_wheel">My car\'s tire sensor, wheel %1$d</string>
+    <string name="scan_tire_label">My car\'s tire sensor</string>
+    <plurals name="scan_mark_my_car_tires">
+        <item quantity="one">Mark as my car\'s tire</item>
+        <item quantity="other">Mark these %1$d as my car\'s tires</item>
+    </plurals>
+    <string name="scan_marking_tires_as_yours">If your car has Bluetooth tire sensors, its own set rides along on every drive. This marks this sensor and the ones heard alongside it from the same moment (%1$s) as your car\'s, for good. After that, any other vehicle\'s tire sensor that keeps turning up on your drives stands out. Each can be undone on its own here or in Settings.</string>
     <string name="scan_marking_it_as_yours_removes_it_2">Marking it as yours removes it from the threat level. You can undo this here or in Settings.</string>
     <string name="scan_gps_fix">GPS fix</string>
     <string name="scan_no_fix">No fix</string>

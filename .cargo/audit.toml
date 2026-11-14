@@ -32,4 +32,23 @@ ignore = [
     # stable version on elliptic-curve 0.14 (then update both trees and remove this), or
     # if Clairix ever uses a NIST-curve suite or an ECDSA key.
     "RUSTSEC-2026-0387",
+
+    # RUSTSEC-2026-0459, libsqlite3-sys 0.38.2 (comms-crypto): SQLite before 3.54.0 can
+    # return uninitialized page-cache memory when it opens a database together with a
+    # -wal file whose page size differs from the database's; the attacker has to plant
+    # that pair of files where the victim will open them. Fixed in libsqlite3-sys 0.39
+    # (SQLite 3.54), which only rusqlite 0.41 uses. libsqlite3-sys is in the tree only
+    # through Arti: tor-dirmgr keeps its directory cache in SQLite, compiled in from the
+    # bundled source (arti-client's static-sqlite, for Android), and every released
+    # tor-dirmgr, 0.48.0 included, requires rusqlite below 0.41, so this tree cannot take
+    # the fix. The only database the app opens with it is Arti's own cache, in
+    # cacheDir/tor (TorTransport.kt), which is private to the app's user id: no other app
+    # can write a file there, cloud backup and device transfer bring nothing back into it
+    # (allowBackup="false" and data_extraction_rules.xml exclude every domain), and Arti
+    # checks that nothing inside the app's directory is writable by others before using
+    # it. Nobody less trusted than the app itself can place the database and -wal pair
+    # the bug needs. Look again when an Arti release accepts rusqlite 0.41 (update
+    # arti-client and tor-rtcompat together, then remove this), or if Clairix ever opens
+    # a SQLite file through this library from shared storage or another app's files.
+    "RUSTSEC-2026-0459",
 ]

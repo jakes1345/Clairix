@@ -140,6 +140,13 @@ object Registry {
     fun trust(address: String, label: String? = null, rotating: Boolean = false) =
         setTrust { it.trust(address, label, rotating, System.currentTimeMillis()) }
 
+    /**
+     * Marks [sensors] (address to label) as the owner's own car's tire pressure sensors,
+     * each for good and each on its own ([TrustBook.trustTires]).
+     */
+    fun trustTires(sensors: Map<String, String?>) =
+        setTrust { it.trustTires(sensors, System.currentTimeMillis()) }
+
     /** Takes trust back from the device [address] belongs to, every address of it included. */
     fun untrust(address: String) = setTrust { it.untrust(address) }
 
