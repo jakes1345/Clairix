@@ -97,6 +97,22 @@ class WifiScannerTest {
     }
 
     @Test
+    fun theOmgCablesOwnNetworkIsHighAndLookalikesAreNot() {
+        // The cable's hotspot is WPA2 under the name its maker documents.
+        val cable = WifiScanner.classify(listOf(wpa2("O.MG", "50:00:00:00:00:01")), now)
+        assertEquals(cable.toString(), 1, cable.size)
+        assertEquals("known_catcher_ssid", cable[0].reason)
+        assertEquals(Threat.HIGH, cable[0].threat)
+        // A name that only contains it, and the deauther's default that is also a joke name, are not flagged.
+        val others = WifiScanner.classify(listOf(
+            wpa2("O.MG Guest", "50:00:00:00:00:02"),
+            wpa2("OMG", "50:00:00:00:00:03"),
+            wpa2("pwned", "50:00:00:00:00:04")
+        ), now)
+        assertTrue(others.toString(), others.isEmpty())
+    }
+
+    @Test
     fun wifiInterceptionKitIsHighAndCellularProductNamesAreNot() {
         val a = WifiScanner.classify(listOf(
             open("Pineapple", "50:00:00:00:00:01"),
