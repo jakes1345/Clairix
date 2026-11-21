@@ -1,5 +1,6 @@
 package app.clairix.nav
 
+import app.clairix.repositoryFile
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -7,7 +8,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.File
 
 /**
  * The tile setting's format (tools/relays/check_tiles.py holds the same rules),
@@ -55,8 +55,7 @@ class TileConfigTest {
 
     @Test
     fun theSettingInTheRepositoryParses() {
-        val file = generateSequence(File("").absoluteFile) { it.parentFile }.map { File(it, "relays/tiles.json") }.first { it.isFile }
-        val c = TileConfig.parse(file.readText(), System.currentTimeMillis() / 1000)
+        val c = TileConfig.parse(repositoryFile("relays/tiles.json").readText(), System.currentTimeMillis() / 1000)
         assertTrue(TileConfig.REQUIRED_CREDIT in c.attribution)
     }
 

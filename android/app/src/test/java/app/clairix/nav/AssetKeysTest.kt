@@ -1,5 +1,6 @@
 package app.clairix.nav
 
+import app.clairix.repositoryFile
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -8,7 +9,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.File
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -78,9 +78,8 @@ class AssetKeysTest {
 
     @Test
     fun theListInTheRepositoryParsesAndAcceptsTheBuiltInKey() {
-        val repo = generateSequence(File("").absoluteFile) { it.parentFile }.first { File(it, "relays/keys.json").isFile }
-        val parsed = AssetKeyList.parse(File(repo, "relays/keys.json").readText(), System.currentTimeMillis() / 1000)
-        val builtIn = File(repo, "android/asset-signing.pub").readText().trim()
+        val parsed = AssetKeyList.parse(repositoryFile("relays/keys.json").readText(), System.currentTimeMillis() / 1000)
+        val builtIn = repositoryFile("android/asset-signing.pub").readText().trim()
         assertTrue(builtIn.trimEnd('=') in parsed.accepted.map { it.trimEnd('=') })
     }
 
