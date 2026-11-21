@@ -37,6 +37,8 @@
     <string name="settings_balanced_scan_recommended_for_everyday_use">Balanced scan. Recommended for everyday use.</string>
     <string name="settings_alert_on_surveillance_hardware">Alert on surveillance hardware</string>
     <string name="settings_a_notification_when_a_flock_safety">A notification when a Flock Safety camera battery, Raven gunshot detector or Flock hotspot is heard nearby. Off, it is still written to the timeline.</string>
+    <string name="settings_alert_on_attack_tools">Alert on attack tools</string>
+    <string name="settings_a_notification_when_a_flipper_zero">A notification when a Flipper Zero is heard nearby, or when something floods Bluetooth with fake pairing requests. Off, it is still written to the timeline.</string>
     <string name="settings_resume_after_reboot">Resume after reboot</string>
     <string name="settings_restarts_the_scanner_when_the_phone">Restarts the scanner when the phone boots, if it was running before.</string>
     <string name="settings_needs_location_set_to_allow_all">Needs location set to \"Allow all the time\". Android asks for this separately: turning this on takes you to Clairix\'s location permission page.</string>

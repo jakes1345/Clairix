@@ -19,6 +19,9 @@ private const val FIND_HUB_FRAME = 0x40
 private const val FIND_HUB_SEPARATED_FRAME = 0x41
 private val DULT_UUID = android.os.ParcelUuid.fromString("0000fcb2-0000-1000-8000-00805f9b34fb")
 private val EDDYSTONE_UUID = android.os.ParcelUuid.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
+private val FAST_PAIR_UUID = android.os.ParcelUuid.fromString("0000fe2c-0000-1000-8000-00805f9b34fb")
+private const val SAMSUNG = 0x0075
+private const val AD_MANUFACTURER = 0xFF
 
 /**
  * The parts of one advertisement the signatures read, taken out of [ScanRecord] so
@@ -43,7 +46,15 @@ internal class Advert(
      * Every manufacturer-specific block, company id to the bytes after it. Read for the
      * tire sensors ([TirePressure]), whose layouts sit under ids that are not their makers'.
      */
-    val manufacturer: Map<Int, ByteArray> = emptyMap()
+    val manufacturer: Map<Int, ByteArray> = emptyMap(),
+    /** Service data under Google's Fast Pair UUID (0xFE2C); three bytes while the sender is in pairing mode. */
+    val fastPair: ByteArray? = null,
+    /**
+     * The first manufacturer block under Samsung's company id (0x0075), read from the raw
+     * bytes. Samsung's earbud set-up frame carries two blocks under that id and the
+     * platform's table keeps one per id, so [manufacturer] cannot be relied on for it.
+     */
+    val samsung: ByteArray? = null
 ) {
     companion object {
         fun of(record: ScanRecord): Advert {
@@ -58,8 +69,34 @@ internal class Advert(
                 google = record.getServiceData(EDDYSTONE_UUID),
                 flags = record.advertiseFlags,
                 name = record.deviceName,
-                manufacturer = manufacturer(record)
+                manufacturer = manufacturer(record),
+                fastPair = record.getServiceData(FAST_PAIR_UUID),
+                samsung = firstManufacturerBlock(record.bytes, SAMSUNG)
             )
+        }
+
+        /**
+         * The payload of the first manufacturer-specific structure under [company] in
+         * a raw advertisement, after the two-byte company id; null when there is none
+         * or the bytes are not well-formed that far. An advertisement is a run of
+         * structures, each a length byte, a type byte and length-minus-one bytes of data.
+         */
+        fun firstManufacturerBlock(raw: ByteArray?, company: Int): ByteArray? {
+            if (raw == null) return null
+            var i = 0
+            while (i < raw.size) {
+                val length = raw[i].toInt() and 0xFF
+                if (length == 0 || i + 1 >= raw.size) return null
+                val end = i + 1 + length
+                val type = raw[i + 1].toInt() and 0xFF
+                if (type == AD_MANUFACTURER && length >= 3 && i + 3 < raw.size) {
+                    val id = (raw[i + 2].toInt() and 0xFF) or ((raw[i + 3].toInt() and 0xFF) shl 8)
+                    // A structure that runs past the end is taken as far as the bytes go.
+                    if (id == company) return raw.copyOfRange(i + 4, minOf(end, raw.size).coerceAtLeast(i + 4))
+                }
+                i = end
+            }
+            return null
         }
 
         private fun manufacturer(record: ScanRecord): Map<Int, ByteArray> {
