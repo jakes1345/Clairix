@@ -68,6 +68,7 @@ import app.clairix.analysis.WifiScanner
 import app.clairix.analysis.haversine
 import app.clairix.analysis.toFix
 import app.clairix.detect.Advert
+import app.clairix.detect.AttackTools
 import app.clairix.detect.BleCanary
 import app.clairix.detect.BleNames
 import app.clairix.detect.CadenceFingerprinter
@@ -194,6 +195,10 @@ class ScanService : LifecycleService() {
 
     /** When each piece of surveillance hardware was last written up, by address; a battery advertises several times a second. */
     private val infrastructureAlertedAt = HashMap<String, Long>()
+    /** When each attack tool was last put on the timeline, by address (or one key for a flood). */
+    private val attackToolAlertedAt = HashMap<String, Long>()
+    /** The last half minute of pairing requests, to tell a flood of fake ones from a room of headphones. */
+    private val pairingFlood = AttackTools.PairingFlood()
 
     /**
      * Where each packet is worked on. The scanner delivers its callbacks on the main
@@ -1081,11 +1086,16 @@ class ScanService : LifecycleService() {
         if (BleCanary.isCanary(record)) return
         // Read off the record once, for the benign check here and the signatures below.
         val advert = record?.let { Advert.of(it) }
-        if (advert != null && Signatures.isBenign(advert)) return
-
         val now = System.currentTimeMillis()
         val device = result.device
-        val address = device.address?.let { BleNames.formatMac(it) } ?: return
+        val address = device.address?.let { BleNames.formatMac(it) }
+        watchForPairingFlood(advert, address, result.rssi, now)
+        if (advert != null && Signatures.isBenign(advert)) return
+        if (address == null) return
+        // A Flipper Zero announcing itself. Reported in its own right, like the
+        // surveillance hardware below, and left in the pipeline: one that keeps
+        // turning up near you is also a device following you.
+        if (advert != null) AttackTools.match(advert, address)?.let { onAttackTool(it, address, result.rssi, now) }
         // Fixed surveillance hardware announcing itself: a plate reader's battery, a
         // gunshot detector. Reported in its own right, before the trust check (marking
         // it "mine" makes no sense) and without leaving the tracker pipeline: a camera
@@ -1266,6 +1276,60 @@ class ScanService : LifecycleService() {
                 lat = fix?.lat, lon = fix?.lon
             ),
             dedupeWindowMs = INFRASTRUCTURE_DEDUPE_MS
+        )
+    }
+
+    /**
+     * Pairing requests are looked at before the benign check throws them away: one is a
+     * pair of headphones, and a stream of them from addresses never heard twice is
+     * somebody's attack tool. See [AttackTools.PairingFlood].
+     */
+    private fun watchForPairingFlood(advert: Advert?, address: String?, rssi: Int, now: Long) {
+        if (advert == null || address == null) return
+        val prompt = AttackTools.promptOf(advert) ?: return
+        pairingFlood.observe(prompt, address, rssi, now)?.let { onAttackTool(it, PAIRING_FLOOD_KEY, rssi, now) }
+    }
+
+    /**
+     * An attack tool heard over Bluetooth: a Flipper Zero, or a flood of fake pairing
+     * requests. Written to the timeline with the phone's position, once per tool per
+     * [ATTACK_TOOL_DEDUPE_MS], and raised as a notification when the match is certain
+     * and the owner wants one. A possible match is remembered nowhere.
+     *
+     * A Flipper nearby is not an attack: plenty are carried by people who only like
+     * the gadget. The alert says what was heard and what it can and cannot do, and
+     * leaves the judgement to whoever is holding the phone.
+     */
+    private fun onAttackTool(hit: AttackTools.Hit, key: String, rssi: Int, now: Long) {
+        if (hit.confidence == AttackTools.Confidence.POSSIBLE) return
+        synchronized(attackToolAlertedAt) {
+            val last = attackToolAlertedAt[key] ?: 0L
+            if (now - last < ATTACK_TOOL_DEDUPE_MS) return
+            attackToolAlertedAt[key] = now
+        }
+        val fix = track.current
+        val certain = hit.confidence == AttackTools.Confidence.CERTAIN
+        val severity = if (certain && AppSettings.attackToolAlerts) Severity.MEDIUM else Severity.LOW
+        val advice = when (hit.kind) {
+            AttackTools.Kind.PAIRING_FLOOD ->
+                "This cannot read anything on your phone; it makes phones and computers nearby show pairing pop-ups. " +
+                    "Do not accept a pairing request you did not start. Turning Bluetooth off stops the pop-ups."
+            AttackTools.Kind.FLIPPER_KEYBOARD ->
+                "Paired with a phone or computer it can type on it like a keyboard. Do not accept a pairing request from it."
+            AttackTools.Kind.FLIPPER_ZERO ->
+                "It is a pocket radio tool that can copy and replay some remotes, access cards and tags held close to it. " +
+                    "Its owner may only be carrying it. It cannot read your phone from where it is."
+        }
+        Registry.publishAlert(
+            Alert(
+                id = "tool@$key@$now", ts = now, severity = severity,
+                title = if (certain) hit.kind.headline else "Possible ${hit.kind.label.replaceFirstChar { it.lowercase() }} nearby",
+                detail = "${hit.kind.label} heard at ${BleNames.signalLabel(rssi)} signal ($rssi dBm): " +
+                    hit.evidence.joinToString("; ") + ". " + advice,
+                kind = EventKind.ATTACK_TOOL, dedupeKey = "tool@$key",
+                lat = fix?.lat, lon = fix?.lon
+            ),
+            dedupeWindowMs = ATTACK_TOOL_DEDUPE_MS
         )
     }
 
@@ -1519,6 +1583,8 @@ class ScanService : LifecycleService() {
         vehicleTrips.clear()
         dultSchedule.clear()
         synchronized(infrastructureAlertedAt) { infrastructureAlertedAt.clear() }
+        synchronized(attackToolAlertedAt) { attackToolAlertedAt.clear() }
+        pairingFlood.reset()
         synchronized(nearestCameraCache) { nearestCameraCache.clear() }
         GnssMonitor.clear()
         runCatching { app.clairix.analysis.CellularExposure.clear(this) }
@@ -1594,6 +1660,13 @@ class ScanService : LifecycleService() {
             // Flock Safety accessory service, so a camera's hardware is heard with the
             // screen off — which is how a phone rides in a car.
             SurveillanceHardware.ACCESSORY_SERVICE,
+            // A Flipper Zero's serial service, one per case colour (AttackTools). The
+            // pairing-request flood is not listed and is only caught with the screen on:
+            // a filter for it would wake the phone for every pair of AirPods in range.
+            "00003080-0000-1000-8000-00805f9b34fb",
+            "00003081-0000-1000-8000-00805f9b34fb",
+            "00003082-0000-1000-8000-00805f9b34fb",
+            "00003083-0000-1000-8000-00805f9b34fb",
         )
         val filters = ArrayList<ScanFilter>()
         for (type in listOf(FIND_MY_TYPE, IBEACON_TYPE)) {
@@ -1952,6 +2025,10 @@ class ScanService : LifecycleService() {
         private const val KNOWN_CAMERAS_REFRESH_MS = 30 * 60_000L
         /** One timeline row and one notification per piece of hardware in this window. */
         private const val INFRASTRUCTURE_DEDUPE_MS = 12 * 3_600_000L
+        /** One timeline row per attack tool per hour: someone at the next table with a Flipper is one event, not sixty. */
+        private const val ATTACK_TOOL_DEDUPE_MS = 3_600_000L
+        /** A flood has no address of its own (every packet has a new one), so it is deduplicated under this key. */
+        private const val PAIRING_FLOOD_KEY = "pairing-flood"
         /** Discoverable for this long and the owner is told the settings page is still open. */
         private const val DISCOVERABLE_ALERT_MS = 3 * 60_000L
         private const val CHANNEL_ONGOING = "scanning"

@@ -26,6 +26,7 @@ just as plainly, what it cannot do.
 | Talk without being listened to | Messages and calls are end-to-end encrypted on the phone and sent as sealed envelopes the relay cannot open and is not told the sender of |
 | Navigate without internet | Turn-by-turn directions from signed offline map files, with anonymous crowd-sourced traffic and incident reports when you are online. United States only for now: the 50 states, DC and Puerto Rico. A route takes a position every second; below 15 % with no charger, traffic and reports slow to every 5 minutes |
 | Know where the plate readers are | Flock Safety and other licence-plate cameras mapped in OpenStreetMap are shown on the map, spoken before you reach one, counted per route and routed around by default (on the US maps above); a Flock camera battery, Raven gunshot detector or Flock hotspot heard over radio is reported too, matched against the map or flagged as unmapped |
+| Know when a hacking gadget is near | Says when a Flipper Zero is nearby with its Bluetooth on, and when something is flooding Bluetooth with fake pairing requests (the pop-ups that cover a phone's screen). Flags the Wi-Fi network an O.MG cable creates. It cannot hear a Flipper that has Bluetooth off or has been renamed, or any tool's other radios |
 | Know if your GPS is lying | Checks that the satellite signals are from satellites: strengths too even or too strong, satellite time against network time, the GPS position against Wi-Fi and cell towers, impossible jumps, mock-location apps, and jamming; navigation warns on the map |
 | Hear the inaudible | Listens for the ultrasonic beacons ad-tracking kits play from TVs, shops and web pages to tie your phone to them, after a self-test that proves the microphone can hear that band |
 | Know where everything is | A guided tour of every screen and tool on first launch, from Settings any time after |
@@ -439,6 +440,19 @@ maintainer on the live service, not in this repository.
   to the timeline. The signatures are the ones the DeFlock and flock-you
   projects published; Flock has been turning these radios down since 2025,
   so silence next to a camera is normal and the map list is the better guide.
+- **Alert on attack tools** (Settings → Scanning): on by default. A
+  notification when a Flipper Zero is identified for certain, or when a flood
+  of fake pairing requests is; a likely match, or the setting off, still goes
+  to the timeline. A Flipper is recognised by the service, name and address
+  its own firmware gives it, so it is heard only while its Bluetooth is on and
+  only until its owner renames it; its sub-gigahertz, NFC and infrared radios
+  are silent to a phone. A flood is recognised by its shape (many pairing
+  requests, each from an address that is never heard twice, all at one
+  strength, or one address claiming to be four different products), not by
+  who sends it, so a room full of real headphones is not one. A flood cannot
+  read anything on the phone. The Wi-Fi tab also marks a network named
+  exactly "O.MG", the default of the O.MG cable; a cable whose owner changed
+  the name is not marked.
 - **Bluetooth exposure** (Scan → Trackers): what the phone's Bluetooth tells
   a sensor it passes. The phone's own advertising address rotates; a
   personal-looking name can be replaced with the model name from the page;

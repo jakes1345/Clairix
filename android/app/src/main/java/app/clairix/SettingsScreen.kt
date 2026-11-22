@@ -26,6 +26,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,6 +68,7 @@ object AppSettings {
     private const val KEY_RESUME_AFTER_REBOOT = "resume_after_reboot"
     private const val KEY_THEME = "theme"
     private const val KEY_INFRASTRUCTURE_ALERTS = "infrastructure_alerts"
+    private const val KEY_ATTACK_TOOL_ALERTS = "attack_tool_alerts"
     private const val KEY_SHOW_ALERT_DETAILS = "show_alert_details"
 
     /**
@@ -77,7 +79,7 @@ object AppSettings {
      */
     internal val DECOY_KEYS: Set<String> = setOf(
         KEY_AGGRESSIVE_SCAN, KEY_FOLLOW_THRESHOLD, KEY_PERSISTENCE_THRESHOLD, KEY_SCAN_ENABLED,
-        KEY_RESUME_AFTER_REBOOT, KEY_THEME, KEY_INFRASTRUCTURE_ALERTS, KEY_SHOW_ALERT_DETAILS,
+        KEY_RESUME_AFTER_REBOOT, KEY_THEME, KEY_INFRASTRUCTURE_ALERTS, KEY_ATTACK_TOOL_ALERTS, KEY_SHOW_ALERT_DETAILS,
         app.clairix.analysis.LowPowerMode.KEY_SWITCH,
         // Discreet mode: the decoy shows the same launcher entry, notifications and lock screen.
         app.clairix.security.DiscreetMode.KEY_ON, app.clairix.security.DiscreetMode.KEY_DISGUISE,
@@ -95,6 +97,7 @@ object AppSettings {
     @Volatile private var _scanEnabled = false
     @Volatile private var _resumeAfterReboot = false
     @Volatile private var _infrastructureAlerts = true
+    @Volatile private var _attackToolAlerts = true
     @Volatile private var _showAlertDetails = false
     private val _theme = MutableStateFlow(ClairixThemeName.ACID)
 
@@ -104,6 +107,12 @@ object AppSettings {
      * row. On by default: it is the one radio signal of a plate reader the phone can hear.
      */
     val infrastructureAlerts: Boolean get() = _infrastructureAlerts
+
+    /**
+     * Whether hearing an attack tool (a Flipper Zero, or a flood of fake Bluetooth
+     * pairing requests) raises an alert as well as a timeline row. On by default.
+     */
+    val attackToolAlerts: Boolean get() = _attackToolAlerts
 
     /**
      * Whether an alert notification (a tracker, a cell anomaly, a platform
@@ -154,6 +163,7 @@ object AppSettings {
         _scanEnabled = p.getBoolean(KEY_SCAN_ENABLED, false)
         _resumeAfterReboot = p.getBoolean(KEY_RESUME_AFTER_REBOOT, false)
         _infrastructureAlerts = p.getBoolean(KEY_INFRASTRUCTURE_ALERTS, true)
+        _attackToolAlerts = p.getBoolean(KEY_ATTACK_TOOL_ALERTS, true)
         _showAlertDetails = p.getBoolean(KEY_SHOW_ALERT_DETAILS, false)
         // A name from a later version that this one does not know reads as the default.
         val savedTheme = p.getString(KEY_THEME, null)
@@ -182,6 +192,11 @@ object AppSettings {
         _infrastructureAlerts = value
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_INFRASTRUCTURE_ALERTS, value).apply()
+    }
+
+    fun setAttackToolAlerts(context: Context, value: Boolean) {
+        _attackToolAlerts = value
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit { putBoolean(KEY_ATTACK_TOOL_ALERTS, value) }
     }
 
     fun setShowAlertDetails(context: Context, value: Boolean) {
@@ -220,6 +235,7 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
 
     var aggressiveScan by remember { mutableStateOf(AppSettings.aggressiveScan) }
     var infrastructureAlerts by remember { mutableStateOf(AppSettings.infrastructureAlerts) }
+    var attackToolAlerts by remember { mutableStateOf(AppSettings.attackToolAlerts) }
     var showAlertDetails by remember { mutableStateOf(AppSettings.showAlertDetails) }
     var followThreshold by remember { mutableFloatStateOf(AppSettings.followThresholdM) }
     var persistenceThreshold by remember { mutableFloatStateOf(AppSettings.persistenceThresholdMin) }
@@ -500,6 +516,16 @@ fun SettingsScreen(onBack: () -> Unit, onClearData: () -> Unit = {}, onTour: () 
                             onCheckedChange = { v ->
                                 infrastructureAlerts = v
                                 AppSettings.setInfrastructureAlerts(context, v)
+                            }
+                        )
+                        Hairline()
+                        ToggleRow(
+                            title = stringResource(R.string.settings_alert_on_attack_tools),
+                            subtitle = stringResource(R.string.settings_a_notification_when_a_flipper_zero),
+                            checked = attackToolAlerts,
+                            onCheckedChange = { v ->
+                                attackToolAlerts = v
+                                AppSettings.setAttackToolAlerts(context, v)
                             }
                         )
                         Hairline()
