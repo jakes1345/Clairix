@@ -69,9 +69,16 @@ object WifiScanner {
      * they ever matched was a joke router name; the generic test names it also held
      * ("AndroidWifi" is the emulator's own network, "testssid") are not interception
      * kit either.
+     *
+     * "o.mg" is the network an O.MG cable or plug broadcasts until its owner renames
+     * it: a charging cable or adapter with a hidden computer that types on whatever
+     * it is plugged into (the maker's own set-up page gives the name, o.mg.lol/setup).
+     * Nothing else is called that, so hearing it means one is switched on within a
+     * room or two. "pwned", the ESP8266 Deauther's default, is not here: it is also a
+     * joke people name their home network.
      */
     private val KNOWN_TOOL_SSIDS = setOf(
-        "pineapple", "wifipineapple", "hak5", "evil_twin", "eviltwin"
+        "pineapple", "wifipineapple", "hak5", "evil_twin", "eviltwin", "o.mg"
     )
 
     /**

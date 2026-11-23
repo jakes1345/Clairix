@@ -37,6 +37,8 @@
     <string name="settings_balanced_scan_recommended_for_everyday_use">Balanced scan. Recommended for everyday use.</string>
     <string name="settings_alert_on_surveillance_hardware">Alert on surveillance hardware</string>
     <string name="settings_a_notification_when_a_flock_safety">A notification when a Flock Safety camera battery, Raven gunshot detector or Flock hotspot is heard nearby. Off, it is still written to the timeline.</string>
+    <string name="settings_alert_on_attack_tools">Alert on attack tools</string>
+    <string name="settings_a_notification_when_a_flipper_zero">A notification when a Flipper Zero is heard nearby, or when something floods Bluetooth with fake pairing requests. Off, it is still written to the timeline.</string>
     <string name="settings_resume_after_reboot">Resume after reboot</string>
     <string name="settings_restarts_the_scanner_when_the_phone">Restarts the scanner when the phone boots, if it was running before.</string>
     <string name="settings_needs_location_set_to_allow_all">Needs location set to \"Allow all the time\". Android asks for this separately: turning this on takes you to Clairix\'s location permission page.</string>
@@ -1987,4 +1989,24 @@
     <string name="supporter_buy_price">Buy Clairix Supporter (%1$s)</string>
     <string name="supporter_purchase_working">Finishing with your relay…</string>
     <string name="supporter_purchase_pending">The payment has not cleared yet. It will finish by itself once it does.</string>
+    <!-- Offline mesh: the LoRa bridge through a Meshtastic radio (LoraTools.kt, LoraLink.kt) -->
+    <string name="lora_section">LoRa radio</string>
+    <string name="lora_radio">Radio</string>
+    <string name="lora_none_chosen">No radio chosen. Pair a Meshtastic LoRa radio and the mesh also carries messages over LoRa, kilometres instead of tens of metres.</string>
+    <string name="lora_needs_permission">Turn the offline mesh on first: finding a radio needs the Nearby devices permission.</string>
+    <string name="lora_choose_radio">Choose a LoRa radio</string>
+    <string name="lora_forget_radio">Forget this radio</string>
+    <string name="lora_scanning">Looking for Meshtastic radios nearby. Make sure the radio is on and its Bluetooth is enabled.</string>
+    <string name="lora_none_found">No Meshtastic radio found. Check that it is on, close by, and not connected to another phone.</string>
+    <string name="lora_scan_again">Look again</string>
+    <string name="lora_starts_with_mesh">Connects when the offline mesh is on</string>
+    <string name="lora_connecting">Connecting</string>
+    <string name="lora_configuring">Reading the radio\'s settings</string>
+    <string name="lora_connected">Connected</string>
+    <string name="lora_waiting">Not connected, trying again</string>
+    <string name="lora_packets_sent">Packets sent</string>
+    <string name="lora_bundles_heard">Messages heard</string>
+    <string name="lora_last_heard">Last heard</string>
+    <string name="lora_how_title">How LoRa works here</string>
+    <string name="lora_how_text">The radio sends the sealed messages this phone carries on its primary channel, and passes on Clairix messages it hears; the phone keeps them with the rest of the mesh. Anyone on that channel can see that packets go by, never what is in them or whose they are. Airtime is shared and limited, so the phone sends at most ten packets every ten minutes and each message at most twice; a text takes two to four packets. Photos and voice notes are too big for LoRa and stay on Bluetooth and the relay.</string>
 </resources>

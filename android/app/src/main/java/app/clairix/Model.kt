@@ -278,6 +278,8 @@ enum class EventKind {
     CLOCK_DRIFT,
     /** Fixed surveillance hardware heard over radio: a plate reader's battery, a gunshot detector, a Flock hotspot. */
     INFRASTRUCTURE,
+    /** An attack tool heard over radio: a Flipper Zero, or a flood of fake Bluetooth pairing requests. */
+    ATTACK_TOOL,
     /** Satellite positioning spoofed, jammed or behaving unlike satellites. */
     GNSS,
     /** An inaudible beacon tone heard on the ultrasound page. */

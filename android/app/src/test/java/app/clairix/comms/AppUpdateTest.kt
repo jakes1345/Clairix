@@ -1,5 +1,6 @@
 package app.clairix.comms
 
+import app.clairix.repositoryFile
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,7 +10,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.File
 
 /**
  * The version note (relays/latest.json; tools/relays/check_latest.py holds the
@@ -49,8 +49,7 @@ class AppUpdateTest {
 
     @Test
     fun theNoteInTheRepositoryParses() {
-        val file = generateSequence(File("").absoluteFile) { it.parentFile }.map { File(it, "relays/latest.json") }.first { it.isFile }
-        val r = LatestRelease.parse(file.readText(), System.currentTimeMillis() / 1000)
+        val r = LatestRelease.parse(repositoryFile("relays/latest.json").readText(), System.currentTimeMillis() / 1000)
         assertTrue(r.minSafeVersionCode <= r.versionCode)
     }
 

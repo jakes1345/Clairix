@@ -1,5 +1,6 @@
 package app.clairix.comms
 
+import app.clairix.repositoryFile
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -8,7 +9,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.File
 
 /** The relay list's format (tools/relays/check.py holds the same rules) and when a download replaces it. */
 class RelayListTest {
@@ -47,8 +47,7 @@ class RelayListTest {
 
     @Test
     fun theListInTheRepositoryParses() {
-        val file = generateSequence(File("").absoluteFile) { it.parentFile }.map { File(it, "relays/relays.json") }.first { it.isFile }
-        assertTrue(RelayList.parse(file.readText(), System.currentTimeMillis() / 1000).relays.isNotEmpty())
+        assertTrue(RelayList.parse(repositoryFile("relays/relays.json").readText(), System.currentTimeMillis() / 1000).relays.isNotEmpty())
     }
 
     @Test

@@ -19,17 +19,19 @@ import androidx.core.app.ActivityOptionsCompat
 import app.clairix.AppSettings
 import app.clairix.ui.theme.ClairixTheme
 import app.clairix.ui.theme.ClairixThemeName
+import java.io.File
+import java.nio.file.Files
 
 /**
  * Hosts a screen for a screenshot: the chosen theme, selected in AppSettings the
  * way the Appearance picker does it, plus what an Activity would otherwise
- * provide: a result registry for the permission launchers, and preferences that
- * live in memory.
+ * provide: a result registry for the permission launchers, preferences that
+ * live in memory, and a data directory in a temporary folder.
  */
 @Composable
 internal fun ScreenshotHost(theme: ClairixThemeName, content: @Composable () -> Unit) {
     val base = LocalContext.current
-    val context = remember(base) { InMemoryPrefsContext(base) }
+    val context = remember(base) { ScreenshotContext(base) }
     AppSettings.setTheme(context, theme)
     CompositionLocalProvider(
         LocalContext provides context,
@@ -55,16 +57,40 @@ private object NoResultsOwner : ActivityResultRegistryOwner {
 }
 
 /**
- * A context whose SharedPreferences live in memory, since layoutlib has no data
- * directory, and which reports a system service layoutlib does not implement
- * (biometrics) as absent, the way a phone without the hardware does.
+ * The data directory of the screens drawn in this test process: a temporary
+ * folder, deleted when the process ends. It is one for all of them, as the app
+ * has one on a phone, because what reads it is one per process too: AssetKeys
+ * and AppUpdate keep the first context they are handed. (Not named dataDir:
+ * inside a Context that name is the context's own getDataDir(), null here.)
  */
-private class InMemoryPrefsContext(base: Context) : ContextWrapper(base) {
-    private val files = HashMap<String, InMemoryPrefs>()
+private val screenshotData: File by lazy {
+    Files.createTempDirectory("screenshots").toFile().also { dir ->
+        Runtime.getRuntime().addShutdownHook(Thread { dir.deleteRecursively() })
+    }
+}
+
+/**
+ * A context for a screen drawn by layoutlib, which has no data directory. Its
+ * SharedPreferences live in memory and its files in [screenshotData], and it
+ * reports a system service layoutlib does not implement (biometrics) as absent,
+ * the way a phone without the hardware does.
+ *
+ * layoutlib answers getFilesDir(), getNoBackupFilesDir() and getCacheDir() with
+ * null, and File(null, "relays") is the path "relays" in the working directory.
+ * Without the three below, what a screen keeps would be written into
+ * android/app: the Comms setup screen asks RelayDirectory for newer lists, and
+ * the ones it downloads are kept as relays/latest.json and the like.
+ */
+internal class ScreenshotContext(base: Context) : ContextWrapper(base) {
+    private val prefs = HashMap<String, InMemoryPrefs>()
     override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
-        files.getOrPut(name) { InMemoryPrefs() }
+        prefs.getOrPut(name) { InMemoryPrefs() }
     override fun getSystemService(name: String): Any? = runCatching { super.getSystemService(name) }.getOrNull()
     override fun getApplicationContext(): Context = this
+    override fun getFilesDir(): File = dir("files")
+    override fun getNoBackupFilesDir(): File = dir("no_backup")
+    override fun getCacheDir(): File = dir("cache")
+    private fun dir(name: String) = File(screenshotData, name).apply { mkdirs() }
 }
 
 private class InMemoryPrefs : SharedPreferences {
