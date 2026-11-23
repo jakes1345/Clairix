@@ -88,8 +88,8 @@ object LoraFrames {
 
         val inProgress: Int get() = pending.size
 
-        /** Adds one LoRa payload heard from radio [sender]; returns the bundle it completes, if it does. */
-        fun add(sender: Int, payload: ByteArray, now: Long): MeshProtocol.Bundle? {
+        /** Adds one LoRa payload; returns the bundle it completes, if it does. */
+        fun add(payload: ByteArray, now: Long): MeshProtocol.Bundle? {
             if (payload.size <= HEADER || payload[0] != MAGIC || payload[1] != VERSION) return null
             val index = payload[10].toInt() and 0xFF
             val count = payload[11].toInt() and 0xFF

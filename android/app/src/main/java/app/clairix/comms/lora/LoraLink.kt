@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
@@ -110,6 +111,7 @@ class LoraLink(
         gatt = try {
             device.connectGatt(app, false, callback, BluetoothDevice.TRANSPORT_LE)
         } catch (e: SecurityException) {
+            Log.w(TAG, "no permission to connect to the radio", e)
             null
         }
         if (gatt == null) retry("could not connect")
@@ -144,40 +146,55 @@ class LoraLink(
         val op = ops.removeFirstOrNull() ?: return
         val service = g.getService(MeshtasticProto.SERVICE_UUID) ?: run { retry("not a Meshtastic radio"); return }
         busy = true
-        val ok = try {
+        val refused = try {
             when (op) {
-                is Op.Write -> {
-                    val ch = service.getCharacteristic(MeshtasticProto.TO_RADIO_UUID) ?: return retry("radio has no ToRadio")
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        g.writeCharacteristic(ch, op.bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
-                    } else {
-                        @Suppress("DEPRECATION") run {
-                            ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                            ch.value = op.bytes
-                            g.writeCharacteristic(ch)
-                        }
-                    }
-                }
-                Op.Read -> {
-                    val ch = service.getCharacteristic(MeshtasticProto.FROM_RADIO_UUID) ?: return retry("radio has no FromRadio")
-                    g.readCharacteristic(ch)
-                }
-                Op.Subscribe -> {
-                    val ch = service.getCharacteristic(MeshtasticProto.FROM_NUM_UUID) ?: return retry("radio has no FromNum")
-                    g.setCharacteristicNotification(ch, true)
-                    val cccd = ch.getDescriptor(CCCD_UUID) ?: return retry("radio's FromNum can't notify")
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothStatusCodes.SUCCESS
-                    } else {
-                        @Suppress("DEPRECATION") run {
-                            cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            g.writeDescriptor(cccd)
-                        }
-                    }
-                }
+                is Op.Write -> write(g, service, op.bytes)
+                Op.Read -> requestRead(g, service)
+                Op.Subscribe -> subscribe(g, service)
             }
-        } catch (e: SecurityException) { false }
-        if (!ok) retry("radio refused a request")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "no permission for the radio", e)
+            "no Bluetooth permission"
+        }
+        if (refused != null) retry(refused)
+    }
+
+    /** Reads FromRadio; returns why it couldn't, or null once the read is under way. */
+    private fun requestRead(g: BluetoothGatt, service: BluetoothGattService): String? {
+        val ch = service.getCharacteristic(MeshtasticProto.FROM_RADIO_UUID) ?: return "radio has no FromRadio"
+        return if (g.readCharacteristic(ch)) null else "radio refused a read"
+    }
+
+    /** Writes [bytes] to ToRadio; returns why it couldn't, or null once the write is under way. */
+    private fun write(g: BluetoothGatt, service: BluetoothGattService, bytes: ByteArray): String? {
+        val ch = service.getCharacteristic(MeshtasticProto.TO_RADIO_UUID) ?: return "radio has no ToRadio"
+        val ok = if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            @Suppress("DEPRECATION")
+            ch.value = bytes
+            @Suppress("DEPRECATION")
+            g.writeCharacteristic(ch)
+        }
+        return if (ok) null else "radio refused a write"
+    }
+
+    /** Turns on FromNum notifications; returns why it couldn't, or null once the descriptor write is under way. */
+    private fun subscribe(g: BluetoothGatt, service: BluetoothGattService): String? {
+        val ch = service.getCharacteristic(MeshtasticProto.FROM_NUM_UUID) ?: return "radio has no FromNum"
+        g.setCharacteristicNotification(ch, true)
+        val cccd = ch.getDescriptor(CCCD_UUID) ?: return "radio's FromNum can't notify"
+        val ok = if (Build.VERSION.SDK_INT >= 33) {
+            g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            @Suppress("DEPRECATION")
+            g.writeDescriptor(cccd)
+        }
+        return if (ok) null else "radio refused notifications"
     }
 
     private fun done() { busy = false; next() }
@@ -284,7 +301,7 @@ class LoraLink(
     private fun heard(p: MeshtasticProto.FromRadio.Packet) {
         if (p.port != MeshtasticProto.CLAIRIX_PORT || (myNode != 0 && p.from == myNode)) return
         val now = System.currentTimeMillis()
-        val b = reassembler.add(p.from, p.payload, now) ?: return
+        val b = reassembler.add(p.payload, now) ?: return
         planner.heard(b)
         status.update { it.copy(bundlesHeard = it.bundlesHeard + 1, lastHeardAt = now) }
         if (MeshProtocol.hex(b.tag) in ownTags()) {
@@ -346,7 +363,9 @@ class LoraLink(
                 scanner.startScan(listOf(filter), settings, cb)
                 ({ runCatching { scanner.stopScan(cb) }; Unit })
             } catch (e: SecurityException) {
-                {}
+                Log.w(TAG, "no permission to scan for radios", e)
+                val nothingToStop: () -> Unit = {}
+                nothingToStop
             }
         }
 

@@ -111,8 +111,8 @@ class LoraTest {
         parts.forEach { assertTrue(it.size <= MeshtasticProto.DATA_PAYLOAD_LEN) }
         val r = LoraFrames.Reassembler()
         val order = listOf(3, 1, 1, 0, 3)
-        order.forEach { assertNull(r.add(5, parts[it], now)) }
-        val got = r.add(6, parts[2], now)
+        order.forEach { assertNull(r.add(parts[it], now)) }
+        val got = r.add(parts[2], now)
         assertNotNull(got)
         assertArrayEquals(b.id, got!!.id)
         assertArrayEquals(b.tag, got.tag)
@@ -120,7 +120,7 @@ class LoraTest {
         assertEquals(b.createdMs, got.createdMs)
         assertEquals("crossing LoRa is one hop", 3, got.hops)
         // A late repeat of a finished bundle is ignored, not started again.
-        assertNull(r.add(5, parts[0], now))
+        assertNull(r.add(parts[0], now))
         assertEquals(0, r.inProgress)
     }
 
@@ -137,19 +137,19 @@ class LoraTest {
         val parts = LoraFrames.split(bundle(500)).map { it.copyOf() }
         parts[1][LoraFrames.HEADER + 3] = (parts[1][LoraFrames.HEADER + 3] + 1).toByte()
         val r = LoraFrames.Reassembler()
-        assertNull(parts.firstNotNullOfOrNull { r.add(1, it, now) })
+        assertNull(parts.firstNotNullOfOrNull { r.add(it, now) })
     }
 
     @Test
     fun foreignAndMalformedPayloadsAreIgnored() {
         val r = LoraFrames.Reassembler()
         val good = LoraFrames.split(bundle(300))[0]
-        assertNull(r.add(1, good.copyOf().also { it[0] = 0x00 }, now))      // not ours
-        assertNull(r.add(1, good.copyOf().also { it[1] = 9 }, now))         // other version
-        assertNull(r.add(1, good.copyOf().also { it[11] = 0 }, now))        // count 0
-        assertNull(r.add(1, good.copyOf().also { it[11] = 9 }, now))        // too many
-        assertNull(r.add(1, good.copyOf().also { it[10] = 5; it[11] = 2 }, now)) // index past count
-        assertNull(r.add(1, good.copyOf(LoraFrames.HEADER), now))           // header only
+        assertNull(r.add(good.copyOf().also { it[0] = 0x00 }, now))      // not ours
+        assertNull(r.add(good.copyOf().also { it[1] = 9 }, now))         // other version
+        assertNull(r.add(good.copyOf().also { it[11] = 0 }, now))        // count 0
+        assertNull(r.add(good.copyOf().also { it[11] = 9 }, now))        // too many
+        assertNull(r.add(good.copyOf().also { it[10] = 5; it[11] = 2 }, now)) // index past count
+        assertNull(r.add(good.copyOf(LoraFrames.HEADER), now))           // header only
         assertEquals(0, r.inProgress)
     }
 
@@ -157,13 +157,13 @@ class LoraTest {
     fun unfinishedBundlesExpireAndThePendingListIsBounded() {
         val r = LoraFrames.Reassembler(maxPending = 3, timeoutMs = 10 * 60_000L)
         val a = LoraFrames.split(bundle(500, seed = 1))
-        r.add(1, a[0], now)
+        r.add(a[0], now)
         assertEquals(1, r.inProgress)
         // Another bundle's fragment much later expires the first.
-        r.add(1, LoraFrames.split(bundle(500, seed = 2))[0], now + 11 * 60_000L)
+        r.add(LoraFrames.split(bundle(500, seed = 2))[0], now + 11 * 60_000L)
         assertEquals(1, r.inProgress)
-        assertNull("the rest of the expired one doesn't complete it", a.drop(1).firstNotNullOfOrNull { r.add(1, it, now + 11 * 60_000L) })
-        (3..10).forEach { r.add(1, LoraFrames.split(bundle(500, seed = it))[0], now + 11 * 60_000L) }
+        assertNull("the rest of the expired one doesn't complete it", a.drop(1).firstNotNullOfOrNull { r.add(it, now + 11 * 60_000L) })
+        (3..10).forEach { r.add(LoraFrames.split(bundle(500, seed = it))[0], now + 11 * 60_000L) }
         assertEquals(3, r.inProgress)
     }
 

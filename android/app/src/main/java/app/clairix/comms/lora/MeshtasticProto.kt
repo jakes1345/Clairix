@@ -95,25 +95,34 @@ object MeshtasticProto {
 
     private fun parsePacket(bytes: ByteArray): FromRadio {
         var from = 0; var to = 0; var channel = 0; var id = 0
-        var port = -1; var payload: ByteArray? = null
+        var data: Pair<Int, ByteArray?>? = null
         Reader(bytes).forEach { field, wire, r ->
             when {
                 field == 1 && wire == WIRE_I32 -> from = r.fixed32()
                 field == 2 && wire == WIRE_I32 -> to = r.fixed32()
                 field == 3 && wire == WIRE_VARINT -> channel = r.varint().toInt()
                 field == 6 && wire == WIRE_I32 -> id = r.fixed32()
-                field == 4 && wire == WIRE_LEN -> Reader(r.lenBytes()).forEach { f, w, d ->
-                    when {
-                        f == 1 && w == WIRE_VARINT -> port = d.varint().toInt()
-                        f == 2 && w == WIRE_LEN -> payload = d.lenBytes()
-                        else -> d.skip(w)
-                    }
-                }
+                field == 4 && wire == WIRE_LEN -> data = parseData(r.lenBytes())
                 else -> r.skip(wire)
             }
         }
-        val p = payload ?: return FromRadio.Other // encrypted for a channel this radio lacks, or no payload
-        return FromRadio.Packet(from, to, channel, id, port, p)
+        // No decoded Data: encrypted for a channel this radio lacks.
+        val (port, payload) = data ?: return FromRadio.Other
+        return if (payload == null) FromRadio.Other else FromRadio.Packet(from, to, channel, id, port, payload)
+    }
+
+    /** Data{portnum, payload}. */
+    private fun parseData(bytes: ByteArray): Pair<Int, ByteArray?> {
+        var port = -1
+        var payload: ByteArray? = null
+        Reader(bytes).forEach { f, w, d ->
+            when {
+                f == 1 && w == WIRE_VARINT -> port = d.varint().toInt()
+                f == 2 && w == WIRE_LEN -> payload = d.lenBytes()
+                else -> d.skip(w)
+            }
+        }
+        return port to payload
     }
 
     private fun parseMyInfo(bytes: ByteArray): FromRadio {
