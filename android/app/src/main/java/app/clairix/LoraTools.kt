@@ -16,7 +16,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.clairix.comms.lora.LoraFrames
 import app.clairix.comms.lora.LoraLink
 import app.clairix.comms.lora.LoraStatus
 import app.clairix.comms.mesh.Mesh
@@ -77,7 +76,7 @@ internal fun LoraRadioCard(meshOn: Boolean, now: Long) {
         }
         Notice(
             Tone.Info, title = stringResource(R.string.lora_how_title),
-            text = stringResource(R.string.lora_how_text, LoraFrames.MAX_ENVELOPE)
+            text = stringResource(R.string.lora_how_text)
         )
     }
 

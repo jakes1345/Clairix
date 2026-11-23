@@ -1,10 +1,12 @@
 package app.clairix.comms.mesh
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import app.clairix.Store
 import app.clairix.comms.CommsRepository
 import app.clairix.comms.lora.LoraLink
@@ -29,6 +31,8 @@ object Mesh {
 
     @Volatile private var store: MeshStore? = null
     @Volatile private var node: MeshNode? = null
+    // LoraLink keeps only the application context, which lives as long as the process.
+    @SuppressLint("StaticFieldLeak")
     @Volatile private var loraLink: LoraLink? = null
     private val _status = MutableStateFlow(MeshStatus())
     val status: StateFlow<MeshStatus> = _status.asStateFlow()
@@ -49,10 +53,10 @@ object Mesh {
      */
     fun setLoraRadio(context: Context, address: String?, name: String? = null) {
         val app = context.applicationContext
-        val editor = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-        if (address == null) editor.remove(KEY_LORA).remove(KEY_LORA_NAME)
-        else editor.putString(KEY_LORA, address).putString(KEY_LORA_NAME, name ?: address)
-        editor.apply()
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            if (address == null) remove(KEY_LORA).remove(KEY_LORA_NAME)
+            else putString(KEY_LORA, address).putString(KEY_LORA_NAME, name ?: address)
+        }
         synchronized(this) {
             loraLink?.stop()
             loraLink = null

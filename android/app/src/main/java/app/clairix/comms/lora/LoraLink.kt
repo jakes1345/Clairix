@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -148,7 +149,7 @@ class LoraLink(
                 is Op.Write -> {
                     val ch = service.getCharacteristic(MeshtasticProto.TO_RADIO_UUID) ?: return retry("radio has no ToRadio")
                     if (Build.VERSION.SDK_INT >= 33) {
-                        g.writeCharacteristic(ch, op.bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
+                        g.writeCharacteristic(ch, op.bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
                     } else {
                         @Suppress("DEPRECATION") run {
                             ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -166,7 +167,7 @@ class LoraLink(
                     g.setCharacteristicNotification(ch, true)
                     val cccd = ch.getDescriptor(CCCD_UUID) ?: return retry("radio's FromNum can't notify")
                     if (Build.VERSION.SDK_INT >= 33) {
-                        g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
+                        g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothStatusCodes.SUCCESS
                     } else {
                         @Suppress("DEPRECATION") run {
                             cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE

@@ -2008,5 +2008,5 @@
     <string name="lora_bundles_heard">Messages heard</string>
     <string name="lora_last_heard">Last heard</string>
     <string name="lora_how_title">How LoRa works here</string>
-    <string name="lora_how_text">The radio sends the sealed messages this phone carries on its primary channel, and passes on Clairix messages it hears; the phone keeps them with the rest of the mesh. Anyone on that channel can see that packets go by, never what is in them or whose they are. Airtime is shared and limited, so the phone sends at most ten packets every ten minutes and each message at most twice; a text takes two to four packets, and messages over %1$d bytes (photos, voice) stay on Bluetooth and the relay.</string>
+    <string name="lora_how_text">The radio sends the sealed messages this phone carries on its primary channel, and passes on Clairix messages it hears; the phone keeps them with the rest of the mesh. Anyone on that channel can see that packets go by, never what is in them or whose they are. Airtime is shared and limited, so the phone sends at most ten packets every ten minutes and each message at most twice; a text takes two to four packets. Photos and voice notes are too big for LoRa and stay on Bluetooth and the relay.</string>
 </resources>
