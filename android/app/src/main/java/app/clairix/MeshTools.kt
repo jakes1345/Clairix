@@ -88,6 +88,8 @@ internal fun MeshPage(onBack: (() -> Unit)? = null) {
                 status.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ClairixTheme.colors.caution) }
             }
         }
+        item(key = "§lora-hdr") { SectionHeader(stringResource(R.string.lora_section)) }
+        item(key = "§lora") { LoraRadioCard(meshOn = on, now = now) }
         item(key = "§battery") {
             Notice(
                 Tone.Info, title = stringResource(R.string.settings_battery),
