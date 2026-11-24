@@ -461,6 +461,12 @@ object CommsRepository {
 
     private suspend fun sealVault() {
         lock.withLock {
+            // The seal waits for the lock, and the screen can come back on while
+            // it waits: the vault is open again and work has already picked up
+            // the store (a photo being sent). Closing it now would pull the
+            // database out from under that work ("connection pool has been
+            // closed", SoakTest, API 34); the open that follows finds it open.
+            if (!Vault.sealed.value) return
             val db = synchronized(storeLock) { openStore.also { openStore = null } }
             runCatching { db?.close() }
             identities.seal()
