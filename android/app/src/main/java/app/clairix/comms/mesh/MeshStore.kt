@@ -71,6 +71,9 @@ class MeshStore(private val store: Store) {
 
     fun ids(now: Long): List<ByteArray> = synchronized(lock) { prune(now); bundles.values.map { it.id } }
 
+    /** Every bundle carried now, for the LoRa bridge to choose from (it never changes them). */
+    fun snapshot(now: Long): List<MeshProtocol.Bundle> = synchronized(lock) { prune(now); bundles.values.toList() }
+
     /**
      * What a hello should list: what this phone carries, and nothing else. A
      * bundle handed to the owner stays among those carried and is passed on like
