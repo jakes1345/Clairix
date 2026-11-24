@@ -508,7 +508,7 @@ Used by: deranged 0.5.9
 
 ### Apache License 2.0
 
-Used by: cmov 0.5.4, ctutils 0.4.7, derive-where 1.7.0, serdect 0.4.3, static_assertions 1.1.0, utf8_iter 1.0.4, zeroize 1.9.1, zeroize_derive 1.5.0
+Used by: cmov 0.5.4, ctutils 0.4.7, derive-where 1.7.0, serdect 0.4.3, static_assertions 1.1.0, utf8_iter 1.0.4, zeroize 1.9.2, zeroize_derive 1.5.0
 
 ````
 
