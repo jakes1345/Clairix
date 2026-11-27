@@ -629,7 +629,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     implementation(platform("androidx.compose:compose-bom:2024.10.01"))
     implementation("androidx.compose.ui:ui")
@@ -641,8 +641,8 @@ dependencies {
 
     // Google's fused location client, in the full and Play editions only (src/gms).
     // The foss edition, for F-Droid, is built without it; see productFlavors.
-    "fullImplementation"("com.google.android.gms:play-services-location:21.3.0")
-    "playImplementation"("com.google.android.gms:play-services-location:21.3.0")
+    "fullImplementation"("com.google.android.gms:play-services-location:21.4.0")
+    "playImplementation"("com.google.android.gms:play-services-location:21.4.0")
 
     // Google Play Billing, for Clairix Supporter (docs/SUPPORTER.md), in the Play
     // edition only: PlaySupporterBilling (src/play). The full and foss editions
@@ -655,10 +655,10 @@ dependencies {
     // Hidden-camera sweep — CameraX drives the torch-on lens-glint analyser and the
     // front-camera IR-illuminator view. Frames are read from the Y plane in process
     // and never stored or transmitted.
-    implementation("androidx.camera:camera-core:1.4.1")
-    implementation("androidx.camera:camera-camera2:1.4.1")
-    implementation("androidx.camera:camera-lifecycle:1.4.1")
-    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("androidx.camera:camera-core:1.7.0")
+    implementation("androidx.camera:camera-camera2:1.7.0")
+    implementation("androidx.camera:camera-lifecycle:1.7.0")
+    implementation("androidx.camera:camera-view:1.7.0")
 
     // Live tile map — renders OpenStreetMap tiles. The network is used only for tile
     // downloads, which expose the device's IP and the viewed area to the tile server;
@@ -666,7 +666,7 @@ dependencies {
     implementation("org.osmdroid:osmdroid-android:6.1.20")
 
     // Card vault — BiometricPrompt and AppCompatActivity for vault unlock
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.biometric:biometric:1.1.0")
 
     // COMMS — end-to-end encrypted messaging between Clairix apps.
@@ -681,7 +681,7 @@ dependencies {
     // "requires ... to compile against version 37 or later"), which needs an
     // Android Gradle plugin of the 9.x line; the 8.x line stops at compileSdk 36.
     // 4.17 is the newest release this toolchain can build.
-    implementation("net.zetetic:sqlcipher-android:4.17.0")
+    implementation("net.zetetic:sqlcipher-android:4.20.0")
     // SQLCipher's database and open-helper classes implement androidx.sqlite's
     // support interfaces, which its POM lists at runtime scope only; the Kotlin
     // compiler needs them on the compile classpath to resolve the supertypes.
@@ -689,7 +689,7 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("com.google.zxing:core:3.5.4")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    implementation("org.unifiedpush.android:connector:3.3.5")
+    implementation("org.unifiedpush.android:connector:3.3.6")
     // Calls: prebuilt libwebrtc (audio over DTLS-SRTP, signalled through the encrypted envelopes).
     implementation("io.getstream:stream-webrtc-android:1.3.10")
 
@@ -698,7 +698,7 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.1")
 
     testImplementation("junit:junit:4.13.2")
     // The real org.json: android.jar only carries stubs of it.
@@ -710,7 +710,7 @@ dependencies {
     // the stubbed android.jar above. 4.14 is the first release that knows compileSdk 35;
     // its tests run against SDK 34 (src/test/resources/robolectric.properties), because
     // Robolectric's SDK 35 needs Java 21 and this build runs on 17.
-    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("org.robolectric:robolectric:4.18.1")
 }
 
 // Robolectric's Android runtime, resolved by Gradle like any other dependency (and
