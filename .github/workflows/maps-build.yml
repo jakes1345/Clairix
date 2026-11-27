@@ -1,0 +1,190 @@
+name: Maps build
+
+# One round of the Maps workflow's build (.github/workflows/maps.yml calls this up to three
+# times): per region, downloads the OpenStreetMap extract, builds the graph and the
+# plate-reader list, and hands them on as artifacts for sign and publish. No secrets.
+#
+# download.geofabrik.de refuses every connection from some GitHub runners (it blocks whole
+# /24 networks that have made too many requests, and runners share networks), while the
+# runners beside them download fine. A region whose runner cannot reach it at all
+# (tools/graph-builder/fetch_extract.sh exit 75) is not failed in the first rounds: the job
+# leaves an empty artifact named refused-a<attempt>-r<round>-<slug> and stops green, and
+# maps.yml builds that region again in the next round, on a new runner
+# (tools/graph-builder/retry_plan.py). In the last round (final: true) it is an error.
+on:
+  workflow_call:
+    inputs:
+      regions:
+        description: 'JSON list of Geofabrik region paths to build'
+        required: true
+        type: string
+      round:
+        description: 'Which round this is (1 for the first), for the refused-* artifact names'
+        required: true
+        type: number
+      final:
+        description: 'The last round: a region whose runner cannot reach Geofabrik fails'
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        region: ${{ fromJSON(inputs.regions) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve region
+        id: region
+        env:
+          REGION: ${{ matrix.region }}
+        run: |
+          slug="${REGION//\//-}"
+          echo "region=$REGION" >> "$GITHUB_OUTPUT"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # numpy 2.5 (pinned in requirements.txt) ships wheels for 3.12 and newer only.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/graph-builder/requirements.txt
+
+      # Hash-pinned, as in plan.
+      - name: Install builder dependencies
+        run: python -m pip install --require-hashes -r tools/graph-builder/requirements.txt
+
+      # Geofabrik publishes an MD5 beside every extract. It comes from the same
+      # host, so it proves the download is intact rather than authentic; the
+      # graph built from it is what gets signed below. The MD5, the time the
+      # extract was published and the time its data was cut go into the release
+      # notes (tools/graph-builder/extract_info.py), so a published graph can be
+      # matched to the extract it was built from.
+      - name: Download OSM extract
+        id: download
+        env:
+          REGION: ${{ steps.region.outputs.region }}
+          SLUG: ${{ steps.region.outputs.slug }}
+          FINAL: ${{ inputs.final }}
+          MARKER: refused-a${{ github.run_attempt }}-r${{ inputs.round }}-${{ steps.region.outputs.slug }}
+        run: |
+          url="https://download.geofabrik.de/${REGION}-latest.osm.pbf"
+          echo "Downloading $url"
+          rc=0
+          tools/graph-builder/fetch_extract.sh "$url" "$RUNNER_TEMP" || rc=$?
+          if [ "$rc" = 75 ]; then
+            if [ "$FINAL" = true ]; then
+              echo "::error::No runner could reach download.geofabrik.de for $REGION in any round"
+              exit 1
+            fi
+            echo "::warning::This runner could not reach download.geofabrik.de; $REGION is built again on a new runner"
+            mkdir -p "$RUNNER_TEMP/refused"
+            echo "$REGION" > "$RUNNER_TEMP/refused/$SLUG"
+            echo "refused=$MARKER" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ "$rc" = 0 ] || exit "$rc"
+          mkdir -p dist
+          python3 tools/graph-builder/extract_info.py record --pbf "$RUNNER_TEMP/region.osm.pbf" \
+            --md5 "$RUNNER_TEMP/region.osm.pbf.md5" --headers "$RUNNER_TEMP/region.headers" \
+            --url "$url" --region "$REGION" --out "dist/source-$SLUG.json"
+
+      # Read by retry_plan.py in maps.yml, which builds the region again in the next round.
+      - name: Hand the region to the next round
+        if: ${{ steps.download.outputs.refused != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.download.outputs.refused }}
+          path: ${{ runner.temp }}/refused
+          if-no-files-found: error
+          retention-days: 1
+
+      # The plate readers (Flock and others) mapped in the same extract, as a small
+      # file beside the graph; the app shows them, warns of them and routes around them.
+      - name: Extract plate readers
+        if: ${{ steps.download.outputs.refused == '' }}
+        env:
+          SLUG: ${{ steps.region.outputs.slug }}
+        run: |
+          mkdir -p dist
+          python3 tools/graph-builder/extract_cameras.py "$RUNNER_TEMP/region.osm.pbf" "dist/cameras-$SLUG.json.gz" --region "$SLUG"
+
+      - name: Build graph
+        if: ${{ steps.download.outputs.refused == '' }}
+        env:
+          SLUG: ${{ steps.region.outputs.slug }}
+        run: |
+          mkdir -p dist
+          # File-backed node index keeps RAM free for the graph arrays on large states.
+          python3 tools/graph-builder/build_graph.py "$RUNNER_TEMP/region.osm.pbf" "dist/graph-$SLUG.agr" \
+            --region "$SLUG" --index "sparse_file_array,$RUNNER_TEMP/nodes.idx"
+          rm -f "$RUNNER_TEMP/nodes.idx" "$RUNNER_TEMP/region.osm.pbf"
+
+      - name: Compress and report
+        if: ${{ steps.download.outputs.refused == '' }}
+        env:
+          SLUG: ${{ steps.region.outputs.slug }}
+        run: |
+          agr="dist/graph-$SLUG.agr"
+          file="$agr.gz"
+          read -r version nodes edges shape <<< "$(od -An -tu4 -j4 -N16 "$agr")"
+          raw=$(stat -c %s "$agr")
+          gzip -9 -f "$agr"
+          (cd dist && sha256sum "graph-$SLUG.agr.gz" > "graph-$SLUG.agr.gz.sha256")
+          size=$(stat -c %s "$file")
+
+      - name: Report
+        if: ${{ steps.download.outputs.refused == '' }}
+        env:
+          SLUG: ${{ steps.region.outputs.slug }}
+        run: |
+          agr="dist/graph-$SLUG.agr"
+          file="$agr.gz"
+          read -r version nodes edges shape <<< "$(zcat "$file" | od -An -tu4 -j4 -N16)"
+          raw=$(zcat "$file" | wc -c)
+          size=$(stat -c %s "$file")
+          echo "AGR version $version: $nodes nodes, $edges edges, $shape shape points"
+          echo "uncompressed $raw bytes, compressed $size bytes"
+          {
+            echo "### Road graph \`$SLUG\`"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Nodes | $nodes |"
+            echo "| Edges | $edges |"
+            echo "| Shape points | $shape |"
+            echo "| Uncompressed | $raw bytes |"
+            echo "| graph-$SLUG.agr.gz | $size bytes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The graph itself goes straight to publish; sign gets only what is signed
+      # (the graph's checksum file and the plate-reader list) and the extract's record.
+      - name: Keep the graph
+        if: ${{ steps.download.outputs.refused == '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: graph-${{ steps.region.outputs.slug }}
+          path: dist/graph-${{ steps.region.outputs.slug }}.agr.gz
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Keep what is signed
+        if: ${{ steps.download.outputs.refused == '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tosign-${{ steps.region.outputs.slug }}
+          path: |
+            dist/graph-${{ steps.region.outputs.slug }}.agr.gz.sha256
+            dist/cameras-${{ steps.region.outputs.slug }}.json.gz
+            dist/source-${{ steps.region.outputs.slug }}.json
+          if-no-files-found: error
+          retention-days: 3

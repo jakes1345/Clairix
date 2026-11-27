@@ -5,11 +5,13 @@ name: Maps
 # previous build. Runs daily so maps track OpenStreetMap edits, whenever the builder
 # or the region list changes on main, and on demand for one region or all.
 #
-# Four jobs, so the asset signing key never shares a job with the builder, its
+# Four stages, so the asset signing key never shares a job with the builder, its
 # dependencies or the downloaded data:
 #   plan     tests the builder and the signing tool, and lists the regions
-#   build    per region: downloads the extract, builds the graph and the plate-reader
-#            list, and hands them on as artifacts; no secrets
+#   build    per region (.github/workflows/maps-build.yml): downloads the extract, builds
+#            the graph and the plate-reader list, and hands them on as artifacts; no
+#            secrets. A region whose runner Geofabrik refuses outright is built again on
+#            a new runner (retry-plan-2, build-2, then retry-plan-3, build-3).
 #   sign     the one job that reads ASSET_SIGNING_KEY (environment `assets`): installs
 #            the hash-pinned signing tool, signs every region's checksum file and
 #            plate-reader list, and hands on the signatures alone
@@ -22,6 +24,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/maps.yml'
+      - '.github/workflows/maps-build.yml'
       - 'tools/graph-builder/**'
   workflow_dispatch:
     inputs:
@@ -63,7 +66,7 @@ jobs:
         run: python -m pip install --require-hashes -r tools/graph-builder/requirements.txt -r tools/signing/requirements.txt -r tools/requirements-test.txt
 
       - name: Test graph builder and signing tool
-        run: python -m pytest -q tools/graph-builder/test_build_graph.py tools/graph-builder/test_extract_cameras.py tools/graph-builder/test_extract_info.py tools/signing/test_sign.py
+        run: python -m pytest -q tools/graph-builder/test_build_graph.py tools/graph-builder/test_extract_cameras.py tools/graph-builder/test_extract_info.py tools/graph-builder/test_fetch_extract.py tools/graph-builder/test_retry_plan.py tools/signing/test_sign.py
 
       - name: Choose regions
         id: list
@@ -86,142 +89,97 @@ jobs:
           echo "regions=$json" >> "$GITHUB_OUTPUT"
           echo "Building ${#regions[@]} region(s)"
 
+  # Each round builds its regions on fresh runners (.github/workflows/maps-build.yml). A
+  # region whose runner download.geofabrik.de refused outright is built again in the next
+  # round, on a new runner; only in the third round is that a failure.
   build:
     needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        region: ${{ fromJSON(needs.plan.outputs.regions) }}
+    uses: ./.github/workflows/maps-build.yml
+    with:
+      regions: ${{ needs.plan.outputs.regions }}
+      round: 1
+      final: false
 
+  retry-plan-2:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      regions: ${{ steps.list.outputs.regions }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Resolve region
-        id: region
-        env:
-          REGION: ${{ matrix.region }}
-        run: |
-          slug="${REGION//\//-}"
-          echo "region=$REGION" >> "$GITHUB_OUTPUT"
-          echo "slug=$slug" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          # numpy 2.5 (pinned in requirements.txt) ships wheels for 3.12 and newer only.
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: tools/graph-builder/requirements.txt
+          persist-credentials: false
+          sparse-checkout: tools/graph-builder/retry_plan.py
+          sparse-checkout-cone-mode: false
 
-      # Hash-pinned, as in plan.
-      - name: Install builder dependencies
-        run: python -m pip install --require-hashes -r tools/graph-builder/requirements.txt
-
-      # Geofabrik publishes an MD5 beside every extract. It comes from the same
-      # host, so it proves the download is intact rather than authentic; the
-      # graph built from it is what gets signed below. The MD5, the time the
-      # extract was published and the time its data was cut go into the release
-      # notes (tools/graph-builder/extract_info.py), so a published graph can be
-      # matched to the extract it was built from.
-      - name: Download OSM extract
+      - name: List the regions Geofabrik refused
+        id: list
         env:
-          REGION: ${{ steps.region.outputs.region }}
-          SLUG: ${{ steps.region.outputs.slug }}
+          GH_TOKEN: ${{ github.token }}
+          REGIONS: ${{ needs.plan.outputs.regions }}
         run: |
-          url="https://download.geofabrik.de/${REGION}-latest.osm.pbf"
-          echo "Downloading $url"
-          curl -fL --retry 5 --retry-delay 10 --retry-all-errors -D "$RUNNER_TEMP/region.headers" -o "$RUNNER_TEMP/region.osm.pbf" "$url"
-          curl -fL --retry 5 --retry-delay 10 --retry-all-errors -o "$RUNNER_TEMP/region.osm.pbf.md5" "$url.md5"
-          (cd "$RUNNER_TEMP" && sed 's#  .*#  region.osm.pbf#' region.osm.pbf.md5 | md5sum -c -)
-          ls -l "$RUNNER_TEMP/region.osm.pbf"
-          mkdir -p dist
-          python3 tools/graph-builder/extract_info.py record --pbf "$RUNNER_TEMP/region.osm.pbf" \
-            --md5 "$RUNNER_TEMP/region.osm.pbf.md5" --headers "$RUNNER_TEMP/region.headers" \
-            --url "$url" --region "$REGION" --out "dist/source-$SLUG.json"
+          regions=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].name' \
+            | python3 tools/graph-builder/retry_plan.py --regions "$REGIONS" --attempt "$GITHUB_RUN_ATTEMPT" --round 1)
+          echo "regions=$regions" >> "$GITHUB_OUTPUT"
+          echo "Building again on new runners: $regions"
 
-      # The plate readers (Flock and others) mapped in the same extract, as a small
-      # file beside the graph; the app shows them, warns of them and routes around them.
-      - name: Extract plate readers
-        env:
-          SLUG: ${{ steps.region.outputs.slug }}
-        run: |
-          mkdir -p dist
-          python3 tools/graph-builder/extract_cameras.py "$RUNNER_TEMP/region.osm.pbf" "dist/cameras-$SLUG.json.gz" --region "$SLUG"
+  build-2:
+    needs: retry-plan-2
+    if: ${{ !cancelled() && needs.retry-plan-2.result == 'success' && needs.retry-plan-2.outputs.regions != '[]' }}
+    uses: ./.github/workflows/maps-build.yml
+    with:
+      regions: ${{ needs.retry-plan-2.outputs.regions }}
+      round: 2
+      final: false
 
-      - name: Build graph
-        env:
-          SLUG: ${{ steps.region.outputs.slug }}
-        run: |
-          mkdir -p dist
-          # File-backed node index keeps RAM free for the graph arrays on large states.
-          python3 tools/graph-builder/build_graph.py "$RUNNER_TEMP/region.osm.pbf" "dist/graph-$SLUG.agr" \
-            --region "$SLUG" --index "sparse_file_array,$RUNNER_TEMP/nodes.idx"
-          rm -f "$RUNNER_TEMP/nodes.idx" "$RUNNER_TEMP/region.osm.pbf"
-
-      - name: Compress and report
-        env:
-          SLUG: ${{ steps.region.outputs.slug }}
-        run: |
-          agr="dist/graph-$SLUG.agr"
-          file="$agr.gz"
-          read -r version nodes edges shape <<< "$(od -An -tu4 -j4 -N16 "$agr")"
-          raw=$(stat -c %s "$agr")
-          gzip -9 -f "$agr"
-          (cd dist && sha256sum "graph-$SLUG.agr.gz" > "graph-$SLUG.agr.gz.sha256")
-          size=$(stat -c %s "$file")
-
-      - name: Report
-        env:
-          SLUG: ${{ steps.region.outputs.slug }}
-        run: |
-          agr="dist/graph-$SLUG.agr"
-          file="$agr.gz"
-          read -r version nodes edges shape <<< "$(zcat "$file" | od -An -tu4 -j4 -N16)"
-          raw=$(zcat "$file" | wc -c)
-          size=$(stat -c %s "$file")
-          echo "AGR version $version: $nodes nodes, $edges edges, $shape shape points"
-          echo "uncompressed $raw bytes, compressed $size bytes"
-          {
-            echo "### Road graph \`$SLUG\`"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Nodes | $nodes |"
-            echo "| Edges | $edges |"
-            echo "| Shape points | $shape |"
-            echo "| Uncompressed | $raw bytes |"
-            echo "| graph-$SLUG.agr.gz | $size bytes |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # The graph itself goes straight to publish; sign gets only what is signed
-      # (the graph's checksum file and the plate-reader list) and the extract's record.
-      - name: Keep the graph
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+  retry-plan-3:
+    needs: [retry-plan-2, build-2]
+    if: ${{ !cancelled() && needs.retry-plan-2.result == 'success' && needs.retry-plan-2.outputs.regions != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      regions: ${{ steps.list.outputs.regions }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: graph-${{ steps.region.outputs.slug }}
-          path: dist/graph-${{ steps.region.outputs.slug }}.agr.gz
-          if-no-files-found: error
-          retention-days: 3
+          persist-credentials: false
+          sparse-checkout: tools/graph-builder/retry_plan.py
+          sparse-checkout-cone-mode: false
 
-      - name: Keep what is signed
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: tosign-${{ steps.region.outputs.slug }}
-          path: |
-            dist/graph-${{ steps.region.outputs.slug }}.agr.gz.sha256
-            dist/cameras-${{ steps.region.outputs.slug }}.json.gz
-            dist/source-${{ steps.region.outputs.slug }}.json
-          if-no-files-found: error
-          retention-days: 3
+      - name: List the regions Geofabrik refused again
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGIONS: ${{ needs.retry-plan-2.outputs.regions }}
+        run: |
+          regions=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].name' \
+            | python3 tools/graph-builder/retry_plan.py --regions "$REGIONS" --attempt "$GITHUB_RUN_ATTEMPT" --round 2)
+          echo "regions=$regions" >> "$GITHUB_OUTPUT"
+          echo "Building again on new runners: $regions"
+
+  build-3:
+    needs: retry-plan-3
+    if: ${{ !cancelled() && needs.retry-plan-3.result == 'success' && needs.retry-plan-3.outputs.regions != '[]' }}
+    uses: ./.github/workflows/maps-build.yml
+    with:
+      regions: ${{ needs.retry-plan-3.outputs.regions }}
+      round: 3
+      final: true
 
   # The checksum file is signed with the asset signing key; the app verifies the
   # signature with the public key it was built with, then the graph against the
   # signed checksum. Nothing unsigned is published. Every region that built is
   # signed, so one region failing does not hold the others back.
   sign:
-    needs: [plan, build]
+    needs: [plan, build, build-2, build-3]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -362,7 +320,7 @@ jobs:
   # A red daily run is otherwise seen by nobody: one issue for the run (not one per
   # region), or a comment on the open one (.github/scripts/report-failure.sh).
   alert:
-    needs: [plan, build, sign, publish]
+    needs: [plan, build, retry-plan-2, build-2, retry-plan-3, build-3, sign, publish]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
