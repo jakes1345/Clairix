@@ -98,12 +98,23 @@ def wait_for(text, timeout_s):
     return None
 
 
-def tap(text, timeout_s=5):
-    """Taps the centre of the Clairix node showing exactly [text]."""
+def tap(text, timeout_s=20):
+    """Taps the centre of the Clairix node showing exactly [text].
+
+    Every look at the screen is a full `uiautomator dump`, which takes seconds on a
+    loaded emulator and fails while the window changes; five seconds left too few
+    looks (smoke (33) on 635ed4e: "no Unlock on the screen to tap", after the digits
+    had been typed). On failure the last screen seen is printed, so a button that
+    was really missing can be told from a screen that could not be read.
+    """
     deadline = time.monotonic() + timeout_s
+    last = None
+    dumps = 0
     while time.monotonic() < deadline:
         root = screen()
+        dumps += 1
         if root is not None:
+            last = texts(root)
             for node in root.iter("node"):
                 if node.get("package") == PKG and node.get("text") == text:
                     m = BOUNDS.fullmatch(node.get("bounds") or "")
@@ -112,7 +123,8 @@ def tap(text, timeout_s=5):
                         adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
                         return
         time.sleep(0.5)
-    fail(f'no "{text}" on the screen to tap')
+    seen = "no readable screen" if last is None else f"Clairix showed {last}"
+    fail(f'no "{text}" on the screen to tap after {dumps} looks in {timeout_s}s; {seen}')
 
 
 def pid():

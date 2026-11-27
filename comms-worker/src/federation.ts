@@ -79,6 +79,74 @@ export const FED_CLAIMS_BURST = 120;
  */
 export const WRITTEN_TO_DAYS = 90;
 
+/**
+ * Two-label suffixes where the registrable domain is the three right-most
+ * labels, not two.  Includes both ICANN country-code second-level TLDs
+ * (co.uk, com.au, …) and PSL private-section platform domains
+ * (workers.dev, github.io, …) where each tenant owns a single subdomain.
+ *
+ * Adding platform entries here gives each tenant (tenant1.workers.dev,
+ * tenant2.workers.dev) its own rate-limit bucket, so wildcard-DNS Sybil
+ * attacks on custom TLDs are blocked while independent platform tenants
+ * are not falsely throttled against each other.
+ *
+ * Used only for rate-limit bucketing — completeness matters less than
+ * correct eTLD+1 for the platforms most likely to host a Clairix relay.
+ */
+const SLD_SUFFIXES = new Set([
+  // ICANN country-code second-level TLDs
+  "co.uk", "org.uk", "me.uk", "net.uk", "ltd.uk", "plc.uk",
+  "co.jp", "or.jp", "ne.jp", "ac.jp",
+  "com.au", "net.au", "org.au", "edu.au",
+  "co.nz", "net.nz", "org.nz",
+  "co.in", "net.in", "org.in",
+  "com.br", "net.br", "org.br",
+  "co.za", "net.za", "org.za",
+  // PSL private-section platform domains (tenant-per-subdomain pattern)
+  "workers.dev", "pages.dev",          // Cloudflare
+  "vercel.app", "now.sh",              // Vercel
+  "netlify.app",                       // Netlify
+  "github.io", "gitlab.io",            // GitHub / GitLab Pages
+  "fly.dev",                           // Fly.io
+  "railway.app",                       // Railway
+  "onrender.com",                      // Render
+  "web.app", "firebaseapp.com",        // Firebase / Google
+  "azurewebsites.net", "azurefd.net",  // Azure
+  "appspot.com",                       // Google App Engine
+]);
+
+/**
+ * The registrable domain (eTLD+1) of a valid relay origin.
+ * Rate-limit buckets keyed on this value cannot be bypassed by wildcard DNS:
+ * every subdomain of "attacker.com" maps to "attacker.com", and each
+ * tenant on a shared platform gets their own bucket (e.g. two distinct
+ * workers.dev subdomains produce two distinct keys, not one shared key).
+ */
+export function registrableDomain(origin: string): string {
+  const o = relayOrigin(origin);
+  const host = o ? new URL(o).hostname : origin.toLowerCase();
+  const labels = host.split(".");
+  if (labels.length < 2) return host;
+  const last2 = `${labels[labels.length - 2]}.${labels[labels.length - 1]}`;
+  if (SLD_SUFFIXES.has(last2) && labels.length >= 3) {
+    return `${labels[labels.length - 3]}.${last2}`;
+  }
+  return last2;
+}
+
+/**
+ * Lookups allowed from all origins sharing the same registrable domain, per
+ * minute. Five times the per-origin limit covers up to five legitimate relays
+ * under one domain while capping a wildcard-DNS Sybil farm at this ceiling.
+ */
+export const FED_LOOKUPS_PER_DOMAIN_PER_MINUTE = 600;
+export const FED_LOOKUPS_PER_DOMAIN_BURST = 1_200;
+
+/** The object that holds per-registrable-domain federation rate limits. */
+export async function federationDomainObjectName(domain: string): Promise<string> {
+  return `fed-dom:${(await sha256Hex(domain)).slice(0, 32)}`;
+}
+
 export type FederationPolicy = { mode: "off" } | { mode: "open" } | { mode: "allow"; origins: Set<string> };
 
 /**
