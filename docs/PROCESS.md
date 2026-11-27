@@ -86,7 +86,7 @@ Every workflow and its jobs, under the names GitHub shows as checks:
 | Relay container (`relay-container.yml`) | `image` | The same, and every Monday |
 | Relay list (`relays.yml`) | `check`, `publish` (main only) | Pull requests and pushes to main touching `relays/`, `tools/relays/` |
 | Stalkerware list (`ioc.yml`) | `convert`, `publish` (main only), `alert` | Daily; pull requests and pushes to main touching `tools/ioc/` |
-| Maps (`maps.yml`) | `plan`, `build (<region>)`, `sign`, `publish (<region>)`, `alert` | Daily; pushes to main touching `tools/graph-builder/` |
+| Maps (`maps.yml`, which calls `maps-build.yml`) | `plan`, `build / build (<region>)`, `retry-plan-2`, `build-2 / build (<region>)`, `retry-plan-3`, `build-3 / build (<region>)` (the retry rounds only for regions whose runner Geofabrik refused), `sign`, `publish (<region>)`, `alert` | Daily; pushes to main touching `tools/graph-builder/` or either workflow |
 | Work zones (`workzones.yml`) | `aggregate`, `sign`, `publish`, `alert` | Every 15 minutes, as GitHub's schedule allows |
 | Supply chain (`supply-chain.yml`) | `cargo-audit`, `npm-audit`, `dependency-review` (pull requests), `secret-scan`, `alert` | Every pull request, pushes to main, daily |
 | Gate (`gate.yml`) | `gate` | Every pull request |
