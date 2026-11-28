@@ -16,15 +16,15 @@
     "test": "node --test scripts/copy-check.test.mjs"
   },
   "engines": {
-    "node": ">=22.22.0"
+    "node": ">=22.23.4"
   },
   "dependencies": {
-    "@astrojs/markdown-satteri": "^0.4.4",
-    "@astrojs/sitemap": "^3.7.4",
-    "astro": "^7.4.0"
+    "@astrojs/markdown-satteri": "^0.4.10",
+    "@astrojs/sitemap": "^3.7.6",
+    "astro": "^7.4.13"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.10",
+    "@astrojs/check": "^0.9.12",
     "subset-font": "^2.9.0",
     "typescript": "^6.0.3"
   }
